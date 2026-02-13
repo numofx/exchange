@@ -34,6 +34,8 @@ mkdir deployments/901
 forge script scripts/deploy-all.s.sol --rpc-url conduit_testnet --broadcast
 ```
 
+Runbook note: on Base, always add `--slow` to this deploy command.
+
 You should see output similar to this:
 
 ```
