@@ -1,0 +1,10 @@
+{
+  "usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  "cngn": "0x46C85152bFe9f96829aA94755D9f915F9B10EF5F",
+  "useMockedFeed": false,
+  "requiredSigners": 2,
+  "feedSigners": [
+    "0xC7bE60b228b997c23094DdfdD71e22E2DE6C9310",
+    "0x42F21354603C7f4065C40C80c88fA8d0Db4d4EA9"
+  ]
+}

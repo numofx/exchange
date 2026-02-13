@@ -263,6 +263,11 @@ library Config {
                 marginFactor: 0.98e18,
                 IMScale: 0.98e18
             });
+        } else if (keccak256(abi.encodePacked(market)) == keccak256(abi.encodePacked("CNGN"))) {
+            baseMarginParams = IStandardManager.BaseMarginParams({
+                marginFactor: 0.9e18,
+                IMScale: 0.9e18
+            });
         } else if (keccak256(abi.encodePacked(market)) == keccak256(abi.encodePacked("WSTETH"))) {
             baseMarginParams = IStandardManager.BaseMarginParams({
                 marginFactor: 0.8e18,
@@ -472,6 +477,10 @@ library Config {
             perpCap = 0;
             optionCap = 0;
             baseCap = 100_000e18;
+        } else if (keccak256(abi.encodePacked(market)) == keccak256(abi.encodePacked("CNGN"))) {
+            perpCap = 0;
+            optionCap = 500_000e18;
+            baseCap = 3_000_000e18;
         } else if (keccak256(abi.encodePacked(market)) == keccak256(abi.encodePacked("WSTETH"))) {
             perpCap = 0;
             optionCap = 0;

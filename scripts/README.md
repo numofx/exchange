@@ -1,5 +1,9 @@
 # Deployment script
 
+## Runbook note (Base)
+
+For Base (`chainId 8453`), always run deploy scripts with `--slow` in this flow to force serialized sends and avoid provider nonce/in-flight transaction errors.
+
 ## Setup
 
 Add an `.env` file with following:
