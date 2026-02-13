@@ -2,7 +2,7 @@
 
 ## Deploying to a new network:
 
-1. You must deploy the lyra v2 core contract first. After that, add the following config to the corresponding network id in `scripts/input/{networkId}/config.json`:
+1. You must deploy the v2 core contract first. After that, add the following config to the corresponding network id in `scripts/input/{networkId}/config.json`:
 
 ```json
 {
