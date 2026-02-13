@@ -8,19 +8,19 @@ License text copyright (c) 2017 MariaDB Corporation Ab, All Rights Reserved.
 Parameters
 
 Licensor:
-Lyra Foundation
+Numo Foundation
 
 Licensed Work:
-Lyra V2 Core The Licensed Work is (c) 2023-2025 Lyra Foundation
+Numo Options Core The Licensed Work is (c) 2023-2025 Numo Foundation
 
 Additional Use Grant:
-Any uses listed and defined at v2-core-license-grants.lyra.eth
+None
 
 Change Date:
 - For code released before 2025-02-17:
-  The earlier of 2025-11-16 or a date specified at v2-core-license-date.lyra.eth
+  2025-11-16
 - For code released on or after 2025-02-17:
-  The earlier of 2029-03-20 or a date specified at v2-core-license-date.lyra.eth
+  2029-03-20
 
 Change License:
 GNU General Public License v3.0 or later

@@ -68,7 +68,7 @@ Example Output
   Start deploying core contracts! deployer:  0x77774066be05E9725cf12A583Ed67F860d19c187
   predicted addr 0xfe3e0ACFA9f4165DD733FCF6912c9d90c3aC0008
   Core contracts deployed and setup!
-  Written to deployment  v2-core/deployments/901/core.json
+  Written to deployment  options-core/deployments/901/core.json
 ```
 
 The configs will now be written as something like this: (example `deployment/901/core.json`)
@@ -103,7 +103,7 @@ MARKET_NAME=weth forge script scripts/deploy-market.s.sol  --rpc-url sepolia --b
   target erc20: 0x3a34565D81156cF0B1b9bC5f14FD00333bcf6B93
   All asset whitelist both managers!
   market ID for newly created market: 1
-  Written to deployment  /lyra/v2-core/deployments/999/weth.json
+  Written to deployment  /numo/options-core/deployments/999/weth.json
 ```
 
 And every address will be stored in `deployments/999/weth.json`

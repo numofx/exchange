@@ -1,4 +1,4 @@
-# Lyra V2 Testing Guideline
+# Numo Options Testing Guideline
 
 ## Running Different Tests
 
@@ -27,7 +27,7 @@ genhtml lcov.info -out coverage/ --rc lcov_branch_coverage=1 --keep-going --incl
 
 ## Folder structure
 
-You can find each big **modules** that compose Lyra-V2 in separate folders: list of modules:
+You can find each big **modules** that compose Numo Options in separate folders: list of modules:
 
 - `account`
 - `assets`

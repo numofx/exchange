@@ -2,7 +2,7 @@
 
 As DeFi continues to evolve, the industry has expanded well beyond basic token swapping. It now includes a range of advanced financial applications such as lending, perpetual contracts (perps), and options. However, each protocol's distinct contract architecture and accounting system make it increasingly challenging to integrate them all effectively.
 
-Lyra V2 core is a framework designed to handle various derivatives in an clean way. It currently supports instruments like spot trading, perps, and options, with the capability to include more in the future. To make this possible, we've completely revamped the underlying 'account' layer. Additionally, we've defined a new validation process, making it flexible enough to accommodate a wide range of trading scenarios.
+Numo Options core is a framework designed to handle various derivatives in an clean way. It currently supports instruments like spot trading, perps, and options, with the capability to include more in the future. To make this possible, we've completely revamped the underlying 'account' layer. Additionally, we've defined a new validation process, making it flexible enough to accommodate a wide range of trading scenarios.
 
 ## Agenda
 
@@ -11,7 +11,7 @@ Lyra V2 core is a framework designed to handle various derivatives in an clean w
   * [Managers](#managers)
   * [Assets](#assets)
   * [Shared Risk and Hooks](#shared-risk)
-* [Lyra V2](#lyra-v2)
+* [Numo Options](#numo-options)
 
 ## The Base layer
 
@@ -89,9 +89,9 @@ To check these requirements, whenever a trade happens, `SubAccounts` passes the 
 
 It's worth mentioning that because the **account contract** is totally permission-less, anyone can spin up their own "ecosystem" with risk totally separated from other ecosystems.
 
-## Lyra V2
+## Numo Options
 
-The goal of Lyra v2-core contracts is to build a margin layer that supports all derivatives, with a modular framework for upgrading existing contracts and supplementing the Lyra ecosystem with new features. At the base layer, this will be composed of 2 manager and 4 assets at the launch of V2. You can find the more detailed documentation about each modules from the links below: 
+The goal of Numo Options core contracts is to build a margin layer that supports all derivatives, with a modular framework for upgrading existing contracts and supplementing the Numo ecosystem with new features. At the base layer, this will be composed of 2 manager and 4 assets at launch. You can find the more detailed documentation about each modules from the links below:
 
 * [Assets](assets.md) Overview
 * (Manager) [SRM: Standard Risk Manager](./managers/SRM.md) 

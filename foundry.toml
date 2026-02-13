@@ -26,8 +26,8 @@ quote_style = 'double'
 
 sepolia = "https://sepolia.infura.io/v3/26251a7744c548a3adbc17880fc70764"
 
-lyra_testnet = "https://l2-prod-testnet-0eakp60405.t.conduit.xyz"
+numo_testnet = "https://l2-prod-testnet-0eakp60405.t.conduit.xyz"
 
-lyra_mainnet = "https://rpc.lyra.finance"
+numo_mainnet = "https://rpc.lyra.finance"
 
 local = "http://localhost:8545"

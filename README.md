@@ -1,16 +1,16 @@
-# Lyra V2
+# Options Core
 
 [![foundry-rs - foundry](https://img.shields.io/static/v1?label=foundry-rs&message=foundry&color=blue&logo=github)](https://github.com/foundry-rs/foundry "Go to GitHub repo")
-[![CI](https://github.com/lyra-finance/v2-core/actions/workflows/ci.yml/badge.svg)](https://github.com/lyra-finance/v2-core/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/lyra-finance/v2-core/branch/master/graph/badge.svg?token=43B951MYIN)](https://codecov.io/gh/lyra-finance/v2-core)
+[![CI](https://github.com/numofx/options-core/actions/workflows/ci.yml/badge.svg)](https://github.com/numofx/options-core/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/numofx/options-core/branch/master/graph/badge.svg?token=43B951MYIN)](https://codecov.io/gh/numofx/options-core)
 
 <div align="center">
   <p align='center'>
     <br>
     <br>
-    <img src='./docs/imgs/overall/logo.png' alt='lyra' width="300" />
+    <img src='./docs/imgs/overall/numo.svg' alt='numo' width="300" />
   </p>
-  <h5 align="center"> The framework to trade all derivatives </h5>
+  <h5 align="center"> Options Exchange for Frontier FX </h5>
 </div>
 
 
@@ -33,7 +33,7 @@ Go to [test](./test/) folder for more details on how to run different tests.
 
 ## Documentation
 
-Go to [docs](./docs) to understand the high-level design, transaction flow, and how different **Lyra V2 components** work together.
+Go to [docs](./docs) to understand the high-level design, transaction flow, and how different **Numo Options components** work together.
 
 ## Static Analysis - [Slither](https://github.com/crytic/slither)
 
@@ -46,4 +46,4 @@ slither src
 
 ## Deployment
 
-Got to [scripts](./scripts) to understand how to deploy **Lyra v2** to different networks.
+Got to [scripts](./scripts) to understand how to deploy **Numo Options** to different networks.
