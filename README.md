@@ -1,4 +1,4 @@
-# Options Core
+# Exchange Core
 
 [![foundry-rs - foundry](https://img.shields.io/static/v1?label=foundry-rs&message=foundry&color=blue&logo=github)](https://github.com/foundry-rs/foundry "Go to GitHub repo")
 [![CI](https://github.com/numofx/options-core/actions/workflows/ci.yml/badge.svg)](https://github.com/numofx/options-core/actions/workflows/ci.yml)
@@ -10,7 +10,7 @@
     <br>
     <img src='./docs/imgs/overall/numo.svg' alt='numo' width="300" />
   </p>
-  <h5 align="center"> Options Exchange for Frontier FX </h5>
+  <h5 align="center"> Derivatives Exchange for Frontier FX </h5>
 </div>
 
 
