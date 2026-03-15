@@ -264,21 +264,21 @@ contract PerpAsset is IPerpAsset, PositionTracking, GlobalSubIdOITracking, Manag
   /**
    * @dev Return the current index price for the perp asset
    */
-  function getIndexPrice() external view returns (uint, uint) {
+  function getIndexPrice() external view virtual returns (uint, uint) {
     return spotFeed.getSpot();
   }
 
   /**
    * @dev Return the current mark price for the perp asset
    */
-  function getPerpPrice() external view returns (uint, uint) {
+  function getPerpPrice() external view virtual returns (uint, uint) {
     if (isDisabled) {
       return (uint(frozenPerpPrice), 1e18);
     }
     return perpFeed.getResult();
   }
 
-  function getImpactPrices() external view returns (uint bid, uint ask) {
+  function getImpactPrices() external view virtual returns (uint bid, uint ask) {
     (bid,) = impactBidPriceFeed.getResult();
     (ask,) = impactAskPriceFeed.getResult();
   }
@@ -396,7 +396,7 @@ contract PerpAsset is IPerpAsset, PositionTracking, GlobalSubIdOITracking, Manag
    * @dev get premium to calculate funding rate
    * Premium = (Max(0, Impact Bid Price - Index Price) - Max(0, Index Price - Impact Ask Price)) / Index Price
    */
-  function _getPremium(int indexPrice) internal view returns (int premium) {
+  function _getPremium(int indexPrice) internal view virtual returns (int premium) {
     (uint impactAskPrice,) = impactAskPriceFeed.getResult();
     (uint impactBidPrice,) = impactBidPriceFeed.getResult();
 
@@ -456,7 +456,7 @@ contract PerpAsset is IPerpAsset, PositionTracking, GlobalSubIdOITracking, Manag
     return subAccounts.getBalance(accountId, IPerpAsset(address(this)), 0);
   }
 
-  function _getIndexPrice() internal view returns (int) {
+  function _getIndexPrice() internal view virtual returns (int) {
     if (isDisabled) {
       // Note: this value should not get used anywhere when disabled, but must be left in for
       // certain function parameters
@@ -466,7 +466,7 @@ contract PerpAsset is IPerpAsset, PositionTracking, GlobalSubIdOITracking, Manag
     return spotPrice.toInt256();
   }
 
-  function _getPerpPrice() internal view returns (int) {
+  function _getPerpPrice() internal view virtual returns (int) {
     if (isDisabled) {
       return frozenPerpPrice;
     }

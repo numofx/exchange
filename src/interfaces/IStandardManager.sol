@@ -5,6 +5,7 @@ import {IAsset} from "./IAsset.sol";
 import {IPerpAsset} from "./IPerpAsset.sol";
 import {IBaseManager} from "./IBaseManager.sol";
 import {IOptionAsset} from "./IOptionAsset.sol";
+import {IDatedFutureAsset} from "./IDatedFutureAsset.sol";
 import {ISpotFeed} from "./ISpotFeed.sol";
 import {IForwardFeed} from "./IForwardFeed.sol";
 import {IVolFeed} from "./IVolFeed.sol";
@@ -14,7 +15,8 @@ interface IStandardManager is IBaseManager {
     NotSet,
     Option,
     Perpetual,
-    Base
+    Base,
+    DatedFuture
   }
 
   struct AssetDetail {
@@ -42,9 +44,17 @@ interface IStandardManager is IBaseManager {
     /// option position detail
     IOptionAsset option;
     ExpiryHolding[] expiryHoldings;
+    /// dated futures position detail
+    IDatedFutureAsset datedFuture;
+    FuturePosition[] futurePositions;
     // sum of all short positions and abs(perps) for the market.
     // used to increase margin requirement if stable price depegs.
     uint depegPenaltyPos;
+  }
+
+  struct FuturePosition {
+    uint subId;
+    int balance;
   }
 
   /// @dev contains portfolio struct for single expiry assets
@@ -110,6 +120,11 @@ interface IStandardManager is IBaseManager {
   struct BaseMarginParams {
     uint marginFactor;
     uint IMScale;
+  }
+
+  struct FutureMarginRequirements {
+    uint mmReq;
+    uint imReq;
   }
 
   function assetDetails(IAsset asset) external view returns (AssetDetail memory);
@@ -180,6 +195,8 @@ interface IStandardManager is IBaseManager {
   );
 
   event BaseMarginParamsSet(uint marketId, uint baseAssetMarginFactor, uint baseAssetIMScale);
+
+  event FutureMarginRequirementsSet(uint marketId, uint futureMMRequirement, uint futureIMRequirement);
 
   event DepegParametersSet(uint threshold, uint depegFactor);
 

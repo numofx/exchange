@@ -12,6 +12,7 @@ import {ISRMPortfolioViewer} from "../interfaces/ISRMPortfolioViewer.sol";
 import {ICashAsset} from "../interfaces/ICashAsset.sol";
 import {IPerpAsset} from "../interfaces/IPerpAsset.sol";
 import {IOptionAsset} from "../interfaces/IOptionAsset.sol";
+import {IDatedFutureAsset} from "../interfaces/IDatedFutureAsset.sol";
 import {IStandardManager} from "../interfaces/IStandardManager.sol";
 import {BasePortfolioViewer} from "./BasePortfolioViewer.sol";
 
@@ -63,85 +64,129 @@ contract SRMPortfolioViewer is BasePortfolioViewer, ISRMPortfolioViewer {
     // for each market, need to count how many expires there are
     // and initiate a ExpiryHolding[] array in the corresponding marketHolding
     for (uint i; i < marketCount; i++) {
-      // 1. find the first market id
       uint marketId;
       for (uint8 id = 1; id < 255; id++) {
         uint masked = (1 << id);
         if (marketBitMap & masked == 0) continue;
-        // mark this market id as used => flip it back to 0 with xor
         marketBitMap ^= masked;
         marketId = id;
         break;
       }
-      portfolio.marketHoldings[i].marketId = marketId;
+      (
+        IStandardManager.MarketHolding memory holding,
+        uint[] memory seenExpires,
+        uint[] memory expiryOptionCounts,
+        uint numExpires,
+        uint numFutures
+      ) = _scanMarketAssets(assets, marketId);
 
-      // 2. filter through all balances and only find perp or option for this market
-      uint numExpires;
-      uint[] memory seenExpires = new uint[](assets.length);
-      uint[] memory expiryOptionCounts = new uint[](assets.length);
+      holding.marketId = marketId;
+      holding.expiryHoldings = new IStandardManager.ExpiryHolding[](numExpires);
+      holding.futurePositions = new IStandardManager.FuturePosition[](numFutures);
 
-      for (uint j; j < assets.length; j++) {
-        ISubAccounts.AssetBalance memory currentAsset = assets[j];
-        if (currentAsset.asset == cashAsset) continue;
-
-        IStandardManager.AssetDetail memory detail = standardManager.assetDetails(currentAsset.asset);
-        if (detail.marketId != marketId) continue;
-
-        if (detail.assetType == IStandardManager.AssetType.Perpetual) {
-          // if it's perp asset, update the perp position directly
-          portfolio.marketHoldings[i].perp = IPerpAsset(address(currentAsset.asset));
-          portfolio.marketHoldings[i].perpPosition = currentAsset.balance;
-          portfolio.marketHoldings[i].depegPenaltyPos += SignedMath.abs(currentAsset.balance);
-        } else if (detail.assetType == IStandardManager.AssetType.Option) {
-          portfolio.marketHoldings[i].option = IOptionAsset(address(currentAsset.asset));
-          (uint expiry,,) = OptionEncoding.fromSubId(uint96(currentAsset.subId));
-          uint expiryIndex;
-          (numExpires, expiryIndex) = seenExpires.addUniqueToArray(expiry, numExpires);
-          // print all seen expiries
-          expiryOptionCounts[expiryIndex]++;
-        } else {
-          // base asset, update holding.basePosition directly. This balance is assumed to be positive
-          portfolio.marketHoldings[i].basePosition = currentAsset.balance.toUint256();
-        }
-      }
-
-      // 3. initiate expiry holdings in a marketHolding
-      portfolio.marketHoldings[i].expiryHoldings = new IStandardManager.ExpiryHolding[](numExpires);
-      // 4. initiate the option array in each expiry holding
       for (uint j; j < numExpires; j++) {
-        portfolio.marketHoldings[i].expiryHoldings[j].expiry = seenExpires[j];
-        portfolio.marketHoldings[i].expiryHoldings[j].options = new IStandardManager.Option[](expiryOptionCounts[j]);
+        holding.expiryHoldings[j].expiry = seenExpires[j];
+        holding.expiryHoldings[j].options = new IStandardManager.Option[](expiryOptionCounts[j]);
       }
 
-      // 5. put options into expiry holdings
-      for (uint j; j < assets.length; j++) {
-        ISubAccounts.AssetBalance memory currentAsset = assets[j];
-        if (currentAsset.asset == cashAsset) continue;
-
-        IStandardManager.AssetDetail memory detail = standardManager.assetDetails(currentAsset.asset);
-        if (detail.marketId != marketId) continue;
-
-        if (detail.assetType == IStandardManager.AssetType.Option) {
-          (uint expiry, uint strike, bool isCall) = OptionEncoding.fromSubId(uint96(currentAsset.subId));
-          uint expiryIndex = seenExpires.findInArray(expiry, numExpires).toUint256();
-          uint nextIndex = portfolio.marketHoldings[i].expiryHoldings[expiryIndex].numOptions;
-          portfolio.marketHoldings[i].expiryHoldings[expiryIndex].options[nextIndex] =
-            IStandardManager.Option({strike: strike, isCall: isCall, balance: currentAsset.balance});
-
-          portfolio.marketHoldings[i].expiryHoldings[expiryIndex].numOptions++;
-          if (isCall) {
-            portfolio.marketHoldings[i].expiryHoldings[expiryIndex].netCalls += currentAsset.balance;
-          }
-          if (currentAsset.balance < 0) {
-            uint shortPos = (-currentAsset.balance).toUint256();
-            // short option will be added to depegPenaltyPos
-            portfolio.marketHoldings[i].depegPenaltyPos += shortPos;
-            portfolio.marketHoldings[i].expiryHoldings[expiryIndex].totalShortPositions += shortPos;
-          }
-        }
-      }
+      portfolio.marketHoldings[i] = _populateMarketDerivatives(holding, assets, marketId, seenExpires, numExpires);
     }
     return portfolio;
+  }
+
+  function _scanMarketAssets(ISubAccounts.AssetBalance[] memory assets, uint marketId)
+    internal
+    view
+    returns (
+      IStandardManager.MarketHolding memory holding,
+      uint[] memory seenExpires,
+      uint[] memory expiryOptionCounts,
+      uint numExpires,
+      uint numFutures
+    )
+  {
+    seenExpires = new uint[](assets.length);
+    expiryOptionCounts = new uint[](assets.length);
+
+    for (uint j; j < assets.length; j++) {
+      ISubAccounts.AssetBalance memory currentAsset = assets[j];
+      if (currentAsset.asset == cashAsset) continue;
+
+      IStandardManager.AssetDetail memory detail = standardManager.assetDetails(currentAsset.asset);
+      if (detail.marketId != marketId) continue;
+
+      if (detail.assetType == IStandardManager.AssetType.Perpetual) {
+        holding.perp = IPerpAsset(address(currentAsset.asset));
+        holding.perpPosition = currentAsset.balance;
+        holding.depegPenaltyPos += SignedMath.abs(currentAsset.balance);
+      } else if (detail.assetType == IStandardManager.AssetType.DatedFuture) {
+        holding.datedFuture = IDatedFutureAsset(address(currentAsset.asset));
+        numFutures++;
+        holding.depegPenaltyPos += SignedMath.abs(currentAsset.balance);
+      } else if (detail.assetType == IStandardManager.AssetType.Option) {
+        holding.option = IOptionAsset(address(currentAsset.asset));
+        (uint expiry,,) = OptionEncoding.fromSubId(uint96(currentAsset.subId));
+        uint expiryIndex;
+        (numExpires, expiryIndex) = seenExpires.addUniqueToArray(expiry, numExpires);
+        expiryOptionCounts[expiryIndex]++;
+      } else {
+        holding.basePosition = currentAsset.balance.toUint256();
+      }
+    }
+  }
+
+  function _populateMarketDerivatives(
+    IStandardManager.MarketHolding memory holding,
+    ISubAccounts.AssetBalance[] memory assets,
+    uint marketId,
+    uint[] memory seenExpires,
+    uint numExpires
+  ) internal view returns (IStandardManager.MarketHolding memory) {
+    uint nextFutureIndex = 0;
+
+    for (uint j; j < assets.length; j++) {
+      ISubAccounts.AssetBalance memory currentAsset = assets[j];
+      if (currentAsset.asset == cashAsset) continue;
+
+      IStandardManager.AssetDetail memory detail = standardManager.assetDetails(currentAsset.asset);
+      if (detail.marketId != marketId) continue;
+
+      if (detail.assetType == IStandardManager.AssetType.Option) {
+        holding = _appendOptionPosition(holding, currentAsset, seenExpires, numExpires);
+      } else if (detail.assetType == IStandardManager.AssetType.DatedFuture) {
+        holding.futurePositions[nextFutureIndex] =
+          IStandardManager.FuturePosition({subId: currentAsset.subId, balance: currentAsset.balance});
+        nextFutureIndex++;
+      }
+    }
+
+    return holding;
+  }
+
+  function _appendOptionPosition(
+    IStandardManager.MarketHolding memory holding,
+    ISubAccounts.AssetBalance memory currentAsset,
+    uint[] memory seenExpires,
+    uint numExpires
+  ) internal pure returns (IStandardManager.MarketHolding memory) {
+    (uint expiry, uint strike, bool isCall) = OptionEncoding.fromSubId(uint96(currentAsset.subId));
+    uint expiryIndex = seenExpires.findInArray(expiry, numExpires).toUint256();
+    IStandardManager.ExpiryHolding memory expiryHolding = holding.expiryHoldings[expiryIndex];
+    uint nextIndex = expiryHolding.numOptions;
+    expiryHolding.options[nextIndex] = IStandardManager.Option({strike: strike, isCall: isCall, balance: currentAsset.balance});
+    expiryHolding.numOptions = nextIndex + 1;
+
+    if (isCall) {
+      expiryHolding.netCalls += currentAsset.balance;
+    }
+    if (currentAsset.balance < 0) {
+      uint shortPos = (-currentAsset.balance).toUint256();
+      holding.depegPenaltyPos += shortPos;
+      expiryHolding.totalShortPositions += shortPos;
+    }
+
+    holding.expiryHoldings[expiryIndex] = expiryHolding;
+    return holding;
   }
 
   /**
