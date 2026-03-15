@@ -1,0 +1,27 @@
+{
+  "iapFeed": "0x8a4089B354532dF320073c8fAde89dcAD69971DF",
+  "ibpFeed": "0x420c4838BFbbfFb061717434a0767adDd0b95C8B",
+  "manager": "0xBdae5e2dC9FC3b2e370cfD31fB88d86Dc4814B76",
+  "managerConfig": {
+    "maxAccountSize": 128,
+    "minOIFee": "50000000000000000000",
+    "oiFeeRateBPS": 100000000000000000,
+    "perpCap": "12000000000000000000000"
+  },
+  "perp": "0x0d5e36041064248445F8a8D5d0bBDc3b5c48fDA7",
+  "perpFeed": "0x684b98Cf6467386AA3b73D8b6a50c034Ea034705",
+  "riskConfig": {
+    "initialMarginRatio": 200000000000000000,
+    "initialMaxLeverage": 5000000000000000000,
+    "initialSpotShockDown": 200000000000000000,
+    "initialSpotShockUp": 200000000000000000,
+    "isSquared": true,
+    "isWhitelisted": true,
+    "maintenanceMarginRatio": 120000000000000000,
+    "maintenanceMaxLeverage": 5000000000000000000,
+    "maintenanceSpotShockDown": 100000000000000000,
+    "maintenanceSpotShockUp": 100000000000000000
+  },
+  "spotFeed": "0x0812f224D7329C6166040E377fEb2c46a73AdaCd",
+  "viewer": "0xD0b29462394585250282A625EA1025143359e271"
+}

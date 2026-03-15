@@ -10,6 +10,7 @@ import {IPMRMLib} from "../src/interfaces/IPMRMLib.sol";
 import {IPMRM} from "../src/interfaces/IPMRMLib.sol";
 import {IPMRMLib_2} from "../src/interfaces/IPMRMLib_2.sol";
 import {IPMRM_2} from "../src/interfaces/IPMRMLib_2.sol";
+import {SquaredPerpManager} from "../src/risk-managers/SquaredPerpManager.sol";
 
 
 library Config {
@@ -627,6 +628,50 @@ library Config {
             baseCap = 0;
         } else {
             revert("market not supported");
+        }
+    }
+
+    function getSquaredPerpConfig(string memory market) public pure returns (
+        SquaredPerpManager.PerpRiskParams memory riskParams,
+        uint perpCap,
+        uint maxAccountSize,
+        uint oiFeeRateBPS,
+        uint minOIFee
+    ) {
+        maxAccountSize = MAX_ACCOUNT_SIZE_PMRM;
+        oiFeeRateBPS = OI_FEE_BPS;
+        minOIFee = MIN_OI_FEE;
+
+        if (keccak256(abi.encodePacked(market)) == keccak256(abi.encodePacked("SFP"))) {
+            riskParams = SquaredPerpManager.PerpRiskParams({
+                isWhitelisted: true,
+                isSquared: true,
+                initialMarginRatio: 0.20e18,
+                maintenanceMarginRatio: 0.12e18,
+                initialMaxLeverage: 5e18,
+                maintenanceMaxLeverage: 5e18,
+                initialSpotShockUp: 0.20e18,
+                initialSpotShockDown: 0.20e18,
+                maintenanceSpotShockUp: 0.10e18,
+                maintenanceSpotShockDown: 0.10e18
+            });
+            perpCap = 250_000e18;
+        } else if (keccak256(abi.encodePacked(market)) == keccak256(abi.encodePacked("BTC"))) {
+            riskParams = SquaredPerpManager.PerpRiskParams({
+                isWhitelisted: true,
+                isSquared: true,
+                initialMarginRatio: 0.20e18,
+                maintenanceMarginRatio: 0.12e18,
+                initialMaxLeverage: 5e18,
+                maintenanceMaxLeverage: 5e18,
+                initialSpotShockUp: 0.20e18,
+                initialSpotShockDown: 0.20e18,
+                maintenanceSpotShockUp: 0.10e18,
+                maintenanceSpotShockDown: 0.10e18
+            });
+            perpCap = 12_000e18;
+        } else {
+            revert("squared perp market not supported");
         }
     }
 

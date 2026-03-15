@@ -132,3 +132,191 @@ And every address will be stored in `deployments/999/weth.json`
 ```
 
 You can update the market name to "wbtc" and run the script again to deploy wbtc markets.
+
+### 4. Deploy Squared-Perp Market (Base)
+
+For Base (`chainId 8453`), run the squared-perp deployment with `--slow`.
+
+This flow assumes:
+- `deployments/8453/core.json` already exists
+- the underlying market JSON already exists at `deployments/8453/<MARKET_NAME>.json`
+- the existing market JSON contains the `spotFeed` to reuse for the squared perp
+
+Example for `SFP`:
+
+```shell
+MARKET_NAME=SFP forge script scripts/deploy-squared-perp-market.s.sol --rpc-url base --broadcast --slow
+```
+
+This deploys:
+- a new `SquaredPerpAsset`
+- new perp and impact price diff feeds
+- a dedicated `SquaredPerpManager`
+- a dedicated `BasePortfolioViewer`
+
+The deployment artifact is written to:
+
+```text
+deployments/8453/SFP_SQUARED.json
+```
+
+The artifact includes:
+- the new squared perp address
+- the manager and viewer addresses
+- the perp and impact feeds
+- `managerConfig`
+- `riskConfig`
+
+Example artifact shape:
+
+```json
+{
+  "spotFeed": "0x...",
+  "perp": "0x...",
+  "perpFeed": "0x...",
+  "iapFeed": "0x...",
+  "ibpFeed": "0x...",
+  "manager": "0x...",
+  "viewer": "0x...",
+  "managerConfig": {
+    "maxAccountSize": 128,
+    "minOIFee": 50000000000000000000,
+    "oiFeeRateBPS": 100000000000000000,
+    "perpCap": 250000000000000000000000
+  },
+  "riskConfig": {
+    "isWhitelisted": true,
+    "isSquared": true,
+    "initialMarginRatio": 200000000000000000,
+    "maintenanceMarginRatio": 120000000000000000,
+    "initialMaxLeverage": 5000000000000000000,
+    "maintenanceMaxLeverage": 5000000000000000000,
+    "initialSpotShockUp": 200000000000000000,
+    "initialSpotShockDown": 200000000000000000,
+    "maintenanceSpotShockUp": 100000000000000000,
+    "maintenanceSpotShockDown": 100000000000000000
+  }
+}
+```
+
+### 5. Deploy BTC Squared-Perp Market On Base (Chainlink Spot)
+
+For `MARKET_NAME=BTC` on Base (`chainId 8453`), the squared-perp deployment script will:
+- deploy a `SquaredPerpAsset`
+- deploy new `perpFeed`, `iapFeed`, and `ibpFeed` contracts
+- deploy a dedicated `SquaredPerpManager`
+- deploy a dedicated `BasePortfolioViewer`
+- deploy a `ChainlinkSpotFeed` adapter for the Base BTC/USD Chainlink oracle
+
+The Chainlink BTC/USD spot oracle used in this flow is:
+
+```text
+0x64c911996D3c6aC71f9b455B1E8E7266BcbD848F
+```
+
+This means `deployments/8453/BTC.json` is not required just to source a spot feed.
+
+Prerequisites:
+- `deployments/8453/core.json` exists
+- `deployments/8453/shared.json` exists
+- `PRIVATE_KEY` is set in `.env`
+- the deployer wallet has Base ETH for gas
+
+Run:
+
+```shell
+source .env
+MARKET_NAME=BTC forge script scripts/deploy-squared-perp-market.s.sol --rpc-url base --broadcast --slow
+```
+
+If you are not using a `base` alias in `foundry.toml`, pass the full Base RPC URL instead.
+
+Artifact output:
+
+```text
+deployments/8453/BTC_SQUARED.json
+```
+
+Important operational note:
+- the script deploys `perpFeed`, `iapFeed`, and `ibpFeed`
+- those contracts do not self-update
+- after deployment they still require signed feed updates from the configured signers in `deployments/8453/shared.json`
+
+The BTC Chainlink spot feed covers the `spotFeed` input only. The market still needs live updates for:
+- `perpFeed`
+- `iapFeed`
+- `ibpFeed`
+
+### 6. Run BTC Squared-Perp Feed Updater
+
+The repo includes a minimal updater at:
+
+```text
+scripts/update_btc_squared_feeds.py
+```
+
+It uses:
+- onchain `spotFeed` as the BTC/USD anchor
+- Binance `BTCUSDT` perpetual best bid/ask midpoint as the mark source
+- a fixed spread around mark for `iapFeed` and `ibpFeed`
+- one or more signer keys for the EIP-712 feed signatures
+- one relayer key to submit transactions
+- the deployed `OracleDataSubmitter` to batch all pending feed updates into one transaction
+
+Required env vars:
+
+```text
+BASE_RPC_URL=...
+SIGNER1_PRIVATE_KEY=...
+```
+
+Optional env vars:
+
+```text
+RELAYER_PRIVATE_KEY=...
+SIGNER2_PRIVATE_KEY=...
+DATA_SUBMITTER=...
+```
+
+If `RELAYER_PRIVATE_KEY` is omitted, the updater falls back to `PRIVATE_KEY`, then `SIGNER1_PRIVATE_KEY`.
+If your feeds are configured with `requiredSigners = 1`, `SIGNER1_PRIVATE_KEY` alone is enough.
+If `DATA_SUBMITTER` is omitted, the updater uses `deployments/8453/core.json`.
+
+Optional env vars:
+
+```text
+BTC_SQUARED_MAX_BASIS_BPS=30
+BTC_SQUARED_IMPACT_SPREAD_BPS=10
+BTC_SQUARED_UPDATE_THRESHOLD_BPS=10
+BTC_SQUARED_LOOP_INTERVAL_SEC=60
+BTC_SQUARED_DEADLINE_SEC=30
+BTC_SQUARED_CONFIDENCE=1000000000000000000
+BTC_SQUARED_TIMESTAMP_SAFETY_SEC=15
+```
+
+Run once:
+
+```shell
+python3 scripts/update_btc_squared_feeds.py --once
+```
+
+Dry run:
+
+```shell
+python3 scripts/update_btc_squared_feeds.py --once --dry-run
+```
+
+Run continuously:
+
+```shell
+python3 scripts/update_btc_squared_feeds.py
+```
+
+The updater submits to:
+- `perpFeed`
+- `iapFeed`
+- `ibpFeed`
+
+By default it batches those updates through the Base `dataSubmitter` in a single transaction per cycle.
+
+It does not publish squared prices. It publishes linear BTC perp and impact inputs, and the onchain `SquaredPerpAsset` squares them internally.
