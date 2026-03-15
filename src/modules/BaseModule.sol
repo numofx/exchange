@@ -9,12 +9,15 @@ import {ISubAccounts} from "v2-core/src/interfaces/ISubAccounts.sol";
 import {Ownable2Step, Ownable} from "openzeppelin/access/Ownable2Step.sol";
 import {IMatching} from "../interfaces/IMatching.sol";
 import {IERC20} from "openzeppelin/token/ERC20/IERC20.sol";
+import {SafeERC20} from "openzeppelin/token/ERC20/utils/SafeERC20.sol";
 
 /**
  * @title BaseModule
  * @dev Implement common utils shared by all modules
  */
 abstract contract BaseModule is IBaseModule, Ownable2Step {
+  using SafeERC20 for IERC20;
+
   IMatching public immutable matching;
   ISubAccounts public immutable subAccounts;
 
@@ -29,7 +32,7 @@ abstract contract BaseModule is IBaseModule, Ownable2Step {
    * @dev Module contracts should never hold any funds, but just in case, allow the owner to withdraw
    */
   function withdrawERC20(address token, address recipient, uint amount) external onlyOwner {
-    IERC20(token).transfer(recipient, amount);
+    IERC20(token).safeTransfer(recipient, amount);
   }
 
   /**

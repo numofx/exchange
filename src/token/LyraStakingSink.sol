@@ -2,10 +2,13 @@
 pragma solidity ^0.8.18;
 
 import "openzeppelin/token/ERC20/IERC20.sol";
+import "openzeppelin/token/ERC20/utils/SafeERC20.sol";
 import "openzeppelin/access/Ownable.sol";
 
 /// @notice Contract for users to lock up their tokens until owner chooses to free the tokens
 contract LyraStakingSink is Ownable {
+  using SafeERC20 for IERC20;
+
   IERC20 public token;
   mapping(address => uint) public lockedBalances;
   bool public locked = true;
@@ -23,7 +26,7 @@ contract LyraStakingSink is Ownable {
   ///////////
 
   function recoverERC20(address tokenAddress, uint tokenAmount) external onlyOwner {
-    IERC20(tokenAddress).transfer(msg.sender, tokenAmount);
+    IERC20(tokenAddress).safeTransfer(msg.sender, tokenAmount);
   }
 
   function setLocked(bool _locked) external onlyOwner {
@@ -35,7 +38,7 @@ contract LyraStakingSink is Ownable {
   ////////////
 
   function lock(uint amount) external {
-    token.transferFrom(msg.sender, address(this), amount);
+    token.safeTransferFrom(msg.sender, address(this), amount);
     lockedBalances[msg.sender] += amount;
     emit Locked(msg.sender, amount);
   }
@@ -44,7 +47,7 @@ contract LyraStakingSink is Ownable {
     require(!locked, "locked");
     uint amount = lockedBalances[msg.sender];
     lockedBalances[msg.sender] = 0;
-    token.transfer(msg.sender, amount);
+    token.safeTransfer(msg.sender, amount);
     emit Withdrawn(msg.sender, amount);
   }
 

@@ -305,12 +305,12 @@ contract LeveragedBasisTSA is CollateralManagementTSA {
     require(newUnderlyingBase > 0, LBT_InvalidDeltaChange());
 
     int baseExposure =
-      int(tradeHelperVars.baseBalance) + tradeHelperVars.perpPosition.multiplyDecimal(int(perpBaseRatio));
+      tradeHelperVars.baseBalance.toInt256() + tradeHelperVars.perpPosition.multiplyDecimal(perpBaseRatio.toInt256());
 
     // delta as a % of TVL
     int preDeltaPercent = baseExposure.divideDecimal(tradeHelperVars.underlyingBase.toInt256());
 
-    int deltaChange = tradeHelperVars.isBaseTrade ? amtDelta : amtDelta.multiplyDecimal(int(perpBaseRatio));
+    int deltaChange = tradeHelperVars.isBaseTrade ? amtDelta : amtDelta.multiplyDecimal(perpBaseRatio.toInt256());
     int newDeltaPercent = (baseExposure + deltaChange).divideDecimal(newUnderlyingBase);
 
     require(
@@ -326,11 +326,11 @@ contract LeveragedBasisTSA is CollateralManagementTSA {
     LBTSAStorage storage $ = _getLBTSAStorage();
 
     uint newUnderlyingBase =
-      isWithdrawal ? uint(int(tradeHelperVars.underlyingBase) + amtDelta) : tradeHelperVars.underlyingBase;
+      isWithdrawal ? (tradeHelperVars.underlyingBase.toInt256() + amtDelta).toUint256() : tradeHelperVars.underlyingBase;
 
     // Leverage
     uint leverage = tradeHelperVars.baseBalance.divideDecimal(tradeHelperVars.underlyingBase);
-    uint newBaseBalance = uint(int(tradeHelperVars.baseBalance) + amtDelta);
+    uint newBaseBalance = (tradeHelperVars.baseBalance.toInt256() + amtDelta).toUint256();
 
     // handle zero case
     if (newBaseBalance == 0 && newUnderlyingBase == 0) return;
@@ -338,7 +338,9 @@ contract LeveragedBasisTSA is CollateralManagementTSA {
     uint newLeverage = newBaseBalance.divideDecimal(newUnderlyingBase);
 
     require(
-      _isWithinBounds(int(leverage), int(newLeverage), int($.lbParams.leverageFloor), int($.lbParams.leverageCeil)),
+      _isWithinBounds(
+        leverage.toInt256(), newLeverage.toInt256(), $.lbParams.leverageFloor.toInt256(), $.lbParams.leverageCeil.toInt256()
+      ),
       LBT_PostTradeLeverageOutOfRange()
     );
   }
@@ -364,7 +366,7 @@ contract LeveragedBasisTSA is CollateralManagementTSA {
   function _verifyEmaMarkLoss(ITradeModule.TradeData memory tradeData, TradeHelperVars memory tradeHelperVars) internal {
     LBTSAStorage storage $ = _getLBTSAStorage();
 
-    int priceToCheck = int(tradeHelperVars.isBaseTrade ? tradeHelperVars.basePrice : tradeHelperVars.perpPrice);
+    int priceToCheck = (tradeHelperVars.isBaseTrade ? tradeHelperVars.basePrice : tradeHelperVars.perpPrice).toInt256();
 
     // Note, we don't include fee in the loss calculation
     int lossPerUnitCash = tradeData.isBid ? tradeData.limitPrice - priceToCheck : priceToCheck - tradeData.limitPrice;
@@ -390,8 +392,8 @@ contract LeveragedBasisTSA is CollateralManagementTSA {
     LBTSAStorage storage $ = _getLBTSAStorage();
 
     uint dt = block.timestamp - $.markLossLastTs;
-    uint decay = FixedPointMathLib.exp(-int($.lbParams.emaDecayFactor * dt));
-    $.markLossEma = $.markLossEma.multiplyDecimal(int(decay));
+    uint decay = FixedPointMathLib.exp(-($.lbParams.emaDecayFactor * dt).toInt256());
+    $.markLossEma = $.markLossEma.multiplyDecimal(decay.toInt256());
     $.markLossLastTs = block.timestamp;
 
     return $.markLossEma;

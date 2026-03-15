@@ -2,6 +2,7 @@
 pragma solidity ^0.8.18;
 
 import {IERC20} from "openzeppelin/token/ERC20/IERC20.sol";
+import {SafeERC20} from "openzeppelin/token/ERC20/utils/SafeERC20.sol";
 import {ISubAccounts} from "v2-core/src/interfaces/ISubAccounts.sol";
 import {ICashAsset} from "v2-core/src/interfaces/ICashAsset.sol";
 import {IERC20BasedAsset} from "v2-core/src/interfaces/IERC20BasedAsset.sol";
@@ -13,6 +14,8 @@ import "../interfaces/IMatching.sol";
  * @title SubAccountCreator
  */
 contract SubAccountCreator {
+  using SafeERC20 for IERC20;
+
   ISubAccounts public immutable subAccounts;
 
   IMatching public immutable matching;
@@ -39,9 +42,9 @@ contract SubAccountCreator {
     if (initDeposit > 0) {
       IERC20 erc20 = baseAsset.wrappedAsset();
 
-      erc20.transferFrom(msg.sender, address(this), initDeposit);
+      erc20.safeTransferFrom(msg.sender, address(this), initDeposit);
 
-      erc20.approve(address(baseAsset), type(uint).max);
+      erc20.forceApprove(address(baseAsset), type(uint).max);
 
       baseAsset.deposit(accountId, initDeposit);
     }

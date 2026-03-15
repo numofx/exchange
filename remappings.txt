@@ -1,6 +1,8 @@
 forge-std/=lib/forge-std/src/
+lib/forge-std/=lib/forge-std/
 openzeppelin/=lib/openzeppelin-contracts/contracts/
 openzeppelin-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts/
+lyra-utils-test/=lib/lyra-utils/test/
 lyra-utils/=lib/lyra-utils/src/
 src/decimals/=lib/lyra-utils/src/decimals/
-v2-core/=lib/v2-core/
+v2-core/=v2-core/

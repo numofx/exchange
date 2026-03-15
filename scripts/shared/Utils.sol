@@ -22,7 +22,7 @@ contract UtilBase is Script {
 
   ///@dev read deployment file from deployments/
   function _readV2CoreDeploymentFile(string memory fileName) internal view returns (string memory) {
-    string memory deploymentDir = string.concat(vm.projectRoot(), "/lib/v2-core/deployments/");
+    string memory deploymentDir = string.concat(vm.projectRoot(), "/../../exchange-core/deployments/");
     string memory chainDir = string.concat(vm.toString(block.chainid), "/");
     string memory file = string.concat(fileName, ".json");
     return vm.readFile(string.concat(deploymentDir, chainDir, file));

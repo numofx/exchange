@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 pragma solidity ^0.8.18;
 
+import {SafeCast} from "openzeppelin/utils/math/SafeCast.sol";
 import {StandardManager} from "v2-core/src/risk-managers/StandardManager.sol";
 import {PMRM, IPMRM} from "v2-core/src/risk-managers/PMRM.sol";
 import {IBaseManager} from "v2-core/src/interfaces/IBaseManager.sol";
@@ -23,6 +24,8 @@ import {ISpotFeed} from "v2-core/src/interfaces/ISpotFeed.sol";
  * - merge subaccount back into liquidator account (yes or no)
  */
 contract LyraAuctionUtils {
+  using SafeCast for uint;
+
   ISubAccounts subAccounts;
   DutchAuction auction;
   address cash;
@@ -122,7 +125,7 @@ contract LyraAuctionUtils {
       toAcc: toId,
       asset: IAsset(cash),
       subId: 0,
-      amount: int(amount),
+      amount: amount.toInt256(),
       assetData: bytes32(0)
     });
     subAccounts.submitTransfer(adjustment, managerData);

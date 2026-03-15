@@ -167,7 +167,7 @@ abstract contract CollateralManagementTSA is BaseOnChainSigningTSA {
       revert CMTSA_PositionInsolvent();
     }
 
-    return uint(convertedMtM);
+    return convertedMtM.toUint256();
   }
 
   function _getBasePrice() internal view virtual returns (uint spotPrice);

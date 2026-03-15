@@ -51,7 +51,7 @@ for key, value in matching.items():
 
 for key, value in core_and_market.items():
     print(key, value)
-    with open(os.path.join(BASE_DIR, "./lib/v2-core/out/", value + ".sol/", value + ".json")) as f:
+    with open(os.path.join(BASE_DIR, "../../exchange-core/out/", value + ".sol/", value + ".json")) as f:
         contents = json.loads(f.read())
         abi = contents["abi"]
     with open(os.path.join(BASE_DIR, "./all_abis/", key + ".json"), "w") as f:

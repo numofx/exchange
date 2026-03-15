@@ -11,7 +11,7 @@ set -euo pipefail
 # Optional env vars:
 #   CHAIN_ID=8453
 #   MATCHING_DEPLOYMENT_FILE=deployments/<chainId>/matching.json
-#   CORE_DEPLOYMENT_FILE=lib/v2-core/deployments/<chainId>/core.json
+#   CORE_DEPLOYMENT_FILE=../../exchange-core/deployments/<chainId>/core.json
 #   DISABLE_DEFAULT_EXECUTOR=true|false   (default: true)
 #   DISABLE_ATOMIC_EXECUTOR=true|false    (default: true)
 #   FEE_RECIPIENT_ACCOUNT_ID=<uint>       (default: auto from SecurityModule.accountId())
@@ -88,7 +88,7 @@ DISABLE_DEFAULT_EXECUTOR="${DISABLE_DEFAULT_EXECUTOR:-true}"
 DISABLE_ATOMIC_EXECUTOR="${DISABLE_ATOMIC_EXECUTOR:-true}"
 
 MATCHING_DEPLOYMENT_FILE="${MATCHING_DEPLOYMENT_FILE:-deployments/${CHAIN_ID}/matching.json}"
-CORE_DEPLOYMENT_FILE="${CORE_DEPLOYMENT_FILE:-lib/v2-core/deployments/${CHAIN_ID}/core.json}"
+CORE_DEPLOYMENT_FILE="${CORE_DEPLOYMENT_FILE:-../../exchange-core/deployments/${CHAIN_ID}/core.json}"
 
 if [[ ! -f "$MATCHING_DEPLOYMENT_FILE" ]]; then
   echo "Missing matching deployment file: $MATCHING_DEPLOYMENT_FILE" >&2
