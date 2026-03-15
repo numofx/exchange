@@ -6,6 +6,7 @@ import {BaseModule} from "./BaseModule.sol";
 import {IDepositModule} from "../interfaces/IDepositModule.sol";
 // Interfaces
 import {IERC20Metadata} from "openzeppelin/token/ERC20/extensions/IERC20Metadata.sol";
+import {SafeERC20} from "openzeppelin/token/ERC20/utils/SafeERC20.sol";
 import {IManager} from "v2-core/src/interfaces/IManager.sol";
 import {IERC20BasedAsset} from "v2-core/src/interfaces/IERC20BasedAsset.sol";
 import {IMatching} from "../interfaces/IMatching.sol";
@@ -14,6 +15,8 @@ import {IMatching} from "../interfaces/IMatching.sol";
  * @dev Handles depositing ERC20 Asset into subAccount
  */
 contract DepositModule is IDepositModule, BaseModule {
+  using SafeERC20 for IERC20Metadata;
+
   constructor(IMatching _matching) BaseModule(_matching) {}
 
   function executeAction(VerifiedAction[] memory actions, bytes memory)
@@ -46,9 +49,9 @@ contract DepositModule is IDepositModule, BaseModule {
       depositAmount = depositToken.balanceOf(action.owner);
     }
 
-    depositToken.transferFrom(action.owner, address(this), depositAmount);
+    depositToken.safeTransferFrom(action.owner, address(this), depositAmount);
 
-    depositToken.approve(address(data.asset), depositAmount);
+    depositToken.forceApprove(address(data.asset), depositAmount);
     IERC20BasedAsset(data.asset).deposit(subaccountId, depositAmount);
 
     // Return

@@ -68,7 +68,7 @@ matching_contracts=(
 #explorer=https://explorerl2new-prod-testnet-0eakp60405.t.conduit.xyz/api
 chainId=957
 explorer="https://explorer.lyra.finance/api"
-cd ./lib/v2-core
+cd ../../exchange-core
 
 # Core
 echo "Core"

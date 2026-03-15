@@ -2,9 +2,12 @@ pragma solidity ^0.8.27;
 
 import {AccessControlUpgradeable} from "openzeppelin-upgradeable/access/AccessControlUpgradeable.sol";
 import {ERC20Upgradeable, Initializable} from "openzeppelin-upgradeable/token/ERC20/ERC20Upgradeable.sol";
+import {SafeCast} from "openzeppelin/utils/math/SafeCast.sol";
 
 
 contract FXToken is Initializable, ERC20Upgradeable, AccessControlUpgradeable {
+    using SafeCast for uint256;
+
     bytes32 public constant MINTER_ROLE = keccak256("MINTER");
     bytes32 public constant BLOCK_MANAGER_ROLE = keccak256("BLOCK_MANAGER");
     // keccak256(abi.encode(uint256(keccak256("FxToken")) - 1)) & ~bytes32(uint256(0xff))
@@ -37,7 +40,7 @@ contract FXToken is Initializable, ERC20Upgradeable, AccessControlUpgradeable {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
 
         FxTokenStorage storage s = _getStorage();
-        s.decimals = uint8(_decimals);
+        s.decimals = _decimals.toUint8();
     }
 
     ////////////////

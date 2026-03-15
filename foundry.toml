@@ -1,6 +1,8 @@
 [profile.default]
 src = 'src'
 out = 'out'
+allow_paths = ["../../exchange-core"]
+include_paths = ["../../exchange-core"]
 
 optimizer = true
 optimizer_runs = 50
@@ -24,4 +26,4 @@ conduit_staging = "https://l2-staging-9ns7v94tpj.t.conduit.xyz"
 sepolia = "https://sepolia.infura.io/v3/26251a7744c548a3adbc17880fc70764"
 
 [profile.CORE]
-src = "lib/v2-core/src"
+src = "v2-core/src"

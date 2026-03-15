@@ -11,7 +11,7 @@ address=$(cast wallet address "$PRIVATE_KEY")
 echo "Deployer address:" $address
 
 # Deploy v2-core repos
-cd ./lib/v2-core
+cd ../../exchange-core
 
 # Deploy core contracts
 forge script scripts/deploy-base-only-market.s.sol --rpc-url $ETH_RPC_URL --broadcast
@@ -19,6 +19,5 @@ forge script scripts/deploy-base-only-market.s.sol --rpc-url $ETH_RPC_URL --broa
 # Deploy matching contracts
 cd ../../
 # Copy previous outputs to deployments folder
-cp lib/v2-core/deployments/$chainId/WSTETH.json deployments/$chainId/WSTETH.json
-cp lib/v2-core/scripts/input/$chainId/config.json deployments/$chainId/shared.json
-
+cp ../../exchange-core/deployments/$chainId/WSTETH.json deployments/$chainId/WSTETH.json
+cp ../../exchange-core/scripts/input/$chainId/config.json deployments/$chainId/shared.json

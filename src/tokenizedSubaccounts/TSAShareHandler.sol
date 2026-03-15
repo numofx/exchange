@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import {Ownable2Step, Ownable} from "openzeppelin/access/Ownable2Step.sol";
 import {EnumerableSet} from "openzeppelin/utils/structs/EnumerableSet.sol";
 import {IERC20Metadata} from "openzeppelin/token/ERC20/extensions/IERC20Metadata.sol";
+import {SafeERC20} from "openzeppelin/token/ERC20/utils/SafeERC20.sol";
 
 interface IBridge {
   function bridge(
@@ -71,6 +72,7 @@ interface IBaseTSA {
 contract TSAShareHandler is Ownable2Step {
   using EnumerableSet for EnumerableSet.Bytes32Set;
   using EnumerableSet for EnumerableSet.AddressSet;
+  using SafeERC20 for IERC20Metadata;
 
   struct PendingTSAAction {
     /// @dev either a deposit or withdrawal id for the given TSA. actionId = isDeposit ? actionId : actionId | 1 << 255
@@ -119,7 +121,7 @@ contract TSAShareHandler is Ownable2Step {
   }
 
   function recoverERC20(IERC20Metadata token, address recipient) external onlyOwner {
-    token.transfer(recipient, token.balanceOf(address(this)));
+    token.safeTransfer(recipient, token.balanceOf(address(this)));
   }
 
   function setKeeper(address newKeeper, bool isKeeper) external onlyOwner {
@@ -142,8 +144,8 @@ contract TSAShareHandler is Ownable2Step {
 
     IBaseTSA.BaseTSAAddresses memory tsaAddrs = toVault.getBaseTSAAddresses();
 
-    tsaAddrs.depositAsset.transferFrom(msg.sender, address(this), amount);
-    tsaAddrs.depositAsset.approve(address(toVault), amount);
+    tsaAddrs.depositAsset.safeTransferFrom(msg.sender, address(this), amount);
+    tsaAddrs.depositAsset.forceApprove(address(toVault), amount);
 
     _addPendingAction(
       toVault,
@@ -169,7 +171,7 @@ contract TSAShareHandler is Ownable2Step {
   ) external {
     require(fallbackDest != address(0), "fallbackDest cannot be 0");
 
-    IERC20Metadata(address(fromVault)).transferFrom(msg.sender, address(this), amount);
+    IERC20Metadata(address(fromVault)).safeTransferFrom(msg.sender, address(this), amount);
 
     _addPendingAction(
       fromVault,
@@ -303,7 +305,7 @@ contract TSAShareHandler is Ownable2Step {
     }
 
     if (sendToFallback) {
-      token.transfer(fallbackAddr, amount);
+      token.safeTransfer(fallbackAddr, amount);
     }
   }
 
@@ -334,7 +336,7 @@ contract TSAShareHandler is Ownable2Step {
     uint amount,
     address withdrawConnector
   ) internal returns (bool) {
-    withdrawToken.approve(address(bridge), amount);
+    withdrawToken.forceApprove(address(bridge), amount);
 
     uint fees = IConnectorPlugExt(withdrawConnector).getMinFees(withdrawalMinGasLimitEstimation, payloadBufferSize);
 

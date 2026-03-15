@@ -9,8 +9,11 @@ import {IMatching} from "./interfaces/IMatching.sol";
 import {ISubAccounts} from "v2-core/src/interfaces/ISubAccounts.sol";
 import {IMatchingModule} from "./interfaces/IMatchingModule.sol";
 import {IERC20} from "openzeppelin/token/ERC20/IERC20.sol";
+import {SafeERC20} from "openzeppelin/token/ERC20/utils/SafeERC20.sol";
 
 contract Matching is IMatching, ActionVerifier {
+  using SafeERC20 for IERC20;
+
   /// @dev Permissioned address to execute trades
   mapping(address tradeExecutor => bool canExecuteTrades) public tradeExecutors;
 
@@ -45,7 +48,7 @@ contract Matching is IMatching, ActionVerifier {
    * @dev This contract should never hold any funds, but just in case, allow the owner to withdraw
    */
   function withdrawERC20(address token, address recipient, uint amount) external onlyOwner {
-    IERC20(token).transfer(recipient, amount);
+    IERC20(token).safeTransfer(recipient, amount);
   }
 
   /////////////////////////////
