@@ -128,6 +128,10 @@ contract DeploySquaredPerpMarket is Utils {
   }
 
   function _loadExistingSpotFeed(string memory marketName) internal view returns (ISpotFeed) {
+    if (block.chainid == 8453 && keccak256(abi.encodePacked(marketName)) == keccak256(abi.encodePacked("NGN"))) {
+      marketName = "CNGN";
+    }
+
     string memory content = _readDeploymentFile(marketName);
     return ISpotFeed(vm.parseJsonAddress(content, ".spotFeed"));
   }

@@ -2,6 +2,20 @@
 
 ## Base
 
+### NGN Squared Perp
+
+Date: 2026-03-16
+Chain ID: `8453`
+Artifact: [deployments/8453/NGN_SQUARED.json](/Users/robertleifke/Code/work/exchange-core/deployments/8453/NGN_SQUARED.json)
+
+- `spotFeed`: `0xf83e046aD9B9ea9725E6665667604Bbf4Ac4a54a`
+- `perp`: `0x20B25b6214390c24308d2D13014339D7f95fA599`
+- `perpFeed`: `0xDD3aF9Ba14bFE164946A898CFB42433D201f5f01`
+- `iapFeed`: `0xF6E0Dc52aa8BF16B908b1bA747a0591c5ad35E2E`
+- `ibpFeed`: `0xc17dFD8aec6A5250f9407b24FF884014061038f6`
+- `manager`: `0xf5a1bF5325Bd3684FFc4f8B73965Eb5f8118F22d`
+- `viewer`: `0xa8aAE86183529251fB1Fa0B2F4cF431fdeDd4DC1`
+
 ### BTC Squared Perp
 
 Date: 2026-03-15

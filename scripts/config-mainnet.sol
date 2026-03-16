@@ -656,6 +656,20 @@ library Config {
                 maintenanceSpotShockDown: 0.10e18
             });
             perpCap = 250_000e18;
+        } else if (keccak256(abi.encodePacked(market)) == keccak256(abi.encodePacked("NGN"))) {
+            riskParams = SquaredPerpManager.PerpRiskParams({
+                isWhitelisted: true,
+                isSquared: true,
+                initialMarginRatio: 0.20e18,
+                maintenanceMarginRatio: 0.12e18,
+                initialMaxLeverage: 5e18,
+                maintenanceMaxLeverage: 5e18,
+                initialSpotShockUp: 0.20e18,
+                initialSpotShockDown: 0.20e18,
+                maintenanceSpotShockUp: 0.10e18,
+                maintenanceSpotShockDown: 0.10e18
+            });
+            perpCap = 250_000e18;
         } else if (keccak256(abi.encodePacked(market)) == keccak256(abi.encodePacked("BTC"))) {
             riskParams = SquaredPerpManager.PerpRiskParams({
                 isWhitelisted: true,
