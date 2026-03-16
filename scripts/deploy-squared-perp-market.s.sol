@@ -11,6 +11,7 @@ import {ISpotFeed} from "../src/interfaces/ISpotFeed.sol";
 import {IManager} from "../src/interfaces/IManager.sol";
 import {LyraSpotDiffFeed} from "../src/feeds/LyraSpotDiffFeed.sol";
 import {ChainlinkSpotFeed, IAggregatorV3} from "../src/feeds/ChainlinkSpotFeed.sol";
+import {InvertedChainlinkSpotFeed} from "../src/feeds/InvertedChainlinkSpotFeed.sol";
 import {SquaredPerpAsset} from "../src/assets/SquaredPerpAsset.sol";
 import {BasePortfolioViewer} from "../src/risk-managers/BasePortfolioViewer.sol";
 import {SquaredPerpManager} from "../src/risk-managers/SquaredPerpManager.sol";
@@ -20,7 +21,9 @@ import {SquaredPerpManager} from "../src/risk-managers/SquaredPerpManager.sol";
  */
 contract DeploySquaredPerpMarket is Utils {
   address internal constant BASE_BTC_USD_CHAINLINK = 0x64c911996D3c6aC71f9b455B1E8E7266BcbD848F;
+  address internal constant BASE_NGN_USD_CHAINLINK = 0xdfbb5Cbc88E382de007bfe6CE99C388176ED80aD;
   uint64 internal constant CHAINLINK_SPOT_HEARTBEAT = 60 minutes;
+  uint64 internal constant L2_SEQUENCER_GRACE_PERIOD = 1 hours;
 
   struct SquaredPerpDeployment {
     SquaredPerpAsset perp;
@@ -139,6 +142,16 @@ contract DeploySquaredPerpMarket is Utils {
   function _getSquaredPerpSpotFeed(string memory marketName) internal returns (ISpotFeed) {
     if (block.chainid == 8453 && keccak256(abi.encodePacked(marketName)) == keccak256(abi.encodePacked("BTC"))) {
       return ISpotFeed(address(new ChainlinkSpotFeed(IAggregatorV3(BASE_BTC_USD_CHAINLINK), CHAINLINK_SPOT_HEARTBEAT)));
+    }
+
+    if (block.chainid == 8453 && keccak256(abi.encodePacked(marketName)) == keccak256(abi.encodePacked("NGN"))) {
+      return ISpotFeed(
+        address(
+          new InvertedChainlinkSpotFeed(
+            IAggregatorV3(BASE_NGN_USD_CHAINLINK), IAggregatorV3(address(0)), CHAINLINK_SPOT_HEARTBEAT, L2_SEQUENCER_GRACE_PERIOD
+          )
+        )
+      );
     }
 
     return _loadExistingSpotFeed(marketName);

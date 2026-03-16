@@ -2,19 +2,31 @@
 
 ## Base
 
+### NGN Linear Perp
+
+Date: 2026-03-16
+Chain ID: `8453`
+Artifact: [deployments/8453/NGN.json](/Users/robertleifke/Code/work/exchange-core/deployments/8453/NGN.json)
+
+- `spotFeed`: `0x9FCD5895e0dE5d6F4f69064EE955989324D6Dc28`
+- `perp`: `0x07c9CbA48De1d5A403EC78b0204a5036b520DE1c`
+- `perpFeed`: `0xDeb37948A9c73b888f6832A6Ff1F3B39a8a12F0E`
+- `iapFeed`: `0x101CCADddA707F80A9C144d0263D6dF3Fe4FE73B`
+- `ibpFeed`: `0x08B6d59F567CDcf665192dc032e0C5C8c5C777D2`
+
 ### NGN Squared Perp
 
 Date: 2026-03-16
 Chain ID: `8453`
 Artifact: [deployments/8453/NGN_SQUARED.json](/Users/robertleifke/Code/work/exchange-core/deployments/8453/NGN_SQUARED.json)
 
-- `spotFeed`: `0xf83e046aD9B9ea9725E6665667604Bbf4Ac4a54a`
-- `perp`: `0x20B25b6214390c24308d2D13014339D7f95fA599`
-- `perpFeed`: `0xDD3aF9Ba14bFE164946A898CFB42433D201f5f01`
-- `iapFeed`: `0xF6E0Dc52aa8BF16B908b1bA747a0591c5ad35E2E`
-- `ibpFeed`: `0xc17dFD8aec6A5250f9407b24FF884014061038f6`
-- `manager`: `0xf5a1bF5325Bd3684FFc4f8B73965Eb5f8118F22d`
-- `viewer`: `0xa8aAE86183529251fB1Fa0B2F4cF431fdeDd4DC1`
+- `spotFeed`: `0xa268936A80920B4A596b77d138591f7c527d54D3`
+- `perp`: `0xa9B9C8D76B9695b54D8a8bde998D95ca0eC0bcE6`
+- `perpFeed`: `0x801abe77c1E080dd13f080E51FB784Be7830e787`
+- `iapFeed`: `0x8cEe20Ed65AE335aD4c5fA5E488dF1FB94e928d4`
+- `ibpFeed`: `0x65AF06b9a00Ac6865CB4f68a543943Aa8504Cdf1`
+- `manager`: `0xBB623952F80feD409A2446d09325C6B226f560E6`
+- `viewer`: `0x410C71F7101D7A5Cee6480B0715173d26ABdb180`
 
 ### BTC Squared Perp
 
