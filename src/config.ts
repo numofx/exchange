@@ -3,6 +3,8 @@ import 'dotenv/config';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
+import { getAddress } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 
 const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(8081),
@@ -13,6 +15,8 @@ const envSchema = z.object({
   MATCHING_REPO_PATH: z.string().default('../options/matching'),
   MATCHING_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
   TRADE_MODULE_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
+  EXPECTED_ACTION_OWNER: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
+  EXPECTED_ACTION_SIGNER: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
   DRY_RUN: z.union([z.literal('true'), z.literal('false')]).default('false'),
   WAIT_FOR_RECEIPT: z.union([z.literal('true'), z.literal('false')]).default('false'),
 });
@@ -26,12 +30,16 @@ export type AppConfig = {
   matchingRepoPath: string;
   matchingAddress?: `0x${string}`;
   tradeModuleAddress?: `0x${string}`;
+  executorAddress: `0x${string}`;
+  expectedActionOwner?: `0x${string}`;
+  expectedActionSigner?: `0x${string}`;
   dryRun: boolean;
   waitForReceipt: boolean;
 };
 
 export function loadConfig(): AppConfig {
   const parsed = envSchema.parse(process.env);
+  const executorAddress = privateKeyToAccount(parsed.PRIVATE_KEY as `0x${string}`).address;
 
   return {
     port: parsed.PORT,
@@ -42,6 +50,9 @@ export function loadConfig(): AppConfig {
     matchingRepoPath: path.resolve(process.cwd(), parsed.MATCHING_REPO_PATH),
     matchingAddress: parsed.MATCHING_ADDRESS ? (parsed.MATCHING_ADDRESS as `0x${string}`) : undefined,
     tradeModuleAddress: parsed.TRADE_MODULE_ADDRESS ? (parsed.TRADE_MODULE_ADDRESS as `0x${string}`) : undefined,
+    executorAddress,
+    expectedActionOwner: parsed.EXPECTED_ACTION_OWNER ? (getAddress(parsed.EXPECTED_ACTION_OWNER) as `0x${string}`) : undefined,
+    expectedActionSigner: parsed.EXPECTED_ACTION_SIGNER ? (getAddress(parsed.EXPECTED_ACTION_SIGNER) as `0x${string}`) : undefined,
     dryRun: parsed.DRY_RUN === 'true',
     waitForReceipt: parsed.WAIT_FOR_RECEIPT === 'true',
   };

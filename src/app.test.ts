@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { buildApp } from './app.js';
 import type { AppConfig } from './config.js';
+import { assertPayloadConsistency } from './executor.js';
 import type { ExecuteMatchRequest, ExecuteMatchResponse } from './types.js';
 
 const config: AppConfig = {
@@ -12,6 +13,9 @@ const config: AppConfig = {
   privateKey: '0x1111111111111111111111111111111111111111111111111111111111111111',
   chainId: 8453,
   matchingRepoPath: '/tmp/matching',
+  executorAddress: '0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A',
+  expectedActionOwner: undefined,
+  expectedActionSigner: undefined,
   dryRun: true,
   waitForReceipt: false,
 };
@@ -74,6 +78,7 @@ test('GET /healthz returns executor status', async () => {
   const body = response.json();
   assert.equal(body.status, 'ok');
   assert.equal(body.chain_id, 8453);
+  assert.equal(body.executor_address, '0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A');
 
   await app.close();
 });
@@ -100,6 +105,17 @@ test('POST /execute validates request payload', async () => {
   assert.equal(response.statusCode, 400);
 
   await app.close();
+});
+
+test('assertPayloadConsistency rejects owner mismatch when an expected owner is configured', () => {
+  assert.throws(
+    () =>
+      assertPayloadConsistency(requestPayload, {
+        tradeModuleAddress: '0x0000000000000000000000000000000000000002',
+        expectedActionOwner: '0x00000000000000000000000000000000000000cc',
+      }),
+    /owner mismatch/,
+  );
 });
 
 test('POST /execute forwards valid payload to executor', async () => {

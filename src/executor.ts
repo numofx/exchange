@@ -42,7 +42,11 @@ export class MatchExecutor {
   }
 
   async execute(request: ExecuteMatchRequest): Promise<ExecuteMatchResponse> {
-    assertPayloadConsistency(request, this.deps.tradeModuleAddress);
+    assertPayloadConsistency(request, {
+      tradeModuleAddress: this.deps.tradeModuleAddress,
+      expectedActionOwner: this.config.expectedActionOwner,
+      expectedActionSigner: this.config.expectedActionSigner,
+    });
 
     const args = buildVerifyAndMatchArgs(request);
 
@@ -98,8 +102,21 @@ export function buildVerifyAndMatchArgs(request: ExecuteMatchRequest) {
   return [actions, signatures, actionData] as const;
 }
 
-export function assertPayloadConsistency(request: ExecuteMatchRequest, tradeModuleAddress: `0x${string}`): void {
-  const expected = getAddress(tradeModuleAddress);
+export function assertPayloadConsistency(
+  request: ExecuteMatchRequest,
+  tradeModuleAddressOrExpectations:
+    | `0x${string}`
+    | {
+        tradeModuleAddress: `0x${string}`;
+        expectedActionOwner?: `0x${string}`;
+        expectedActionSigner?: `0x${string}`;
+      },
+): void {
+  const expectations =
+    typeof tradeModuleAddressOrExpectations === 'string'
+      ? { tradeModuleAddress: tradeModuleAddressOrExpectations }
+      : tradeModuleAddressOrExpectations;
+  const expected = getAddress(expectations.tradeModuleAddress);
   const moduleAddress = getAddress(request.module_address);
 
   if (moduleAddress !== expected) {
@@ -110,6 +127,20 @@ export function assertPayloadConsistency(request: ExecuteMatchRequest, tradeModu
     const actionModule = getAddress(action.module);
     if (actionModule !== expected) {
       throw new Error(`actions[${index}].module mismatch: expected ${expected}, got ${actionModule}`);
+    }
+
+    if (expectations.expectedActionOwner) {
+      const actionOwner = getAddress(action.owner);
+      if (actionOwner !== expectations.expectedActionOwner) {
+        throw new Error(`actions[${index}].owner mismatch: expected ${expectations.expectedActionOwner}, got ${actionOwner}`);
+      }
+    }
+
+    if (expectations.expectedActionSigner) {
+      const actionSigner = getAddress(action.signer);
+      if (actionSigner !== expectations.expectedActionSigner) {
+        throw new Error(`actions[${index}].signer mismatch: expected ${expectations.expectedActionSigner}, got ${actionSigner}`);
+      }
     }
   }
 }
