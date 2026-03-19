@@ -72,6 +72,10 @@ contract AddPerpToModules is Utils {
    * @dev write to deployments/{network}/core.json
    */
   function __getPerpAddress(string memory marketName) internal returns (address) {
+    try vm.envAddress("PERP_ADDRESS") returns (address perpAddress) {
+      return perpAddress;
+    } catch {}
+
     return abi.decode(vm.parseJson(_readV2CoreDeploymentFile(marketName), ".perp"), (address));
   }
 }
