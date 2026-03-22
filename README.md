@@ -44,7 +44,7 @@ Accepts the payload emitted by `matching-backend`:
 
 ```json
 {
-  "market": "BTC-PERP",
+  "market": "BTCUSDC-CVXPERP",
   "asset_address": "0x...",
   "module_address": "0x...",
   "maker_order_id": "maker-1",

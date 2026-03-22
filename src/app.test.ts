@@ -21,7 +21,7 @@ const config: AppConfig = {
 };
 
 const requestPayload: ExecuteMatchRequest = {
-  market: 'BTC-PERP',
+  market: 'BTCUSDC-CVXPERP',
   asset_address: '0x0000000000000000000000000000000000000001',
   module_address: '0x0000000000000000000000000000000000000002',
   maker_order_id: 'maker-1',
