@@ -202,8 +202,13 @@ abstract contract BaseManager is IBaseManager, Ownable2StepUpgradeable {
    */
   function executeBid(uint accountId, uint liquidatorId, uint portion, uint bidAmount, uint reservedCash)
     external
+    virtual
     onlyLiquidations
   {
+    _executeBid(accountId, liquidatorId, portion, bidAmount, reservedCash);
+  }
+
+  function _executeBid(uint accountId, uint liquidatorId, uint portion, uint bidAmount, uint reservedCash) internal {
     if (portion > 1e18) revert BM_InvalidBidPortion();
 
     ISubAccounts.AssetBalance[] memory assetBalances = subAccounts.getAccountBalances(accountId);
@@ -368,10 +373,7 @@ abstract contract BaseManager is IBaseManager, Ownable2StepUpgradeable {
       emit OptionSettled(accountId, address(option), balances[i].subId, balances[i].balance, value);
     }
 
-    // update user cash amount
-    subAccounts.managerAdjustment(ISubAccounts.AssetAdjustment(accountId, cashAsset, 0, cashDelta, bytes32(0)));
-    // report total print / burn to cash asset
-    cashAsset.updateSettledCash(cashDelta);
+    _applyCashDelta(accountId, cashDelta);
   }
 
   /**
@@ -388,10 +390,14 @@ abstract contract BaseManager is IBaseManager, Ownable2StepUpgradeable {
 
     if (netCash == 0) return;
 
-    cashAsset.updateSettledCash(netCash);
+    _applyCashDelta(accountId, netCash);
+  }
 
-    // update user cash amount
-    subAccounts.managerAdjustment(ISubAccounts.AssetAdjustment(accountId, cashAsset, 0, netCash, bytes32(0)));
+  function _applyCashDelta(uint accountId, int cashDelta) internal {
+    if (cashDelta == 0) return;
+
+    cashAsset.updateSettledCash(cashDelta);
+    subAccounts.managerAdjustment(ISubAccounts.AssetAdjustment(accountId, cashAsset, 0, cashDelta, bytes32(0)));
   }
 
   /**

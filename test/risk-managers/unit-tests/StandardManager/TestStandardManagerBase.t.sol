@@ -19,6 +19,7 @@ import "../../../shared/mocks/MockCash.sol";
 import "../../../config-test.sol";
 import "../../mocks/MockDutchAuction.sol";
 import "../../../../src/assets/WrappedERC20Asset.sol";
+import "../../../../src/assets/DeliverableFXFutureAsset.sol";
 
 /**
  * @dev shard contract setting up environment for testing StandardManager
@@ -30,6 +31,7 @@ contract TestStandardManagerBase is Test {
   MockERC20 usdc;
   MockERC20 weth;
   MockERC20 wbtc;
+  MockERC20 cngn;
 
   MockPerp ethPerp;
   MockPerp btcPerp;
@@ -38,6 +40,9 @@ contract TestStandardManagerBase is Test {
   // mocked base asset!
   WrappedERC20Asset wethAsset;
   WrappedERC20Asset wbtcAsset;
+  WrappedERC20Asset usdcDeliveryAsset;
+  WrappedERC20Asset cngnAsset;
+  DeliverableFXFutureAsset fxFuture;
 
   SRMPortfolioViewer portfolioViewer;
 
@@ -50,10 +55,17 @@ contract TestStandardManagerBase is Test {
 
   MockFeeds ethFeed;
   MockFeeds btcFeed;
+  MockFeeds cngnFeed;
   MockFeeds stableFeed;
 
   uint ethMarketId;
   uint btcMarketId;
+  uint usdcDeliveryMarketId;
+  uint cngnMarketId;
+  uint fxFutureMarketId;
+  uint96 fxSeries;
+  uint fxLastTradeTime;
+  uint fxExpiry;
 
   address alice = address(0xaa);
   address bob = address(0xbb);
@@ -86,6 +98,7 @@ contract TestStandardManagerBase is Test {
     // setup asset for BTC Markets
     btcPerp = new MockPerp(subAccounts);
     btcOption = new MockOption(subAccounts);
+    cngn = new MockERC20("cNGN", "cNGN");
 
     portfolioViewer = new SRMPortfolioViewer(subAccounts, cash);
 
@@ -102,9 +115,21 @@ contract TestStandardManagerBase is Test {
     wbtcAsset = new WrappedERC20Asset(subAccounts, wbtc); // false as it cannot go negative
     wbtcAsset.setWhitelistManager(address(manager), true);
     wbtcAsset.setTotalPositionCap(manager, 1e36);
+    usdcDeliveryAsset = new WrappedERC20Asset(subAccounts, usdc);
+    usdcDeliveryAsset.setWhitelistManager(address(manager), true);
+    usdcDeliveryAsset.setTotalPositionCap(manager, 1e36);
+    cngnAsset = new WrappedERC20Asset(subAccounts, cngn);
+    cngnAsset.setWhitelistManager(address(manager), true);
+    cngnAsset.setTotalPositionCap(manager, 1e36);
+    fxFuture = new DeliverableFXFutureAsset(subAccounts);
+    fxFuture.setWhitelistManager(address(manager), true);
+    fxFuture.setTotalPositionCap(manager, 1e36);
 
     ethMarketId = manager.createMarket("weth");
     btcMarketId = manager.createMarket("wbtc");
+    usdcDeliveryMarketId = manager.createMarket("deliverable-usdc");
+    cngnMarketId = manager.createMarket("cngn");
+    fxFutureMarketId = manager.createMarket("usdc-cngn-future");
 
     portfolioViewer.setStandardManager(manager);
 
@@ -117,6 +142,15 @@ contract TestStandardManagerBase is Test {
     manager.whitelistAsset(btcOption, btcMarketId, IStandardManager.AssetType.Option);
     manager.whitelistAsset(wbtcAsset, btcMarketId, IStandardManager.AssetType.Base);
     manager.setOraclesForMarket(btcMarketId, btcFeed, btcFeed, btcFeed);
+    manager.whitelistAsset(usdcDeliveryAsset, usdcDeliveryMarketId, IStandardManager.AssetType.Base);
+    manager.whitelistAsset(cngnAsset, cngnMarketId, IStandardManager.AssetType.Base);
+    manager.whitelistAsset(fxFuture, fxFutureMarketId, IStandardManager.AssetType.DeliverableFXFuture);
+
+    cngnFeed = new MockFeeds();
+    cngnFeed.setSpot(1500e18, 1e18);
+    manager.setOraclesForMarket(usdcDeliveryMarketId, stableFeed, stableFeed, stableFeed);
+    manager.setOraclesForMarket(cngnMarketId, cngnFeed, cngnFeed, cngnFeed);
+    manager.setOraclesForMarket(fxFutureMarketId, cngnFeed, cngnFeed, cngnFeed);
 
     manager.setStableFeed(stableFeed);
     stableFeed.setSpot(1e18, 1e18);
@@ -142,9 +176,12 @@ contract TestStandardManagerBase is Test {
     btcFeed.setForwardPrice(expiry1, btcSpot, 1e18);
     btcFeed.setForwardPrice(expiry2, btcSpot, 1e18);
     btcFeed.setForwardPrice(expiry3, btcSpot, 1e18);
+    cngnFeed.setForwardPrice(expiry1, 1500e18, 1e18);
 
     usdc.mint(address(this), 100_000e18);
     usdc.approve(address(cash), type(uint).max);
+    usdc.approve(address(usdcDeliveryAsset), type(uint).max);
+    cngn.approve(address(cngnAsset), type(uint).max);
 
     // set init perp trading parameters
     manager.setPerpMarginRequirements(ethMarketId, 0.05e18, 0.065e18);
@@ -155,6 +192,14 @@ contract TestStandardManagerBase is Test {
     // set init option trading params
     manager.setOptionMarginParams(ethMarketId, optionParams);
     manager.setOptionMarginParams(btcMarketId, optionParams);
+    manager.setDeliverableFXMarginParams(
+      fxFutureMarketId, IStandardManager.DeliverableFXMarginParams({normalIM: 0.01e18, normalMM: 0.005e18})
+    );
+
+    fxExpiry = block.timestamp + 21 days;
+    fxLastTradeTime = fxExpiry - 1 days;
+    fxSeries =
+      fxFuture.createSeries(uint64(fxExpiry), uint64(fxLastTradeTime), address(usdcDeliveryAsset), address(cngnAsset), 10_000e18, 0.001e18, 1e18, 1500e18);
 
     // the rest can vary in tests
   }
@@ -184,5 +229,28 @@ contract TestStandardManagerBase is Test {
 
   function _getPerpBalance(IPerpAsset perp, uint acc) public view returns (int) {
     return subAccounts.getBalance(acc, perp, 0);
+  }
+
+  function _fundCash(uint acc, uint amount) internal {
+    usdc.mint(address(this), amount);
+    cash.deposit(acc, amount);
+  }
+
+  function _depositWrapped(MockERC20 token, WrappedERC20Asset asset, uint account, uint amount) internal {
+    token.mint(address(this), amount);
+    token.approve(address(asset), amount);
+    asset.deposit(account, amount);
+  }
+
+  function _openFuturePosition(uint shortAcc, uint longAcc, int amount) internal {
+    ISubAccounts.AssetTransfer memory transfer = ISubAccounts.AssetTransfer({
+      fromAcc: shortAcc,
+      toAcc: longAcc,
+      asset: fxFuture,
+      subId: fxSeries,
+      amount: amount,
+      assetData: ""
+    });
+    subAccounts.submitTransfer(transfer, "");
   }
 }

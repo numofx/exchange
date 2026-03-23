@@ -17,6 +17,8 @@ import {ICashAsset} from "../interfaces/ICashAsset.sol";
 import {IPerpAsset} from "../interfaces/IPerpAsset.sol";
 import {IOptionAsset} from "../interfaces/IOptionAsset.sol";
 import {IDatedFutureAsset} from "../interfaces/IDatedFutureAsset.sol";
+import {IDeliverableFXFutureAsset} from "../interfaces/IDeliverableFXFutureAsset.sol";
+import {IBaseManager} from "../interfaces/IBaseManager.sol";
 import {IStandardManager} from "../interfaces/IStandardManager.sol";
 import {ISRMPortfolioViewer} from "../interfaces/ISRMPortfolioViewer.sol";
 import {IForwardFeed} from "../interfaces/IForwardFeed.sol";
@@ -69,6 +71,16 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
 
   /// @dev Dated futures margin requirements
   mapping(uint marketId => FutureMarginRequirements) public futureMarginRequirements;
+
+  /// @dev Deliverable FX future IM/MM requirements
+  mapping(uint marketId => DeliverableFXMarginParams) public deliverableFXMarginParams;
+
+  /// @dev Amount of an asset reserved for physical delivery.
+  mapping(uint accountId => mapping(IAsset asset => uint amount)) public reservedBalance;
+
+  /// @dev Settlement guard for deliverable future series.
+  mapping(uint accountId => mapping(IDeliverableFXFutureAsset future => mapping(uint96 subId => bool settled)))
+    public accountSettled;
 
   /// @dev Option Margin Parameters. See getIsolatedMargin for how it is used in the formula
   mapping(uint marketId => OptionMarginParams) public optionMarginParams;
@@ -185,6 +197,18 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
     emit FutureMarginRequirementsSet(marketId, _mmFutureReq, _imFutureReq);
   }
 
+  function setDeliverableFXMarginParams(uint marketId, DeliverableFXMarginParams calldata params) external onlyOwner {
+    _checkMarketExist(marketId);
+    if (params.normalMM > params.normalIM || params.normalMM == 0 || params.normalMM >= 1e18 || params.normalIM >= 1e18)
+    {
+      revert SRM_InvalidPerpMarginParams();
+    }
+
+    deliverableFXMarginParams[marketId] = params;
+
+    emit DeliverableFXMarginParamsSet(marketId, params.normalIM, params.normalMM);
+  }
+
   /**
    * @dev Set discount factor for base asset
    * @dev if this factor is 0 (unset), base asset won't contribute to margin
@@ -296,6 +320,8 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
 
     // settle accrued daily VM for any dated futures before risk checks
     _settleAllDatedFutureVM(accountId);
+    _settleAllDeliverableFXVM(accountId);
+    _refreshAllDeliverableReservations(accountId);
 
     // if account is only reduce perp position, increasing cash, or increasing option position, bypass check
     bool riskAdding = false;
@@ -338,6 +364,18 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
             riskAdding = true;
           }
         }
+      } else if (detail.assetType == AssetType.DeliverableFXFuture) {
+        IDeliverableFXFutureAsset futureAsset = IDeliverableFXFutureAsset(address(assetDeltas[i].asset));
+        _settleDeliverableFXVM(futureAsset, accountId, assetDeltas[i].subId);
+        refreshDeliverableReservation(futureAsset, accountId, assetDeltas[i].subId);
+        _checkDeliverableSufficiency(futureAsset, accountId, assetDeltas[i].subId);
+
+        if (!riskAdding) {
+          int futurePosition = subAccounts.getBalance(accountId, futureAsset, assetDeltas[i].subId);
+          if (futurePosition != 0 && assetDeltas[i].delta * futurePosition > 0) {
+            riskAdding = true;
+          }
+        }
       } else {
         // if the user is shorting more options, or removing collateral, we need to check margin
         if (assetDeltas[i].delta < 0) {
@@ -345,6 +383,8 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
         }
       }
     }
+
+    _checkAllDeliverableSufficiency(accountId);
 
     ISubAccounts.AssetBalance[] memory assetBalances = subAccounts.getAccountBalances(accountId);
 
@@ -442,6 +482,7 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
     {
       margin += _getNetPerpMargin(marketHolding, spotPrice, isInitial, spotConf);
       margin += _getNetFutureMargin(marketHolding, isInitial);
+      margin += _getNetDeliverableFutureMargin(marketHolding, isInitial);
       int netOptionMargin;
       (netOptionMargin, optionMtm) = _getNetOptionMarginAndMtM(marketHolding, spotPrice, isInitial, spotConf);
       margin += netOptionMargin;
@@ -526,6 +567,26 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
       if (!isSet || markPrice == 0) revert SRM_NoForwardPrice();
 
       uint notional = SignedMath.abs(position.balance).multiplyDecimal(markPrice);
+      netMargin -= int(notional.multiplyDecimal(requirement));
+    }
+  }
+
+  function _getNetDeliverableFutureMargin(MarketHolding memory marketHolding, bool isInitial)
+    internal
+    view
+    returns (int netMargin)
+  {
+    if (address(marketHolding.deliverableFuture) == address(0)) return 0;
+
+    uint requirement = isInitial
+      ? deliverableFXMarginParams[marketHolding.marketId].normalIM
+      : deliverableFXMarginParams[marketHolding.marketId].normalMM;
+    if (requirement == 0) return 0;
+
+    for (uint i = 0; i < marketHolding.deliverableFuturePositions.length; ++i) {
+      IStandardManager.DeliverableFuturePosition memory position = marketHolding.deliverableFuturePositions[i];
+      IDeliverableFXFutureAsset.Series memory series = marketHolding.deliverableFuture.getSeries(uint96(position.subId));
+      uint notional = SignedMath.abs(position.balance).multiplyDecimal(uint(series.contractSizeBase)).multiplyDecimal(series.markPrice);
       netMargin -= int(notional.multiplyDecimal(requirement));
     }
   }
@@ -752,10 +813,192 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
 
   function _settleDatedFutureVM(IDatedFutureAsset future, uint accountId, uint subId) internal {
     int cashDelta = future.settleAccount(accountId, subId);
-    if (cashDelta == 0) return;
+    _applyCashDelta(accountId, cashDelta);
+  }
 
-    cashAsset.updateSettledCash(cashDelta);
-    subAccounts.managerAdjustment(ISubAccounts.AssetAdjustment(accountId, cashAsset, 0, cashDelta, bytes32(0)));
+  function _settleAllDeliverableFXVM(uint accountId) internal {
+    ISubAccounts.AssetBalance[] memory balances = subAccounts.getAccountBalances(accountId);
+    for (uint i = 0; i < balances.length; ++i) {
+      IStandardManager.AssetDetail memory detail = _assetDetails[balances[i].asset];
+      if (detail.assetType != AssetType.DeliverableFXFuture) continue;
+      _settleDeliverableFXVM(IDeliverableFXFutureAsset(address(balances[i].asset)), accountId, uint96(balances[i].subId));
+    }
+  }
+
+  function _refreshAllDeliverableReservations(uint accountId) internal {
+    ISubAccounts.AssetBalance[] memory balances = subAccounts.getAccountBalances(accountId);
+    _refreshDeliverableReservationsFromBalances(accountId, balances);
+  }
+
+  function _refreshDeliverableReservationsFromBalances(uint accountId, ISubAccounts.AssetBalance[] memory balances) internal {
+    for (uint i = 0; i < balances.length; ++i) {
+      IStandardManager.AssetDetail memory detail = _assetDetails[balances[i].asset];
+      if (detail.assetType != AssetType.DeliverableFXFuture) continue;
+      refreshDeliverableReservation(IDeliverableFXFutureAsset(address(balances[i].asset)), accountId, uint96(balances[i].subId));
+    }
+  }
+
+  function _settleDeliverableFXVM(IDeliverableFXFutureAsset future, uint accountId, uint96 subId) internal {
+    int cashDelta = future.settleAccountVM(accountId, subId);
+    _applyCashDelta(accountId, cashDelta);
+  }
+
+  function getSettlementAmounts(IDeliverableFXFutureAsset future, uint accountId, uint96 subId)
+    public
+    view
+    returns (int position, uint baseAmount, uint quoteAmount)
+  {
+    position = subAccounts.getBalance(accountId, future, subId);
+    (baseAmount, quoteAmount) = future.getSettlementAmounts(subId, position);
+  }
+
+  function getRequiredReservedAsset(IDeliverableFXFutureAsset future, uint accountId, uint96 subId)
+    public
+    view
+    returns (IAsset asset, uint amount)
+  {
+    (int position, uint baseAmount, uint quoteAmount) = getSettlementAmounts(future, accountId, subId);
+    IDeliverableFXFutureAsset.Series memory series = future.getSeries(subId);
+    if (position > 0) {
+      return (IAsset(series.quoteAsset), quoteAmount);
+    } else if (position < 0) {
+      return (IAsset(series.baseAsset), baseAmount);
+    }
+    return (IAsset(address(0)), 0);
+  }
+
+  function refreshDeliverableReservation(IDeliverableFXFutureAsset future, uint accountId, uint96 subId) public {
+    _settleDeliverableFXVM(future, accountId, subId);
+
+    IDeliverableFXFutureAsset.Series memory series = future.getSeries(subId);
+    IAsset baseAsset = IAsset(series.baseAsset);
+    IAsset quoteAsset = IAsset(series.quoteAsset);
+    (IAsset owedAsset, uint requiredAmount) = getRequiredReservedAsset(future, accountId, subId);
+
+    if (address(owedAsset) != address(baseAsset)) {
+      reservedBalance[accountId][baseAsset] = 0;
+    }
+    if (address(owedAsset) != address(quoteAsset)) {
+      reservedBalance[accountId][quoteAsset] = 0;
+    }
+    if (address(owedAsset) == address(0)) {
+      return;
+    }
+
+    reservedBalance[accountId][owedAsset] = requiredAmount;
+  }
+
+  function canSettleDeliverableFuture(IDeliverableFXFutureAsset future, uint accountId, uint96 subId)
+    public
+    view
+    returns (bool)
+  {
+    if (accountSettled[accountId][future][subId]) return false;
+
+    IDeliverableFXFutureAsset.Series memory series = future.getSeries(subId);
+    if (!series.settlementPriceSet || block.timestamp < series.expiry) return false;
+
+    (int position, uint baseAmount, uint quoteAmount) = getSettlementAmounts(future, accountId, subId);
+    if (position == 0) return false;
+
+    if (position > 0) {
+      if (reservedBalance[accountId][IAsset(series.quoteAsset)] < quoteAmount) return false;
+      return subAccounts.getBalance(accId, IAsset(series.baseAsset), 0) >= int(baseAmount);
+    }
+
+    if (reservedBalance[accountId][IAsset(series.baseAsset)] < baseAmount) return false;
+    return subAccounts.getBalance(accId, IAsset(series.quoteAsset), 0) >= int(quoteAmount);
+  }
+
+  function settleDeliverableFuture(IDeliverableFXFutureAsset future, uint accountId, uint96 subId) public nonReentrant {
+    IDeliverableFXFutureAsset.Series memory series = future.getSeries(subId);
+    (int position, uint baseAmount, uint quoteAmount) = getSettlementAmounts(future, accountId, subId);
+
+    if (position == 0) revert SRM_UnsupportedAsset();
+    if (accountSettled[accountId][future][subId]) revert SRM_UnsupportedAsset();
+    if (block.timestamp < series.expiry || !series.settlementPriceSet) revert SRM_UnsupportedAsset();
+
+    _settleDeliverableFXVM(future, accountId, subId);
+    refreshDeliverableReservation(future, accountId, subId);
+    _checkDeliverableSufficiency(future, accountId, subId);
+    if (!canSettleDeliverableFuture(future, accountId, subId)) revert SRM_PortfolioBelowMargin();
+
+    IAsset baseAsset = IAsset(series.baseAsset);
+    IAsset quoteAsset = IAsset(series.quoteAsset);
+    IAsset owedAsset = position > 0 ? quoteAsset : baseAsset;
+    int fullPosition = subAccounts.getBalance(accountId, future, subId);
+
+    subAccounts.managerAdjustment(ISubAccounts.AssetAdjustment(accountId, future, subId, -fullPosition, bytes32(0)));
+    accountSettled[accountId][future][subId] = true;
+    reservedBalance[accountId][owedAsset] = 0;
+
+    if (position > 0) {
+      _symmetricManagerAdjustment(accountId, accId, quoteAsset, 0, int(quoteAmount));
+      _symmetricManagerAdjustment(accId, accountId, baseAsset, 0, int(baseAmount));
+    } else {
+      _symmetricManagerAdjustment(accountId, accId, baseAsset, 0, int(baseAmount));
+      _symmetricManagerAdjustment(accId, accountId, quoteAsset, 0, int(quoteAmount));
+    }
+  }
+
+  function settleAllExpiredDeliverableFutures(uint accountId) public {
+    ISubAccounts.AssetBalance[] memory balances = subAccounts.getAccountBalances(accountId);
+    for (uint i = 0; i < balances.length; ++i) {
+      IStandardManager.AssetDetail memory detail = _assetDetails[balances[i].asset];
+      if (detail.assetType != AssetType.DeliverableFXFuture) continue;
+      IDeliverableFXFutureAsset future = IDeliverableFXFutureAsset(address(balances[i].asset));
+      uint96 subId = uint96(balances[i].subId);
+      if (canSettleDeliverableFuture(future, accountId, subId)) {
+        settleDeliverableFuture(future, accountId, subId);
+      }
+    }
+  }
+
+  function _checkDeliverableSufficiency(IDeliverableFXFutureAsset future, uint accountId, uint96 subId) internal view {
+    IDeliverableFXFutureAsset.Series memory series = future.getSeries(subId);
+    if (block.timestamp < series.lastTradeTime) return;
+
+    (int position, uint baseAmount, uint quoteAmount) = getSettlementAmounts(future, accountId, subId);
+    if (position == 0) return;
+
+    if (position > 0) {
+      int totalQuote = subAccounts.getBalance(accountId, IAsset(series.quoteAsset), 0);
+      if (totalQuote < 0 || uint(totalQuote) < quoteAmount) revert SRM_PortfolioBelowMargin();
+      if (reservedBalance[accountId][IAsset(series.quoteAsset)] < quoteAmount) revert SRM_PortfolioBelowMargin();
+    } else {
+      int totalBase = subAccounts.getBalance(accountId, IAsset(series.baseAsset), 0);
+      if (totalBase < 0 || uint(totalBase) < baseAmount) revert SRM_PortfolioBelowMargin();
+      if (reservedBalance[accountId][IAsset(series.baseAsset)] < baseAmount) revert SRM_PortfolioBelowMargin();
+    }
+  }
+
+  function _checkAllDeliverableSufficiency(uint accountId) internal view {
+    ISubAccounts.AssetBalance[] memory balances = subAccounts.getAccountBalances(accountId);
+    for (uint i = 0; i < balances.length; ++i) {
+      IStandardManager.AssetDetail memory detail = _assetDetails[balances[i].asset];
+      if (detail.assetType != AssetType.DeliverableFXFuture) continue;
+      _checkDeliverableSufficiency(IDeliverableFXFutureAsset(address(balances[i].asset)), accountId, uint96(balances[i].subId));
+    }
+  }
+
+  function executeBid(uint accountId, uint liquidatorId, uint portion, uint bidAmount, uint reservedCash)
+    external
+    override(IBaseManager, BaseManager)
+    onlyLiquidations
+  {
+    ISubAccounts.AssetBalance[] memory liquidatedBefore = subAccounts.getAccountBalances(accountId);
+    ISubAccounts.AssetBalance[] memory liquidatorBefore = subAccounts.getAccountBalances(liquidatorId);
+
+    _settleAllDeliverableFXVM(accountId);
+    _settleAllDeliverableFXVM(liquidatorId);
+
+    _executeBid(accountId, liquidatorId, portion, bidAmount, reservedCash);
+
+    _refreshDeliverableReservationsFromBalances(accountId, liquidatedBefore);
+    _refreshDeliverableReservationsFromBalances(liquidatorId, liquidatorBefore);
+    _refreshAllDeliverableReservations(accountId);
+    _refreshAllDeliverableReservations(liquidatorId);
+    _checkAllDeliverableSufficiency(liquidatorId);
   }
 
   function _chargeAllOIFee(address caller, uint accountId, uint tradeId, ISubAccounts.AssetDelta[] memory assetDeltas)

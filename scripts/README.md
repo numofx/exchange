@@ -258,6 +258,44 @@ scripts/update_btc_squared_feeds.py
 It uses:
 - onchain `spotFeed` as the BTC/USD anchor
 - Binance `BTCUSDT` perpetual best bid/ask midpoint as the mark source
+
+### 7. Deploy Deliverable `USDC/cNGN APR-30-2026` Future
+
+This flow deploys the new `DeliverableFXFutureAsset` series for the April 30, 2026 contract and registers it with the existing `StandardManager`.
+
+Prerequisites:
+- `deployments/<chainId>/core.json` exists
+- `deployments/<chainId>/CNGN.json` exists
+- `PRIVATE_KEY` is set
+- `USDC_DELIVERABLE_ASSET_ADDRESS` is set to an already deployed `WrappedERC20Asset` for deliverable `USDC`
+
+For Base (`chainId 8453`), run with `--slow`.
+
+Example:
+
+```shell
+source .env
+forge script scripts/deploy-deliverable-fx-future.s.sol --rpc-url base --broadcast --slow
+```
+
+The script hard-fails if:
+- `lastTradeTime >= expiry`
+- `USDC_DELIVERABLE_ASSET_ADDRESS` is unset
+- the existing `CNGN` deployment does not contain `base` or `spotFeed`
+- manager registration does not stick
+
+Artifact output:
+
+```text
+deployments/8453/CNGN_APR30_2026_FUTURE.json
+```
+
+Downstream values to export into services:
+
+```text
+CNGN_APR30_2026_FUTURE_ASSET_ADDRESS=<future address>
+CNGN_APR30_2026_FUTURE_SUB_ID=<series subId>
+```
 - a fixed spread around mark for `iapFeed` and `ibpFeed`
 - one or more signer keys for the EIP-712 feed signatures
 - one relayer key to submit transactions
