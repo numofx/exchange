@@ -135,6 +135,21 @@ For sells, set `SIDE=sell`. `DESIRED_AMOUNT` stays a positive integer; the side 
 
 The emitted JSON can be posted directly to [../matching-backend/scripts/submit_eoa_order_pair.sh](/Users/robertleifke/Code/work/matching-backend/scripts/submit_eoa_order_pair.sh) or the backend `/v1/orders` endpoint.
 
+### Deliverable FX future example
+
+The execution path is generic over `asset_address + sub_id`, so the live Base staging `USDC/cNGN` future can be signed without code changes:
+
+```bash
+ASSET_ADDRESS=0x752803d72c1835cdcd300C7fDE6c7D7d2F12E679 \
+SUB_ID=1777507200 \
+SIDE=buy \
+LIMIT_PRICE=1605000000000000000000 \
+DESIRED_AMOUNT=100000000000000000 \
+node scripts/generate_trade_order.mjs
+```
+
+That encodes a `0.1` contract order against the staged deliverable future.
+
 ### Create Or Inspect Subaccounts
 
 Inspect current subaccount ownership on the configured deployment with:
