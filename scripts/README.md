@@ -261,13 +261,17 @@ It uses:
 
 ### 7. Deploy Deliverable `USDC/cNGN APR-30-2026` Future
 
-This flow deploys the new `DeliverableFXFutureAsset` series for the April 30, 2026 contract and registers it with the existing `StandardManager`.
+This flow deploys the dedicated `DeliverableFXManager`, `BasePortfolioViewer`, and
+`DeliverableFXFutureAsset` for the April 30, 2026 contract.
+
+Use this path for deliverable FX staging and production.
+Do not route this product through the existing `StandardManager`.
 
 Prerequisites:
 - `deployments/<chainId>/core.json` exists
-- `deployments/<chainId>/CNGN.json` exists
+- `deployments/<chainId>/WRAPPED_CNGN.json` exists
 - `PRIVATE_KEY` is set
-- `USDC_DELIVERABLE_ASSET_ADDRESS` is set to an already deployed `WrappedERC20Asset` for deliverable `USDC`
+- `WRAPPED_USDC_DELIVERABLE_ASSET_ADDRESS` is set to an already deployed `WrappedERC20Asset` for deliverable `USDC`
 
 For Base (`chainId 8453`), run with `--slow`.
 
@@ -275,14 +279,14 @@ Example:
 
 ```shell
 source .env
-forge script scripts/deploy-deliverable-fx-future.s.sol --rpc-url base --broadcast --slow
+forge script scripts/deploy-deliverable-fx-manager.s.sol --rpc-url base --broadcast --slow
 ```
 
 The script hard-fails if:
 - `lastTradeTime >= expiry`
-- `USDC_DELIVERABLE_ASSET_ADDRESS` is unset
-- the existing `CNGN` deployment does not contain `base` or `spotFeed`
-- manager registration does not stick
+- `WRAPPED_USDC_DELIVERABLE_ASSET_ADDRESS` is unset
+- the existing `WRAPPED_CNGN` deployment does not contain `base` or `spotFeed`
+- manager whitelisting or product wiring does not stick
 
 Artifact output:
 
@@ -290,12 +294,47 @@ Artifact output:
 deployments/8453/CNGN_APR30_2026_FUTURE.json
 ```
 
+Artifact contents include:
+- dedicated manager address
+- dedicated viewer address
+- future asset address
+- series `subId`
+- expiry / `lastTradeTime`
+- base / quote asset addresses
+- margin params and product constants
+
 Downstream values to export into services:
 
 ```text
 CNGN_APR30_2026_FUTURE_ASSET_ADDRESS=<future address>
 CNGN_APR30_2026_FUTURE_SUB_ID=<series subId>
 ```
+
+### 8. Canonical Launch Smoke Test
+
+Treat the dedicated deliverable FX path as the canonical launch smoke test for this product.
+Do not route this through `StandardManager`.
+Do not change this path unless a new bug appears.
+
+Canonical sequence:
+
+1. deploy with `scripts/deploy-deliverable-fx-manager.s.sol`
+2. export `CNGN_APR30_2026_FUTURE_ASSET_ADDRESS` and `CNGN_APR30_2026_FUTURE_SUB_ID`
+3. boot `markets-service`
+4. submit one tiny crossed live order pair
+5. confirm exactly one `trade_fills` row lands
+6. confirm `GET /v1/trades` returns that fill
+7. confirm `stats_24h.last` equals the fill price
+
+Hard readiness checks before launch:
+
+- `quoteSpotFeed.getSpot()` must succeed onchain
+- `/v1/trades` must reflect the latest live fill
+
+If either check fails, the market is not launch-ready.
+
+### 9. Feed Updater Notes
+
 - a fixed spread around mark for `iapFeed` and `ibpFeed`
 - one or more signer keys for the EIP-712 feed signatures
 - one relayer key to submit transactions
