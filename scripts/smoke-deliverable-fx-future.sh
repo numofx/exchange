@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Canonical pre-launch smoke gate for deliverable FX futures.
+# Keep this path stable and do not change it unless a new bug appears.
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MARKETS_SERVICE_ROOT="${MARKETS_SERVICE_ROOT:-$(cd "$ROOT/../markets-service" && pwd)}"
 

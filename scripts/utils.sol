@@ -5,6 +5,12 @@ import "forge-std/Script.sol";
 import "./types.sol";
 
 contract Utils is Script {
+  function _deploymentArtifactName(string memory fileName) internal pure returns (string memory) {
+    if (keccak256(bytes(fileName)) == keccak256(bytes("CNGN"))) {
+      return "WRAPPED_CNGN";
+    }
+    return fileName;
+  }
 
   function _toLower(string memory str) internal pure returns (string memory) {
     bytes memory bStr = bytes(str);
@@ -91,7 +97,7 @@ contract Utils is Script {
   function _readDeploymentFile(string memory fileName) internal view returns (string memory) {
     string memory deploymentDir = string.concat(vm.projectRoot(), "/deployments/");
     string memory chainDir = string.concat(vm.toString(block.chainid), "/");
-    string memory file = string.concat(fileName, ".json");
+    string memory file = string.concat(_deploymentArtifactName(fileName), ".json");
     return vm.readFile(string.concat(deploymentDir, chainDir, file));
   }
 
@@ -99,7 +105,7 @@ contract Utils is Script {
   function _writeToDeployments(string memory filename, string memory content) internal {
     string memory deploymentDir = string.concat(vm.projectRoot(), "/deployments/");
     string memory chainDir = string.concat(vm.toString(block.chainid), "/");
-    string memory file = string.concat(filename, ".json");
+    string memory file = string.concat(_deploymentArtifactName(filename), ".json");
     vm.writeJson(content, string.concat(deploymentDir, chainDir, file));
 
     console2.log("Written to deployment ", string.concat(deploymentDir, chainDir, file));
