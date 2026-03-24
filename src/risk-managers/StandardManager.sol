@@ -9,7 +9,6 @@ import "openzeppelin/utils/ReentrancyGuard.sol";
 import "lyra-utils/decimals/DecimalMath.sol";
 import "lyra-utils/decimals/SignedDecimalMath.sol";
 import "lyra-utils/arrays/UnorderedMemoryArray.sol";
-import "lyra-utils/math/Black76.sol";
 
 import {ISubAccounts} from "../interfaces/ISubAccounts.sol";
 import {IAsset} from "../interfaces/IAsset.sol";
@@ -31,6 +30,8 @@ import {ISpotFeed} from "../interfaces/ISpotFeed.sol";
 
 import {IManager} from "../interfaces/IManager.sol";
 import {BaseManager} from "./BaseManager.sol";
+import {DeliverableFXManagerHelper} from "./DeliverableFXManagerHelper.sol";
+import {OptionMarginHelper} from "./OptionMarginHelper.sol";
 
 /**
  * @title StandardManager
@@ -75,12 +76,8 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
   /// @dev Deliverable FX future IM/MM requirements
   mapping(uint marketId => DeliverableFXMarginParams) public deliverableFXMarginParams;
 
-  /// @dev Amount of an asset reserved for physical delivery.
-  mapping(uint accountId => mapping(IAsset asset => uint amount)) public reservedBalance;
-
-  /// @dev Settlement guard for deliverable future series.
-  mapping(uint accountId => mapping(IDeliverableFXFutureAsset future => mapping(uint96 subId => bool settled)))
-    public accountSettled;
+  DeliverableFXManagerHelper internal immutable deliverableHelper;
+  OptionMarginHelper internal immutable optionMarginHelper;
 
   /// @dev Option Margin Parameters. See getIsolatedMargin for how it is used in the formula
   mapping(uint marketId => OptionMarginParams) public optionMarginParams;
@@ -109,7 +106,10 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
     ICashAsset cashAsset_,
     IDutchAuction _dutchAuction,
     ISRMPortfolioViewer _viewer
-  ) BaseManager(subAccounts_, cashAsset_, _dutchAuction, _viewer) {}
+  ) BaseManager(subAccounts_, cashAsset_, _dutchAuction, _viewer) {
+    deliverableHelper = new DeliverableFXManagerHelper(subAccounts_);
+    optionMarginHelper = new OptionMarginHelper();
+  }
 
   ///////////////////////
   //    Owner-Only     //
@@ -365,13 +365,9 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
           }
         }
       } else if (detail.assetType == AssetType.DeliverableFXFuture) {
-        IDeliverableFXFutureAsset futureAsset = IDeliverableFXFutureAsset(address(assetDeltas[i].asset));
-        _settleDeliverableFXVM(futureAsset, accountId, assetDeltas[i].subId);
-        refreshDeliverableReservation(futureAsset, accountId, assetDeltas[i].subId);
-        _checkDeliverableSufficiency(futureAsset, accountId, assetDeltas[i].subId);
-
         if (!riskAdding) {
-          int futurePosition = subAccounts.getBalance(accountId, futureAsset, assetDeltas[i].subId);
+          int futurePosition =
+            subAccounts.getBalance(accountId, IDeliverableFXFutureAsset(address(assetDeltas[i].asset)), assetDeltas[i].subId);
           if (futurePosition != 0 && assetDeltas[i].delta * futurePosition > 0) {
             riskAdding = true;
           }
@@ -602,37 +598,45 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
     bool isInitial,
     uint minConfidence
   ) internal view returns (int netMargin, int totalMarkToMarket) {
-    // for each expiry, sum up the margin requirement.
-    // Also keep track of min confidence so we can apply oracle contingency on each expiry's bases
     for (uint i = 0; i < marketHolding.expiryHoldings.length; i++) {
-      (uint forwardPrice, uint localMinConf) =
-        _getForwardPrice(marketHolding.marketId, marketHolding.expiryHoldings[i].expiry);
+      ExpiryHolding memory expiryHolding = marketHolding.expiryHoldings[i];
+      (uint forwardPrice, uint localMinConf) = _getForwardPrice(marketHolding.marketId, expiryHolding.expiry);
       localMinConf = Math.min(minConfidence, localMinConf);
+      uint volConf = volFeeds[marketHolding.marketId].getExpiryMinConfidence(uint64(expiryHolding.expiry));
+      localMinConf = Math.min(localMinConf, volConf);
+      OptionMarginHelper.ExpiryMarginInputs memory inputs =
+        _getOptionExpiryInputs(marketHolding.marketId, expiryHolding, spotPrice, forwardPrice, isInitial, localMinConf);
+      (int expiryMargin, int expiryMtm) = optionMarginHelper.getExpiryMargin(inputs);
+      netMargin += expiryMargin;
+      totalMarkToMarket += expiryMtm;
+    }
+  }
 
-      {
-        uint volConf =
-          volFeeds[marketHolding.marketId].getExpiryMinConfidence(uint64(marketHolding.expiryHoldings[i].expiry));
-        localMinConf = Math.min(localMinConf, volConf);
-      }
+  function _getOptionExpiryInputs(
+    uint marketId,
+    ExpiryHolding memory expiryHolding,
+    uint spotPrice,
+    uint forwardPrice,
+    bool isInitial,
+    uint localMinConf
+  ) internal view returns (OptionMarginHelper.ExpiryMarginInputs memory inputs) {
+    inputs = OptionMarginHelper.ExpiryMarginInputs({
+      expiryHolding: expiryHolding,
+      params: optionMarginParams[marketId],
+      ocParams: oracleContingencyParams[marketId],
+      spotPrice: spotPrice,
+      forwardPrice: forwardPrice,
+      localMinConf: localMinConf,
+      isInitial: isInitial,
+      vols: _getOptionExpiryVols(marketId, expiryHolding)
+    });
+  }
 
-      (int margin, int mtm) = _calcNetBasicMarginSingleExpiry(
-        marketHolding.marketId, marketHolding.expiryHoldings[i], spotPrice, forwardPrice, isInitial
-      );
-      netMargin += margin;
-      totalMarkToMarket += mtm;
-
-      if (!isInitial) continue;
-
-      // add oracle contingency on this expiry if min conf is too low, only for IM
-      OracleContingencyParams memory ocParam = oracleContingencyParams[marketHolding.marketId];
-
-      if (ocParam.optionThreshold != 0 && localMinConf < uint(ocParam.optionThreshold)) {
-        uint diff = 1e18 - localMinConf;
-        uint penalty = diff.multiplyDecimal(ocParam.OCFactor).multiplyDecimal(spotPrice).multiplyDecimal(
-          marketHolding.expiryHoldings[i].totalShortPositions
-        );
-        netMargin -= penalty.toInt256();
-      }
+  function _getOptionExpiryVols(uint marketId, ExpiryHolding memory expiryHolding) internal view returns (uint[] memory vols) {
+    vols = new uint[](expiryHolding.options.length);
+    for (uint j = 0; j < expiryHolding.options.length; ++j) {
+      (uint vol,) = volFeeds[marketId].getVol(uint128(expiryHolding.options[j].strike), uint64(expiryHolding.expiry));
+      vols[j] = vol;
     }
   }
 
@@ -674,48 +678,6 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
   }
 
   /**
-   * @notice Calculate the required margin of the account.
-   *      If the account's option require 10K cash, this function will return -10K
-   *
-   * @dev If an account's max loss is bounded, return min (max loss margin, isolated margin)
-   *      If an account's max loss is unbounded, return isolated margin
-   * @param expiryHolding strikes for single expiry
-   */
-  function _calcNetBasicMarginSingleExpiry(
-    uint marketId,
-    ExpiryHolding memory expiryHolding,
-    uint spotPrice,
-    uint forwardPrice,
-    bool isInitial
-  ) internal view returns (int, int totalMarkToMarket) {
-    // We make sure the evaluate the scenario at price = 0
-    int maxLossMargin = _calcMaxLoss(expiryHolding, 0);
-    int totalIsolatedMargin = 0;
-
-    for (uint i; i < expiryHolding.options.length; i++) {
-      Option memory optionPos = expiryHolding.options[i];
-
-      // calculate isolated margin for this strike, aggregate to isolatedMargin
-      (int isolatedMargin, int markToMarket) =
-        _getIsolatedMargin(marketId, expiryHolding.expiry, optionPos, spotPrice, forwardPrice, isInitial);
-      totalIsolatedMargin += isolatedMargin;
-      totalMarkToMarket += markToMarket;
-
-      // calculate the max loss margin, update the maxLossMargin if it's lower than current
-      maxLossMargin = SignedMath.min(_calcMaxLoss(expiryHolding, optionPos.strike), maxLossMargin);
-    }
-
-    if (expiryHolding.netCalls < 0) {
-      uint unpairedScale =
-        isInitial ? optionMarginParams[marketId].unpairedIMScale : optionMarginParams[marketId].unpairedMMScale;
-      maxLossMargin += unpairedScale.multiplyDecimal(forwardPrice).toInt256().multiplyDecimal(expiryHolding.netCalls);
-    }
-
-    // return the better of the 2 as the margin
-    return (SignedMath.max(totalIsolatedMargin, maxLossMargin), totalMarkToMarket);
-  }
-
-  /**
    * @notice Settle expired option positions in an account.
    * @dev This function can be called by anyone
    */
@@ -746,6 +708,14 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
    */
   function assetDetails(IAsset asset) external view returns (AssetDetail memory) {
     return _assetDetails[asset];
+  }
+
+  function reservedBalance(uint accountId, IAsset asset) public view returns (uint) {
+    return deliverableHelper.reservedBalance(accountId, asset);
+  }
+
+  function accountSettled(uint accountId, IDeliverableFXFutureAsset future, uint96 subId) public view returns (bool) {
+    return deliverableHelper.accountSettled(accountId, future, subId);
   }
 
   /**
@@ -791,7 +761,18 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
     (uint spotPrice,) = _getSpotPrice(marketId);
     (uint forwardPrice,) = _getForwardPrice(marketId, expiry);
     Option memory optionPos = Option({strike: strike, isCall: isCall, balance: balance});
-    return _getIsolatedMargin(marketId, expiry, optionPos, spotPrice, forwardPrice, isInitial);
+    (uint vol,) = volFeeds[marketId].getVol(uint128(strike), uint64(expiry));
+    OptionMarginParams memory params = optionMarginParams[marketId];
+    OptionMarginHelper.OptionComputationContext memory ctx = OptionMarginHelper.OptionComputationContext({
+      expiry: expiry,
+      spotPrice: spotPrice,
+      forwardPrice: forwardPrice,
+      vol: vol,
+      isInitial: isInitial
+    });
+    OptionMarginHelper.IsolatedMarginInputs memory inputs =
+      OptionMarginHelper.IsolatedMarginInputs({params: params, optionPos: optionPos, ctx: ctx});
+    return optionMarginHelper.getIsolatedMargin(inputs);
   }
 
   //////////////////////////
@@ -848,44 +829,12 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
     view
     returns (int position, uint baseAmount, uint quoteAmount)
   {
-    position = subAccounts.getBalance(accountId, future, subId);
-    (baseAmount, quoteAmount) = future.getSettlementAmounts(subId, position);
-  }
-
-  function getRequiredReservedAsset(IDeliverableFXFutureAsset future, uint accountId, uint96 subId)
-    public
-    view
-    returns (IAsset asset, uint amount)
-  {
-    (int position, uint baseAmount, uint quoteAmount) = getSettlementAmounts(future, accountId, subId);
-    IDeliverableFXFutureAsset.Series memory series = future.getSeries(subId);
-    if (position > 0) {
-      return (IAsset(series.quoteAsset), quoteAmount);
-    } else if (position < 0) {
-      return (IAsset(series.baseAsset), baseAmount);
-    }
-    return (IAsset(address(0)), 0);
+    return deliverableHelper.getSettlementAmounts(future, accountId, subId);
   }
 
   function refreshDeliverableReservation(IDeliverableFXFutureAsset future, uint accountId, uint96 subId) public {
     _settleDeliverableFXVM(future, accountId, subId);
-
-    IDeliverableFXFutureAsset.Series memory series = future.getSeries(subId);
-    IAsset baseAsset = IAsset(series.baseAsset);
-    IAsset quoteAsset = IAsset(series.quoteAsset);
-    (IAsset owedAsset, uint requiredAmount) = getRequiredReservedAsset(future, accountId, subId);
-
-    if (address(owedAsset) != address(baseAsset)) {
-      reservedBalance[accountId][baseAsset] = 0;
-    }
-    if (address(owedAsset) != address(quoteAsset)) {
-      reservedBalance[accountId][quoteAsset] = 0;
-    }
-    if (address(owedAsset) == address(0)) {
-      return;
-    }
-
-    reservedBalance[accountId][owedAsset] = requiredAmount;
+    deliverableHelper.refreshReservation(future, accountId, subId);
   }
 
   function canSettleDeliverableFuture(IDeliverableFXFutureAsset future, uint accountId, uint96 subId)
@@ -893,21 +842,7 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
     view
     returns (bool)
   {
-    if (accountSettled[accountId][future][subId]) return false;
-
-    IDeliverableFXFutureAsset.Series memory series = future.getSeries(subId);
-    if (!series.settlementPriceSet || block.timestamp < series.expiry) return false;
-
-    (int position, uint baseAmount, uint quoteAmount) = getSettlementAmounts(future, accountId, subId);
-    if (position == 0) return false;
-
-    if (position > 0) {
-      if (reservedBalance[accountId][IAsset(series.quoteAsset)] < quoteAmount) return false;
-      return subAccounts.getBalance(accId, IAsset(series.baseAsset), 0) >= int(baseAmount);
-    }
-
-    if (reservedBalance[accountId][IAsset(series.baseAsset)] < baseAmount) return false;
-    return subAccounts.getBalance(accId, IAsset(series.quoteAsset), 0) >= int(quoteAmount);
+    return deliverableHelper.canSettle(future, accountId, subId, accId);
   }
 
   function settleDeliverableFuture(IDeliverableFXFutureAsset future, uint accountId, uint96 subId) public nonReentrant {
@@ -915,7 +850,7 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
     (int position, uint baseAmount, uint quoteAmount) = getSettlementAmounts(future, accountId, subId);
 
     if (position == 0) revert SRM_UnsupportedAsset();
-    if (accountSettled[accountId][future][subId]) revert SRM_UnsupportedAsset();
+    if (accountSettled(accountId, future, subId)) revert SRM_UnsupportedAsset();
     if (block.timestamp < series.expiry || !series.settlementPriceSet) revert SRM_UnsupportedAsset();
 
     _settleDeliverableFXVM(future, accountId, subId);
@@ -929,8 +864,8 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
     int fullPosition = subAccounts.getBalance(accountId, future, subId);
 
     subAccounts.managerAdjustment(ISubAccounts.AssetAdjustment(accountId, future, subId, -fullPosition, bytes32(0)));
-    accountSettled[accountId][future][subId] = true;
-    reservedBalance[accountId][owedAsset] = 0;
+    deliverableHelper.markSettled(accountId, future, subId);
+    deliverableHelper.clearReservation(accountId, owedAsset);
 
     if (position > 0) {
       _symmetricManagerAdjustment(accountId, accId, quoteAsset, 0, int(quoteAmount));
@@ -957,19 +892,7 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
   function _checkDeliverableSufficiency(IDeliverableFXFutureAsset future, uint accountId, uint96 subId) internal view {
     IDeliverableFXFutureAsset.Series memory series = future.getSeries(subId);
     if (block.timestamp < series.lastTradeTime) return;
-
-    (int position, uint baseAmount, uint quoteAmount) = getSettlementAmounts(future, accountId, subId);
-    if (position == 0) return;
-
-    if (position > 0) {
-      int totalQuote = subAccounts.getBalance(accountId, IAsset(series.quoteAsset), 0);
-      if (totalQuote < 0 || uint(totalQuote) < quoteAmount) revert SRM_PortfolioBelowMargin();
-      if (reservedBalance[accountId][IAsset(series.quoteAsset)] < quoteAmount) revert SRM_PortfolioBelowMargin();
-    } else {
-      int totalBase = subAccounts.getBalance(accountId, IAsset(series.baseAsset), 0);
-      if (totalBase < 0 || uint(totalBase) < baseAmount) revert SRM_PortfolioBelowMargin();
-      if (reservedBalance[accountId][IAsset(series.baseAsset)] < baseAmount) revert SRM_PortfolioBelowMargin();
-    }
+    if (!deliverableHelper.hasDeliverableSufficiency(future, accountId, subId)) revert SRM_PortfolioBelowMargin();
   }
 
   function _checkAllDeliverableSufficiency(uint accountId) internal view {
@@ -1025,124 +948,6 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
   }
 
   /**
-   * @dev Calculate isolated margin requirement for a given number of calls and puts
-   */
-  function _getIsolatedMargin(
-    uint marketId,
-    uint expiry,
-    Option memory optionPos,
-    uint spotPrice,
-    uint forwardPrice,
-    bool isInitial
-  ) internal view returns (int margin, int markToMarket) {
-    (uint vol,) = volFeeds[marketId].getVol(uint128(optionPos.strike), uint64(expiry));
-    markToMarket = _getMarkToMarket(optionPos.balance, forwardPrice, optionPos.strike, expiry, vol, optionPos.isCall);
-
-    // a long position doesn't have any "margin", cannot be used to offset other positions
-    if (optionPos.balance > 0) return (margin, markToMarket);
-
-    if (optionPos.isCall) {
-      margin =
-        _getIsolatedMarginForCall(marketId, markToMarket, optionPos.strike, optionPos.balance, spotPrice, isInitial);
-    } else {
-      margin =
-        _getIsolatedMarginForPut(marketId, markToMarket, optionPos.strike, optionPos.balance, spotPrice, isInitial);
-    }
-  }
-
-  /**
-   * @notice Calculate isolated margin requirement for a put option
-   * @param amount Expected a negative number, representing amount of shorts
-   *
-   * @return Expected a negative number. Indicating how much cash is required to open this position in isolation
-   */
-  function _getIsolatedMarginForPut(
-    uint marketId,
-    int markToMarket,
-    uint strike,
-    int amount,
-    uint spotPrice,
-    bool isInitial
-  ) internal view returns (int) {
-    OptionMarginParams memory params = optionMarginParams[marketId];
-
-    int maintenanceMargin = SignedMath.min(
-      params.mmPutSpotReq.multiplyDecimal(spotPrice).toInt256().multiplyDecimal(amount),
-      params.MMPutMtMReq.toInt256().multiplyDecimal(markToMarket)
-    ) + markToMarket;
-
-    if (!isInitial) return maintenanceMargin;
-
-    uint otmRatio = 0;
-    if (spotPrice > strike) {
-      otmRatio = (spotPrice - strike).divideDecimal(spotPrice);
-    }
-    uint imMultiplier = params.minSpotReq;
-    if (params.maxSpotReq > otmRatio && params.maxSpotReq - otmRatio > params.minSpotReq) {
-      imMultiplier = params.maxSpotReq - otmRatio;
-    }
-    imMultiplier = imMultiplier.multiplyDecimal(spotPrice);
-
-    int margin = SignedMath.min(
-      imMultiplier.toInt256().multiplyDecimal(amount) + markToMarket,
-      maintenanceMargin.multiplyDecimal(params.mmOffsetScale.toInt256())
-    );
-    return margin;
-  }
-
-  /**
-   * @dev Calculate isolated margin requirement for a call option
-   * @param amount Expected a negative number, representing amount of shorts
-   *
-   * @return Expected a negative number. Indicating how much cash is required to open this position in isolation
-   */
-  function _getIsolatedMarginForCall(
-    uint marketId,
-    int markToMarket,
-    uint strike,
-    int amount,
-    uint spotPrice,
-    bool isInitial
-  ) internal view returns (int) {
-    OptionMarginParams memory params = optionMarginParams[marketId];
-
-    if (!isInitial) {
-      int mmReqAdd = params.mmCallSpotReq.multiplyDecimal(spotPrice).toInt256().multiplyDecimal(amount);
-      return markToMarket + mmReqAdd;
-    }
-
-    uint otmRatio = 0;
-    if (strike > spotPrice) {
-      otmRatio = (strike - spotPrice).divideDecimal(spotPrice);
-    }
-
-    uint imMultiplier = params.minSpotReq;
-    if (params.maxSpotReq > otmRatio && params.maxSpotReq - otmRatio > params.minSpotReq) {
-      imMultiplier = params.maxSpotReq - otmRatio;
-    }
-
-    imMultiplier = imMultiplier.multiplyDecimal(spotPrice);
-
-    return imMultiplier.toInt256().multiplyDecimal(amount) + markToMarket;
-  }
-
-  /**
-   * @notice Calculate the full portfolio payoff at a given settlement price.
-   *         This is used in '_calcMaxLossMargin()' calculated the max loss of a given portfolio.
-   * @param price Assumed scenario price.
-   * @return payoff Net profit or loss of the portfolio in cash, given a settlement price.
-   */
-  function _calcMaxLoss(ExpiryHolding memory expiryHolding, uint price) internal pure returns (int payoff) {
-    for (uint i; i < expiryHolding.options.length; i++) {
-      payoff += _getSettlementValue(
-        expiryHolding.options[i].strike, expiryHolding.options[i].balance, price, expiryHolding.options[i].isCall
-      );
-    }
-
-    return SignedMath.min(payoff, 0);
-  }
-
-  /**
    * @dev Return index price for a market
    */
   function _getSpotPrice(uint marketId) internal view returns (uint, uint) {
@@ -1158,46 +963,4 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
     return (fwdPrice, confidence);
   }
 
-  /**
-   * @dev Get the mark to market value of an option by querying block scholes
-   */
-  function _getMarkToMarket(int amount, uint forwardPrice, uint strike, uint expiry, uint vol, bool isCall)
-    internal
-    view
-    returns (int value)
-  {
-    uint64 secToExpiry = expiry > block.timestamp ? uint64(expiry - block.timestamp) : 0;
-
-    (uint call, uint put) = Black76.prices(
-      Black76.Black76Inputs({
-        timeToExpirySec: secToExpiry,
-        volatility: vol.toUint128(),
-        fwdPrice: forwardPrice.toUint128(),
-        strikePrice: strike.toUint128(),
-        discount: 1e18
-      })
-    );
-
-    return (isCall ? call.toInt256() : put.toInt256()).multiplyDecimal(amount);
-  }
-
-  // strike per expiry
-  function _getSettlementValue(uint strikePrice, int balance, uint settlementPrice, bool isCall)
-    internal
-    pure
-    returns (int)
-  {
-    int priceDiff = settlementPrice.toInt256() - strikePrice.toInt256();
-
-    if (isCall && priceDiff > 0) {
-      // ITM Call
-      return priceDiff.multiplyDecimal(balance);
-    } else if (!isCall && priceDiff < 0) {
-      // ITM Put
-      return -priceDiff.multiplyDecimal(balance);
-    } else {
-      // OTM
-      return 0;
-    }
-  }
 }
