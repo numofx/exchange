@@ -23,8 +23,8 @@ contract DeployDeliverableFXFuture is Utils {
   uint internal constant TICK_SIZE = 1e18;
   uint internal constant INITIAL_MARK_PRICE = 1500e18;
   uint internal constant POSITION_CAP = 1e36;
-  uint internal constant NORMAL_IM = 0.01e18;
-  uint internal constant NORMAL_MM = 0.005e18;
+  uint internal constant NORMAL_IM = 0.10e18;
+  uint internal constant NORMAL_MM = 0.075e18;
 
   function run() external {
     uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");

@@ -3,6 +3,7 @@ pragma solidity ^0.8.18;
 
 import {IAsset} from "./IAsset.sol";
 import {IPositionTracking} from "./IPositionTracking.sol";
+import {IManager} from "./IManager.sol";
 
 interface IDeliverableFXFutureAsset is IAsset, IPositionTracking {
   enum SettlementType {
@@ -58,6 +59,10 @@ interface IDeliverableFXFutureAsset is IAsset, IPositionTracking {
   function getSeries(uint96 subId) external view returns (Series memory);
 
   function isTradingOpen(uint96 subId) external view returns (bool);
+
+  function totalLongPosition(IManager manager) external view returns (uint);
+
+  function totalShortPosition(IManager manager) external view returns (uint);
 
   event SeriesCreated(
     uint96 indexed subId,

@@ -68,7 +68,7 @@ contract TestDeliverableFXManagerBase is Test {
     cngnFeed.setSpot(1500e18, 1e18);
 
     manager.setProduct(fxFuture, usdcDeliveryAsset, cngnAsset, cngnFeed);
-    manager.setMarginParams(0.01e18, 0.005e18);
+    manager.setMarginParams(0.10e18, 0.075e18);
 
     aliceAcc = subAccounts.createAccountWithApproval(alice, address(this), manager);
     bobAcc = subAccounts.createAccountWithApproval(bob, address(this), manager);

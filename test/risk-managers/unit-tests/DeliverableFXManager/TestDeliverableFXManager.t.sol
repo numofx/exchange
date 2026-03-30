@@ -140,6 +140,70 @@ contract UNIT_TestDeliverableFXManager is TestDeliverableFXManagerBase {
     assertLt(mm, 0);
   }
 
+  function testRampBlocksExposureIncreaseButAllowsReduction() public {
+    _fundCash(aliceAcc, 50_000_000e18);
+    _fundCash(bobAcc, 50_000_000e18);
+    _fundCash(charlieAcc, 50_000_000e18);
+
+    _openFuturePosition(aliceAcc, bobAcc, int(ONE_CONTRACT));
+
+    vm.warp(fxLastTradeTime - 12 hours);
+
+    ISubAccounts.AssetTransfer memory increaseTransfer = ISubAccounts.AssetTransfer({
+      fromAcc: aliceAcc,
+      toAcc: bobAcc,
+      asset: fxFuture,
+      subId: fxSeries,
+      amount: int(HALF_CONTRACT),
+      assetData: ""
+    });
+    vm.expectRevert(DeliverableFXManager.DFXM_LeverageIncreaseBlocked.selector);
+    subAccounts.submitTransfer(increaseTransfer, "");
+
+    ISubAccounts.AssetTransfer memory reduceTransfer = ISubAccounts.AssetTransfer({
+      fromAcc: bobAcc,
+      toAcc: aliceAcc,
+      asset: fxFuture,
+      subId: fxSeries,
+      amount: int(HALF_CONTRACT),
+      assetData: ""
+    });
+    subAccounts.submitTransfer(reduceTransfer, "");
+
+    assertEq(subAccounts.getBalance(bobAcc, fxFuture, fxSeries), int(HALF_CONTRACT));
+    assertEq(subAccounts.getBalance(aliceAcc, fxFuture, fxSeries), -int(HALF_CONTRACT));
+  }
+
+  function testDeliveryReadinessDetailsUseExactBalancesAndReservations() public {
+    _fundCash(aliceAcc, 50_000_000e18);
+    _fundCash(bobAcc, 50_000_000e18);
+
+    _openFuturePosition(aliceAcc, bobAcc, int(ONE_CONTRACT));
+
+    _depositWrapped(cngn, cngnAsset, bobAcc, QUOTE_DELIVERY - 1e18);
+    fxFuture.setSettlementPrice(fxSeries, SETTLEMENT_PRICE);
+    vm.warp(fxLastTradeTime + 1);
+
+    manager.refreshDeliverableReservation(fxFuture, bobAcc, fxSeries);
+
+    DeliverableFXManager.DeliveryReadiness memory readiness = manager.getDeliveryReadiness(bobAcc);
+    assertFalse(readiness.ready);
+    assertTrue(readiness.inDeliveryPhase);
+    assertEq(readiness.requiredQuote, QUOTE_DELIVERY);
+    assertEq(readiness.availableQuote, QUOTE_DELIVERY - 1e18);
+    assertEq(readiness.reservedQuote, QUOTE_DELIVERY);
+    assertEq(readiness.quoteBalanceShortfall, 1e18);
+    assertEq(readiness.quoteReservationShortfall, 0);
+    assertFalse(manager.isDeliveryReady(bobAcc));
+
+    _depositWrapped(cngn, cngnAsset, bobAcc, 1e18);
+    readiness = manager.getDeliveryReadiness(bobAcc);
+    assertTrue(readiness.ready);
+    assertEq(readiness.quoteBalanceShortfall, 0);
+    assertEq(readiness.quoteReservationShortfall, 0);
+    assertTrue(manager.isDeliveryReady(bobAcc));
+  }
+
   function testShortMustHoldActualUSDCAfterLastTradeTime() public {
     _fundCash(aliceAcc, 2_000_000e18);
     _fundCash(bobAcc, 2_000_000e18);
@@ -167,6 +231,56 @@ contract UNIT_TestDeliverableFXManager is TestDeliverableFXManagerBase {
     vm.prank(address(manager.liquidation()));
     vm.expectRevert(IStandardManager.SRM_PortfolioBelowMargin.selector);
     manager.executeBid(bobAcc, charlieAcc, 1e18, 0, 0);
+  }
+
+  function testFrozenLiquidationMustImproveDeliveryReadiness() public {
+    _fundCash(aliceAcc, 2_000_000e18);
+    _fundCash(bobAcc, 2_000_000e18);
+
+    _openFuturePosition(aliceAcc, bobAcc, int(ONE_CONTRACT));
+
+    fxFuture.setSettlementPrice(fxSeries, SETTLEMENT_PRICE);
+    vm.warp(fxLastTradeTime + 1);
+    manager.refreshDeliverableReservation(fxFuture, bobAcc, fxSeries);
+
+    vm.prank(address(manager.liquidation()));
+    vm.expectRevert(DeliverableFXManager.DFXM_DeliveryReadinessNotImproved.selector);
+    manager.executeBid(bobAcc, charlieAcc, 0, 0, 0);
+  }
+
+  function testPositionLimitsBlockOversizedSeriesExposure() public {
+    manager.setPositionLimits(5_000e18, 20_000e18, 20_000e18, 20_000e18, type(uint).max, type(uint).max, type(uint).max);
+
+    _fundCash(aliceAcc, 50_000_000e18);
+    _fundCash(bobAcc, 50_000_000e18);
+
+    vm.expectRevert(DeliverableFXManager.DFXM_PositionLimitExceeded.selector);
+    _openFuturePosition(aliceAcc, bobAcc, int(ONE_CONTRACT));
+  }
+
+  function testPositionLimitsBlockMarketLongAndShortOIAtTradeTime() public {
+    manager.setPositionLimits(type(uint).max, type(uint).max, type(uint).max, type(uint).max, type(uint).max, 0.75e18, 0.75e18);
+
+    _fundCash(aliceAcc, 50_000_000e18);
+    _fundCash(bobAcc, 50_000_000e18);
+
+    vm.expectRevert(DeliverableFXManager.DFXM_PositionLimitExceeded.selector);
+    _openFuturePosition(aliceAcc, bobAcc, int(ONE_CONTRACT));
+  }
+
+  function testPositionLimitsBlockPerAccountDirectionalExposure() public {
+    manager.setPositionLimits(type(uint).max, type(uint).max, 0.75e18, type(uint).max, type(uint).max, type(uint).max, type(uint).max);
+
+    _fundCash(aliceAcc, 50_000_000e18);
+    _fundCash(bobAcc, 50_000_000e18);
+
+    vm.expectRevert(DeliverableFXManager.DFXM_PositionLimitExceeded.selector);
+    _openFuturePosition(aliceAcc, bobAcc, int(ONE_CONTRACT));
+
+    manager.setPositionLimits(type(uint).max, type(uint).max, type(uint).max, 0.75e18, type(uint).max, type(uint).max, type(uint).max);
+
+    vm.expectRevert(DeliverableFXManager.DFXM_PositionLimitExceeded.selector);
+    _openFuturePosition(aliceAcc, bobAcc, int(ONE_CONTRACT));
   }
 
   function testUserTradeIsBlockedAfterLastTradeTimeButManagerAdjustmentSucceeds() public {

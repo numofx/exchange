@@ -17,6 +17,8 @@ contract DeliverableFXFutureAsset is IDeliverableFXFutureAsset, PositionTracking
   mapping(uint96 subId => Series) internal _series;
   mapping(uint accountId => mapping(uint96 subId => int cumulative)) public accountLastCumulativeVM;
   mapping(uint accountId => mapping(uint96 subId => int cashToSettle)) public accountCashToSettle;
+  mapping(IManager manager => uint) public totalLongPosition;
+  mapping(IManager manager => uint) public totalShortPosition;
 
   constructor(ISubAccounts _subAccounts) ManagerWhitelist(_subAccounts) {}
 
@@ -102,6 +104,7 @@ contract DeliverableFXFutureAsset is IDeliverableFXFutureAsset, PositionTracking
 
     _takeTotalPositionSnapshotPreTrade(manager, tradeId);
     _updateTotalPositions(manager, preBalance, adjustment.amount);
+    _updateDirectionalPositions(manager, preBalance, adjustment.amount);
 
     _synchronizeVM(adjustment.acc, uint96(adjustment.subId), preBalance);
 
@@ -171,5 +174,21 @@ contract DeliverableFXFutureAsset is IDeliverableFXFutureAsset, PositionTracking
     Series memory series = _series[subId];
     if (!series.listed) return false;
     return block.timestamp < series.lastTradeTime;
+  }
+
+  function _updateDirectionalPositions(IManager manager, int preBalance, int change) internal {
+    int postBalance = preBalance + change;
+
+    totalLongPosition[manager] = totalLongPosition[manager] + _positivePosition(postBalance) - _positivePosition(preBalance);
+    totalShortPosition[manager] =
+      totalShortPosition[manager] + _negativePosition(postBalance) - _negativePosition(preBalance);
+  }
+
+  function _positivePosition(int balance) internal pure returns (uint) {
+    return balance > 0 ? uint(balance) : 0;
+  }
+
+  function _negativePosition(int balance) internal pure returns (uint) {
+    return balance < 0 ? SignedMath.abs(balance) : 0;
   }
 }

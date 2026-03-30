@@ -19,6 +19,7 @@ import {IAsset} from "../interfaces/IAsset.sol";
 import {ISpotFeed} from "../interfaces/ISpotFeed.sol";
 import {IDeliverableFXFutureAsset} from "../interfaces/IDeliverableFXFutureAsset.sol";
 import {IStandardManager} from "../interfaces/IStandardManager.sol";
+import {IManager} from "../interfaces/IManager.sol";
 import {BaseManager} from "./BaseManager.sol";
 import {DeliverableFXFutureAsset} from "../assets/DeliverableFXFutureAsset.sol";
 
@@ -26,10 +27,44 @@ contract DeliverableFXManager is ILiquidatableManager, BaseManager, ReentrancyGu
   using DecimalMath for uint;
   using SignedDecimalMath for int;
   using SafeCast for uint;
+  using SafeCast for int;
 
   struct MarginParams {
     uint normalIM;
     uint normalMM;
+  }
+
+  struct LifecycleParams {
+    uint64 rampDuration;
+    uint rampIM;
+    uint rampMM;
+  }
+
+  struct PositionLimitParams {
+    uint maxSeriesNotional;
+    uint maxAccountNotional;
+    uint maxAccountLongNotional;
+    uint maxAccountShortNotional;
+    uint maxMarketOI;
+    uint maxMarketLongOI;
+    uint maxMarketShortOI;
+  }
+
+  struct DeliveryReadiness {
+    bool ready;
+    bool inDeliveryPhase;
+    uint requiredBase;
+    uint requiredQuote;
+    uint reservedBase;
+    uint reservedQuote;
+    uint availableBase;
+    uint availableQuote;
+    uint freeBase;
+    uint freeQuote;
+    uint baseBalanceShortfall;
+    uint quoteBalanceShortfall;
+    uint baseReservationShortfall;
+    uint quoteReservationShortfall;
   }
 
   IDeliverableFXFutureAsset public futureAsset;
@@ -37,6 +72,8 @@ contract DeliverableFXManager is ILiquidatableManager, BaseManager, ReentrancyGu
   IAsset public quoteAsset;
   ISpotFeed public quoteSpotFeed;
   MarginParams public marginParams;
+  LifecycleParams public lifecycleParams;
+  PositionLimitParams public positionLimits;
 
   mapping(uint accountId => mapping(IAsset asset => uint amount)) public reservedBalance;
   mapping(uint accountId => mapping(uint96 subId => bool settled)) public accountSettled;
@@ -45,16 +82,40 @@ contract DeliverableFXManager is ILiquidatableManager, BaseManager, ReentrancyGu
   error DFXM_InvalidConfig();
   error DFXM_TooManyAssets();
   error DFXM_OptionsNotSupported();
+  error DFXM_LeverageIncreaseBlocked();
+  error DFXM_PositionLimitExceeded();
+  error DFXM_DeliveryReadinessNotImproved();
 
   event DeliverableProductConfigured(address futureAsset, address baseAsset, address quoteAsset, address quoteSpotFeed);
   event DeliverableMarginParamsSet(uint normalIM, uint normalMM);
+  event DeliverableLifecycleParamsSet(uint64 rampDuration, uint rampIM, uint rampMM);
+  event DeliverablePositionLimitsSet(
+    uint maxSeriesNotional,
+    uint maxAccountNotional,
+    uint maxAccountLongNotional,
+    uint maxAccountShortNotional,
+    uint maxMarketOI,
+    uint maxMarketLongOI,
+    uint maxMarketShortOI
+  );
 
   constructor(
     ISubAccounts subAccounts_,
     ICashAsset cashAsset_,
     IDutchAuction liquidation_,
     IBasePortfolioViewer viewer_
-  ) BaseManager(subAccounts_, cashAsset_, liquidation_, viewer_) {}
+  ) BaseManager(subAccounts_, cashAsset_, liquidation_, viewer_) {
+    lifecycleParams = LifecycleParams({rampDuration: 3 days, rampIM: 1e18, rampMM: 1e18});
+    positionLimits = PositionLimitParams({
+      maxSeriesNotional: type(uint).max,
+      maxAccountNotional: type(uint).max,
+      maxAccountLongNotional: type(uint).max,
+      maxAccountShortNotional: type(uint).max,
+      maxMarketOI: type(uint).max,
+      maxMarketLongOI: type(uint).max,
+      maxMarketShortOI: type(uint).max
+    });
+  }
 
   function setProduct(
     IDeliverableFXFutureAsset futureAsset_,
@@ -83,6 +144,51 @@ contract DeliverableFXManager is ILiquidatableManager, BaseManager, ReentrancyGu
     emit DeliverableMarginParamsSet(normalIM, normalMM);
   }
 
+  function setLifecycleParams(uint64 rampDuration, uint rampIM, uint rampMM) external onlyOwner {
+    if (rampDuration == 0 || rampMM > rampIM || rampIM < marginParams.normalIM || rampMM < marginParams.normalMM || rampIM > 1e18)
+    {
+      revert DFXM_InvalidConfig();
+    }
+
+    lifecycleParams = LifecycleParams({rampDuration: rampDuration, rampIM: rampIM, rampMM: rampMM});
+    emit DeliverableLifecycleParamsSet(rampDuration, rampIM, rampMM);
+  }
+
+  function setPositionLimits(
+    uint maxSeriesNotional,
+    uint maxAccountNotional,
+    uint maxAccountLongNotional,
+    uint maxAccountShortNotional,
+    uint maxMarketOI,
+    uint maxMarketLongOI,
+    uint maxMarketShortOI
+  ) external onlyOwner {
+    if (
+      maxSeriesNotional == 0 || maxAccountNotional < maxSeriesNotional || maxAccountLongNotional == 0
+        || maxAccountShortNotional == 0 || maxAccountLongNotional > maxAccountNotional
+        || maxAccountShortNotional > maxAccountNotional || maxMarketOI == 0 || maxMarketLongOI == 0
+        || maxMarketShortOI == 0 || maxMarketLongOI > maxMarketOI || maxMarketShortOI > maxMarketOI
+    ) revert DFXM_InvalidConfig();
+    positionLimits = PositionLimitParams({
+      maxSeriesNotional: maxSeriesNotional,
+      maxAccountNotional: maxAccountNotional,
+      maxAccountLongNotional: maxAccountLongNotional,
+      maxAccountShortNotional: maxAccountShortNotional,
+      maxMarketOI: maxMarketOI,
+      maxMarketLongOI: maxMarketLongOI,
+      maxMarketShortOI: maxMarketShortOI
+    });
+    emit DeliverablePositionLimitsSet(
+      maxSeriesNotional,
+      maxAccountNotional,
+      maxAccountLongNotional,
+      maxAccountShortNotional,
+      maxMarketOI,
+      maxMarketLongOI,
+      maxMarketShortOI
+    );
+  }
+
   function handleAdjustment(
     uint accountId,
     uint tradeId,
@@ -95,6 +201,7 @@ contract DeliverableFXManager is ILiquidatableManager, BaseManager, ReentrancyGu
 
     _settleAllDeliverableFXVM(accountId);
     _refreshReservations(accountId);
+    DeliveryReadiness memory readinessBefore = _getDeliveryReadiness(accountId);
 
     bool needsRiskCheck;
 
@@ -115,14 +222,17 @@ contract DeliverableFXManager is ILiquidatableManager, BaseManager, ReentrancyGu
       if (asset != IAsset(address(futureAsset))) revert DFXM_UnsupportedAsset();
 
       int currentPosition = subAccounts.getBalance(accountId, futureAsset, assetDeltas[i].subId);
+      IDeliverableFXFutureAsset.Series memory series = futureAsset.getSeries(uint96(assetDeltas[i].subId));
+      if (_isInRamp(series) && _increasesAbsoluteExposure(currentPosition, assetDeltas[i].delta)) {
+        revert DFXM_LeverageIncreaseBlocked();
+      }
       if (currentPosition == 0 || currentPosition * delta > 0) {
         needsRiskCheck = true;
       }
     }
 
-    _checkAllDeliverableSufficiency(accountId);
-
     ISubAccounts.AssetBalance[] memory assetBalances = subAccounts.getAccountBalances(accountId);
+    _checkPositionLimits(assetBalances);
     if (
       assetBalances.length > maxAccountSize
         && viewer.getPreviousAssetsLength(assetBalances, assetDeltas) < assetBalances.length
@@ -130,8 +240,15 @@ contract DeliverableFXManager is ILiquidatableManager, BaseManager, ReentrancyGu
       revert DFXM_TooManyAssets();
     }
 
+    DeliveryReadiness memory readinessAfter = _getDeliveryReadiness(accountId);
+    if (readinessAfter.inDeliveryPhase && !readinessAfter.ready) {
+      revert IStandardManager.SRM_PortfolioBelowMargin();
+    }
+
     if (!needsRiskCheck) return;
-    _assessRisk(caller, accountId);
+    if (!readinessBefore.inDeliveryPhase) {
+      _assessRisk(caller, accountId);
+    }
   }
 
   function settlePerpsWithIndex(uint) external pure override {}
@@ -151,6 +268,14 @@ contract DeliverableFXManager is ILiquidatableManager, BaseManager, ReentrancyGu
     returns (int margin, int markToMarket)
   {
     return _getMarginAndMarkToMarket(accountId, isInitial);
+  }
+
+  function isDeliveryReady(uint accountId) external view returns (bool) {
+    return _getDeliveryReadiness(accountId).ready;
+  }
+
+  function getDeliveryReadiness(uint accountId) external view returns (DeliveryReadiness memory) {
+    return _getDeliveryReadiness(accountId);
   }
 
   function refreshDeliverableReservation(IDeliverableFXFutureAsset future, uint accountId, uint96 subId) public {
@@ -239,6 +364,7 @@ contract DeliverableFXManager is ILiquidatableManager, BaseManager, ReentrancyGu
     override(IBaseManager, BaseManager)
     onlyLiquidations
   {
+    DeliveryReadiness memory accountReadinessBefore = _getDeliveryReadiness(accountId);
     _settleAllDeliverableFXVM(accountId);
     _settleAllDeliverableFXVM(liquidatorId);
 
@@ -247,6 +373,14 @@ contract DeliverableFXManager is ILiquidatableManager, BaseManager, ReentrancyGu
     _refreshReservations(accountId);
     _refreshReservations(liquidatorId);
     _checkAllDeliverableSufficiency(liquidatorId);
+
+    DeliveryReadiness memory accountReadinessAfter = _getDeliveryReadiness(accountId);
+    if (
+      accountReadinessBefore.inDeliveryPhase && !accountReadinessBefore.ready && !accountReadinessAfter.ready
+        && _totalDeliveryShortfall(accountReadinessAfter) >= _totalDeliveryShortfall(accountReadinessBefore)
+    ) {
+      revert DFXM_DeliveryReadinessNotImproved();
+    }
   }
 
   function _chargeAllOIFee(address, uint, uint, ISubAccounts.AssetDelta[] memory) internal override {}
@@ -266,7 +400,6 @@ contract DeliverableFXManager is ILiquidatableManager, BaseManager, ReentrancyGu
   function _getMarginAndMarkToMarket(uint accountId, bool isInitial) internal view returns (int margin, int markToMarket) {
     ISubAccounts.AssetBalance[] memory balances = subAccounts.getAccountBalances(accountId);
     uint quotePrice = _getQuotePrice();
-    uint requirementRatio = isInitial ? marginParams.normalIM : marginParams.normalMM;
 
     for (uint i = 0; i < balances.length; ++i) {
       ISubAccounts.AssetBalance memory balance = balances[i];
@@ -293,6 +426,7 @@ contract DeliverableFXManager is ILiquidatableManager, BaseManager, ReentrancyGu
 
       IDeliverableFXFutureAsset.Series memory series = futureAsset.getSeries(uint96(balance.subId));
       uint baseNotional = (SignedMath.abs(balance.balance) * uint(series.contractSizeBase)) / 1e18;
+      uint requirementRatio = _getMarginRequirementRatio(series, isInitial);
       margin -= int(baseNotional.multiplyDecimal(requirementRatio));
 
       int pendingCash = _getPendingVM(accountId, uint96(balance.subId), balance.balance);
@@ -342,7 +476,7 @@ contract DeliverableFXManager is ILiquidatableManager, BaseManager, ReentrancyGu
   }
 
   function _checkAllDeliverableSufficiency(uint accountId) internal view {
-    if (!_hasAggregateDeliverableSufficiency(accountId)) {
+    if (!_getDeliveryReadiness(accountId).ready) {
       revert IStandardManager.SRM_PortfolioBelowMargin();
     }
   }
@@ -444,5 +578,120 @@ contract DeliverableFXManager is ILiquidatableManager, BaseManager, ReentrancyGu
 
   function _getManagerTokenBalance(IAsset asset) internal view returns (int) {
     return subAccounts.getBalance(accId, asset, 0);
+  }
+
+  function _getMarginRequirementRatio(IDeliverableFXFutureAsset.Series memory series, bool isInitial)
+    internal
+    view
+    returns (uint)
+  {
+    uint normalRatio = isInitial ? marginParams.normalIM : marginParams.normalMM;
+    uint rampRatio = isInitial ? lifecycleParams.rampIM : lifecycleParams.rampMM;
+
+    if (block.timestamp >= series.lastTradeTime) {
+      return rampRatio;
+    }
+
+    uint64 rampDuration = lifecycleParams.rampDuration;
+    if (rampDuration == 0 || series.lastTradeTime <= rampDuration) return normalRatio;
+
+    uint64 rampStart = series.lastTradeTime - rampDuration;
+    if (block.timestamp <= rampStart || rampRatio <= normalRatio) return normalRatio;
+
+    uint elapsed = block.timestamp - rampStart;
+    return normalRatio + ((rampRatio - normalRatio) * elapsed) / rampDuration;
+  }
+
+  function _getDeliveryReadiness(uint accountId) internal view returns (DeliveryReadiness memory readiness) {
+    (uint requiredBase, uint requiredQuote) = _getAggregateDeliveryRequirements(accountId, false);
+    uint reservedBase = reservedBalance[accountId][baseAsset];
+    uint reservedQuote = reservedBalance[accountId][quoteAsset];
+    uint availableBase = _getPositiveBalance(accountId, baseAsset);
+    uint availableQuote = _getPositiveBalance(accountId, quoteAsset);
+    uint freeBase = availableBase > reservedBase ? availableBase - reservedBase : 0;
+    uint freeQuote = availableQuote > reservedQuote ? availableQuote - reservedQuote : 0;
+
+    readiness = DeliveryReadiness({
+      ready: false,
+      inDeliveryPhase: _hasFrozenSeries(accountId),
+      requiredBase: requiredBase,
+      requiredQuote: requiredQuote,
+      reservedBase: reservedBase,
+      reservedQuote: reservedQuote,
+      availableBase: availableBase,
+      availableQuote: availableQuote,
+      freeBase: freeBase,
+      freeQuote: freeQuote,
+      baseBalanceShortfall: availableBase >= requiredBase ? 0 : requiredBase - availableBase,
+      quoteBalanceShortfall: availableQuote >= requiredQuote ? 0 : requiredQuote - availableQuote,
+      baseReservationShortfall: reservedBase >= requiredBase ? 0 : requiredBase - reservedBase,
+      quoteReservationShortfall: reservedQuote >= requiredQuote ? 0 : requiredQuote - reservedQuote
+    });
+
+    readiness.ready = readiness.baseBalanceShortfall == 0 && readiness.quoteBalanceShortfall == 0
+      && readiness.baseReservationShortfall == 0 && readiness.quoteReservationShortfall == 0;
+  }
+
+  function _hasFrozenSeries(uint accountId) internal view returns (bool) {
+    ISubAccounts.AssetBalance[] memory balances = subAccounts.getAccountBalances(accountId);
+    for (uint i = 0; i < balances.length; ++i) {
+      if (balances[i].asset != IAsset(address(futureAsset)) || balances[i].balance == 0) continue;
+      IDeliverableFXFutureAsset.Series memory series = futureAsset.getSeries(uint96(balances[i].subId));
+      if (block.timestamp >= series.lastTradeTime) return true;
+    }
+    return false;
+  }
+
+  function _isInRamp(IDeliverableFXFutureAsset.Series memory series) internal view returns (bool) {
+    if (block.timestamp >= series.lastTradeTime) return false;
+    uint64 rampDuration = lifecycleParams.rampDuration;
+    if (rampDuration == 0 || series.lastTradeTime <= rampDuration) return false;
+    return block.timestamp >= series.lastTradeTime - rampDuration;
+  }
+
+  function _increasesAbsoluteExposure(int currentPosition, int delta) internal pure returns (bool) {
+    if (delta == 0) return false;
+    int nextPosition = currentPosition + delta;
+    return SignedMath.abs(nextPosition) > SignedMath.abs(currentPosition);
+  }
+
+  function _checkPositionLimits(ISubAccounts.AssetBalance[] memory balances) internal view {
+    uint totalAccountNotional;
+    uint accountLongNotional;
+    uint accountShortNotional;
+    for (uint i = 0; i < balances.length; ++i) {
+      if (balances[i].asset != IAsset(address(futureAsset)) || balances[i].balance == 0) continue;
+      IDeliverableFXFutureAsset.Series memory series = futureAsset.getSeries(uint96(balances[i].subId));
+      uint seriesNotional = (SignedMath.abs(balances[i].balance) * uint(series.contractSizeBase)) / 1e18;
+      if (seriesNotional > positionLimits.maxSeriesNotional) revert DFXM_PositionLimitExceeded();
+      totalAccountNotional += seriesNotional;
+      if (balances[i].balance > 0) {
+        accountLongNotional += seriesNotional;
+      } else {
+        accountShortNotional += seriesNotional;
+      }
+    }
+
+    if (totalAccountNotional > positionLimits.maxAccountNotional) revert DFXM_PositionLimitExceeded();
+    if (accountLongNotional > positionLimits.maxAccountLongNotional) revert DFXM_PositionLimitExceeded();
+    if (accountShortNotional > positionLimits.maxAccountShortNotional) revert DFXM_PositionLimitExceeded();
+    if (futureAsset.totalPosition(IManager(address(this))) > positionLimits.maxMarketOI) revert DFXM_PositionLimitExceeded();
+    if (futureAsset.totalLongPosition(IManager(address(this))) > positionLimits.maxMarketLongOI) {
+      revert DFXM_PositionLimitExceeded();
+    }
+    if (futureAsset.totalShortPosition(IManager(address(this))) > positionLimits.maxMarketShortOI) {
+      revert DFXM_PositionLimitExceeded();
+    }
+  }
+
+  function _getPositiveBalance(uint accountId, IAsset asset) internal view returns (uint) {
+    int balance = subAccounts.getBalance(accountId, asset, 0);
+    if (balance <= 0) return 0;
+    return uint(balance);
+  }
+
+  function _totalDeliveryShortfall(DeliveryReadiness memory readiness) internal pure returns (uint) {
+    return readiness.baseBalanceShortfall + readiness.quoteBalanceShortfall + readiness.baseReservationShortfall
+      + readiness.quoteReservationShortfall;
   }
 }

@@ -193,7 +193,7 @@ contract TestStandardManagerBase is Test {
     manager.setOptionMarginParams(ethMarketId, optionParams);
     manager.setOptionMarginParams(btcMarketId, optionParams);
     manager.setDeliverableFXMarginParams(
-      fxFutureMarketId, IStandardManager.DeliverableFXMarginParams({normalIM: 0.01e18, normalMM: 0.005e18})
+      fxFutureMarketId, IStandardManager.DeliverableFXMarginParams({normalIM: 0.10e18, normalMM: 0.075e18})
     );
 
     fxExpiry = block.timestamp + 21 days;
