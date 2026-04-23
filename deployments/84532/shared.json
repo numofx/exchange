@@ -1,0 +1,13 @@
+{
+  "btc": "0x35D56dBC7F4e816Fe49DDd67BB592F545E83de33",
+  "eth": "0x396CaF37CAeAB25EcFD4a26e79Ea851F782F9d6d",
+  "feedSigners": [
+    "0xC7bE60b228b997c23094DdfdD71e22E2DE6C9310"
+  ],
+  "requiredSigners": 1,
+  "snx": "0x6584305ac8a1dF0365d13848137419677c83ec81",
+  "usdc": "0x8b3C43D2b2555ca3fc4Fa1BC34544133B8576110",
+  "usdt": "0x5841B3aF4d7243Ed815f9314Dd55b79E23c1391D",
+  "useMockedFeed": false,
+  "wsteth": "0xca77da30D89A6183Ca666E268Af787abf391B403"
+}
