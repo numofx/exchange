@@ -29,3 +29,5 @@ deployments/31337/*
 
 verification/
 coverage/
+deployments/
+*.bak
