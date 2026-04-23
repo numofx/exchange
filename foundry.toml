@@ -6,7 +6,7 @@ include_paths = ["../../exchange-core"]
 
 optimizer = true
 optimizer_runs = 50
-fs_permissions = [{access = "read-write", path = "./"}]
+fs_permissions = [{access = "read-write", path = "./"}, {access = "read", path = "../../exchange-core"}]
 
 solc_version="0.8.27"
 
