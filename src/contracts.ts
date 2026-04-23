@@ -10,7 +10,7 @@ export type ContractArtifacts = {
 export function loadContractArtifacts(repoPath: string): ContractArtifacts {
   return {
     matchingAbi: loadAbi(path.join(repoPath, 'out', 'Matching.sol', 'Matching.json')),
-    tradeModuleAbi: loadAbi(path.join(repoPath, 'out', 'TradeModule.sol', 'TradeModule.json')),
+    tradeModuleAbi: loadAbi(path.join(repoPath, 'out', 'ITradeModule.sol', 'ITradeModule.json')),
   };
 }
 
