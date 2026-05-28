@@ -11,7 +11,6 @@ import (
 
 	"github.com/numofx/matching-backend/internal/config"
 	"github.com/numofx/matching-backend/internal/instruments"
-	btcvar30instrument "github.com/numofx/matching-backend/internal/instruments/btcvar30"
 	"github.com/numofx/matching-backend/internal/orders"
 	"github.com/numofx/matching-backend/internal/pricing"
 )
@@ -31,8 +30,7 @@ type createOrderRequest struct {
 	LimitPrice     string           `json:"limit_price"`
 	WorstFee       string           `json:"worst_fee"`
 	Expiry         int64            `json:"expiry"`
-	OrderEntrySpec string           `json:"order_entry_spec,omitempty"`
-	UIIntent       *spotOrderIntent `json:"ui_intent,omitempty"`
+
 	ActionJSON     json.RawMessage  `json:"action_json"`
 	Signature      string           `json:"signature"`
 }
@@ -59,10 +57,10 @@ func (r createOrderRequest) toParams(cfg config.Config) (orders.CreateOrderParam
 	if r.AssetAddress == "" {
 		return orders.CreateOrderParams{}, fmt.Errorf("asset_address is required")
 	}
-	if r.DesiredAmount == "" && r.UIIntent == nil {
+	if r.DesiredAmount == "" {
 		return orders.CreateOrderParams{}, fmt.Errorf("desired_amount is required")
 	}
-	if r.LimitPrice == "" && r.UIIntent == nil {
+	if r.LimitPrice == "" {
 		return orders.CreateOrderParams{}, fmt.Errorf("limit_price is required")
 	}
 	if r.WorstFee == "" {
@@ -113,18 +111,7 @@ func (r createOrderRequest) toParams(cfg config.Config) (orders.CreateOrderParam
 			QuotePrecision: 8,
 		}
 	}
-	if isSpotContractInstrument(instrument) {
-		var err error
-		side, r.LimitPrice, r.DesiredAmount, err = validateOrTranslateSpotUIIntent(r.OrderEntrySpec, r.UIIntent, side, r.LimitPrice, r.DesiredAmount)
-		if err != nil {
-			return orders.CreateOrderParams{}, err
-		}
-		if side != orders.SideBuy && side != orders.SideSell {
-			return orders.CreateOrderParams{}, fmt.Errorf("side must be 'buy' or 'sell'")
-		}
-	} else if r.OrderEntrySpec != "" || r.UIIntent != nil {
-		return orders.CreateOrderParams{}, fmt.Errorf("order_entry_spec and ui_intent are only supported for the spot usdc/cngn contract")
-	}
+
 	converter, err := pricing.NewConverter(instrument)
 	if err != nil {
 		return orders.CreateOrderParams{}, err
@@ -133,11 +120,7 @@ func (r createOrderRequest) toParams(cfg config.Config) (orders.CreateOrderParam
 	if err != nil {
 		return orders.CreateOrderParams{}, err
 	}
-	if instrument.Symbol == btcvar30instrument.Symbol {
-		if err := validateBTCVar30VariancePrice(normalizedPrice); err != nil {
-			return orders.CreateOrderParams{}, err
-		}
-	}
+
 	filledAmount := r.FilledAmount
 	if filledAmount == "" {
 		filledAmount = "0"
@@ -188,18 +171,6 @@ func (r createOrderRequest) toParams(cfg config.Config) (orders.CreateOrderParam
 	}, nil
 }
 
-func validateBTCVar30VariancePrice(price string) error {
-	value, err := pricing.ParseVarianceFloat64(price)
-	if err != nil {
-		return err
-	}
-
-	if value > 5.0 || value < btcvar30instrument.MinVariancePrice || value > btcvar30instrument.MaxVariancePrice {
-		return fmt.Errorf("BTCVAR30 prices are variance, not volatility. Example: 0.25 = 50%% vol")
-	}
-	return nil
-}
-
 func normalizeDesiredAmount(instrument instruments.Metadata, raw string) (string, error) {
 	return normalizeAmountToAtomicUnits("desired_amount", instrument, raw, true)
 }
@@ -244,7 +215,7 @@ func normalizeAmountToAtomicUnits(field string, instrument instruments.Metadata,
 }
 
 func amountAtomicStep(instrument instruments.Metadata) string {
-	if instrument.Symbol == instruments.CNGNApr2026Symbol {
+	if instrument.Symbol == instruments.CNGNJun2026Symbol || instrument.Symbol == instruments.CNGNNov2026Symbol || instrument.Symbol == instruments.CNGNMay2027Symbol {
 		return instrument.MinSize
 	}
 	return "1"

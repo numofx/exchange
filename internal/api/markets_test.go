@@ -12,13 +12,15 @@ import (
 
 func TestHandleMarketsIncludesDeliverableFutureMetadata(t *testing.T) {
 	registry := instruments.DefaultRegistry(config.Config{
-		BTCPerpAssetAddress:           "0xbtc",
-		CNGNSpotAssetAddress:          "0xf000000000000000000000000000000000000999",
-		CNGNApr2026FutureAssetAddress: "0xf000000000000000000000000000000000000123",
-		CNGNApr2026FutureSubID:        "1777507200",
+		CNGNJun2026FutureAssetAddress: "0xf000000000000000000000000000000000000123",
+		CNGNJun2026FutureSubID:        "1782777600",
+		CNGNNov2026FutureAssetAddress: "0xf000000000000000000000000000000000000456",
+		CNGNNov2026FutureSubID:        "1795996800",
+		CNGNMay2027FutureAssetAddress: "0xf000000000000000000000000000000000000789",
+		CNGNMay2027FutureSubID:        "1811721600",
 	})
 
-	server := NewServer(config.Config{}, nil, registry, nil)
+	server := NewServer(config.Config{}, nil, registry)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/markets", nil)
 	rec := httptest.NewRecorder()
@@ -33,105 +35,115 @@ func TestHandleMarketsIncludesDeliverableFutureMetadata(t *testing.T) {
 		t.Fatalf("unmarshal response: %v", err)
 	}
 
+	// Verify June Future
 	var found *marketPresentation
 	for i := range markets {
-		if markets[i].Market == instruments.CNGNApr2026Symbol {
+		if markets[i].Market == instruments.CNGNJun2026Symbol {
 			found = &markets[i]
 			break
 		}
 	}
 	if found == nil {
-		t.Fatal("deliverable future missing from markets response")
+		t.Fatal("June deliverable future missing from markets response")
 	}
 
 	if found.ContractType != "deliverable_fx_future" {
-		t.Fatalf("contract type = %q", found.ContractType)
+		t.Fatalf("June contract type = %q", found.ContractType)
 	}
 	if found.SettlementType != "physical_delivery" {
-		t.Fatalf("settlement type = %q", found.SettlementType)
+		t.Fatalf("June settlement type = %q", found.SettlementType)
 	}
 	if found.AssetAddress != "0xf000000000000000000000000000000000000123" {
-		t.Fatalf("asset address = %q", found.AssetAddress)
+		t.Fatalf("June asset address = %q", found.AssetAddress)
 	}
-	if found.SubID != "1777507200" {
-		t.Fatalf("sub id = %q", found.SubID)
+	if found.SubID != "1782777600" {
+		t.Fatalf("June sub id = %q", found.SubID)
 	}
-	if found.ExpiryTimestamp != 1777507200 {
-		t.Fatalf("unexpected expiry window %+v", found)
+	if found.ExpiryTimestamp != 1782777600 {
+		t.Fatalf("June unexpected expiry window %+v", found)
 	}
 	if found.LastTradeTimestamp != nil {
-		t.Fatalf("expected nil last_trade_timestamp without trade history, got %+v", found)
+		t.Fatalf("June expected nil last_trade_timestamp without trade history, got %+v", found)
 	}
 	if found.BaseAssetSymbol != "USDC" || found.QuoteAssetSymbol != "cNGN" {
-		t.Fatalf("unexpected base/quote %q/%q", found.BaseAssetSymbol, found.QuoteAssetSymbol)
+		t.Fatalf("June unexpected base/quote %q/%q", found.BaseAssetSymbol, found.QuoteAssetSymbol)
 	}
 	if found.TickSize != "1" {
-		t.Fatalf("tick size = %q", found.TickSize)
-	}
-}
-
-func TestHandleMarketsIncludesSpotAndFutureMetadata(t *testing.T) {
-	registry := instruments.DefaultRegistry(config.Config{
-		CNGNSpotAssetAddress:          "0xf000000000000000000000000000000000000999",
-		CNGNApr2026FutureAssetAddress: "0xf000000000000000000000000000000000000123",
-		CNGNApr2026FutureSubID:        "1777507200",
-	})
-
-	server := NewServer(config.Config{}, nil, registry, nil)
-
-	req := httptest.NewRequest(http.MethodGet, "/v1/markets", nil)
-	rec := httptest.NewRecorder()
-	server.handleMarkets(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d", rec.Code)
+		t.Fatalf("June tick size = %q", found.TickSize)
 	}
 
-	var markets []marketPresentation
-	if err := json.Unmarshal(rec.Body.Bytes(), &markets); err != nil {
-		t.Fatalf("unmarshal response: %v", err)
-	}
-
-	var foundSpot *marketPresentation
-	var foundFuture *marketPresentation
+	// Verify November Future
+	var foundNov *marketPresentation
 	for i := range markets {
-		switch markets[i].Market {
-		case instruments.CNGNSpotSymbol:
-			foundSpot = &markets[i]
-		case instruments.CNGNApr2026Symbol:
-			foundFuture = &markets[i]
+		if markets[i].Market == instruments.CNGNNov2026Symbol {
+			foundNov = &markets[i]
+			break
 		}
 	}
-
-	if foundSpot == nil {
-		t.Fatal("spot market missing from markets response")
-	}
-	if foundSpot.ContractType != "spot" || foundSpot.SettlementType != "spot" {
-		t.Fatalf("unexpected spot metadata %+v", *foundSpot)
-	}
-	if foundSpot.AssetAddress != "0xf000000000000000000000000000000000000999" || foundSpot.SubID != "0" {
-		t.Fatalf("unexpected spot asset/subId %+v", *foundSpot)
-	}
-	if foundSpot.BaseAssetSymbol != "USDC" || foundSpot.QuoteAssetSymbol != "cNGN" {
-		t.Fatalf("unexpected spot base/quote %q/%q", foundSpot.BaseAssetSymbol, foundSpot.QuoteAssetSymbol)
-	}
-	if foundSpot.TickSize != "0.000000000000000001" {
-		t.Fatalf("unexpected spot tick size %q", foundSpot.TickSize)
-	}
-	if foundSpot.OrderEntrySpec != "usdc_cngn_spot_v1" {
-		t.Fatalf("unexpected spot order entry spec %q", foundSpot.OrderEntrySpec)
-	}
-	if foundSpot.EngineSidePolicy != "invert_ui_side" {
-		t.Fatalf("unexpected spot engine side policy %q", foundSpot.EngineSidePolicy)
-	}
-	if foundSpot.UIPriceToEngine != "engine_price = 1 / ui_price" {
-		t.Fatalf("unexpected spot price formula %q", foundSpot.UIPriceToEngine)
-	}
-	if foundSpot.UISizeToEngine != "engine_amount = ui_size * ui_price" {
-		t.Fatalf("unexpected spot size formula %q", foundSpot.UISizeToEngine)
+	if foundNov == nil {
+		t.Fatal("November deliverable future missing from markets response")
 	}
 
-	if foundFuture == nil {
-		t.Fatal("future market missing from markets response")
+	if foundNov.ContractType != "deliverable_fx_future" {
+		t.Fatalf("November contract type = %q", foundNov.ContractType)
+	}
+	if foundNov.SettlementType != "physical_delivery" {
+		t.Fatalf("November settlement type = %q", foundNov.SettlementType)
+	}
+	if foundNov.AssetAddress != "0xf000000000000000000000000000000000000456" {
+		t.Fatalf("November asset address = %q", foundNov.AssetAddress)
+	}
+	if foundNov.SubID != "1795996800" {
+		t.Fatalf("November sub id = %q", foundNov.SubID)
+	}
+	if foundNov.ExpiryTimestamp != 1795996800 {
+		t.Fatalf("November unexpected expiry window %+v", foundNov)
+	}
+	if foundNov.LastTradeTimestamp != nil {
+		t.Fatalf("November expected nil last_trade_timestamp without trade history, got %+v", foundNov)
+	}
+	if foundNov.BaseAssetSymbol != "USDC" || foundNov.QuoteAssetSymbol != "cNGN" {
+		t.Fatalf("November unexpected base/quote %q/%q", foundNov.BaseAssetSymbol, foundNov.QuoteAssetSymbol)
+	}
+	if foundNov.TickSize != "1" {
+		t.Fatalf("November tick size = %q", foundNov.TickSize)
+	}
+
+	// Verify May 2027 Future
+	var foundMay *marketPresentation
+	for i := range markets {
+		if markets[i].Market == instruments.CNGNMay2027Symbol {
+			foundMay = &markets[i]
+			break
+		}
+	}
+	if foundMay == nil {
+		t.Fatal("May 2027 deliverable future missing from markets response")
+	}
+
+	if foundMay.ContractType != "deliverable_fx_future" {
+		t.Fatalf("May 2027 contract type = %q", foundMay.ContractType)
+	}
+	if foundMay.SettlementType != "physical_delivery" {
+		t.Fatalf("May 2027 settlement type = %q", foundMay.SettlementType)
+	}
+	if foundMay.AssetAddress != "0xf000000000000000000000000000000000000789" {
+		t.Fatalf("May 2027 asset address = %q", foundMay.AssetAddress)
+	}
+	if foundMay.SubID != "1811721600" {
+		t.Fatalf("May 2027 sub id = %q", foundMay.SubID)
+	}
+	if foundMay.ExpiryTimestamp != 1811721600 {
+		t.Fatalf("May 2027 unexpected expiry window %+v", foundMay)
+	}
+	if foundMay.LastTradeTimestamp != nil {
+		t.Fatalf("May 2027 expected nil last_trade_timestamp without trade history, got %+v", foundMay)
+	}
+	if foundMay.BaseAssetSymbol != "USDC" || foundMay.QuoteAssetSymbol != "cNGN" {
+		t.Fatalf("May 2027 unexpected base/quote %q/%q", foundMay.BaseAssetSymbol, foundMay.QuoteAssetSymbol)
+	}
+	if foundMay.TickSize != "1" {
+		t.Fatalf("May 2027 tick size = %q", foundMay.TickSize)
 	}
 }
+

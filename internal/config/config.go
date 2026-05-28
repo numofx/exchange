@@ -19,24 +19,19 @@ type Config struct {
 	MatchingAddress               string
 	EnforceMatchingCustody        bool
 	TradeModuleAddress            string
-	BTCPerpAssetAddress           string
 	ExecutorURL                   string
 	ExecutorManagerData           string
 	ExpectedOrderOwner            string
 	ExpectedOrderSigner           string
 	DeribitBaseURL                string
 	DeribitWSURL                  string
-	BTCVar30Enabled               bool
-	BTCVar30AssetAddress          string
-	BTCVar30OraclePollInterval    time.Duration
-	BTCVar30OracleStaleAfter      time.Duration
-	BTCVar30FundingInterval       time.Duration
-	BTCVar30FundingCoeff          float64
-	BTCVar30FundingCap            float64
-	BTCVar30OracleSigningKey      string
-	CNGNSpotAssetAddress          string
-	CNGNApr2026FutureAssetAddress string
-	CNGNApr2026FutureSubID        string
+
+	CNGNJun2026FutureAssetAddress string
+	CNGNJun2026FutureSubID        string
+	CNGNNov2026FutureAssetAddress string
+	CNGNNov2026FutureSubID        string
+	CNGNMay2027FutureAssetAddress string
+	CNGNMay2027FutureSubID        string
 	EnforceActionDataInvariants   bool
 	CancelProtectedOrderPrefixes  []string
 }
@@ -51,21 +46,19 @@ func Load() (Config, error) {
 		MatchingAddress:               os.Getenv("MATCHING_ADDRESS"),
 		EnforceMatchingCustody:        getenvBool("ENFORCE_MATCHING_CUSTODY", true),
 		TradeModuleAddress:            os.Getenv("TRADE_MODULE_ADDRESS"),
-		BTCPerpAssetAddress:           os.Getenv("BTC_PERP_ASSET_ADDRESS"),
 		ExecutorURL:                   os.Getenv("EXECUTOR_URL"),
 		ExecutorManagerData:           "0x",
 		ExpectedOrderOwner:            os.Getenv("EXPECTED_ORDER_OWNER"),
 		ExpectedOrderSigner:           os.Getenv("EXPECTED_ORDER_SIGNER"),
 		DeribitBaseURL:                getenvDefault("DERIBIT_BASE_URL", "https://test.deribit.com/api/v2"),
 		DeribitWSURL:                  getenvDefault("DERIBIT_WS_URL", "wss://test.deribit.com/ws/api/v2"),
-		BTCVar30Enabled:               getenvBool("BTCVAR30_ENABLED", false),
-		BTCVar30AssetAddress:          strings.ToLower(strings.TrimSpace(os.Getenv("BTCVAR30_PERP_ASSET_ADDRESS"))),
-		BTCVar30FundingCoeff:          getenvFloatDefault("BTCVAR30_FUNDING_COEFF", 0.10),
-		BTCVar30FundingCap:            getenvFloatDefault("BTCVAR30_FUNDING_CAP", 0.05),
-		BTCVar30OracleSigningKey:      strings.TrimSpace(os.Getenv("BTCVAR30_ORACLE_SIGNING_KEY")),
-		CNGNSpotAssetAddress:          strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_SPOT_ASSET_ADDRESS"))),
-		CNGNApr2026FutureAssetAddress: strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_APR30_2026_FUTURE_ASSET_ADDRESS"))),
-		CNGNApr2026FutureSubID:        strings.TrimSpace(os.Getenv("CNGN_APR30_2026_FUTURE_SUB_ID")),
+
+		CNGNJun2026FutureAssetAddress: strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_JUN30_2026_FUTURE_ASSET_ADDRESS"))),
+		CNGNJun2026FutureSubID:        strings.TrimSpace(os.Getenv("CNGN_JUN30_2026_FUTURE_SUB_ID")),
+		CNGNNov2026FutureAssetAddress: strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_NOV30_2026_FUTURE_ASSET_ADDRESS"))),
+		CNGNNov2026FutureSubID:        strings.TrimSpace(os.Getenv("CNGN_NOV30_2026_FUTURE_SUB_ID")),
+		CNGNMay2027FutureAssetAddress: strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_MAY31_2027_FUTURE_ASSET_ADDRESS"))),
+		CNGNMay2027FutureSubID:        strings.TrimSpace(os.Getenv("CNGN_MAY31_2027_FUTURE_SUB_ID")),
 		EnforceActionDataInvariants:   getenvBool("ENFORCE_ACTION_DATA_INVARIANTS", true),
 		CancelProtectedOrderPrefixes:  getenvCSV("CANCEL_PROTECTED_ORDER_ID_PREFIXES", "validation:,smoke:,manual:"),
 	}
@@ -85,28 +78,6 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("parse MATCHER_POLL_INTERVAL: %w", err)
 	}
 	cfg.MatcherPollInterval = pollInterval
-
-	oraclePollInterval, err := getenvMillisecondsDuration("BTCVAR30_ORACLE_POLL_MS", 60_000)
-	if err != nil {
-		return Config{}, fmt.Errorf("parse BTCVAR30_ORACLE_POLL_MS: %w", err)
-	}
-	cfg.BTCVar30OraclePollInterval = oraclePollInterval
-
-	oracleStaleAfter, err := getenvMillisecondsDuration("BTCVAR30_ORACLE_STALE_MS", 180_000)
-	if err != nil {
-		return Config{}, fmt.Errorf("parse BTCVAR30_ORACLE_STALE_MS: %w", err)
-	}
-	cfg.BTCVar30OracleStaleAfter = oracleStaleAfter
-
-	fundingInterval, err := getenvMillisecondsDuration("BTCVAR30_FUNDING_INTERVAL_MS", 28_800_000)
-	if err != nil {
-		return Config{}, fmt.Errorf("parse BTCVAR30_FUNDING_INTERVAL_MS: %w", err)
-	}
-	cfg.BTCVar30FundingInterval = fundingInterval
-
-	if cfg.BTCVar30Enabled && cfg.BTCVar30AssetAddress == "" {
-		return Config{}, fmt.Errorf("BTCVAR30_PERP_ASSET_ADDRESS is required when BTCVAR30_ENABLED=true")
-	}
 
 	return cfg, nil
 }

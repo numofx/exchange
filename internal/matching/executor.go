@@ -66,9 +66,7 @@ func NewExecutorClient(url string, managerData string) *ExecutorClient {
 	}
 }
 
-func (c *ExecutorClient) SubmitMatch(ctx context.Context, candidate orders.MatchCandidate, price string, amount string) (ExecutorResponse, error) {
-	return c.SubmitMatchForMarket(ctx, "BTCUSDC-CVXPERP", candidate, price, amount)
-}
+
 
 func (c *ExecutorClient) SubmitMatchForMarket(ctx context.Context, market string, candidate orders.MatchCandidate, price string, amount string) (ExecutorResponse, error) {
 	if c.url == "" {

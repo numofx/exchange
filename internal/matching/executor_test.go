@@ -1,13 +1,9 @@
 package matching
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"testing"
-	"time"
 
 	"github.com/numofx/matching-backend/internal/orders"
 )
@@ -35,7 +31,7 @@ func TestBuildExecutorRequest(t *testing.T) {
 		},
 	}
 
-	req, err := buildExecutorRequest("BTCUSDC-CVXPERP", candidate, "0xfeed", "75", "3")
+	req, err := buildExecutorRequest("USDCcNGN-JUN30-2026", candidate, "0xfeed", "75", "3")
 	if err != nil {
 		t.Fatalf("buildExecutorRequest returned error: %v", err)
 	}
@@ -63,49 +59,12 @@ func TestBuildExecutorRequest(t *testing.T) {
 	}
 }
 
-func TestBuildExecutorRequestForBTCVar30Market(t *testing.T) {
+
+
+func TestBuildExecutorRequestForFutureMarket(t *testing.T) {
 	candidate := orders.MatchCandidate{
 		Taker: orders.Order{
-			OrderID:       "taker-btcvar30",
-			OwnerAddress:  "0x1111111111111111111111111111111111111111",
-			SignerAddress: "0x3333333333333333333333333333333333333333",
-			AssetAddress:  "0x2222222222222222222222222222222222222222",
-			SubaccountID:  "501",
-			ActionJSON:    json.RawMessage(`{"subaccount_id":"501","nonce":"1","module":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","data":"0xaaa","expiry":"100","owner":"0x1111111111111111111111111111111111111111","signer":"0x3333333333333333333333333333333333333333"}`),
-			Signature:     "0x01",
-			Nonce:         "1",
-		},
-		Maker: orders.Order{
-			OrderID:       "maker-btcvar30",
-			OwnerAddress:  "0x2222222222222222222222222222222222222222",
-			SignerAddress: "0x4444444444444444444444444444444444444444",
-			SubaccountID:  "502",
-			ActionJSON:    json.RawMessage(`{"subaccount_id":"502","nonce":"2","module":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","data":"0xbbb","expiry":"100","owner":"0x2222222222222222222222222222222222222222","signer":"0x4444444444444444444444444444444444444444"}`),
-			Signature:     "0x02",
-			Nonce:         "2",
-		},
-	}
-
-	req, err := buildExecutorRequest("BTCVAR30-PERP", candidate, "0xfeed", "2728", "3")
-	if err != nil {
-		t.Fatalf("buildExecutorRequest returned error: %v", err)
-	}
-
-	if req.Market != "BTCVAR30-PERP" {
-		t.Fatalf("market = %s", req.Market)
-	}
-	if req.AssetAddress != "0x2222222222222222222222222222222222222222" {
-		t.Fatalf("asset address = %s", req.AssetAddress)
-	}
-	if req.OrderData.FillDetails[0].Price != "2728" {
-		t.Fatalf("price = %s", req.OrderData.FillDetails[0].Price)
-	}
-}
-
-func TestBuildExecutorRequestForSpotMarket(t *testing.T) {
-	candidate := orders.MatchCandidate{
-		Taker: orders.Order{
-			OrderID:       "taker-spot",
+			OrderID:       "taker-future",
 			OwnerAddress:  "0x1111111111111111111111111111111111111111",
 			SignerAddress: "0x3333333333333333333333333333333333333333",
 			AssetAddress:  "0x3333333333333333333333333333333333333333",
@@ -115,7 +74,7 @@ func TestBuildExecutorRequestForSpotMarket(t *testing.T) {
 			Nonce:         "1",
 		},
 		Maker: orders.Order{
-			OrderID:       "maker-spot",
+			OrderID:       "maker-future",
 			OwnerAddress:  "0x2222222222222222222222222222222222222222",
 			SignerAddress: "0x4444444444444444444444444444444444444444",
 			SubaccountID:  "602",
@@ -125,12 +84,12 @@ func TestBuildExecutorRequestForSpotMarket(t *testing.T) {
 		},
 	}
 
-	req, err := buildExecutorRequest("USDCcNGN-SPOT", candidate, "0x", "1602", "3000000")
+	req, err := buildExecutorRequest("USDCcNGN-JUN30-2026", candidate, "0x", "1602", "3000000")
 	if err != nil {
 		t.Fatalf("buildExecutorRequest returned error: %v", err)
 	}
 
-	if req.Market != "USDCcNGN-SPOT" {
+	if req.Market != "USDCcNGN-JUN30-2026" {
 		t.Fatalf("market = %s", req.Market)
 	}
 	if req.AssetAddress != "0x3333333333333333333333333333333333333333" {
@@ -141,76 +100,7 @@ func TestBuildExecutorRequestForSpotMarket(t *testing.T) {
 	}
 }
 
-func TestExecutorClientSubmitMatch(t *testing.T) {
-	candidate := orders.MatchCandidate{
-		Taker: orders.Order{
-			OrderID:       "taker-1",
-			OwnerAddress:  "0x1111111111111111111111111111111111111111",
-			SignerAddress: "0x3333333333333333333333333333333333333333",
-			AssetAddress:  "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-			SubaccountID:  "10",
-			ActionJSON:    json.RawMessage(`{"subaccount_id":"10","nonce":"1","module":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","data":"0xaaa","expiry":"100","owner":"0x1111111111111111111111111111111111111111","signer":"0x3333333333333333333333333333333333333333"}`),
-			Signature:     "0x01",
-			Nonce:         "1",
-		},
-		Maker: orders.Order{
-			OrderID:       "maker-1",
-			OwnerAddress:  "0x2222222222222222222222222222222222222222",
-			SignerAddress: "0x4444444444444444444444444444444444444444",
-			SubaccountID:  "11",
-			ActionJSON:    json.RawMessage(`{"subaccount_id":"11","nonce":"2","module":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","data":"0xbbb","expiry":"100","owner":"0x2222222222222222222222222222222222222222","signer":"0x4444444444444444444444444444444444444444"}`),
-			Signature:     "0x02",
-			Nonce:         "2",
-		},
-	}
 
-	client := &ExecutorClient{
-		url:         "https://executor.test/submit",
-		managerData: "0xfeed",
-		httpClient: &http.Client{
-			Timeout: time.Second,
-			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-				defer r.Body.Close()
-				body, err := io.ReadAll(r.Body)
-				if err != nil {
-					t.Fatalf("read body: %v", err)
-				}
-
-				var req ExecutorRequest
-				if err := json.Unmarshal(body, &req); err != nil {
-					t.Fatalf("unmarshal request: %v", err)
-				}
-
-				if req.OrderData.TakerAccount != "10" {
-					t.Fatalf("taker account = %s", req.OrderData.TakerAccount)
-				}
-				if req.OrderData.FillDetails[0].FilledAccount != "11" {
-					t.Fatalf("filled account = %s", req.OrderData.FillDetails[0].FilledAccount)
-				}
-				if req.OrderData.ManagerData != "0xfeed" {
-					t.Fatalf("manager data = %s", req.OrderData.ManagerData)
-				}
-
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Header:     make(http.Header),
-					Body:       io.NopCloser(bytes.NewBufferString(`{"accepted":true,"tx_hash":"0xdeadbeef"}`)),
-				}, nil
-			}),
-		},
-	}
-
-	resp, err := client.SubmitMatch(context.Background(), candidate, "75", "3")
-	if err != nil {
-		t.Fatalf("SubmitMatch returned error: %v", err)
-	}
-	if !resp.Accepted {
-		t.Fatal("expected accepted response")
-	}
-	if resp.TxHash != "0xdeadbeef" {
-		t.Fatalf("tx hash = %s", resp.TxHash)
-	}
-}
 
 func TestBuildExecutorRequestRejectsActionOwnerMismatch(t *testing.T) {
 	candidate := orders.MatchCandidate{
@@ -235,7 +125,7 @@ func TestBuildExecutorRequestRejectsActionOwnerMismatch(t *testing.T) {
 		},
 	}
 
-	_, err := buildExecutorRequest("BTCUSDC-CVXPERP", candidate, "0x", "75", "3")
+	_, err := buildExecutorRequest("USDCcNGN-JUN30-2026", candidate, "0x", "75", "3")
 	if err == nil || err.Error() != "parse taker action_json: owner mismatch" {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -264,7 +154,7 @@ func TestBuildExecutorRequestDefaultsEmptyManagerData(t *testing.T) {
 		},
 	}
 
-	req, err := buildExecutorRequest("BTCUSDC-CVXPERP", candidate, "", "75", "3")
+	req, err := buildExecutorRequest("USDCcNGN-JUN30-2026", candidate, "", "75", "3")
 	if err != nil {
 		t.Fatalf("buildExecutorRequest returned error: %v", err)
 	}
@@ -296,7 +186,7 @@ func TestBuildExecutorRequestRejectsNonAddressActionOwner(t *testing.T) {
 		},
 	}
 
-	_, err := buildExecutorRequest("BTCUSDC-CVXPERP", candidate, "0x", "75", "3")
+	_, err := buildExecutorRequest("USDCcNGN-JUN30-2026", candidate, "0x", "75", "3")
 	if err == nil || err.Error() != "parse taker action_json: owner must be a 20-byte 0x address" {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -325,7 +215,7 @@ func TestBuildExecutorRequestRejectsMismatchedActionModules(t *testing.T) {
 		},
 	}
 
-	_, err := buildExecutorRequest("BTCUSDC-CVXPERP", candidate, "0x", "75", "3")
+	_, err := buildExecutorRequest("USDCcNGN-JUN30-2026", candidate, "0x", "75", "3")
 	if err == nil || err.Error() != "maker module address mismatch: taker=0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa maker=0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
 		t.Fatalf("unexpected error: %v", err)
 	}

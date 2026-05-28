@@ -20,22 +20,14 @@ import (
 
 	"github.com/numofx/matching-backend/internal/config"
 	"github.com/numofx/matching-backend/internal/instruments"
-	oraclemodule "github.com/numofx/matching-backend/internal/oracles/btcvar30"
 	"github.com/numofx/matching-backend/internal/orders"
-	"github.com/numofx/matching-backend/internal/pricing"
 )
-
-type oracleReader interface {
-	Latest() (oraclemodule.Payload, bool)
-	History(ctx context.Context, limit int) ([]oraclemodule.Payload, error)
-}
 
 type Server struct {
 	cfg         config.Config
 	pool        *pgxpool.Pool
 	orders      *orders.Repository
 	instruments *instruments.Registry
-	oracle      oracleReader
 	custody     custodyChecker
 }
 
@@ -93,14 +85,11 @@ type presentedOrder struct {
 	BaseAssetSymbol  string                 `json:"base_asset_symbol,omitempty"`
 	QuoteAssetSymbol string                 `json:"quote_asset_symbol,omitempty"`
 	ExpiryTimestamp  int64                  `json:"expiry_timestamp,omitempty"`
-	VariancePrice    float64                `json:"variance_price,omitempty"`
-	VolPercent       float64                `json:"vol_percent,omitempty"`
 	PriceSemantics   string                 `json:"price_semantics,omitempty"`
 	DisplayName      string                 `json:"display_name,omitempty"`
 	DisplayLabel     string                 `json:"display_label,omitempty"`
 	DisplaySemantic  string                 `json:"display_semantics,omitempty"`
 	TickSize         string                 `json:"tick_size,omitempty"`
-	SpotContract     *spotOrderContractEcho `json:"spot_contract,omitempty"`
 }
 
 type orderResponse struct {
@@ -132,10 +121,9 @@ type presentedTrade struct {
 	TakerOrderID   string                 `json:"taker_order_id,omitempty"`
 	MakerOrderID   string                 `json:"maker_order_id,omitempty"`
 	CreatedAt      time.Time              `json:"created_at"`
-	Market         string                 `json:"market,omitempty"`
 	ContractType   string                 `json:"contract_type,omitempty"`
 	SettlementType string                 `json:"settlement_type,omitempty"`
-	SpotContract   *spotOrderContractEcho `json:"spot_contract,omitempty"`
+	Market         string                 `json:"market,omitempty"`
 }
 
 type presentedTradeStats struct {
@@ -166,40 +154,14 @@ type marketDiagnosticsResponse struct {
 	LastTradeTimestamp *int64 `json:"last_trade_timestamp"`
 }
 
-type oraclePayloadResponse struct {
-	Symbol             string    `json:"symbol"`
-	Market             string    `json:"market"`
-	PriceSemantics     string    `json:"price_semantics"`
-	DisplaySemantics   string    `json:"display_semantics"`
-	DisplayName        string    `json:"display_name"`
-	TickSize           string    `json:"tick_size"`
-	Source             string    `json:"source"`
-	Timestamp          time.Time `json:"timestamp"`
-	Vol30D             float64   `json:"vol_30d"`
-	Variance30D        float64   `json:"variance_30d"`
-	VolPercent         float64   `json:"vol_percent"`
-	MethodologyVersion string    `json:"methodology_version"`
-	Signature          string    `json:"signature,omitempty"`
-	Stale              bool      `json:"stale,omitempty"`
-}
 
-type oracleHistoryResponse struct {
-	Symbol           string                  `json:"symbol"`
-	Market           string                  `json:"market"`
-	PriceSemantics   string                  `json:"price_semantics"`
-	DisplaySemantics string                  `json:"display_semantics"`
-	DisplayName      string                  `json:"display_name"`
-	TickSize         string                  `json:"tick_size"`
-	History          []oraclePayloadResponse `json:"history"`
-}
 
-func NewServer(cfg config.Config, pool *pgxpool.Pool, registry *instruments.Registry, oracle oracleReader) *Server {
+func NewServer(cfg config.Config, pool *pgxpool.Pool, registry *instruments.Registry) *Server {
 	return &Server{
 		cfg:         cfg,
 		pool:        pool,
 		orders:      orders.NewRepository(pool),
 		instruments: registry,
-		oracle:      oracle,
 		custody:     newCustodyChecker(cfg),
 	}
 }
@@ -214,8 +176,6 @@ func (s *Server) Run() error {
 	router.Get("/debug/markets", s.handleMarketDiagnostics)
 	router.Post("/v1/orders", s.handleCreateOrder)
 	router.Post("/v1/orders/cancel", s.handleCancelOrder)
-	router.Get("/oracle/btcvar30/latest", s.handleBTCVar30Latest)
-	router.Get("/oracle/btcvar30/history", s.handleBTCVar30History)
 
 	s.logRegisteredMarkets()
 	slog.Info(
@@ -600,54 +560,7 @@ func cancelInternalHeaders(r *http.Request) map[string]string {
 	return headers
 }
 
-func (s *Server) handleBTCVar30Latest(w http.ResponseWriter, _ *http.Request) {
-	if s.oracle == nil {
-		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "btcvar30 oracle is not configured"})
-		return
-	}
 
-	payload, ok := s.oracle.Latest()
-	if !ok {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "btcvar30 oracle has no data"})
-		return
-	}
-
-	writeJSON(w, http.StatusOK, decorateBTCVar30OraclePayload(payload))
-}
-
-func (s *Server) handleBTCVar30History(w http.ResponseWriter, r *http.Request) {
-	if s.oracle == nil {
-		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "btcvar30 oracle is not configured"})
-		return
-	}
-
-	limit := 100
-	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
-		parsed, err := strconv.Atoi(rawLimit)
-		if err != nil || parsed <= 0 || parsed > 1000 {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "limit must be between 1 and 1000"})
-			return
-		}
-		limit = parsed
-	}
-
-	items, err := s.oracle.History(r.Context(), limit)
-	if err != nil {
-		slog.Error("load btcvar30 history", "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load btcvar30 history"})
-		return
-	}
-
-	writeJSON(w, http.StatusOK, oracleHistoryResponse{
-		Symbol:           oraclemodule.Symbol,
-		Market:           "BTCVAR30-PERP",
-		PriceSemantics:   instruments.PricingModelVariance,
-		DisplaySemantics: instruments.DisplayPriceVolPercent,
-		DisplayName:      "BTC 30D Implied Volatility Perpetual",
-		TickSize:         "0.0001",
-		History:          decorateBTCVar30OracleHistory(items),
-	})
-}
 
 func (s *Server) resolveMarket(r *http.Request) instruments.Metadata {
 	if s.instruments == nil {
@@ -670,12 +583,6 @@ func (s *Server) resolveMarket(r *http.Request) instruments.Metadata {
 		}
 	}
 
-	if item, ok := s.instruments.BySymbol(instruments.CNGNSpotSymbol); ok {
-		return item
-	}
-	if item, ok := s.instruments.BySymbol(instruments.BTCConvexPerpSymbol); ok {
-		return item
-	}
 	return instruments.Metadata{}
 }
 
@@ -720,7 +627,6 @@ func presentTrades(items []orders.TradeFill, instrument instruments.Metadata) []
 
 	presented := make([]presentedTrade, 0, len(items))
 	for _, item := range items {
-		spotContract, _ := deriveSpotContractFromTrade(item, instrument)
 		presented = append(presented, presentedTrade{
 			TradeID:        item.TradeID,
 			AssetAddress:   strings.ToLower(item.AssetAddress),
@@ -731,10 +637,9 @@ func presentTrades(items []orders.TradeFill, instrument instruments.Metadata) []
 			TakerOrderID:   item.TakerOrderID,
 			MakerOrderID:   item.MakerOrderID,
 			CreatedAt:      item.CreatedAt,
-			Market:         instrument.Symbol,
 			ContractType:   instrument.ContractType,
 			SettlementType: instrument.SettlementType,
-			SpotContract:   spotContract,
+			Market:         instrument.Symbol,
 		})
 	}
 	return presented
@@ -815,7 +720,6 @@ func (s *Server) marketDiagnosticsPayload(ctx context.Context, market instrument
 }
 
 func presentOrder(order orders.Order, instrument instruments.Metadata) presentedOrder {
-	spotContract, _ := deriveSpotContractFromOrder(order, instrument)
 	presented := presentedOrder{
 		OrderID:          order.OrderID,
 		OwnerAddress:     order.OwnerAddress,
@@ -846,19 +750,7 @@ func presentOrder(order orders.Order, instrument instruments.Metadata) presented
 		DisplayLabel:     instrument.DisplayLabel,
 		DisplaySemantic:  instrument.DisplaySemantics,
 		TickSize:         instrument.TickSize,
-		SpotContract:     spotContract,
 	}
-	if instrument.PricingModel != instruments.PricingModelVariance {
-		return presented
-	}
-
-	display, err := pricing.VarianceDisplayFromTicks(instrument, order.LimitPriceTicks)
-	if err != nil {
-		return presented
-	}
-
-	presented.VariancePrice = display.VariancePrice
-	presented.VolPercent = display.VolPercent
 	return presented
 }
 
@@ -911,29 +803,4 @@ func (s *Server) presentMarket(ctx context.Context, market instruments.Metadata)
 	return presentation
 }
 
-func decorateBTCVar30OraclePayload(payload oraclemodule.Payload) oraclePayloadResponse {
-	return oraclePayloadResponse{
-		Symbol:             payload.Symbol,
-		Market:             "BTCVAR30-PERP",
-		PriceSemantics:     instruments.PricingModelVariance,
-		DisplaySemantics:   instruments.DisplayPriceVolPercent,
-		DisplayName:        "BTC 30D Implied Volatility Perpetual",
-		TickSize:           "0.0001",
-		Source:             payload.Source,
-		Timestamp:          payload.Timestamp,
-		Vol30D:             payload.Vol30D,
-		Variance30D:        payload.Variance30D,
-		VolPercent:         pricing.RoundVolPercent(pricing.VarianceToVolPercent(payload.Variance30D)),
-		MethodologyVersion: payload.MethodologyVersion,
-		Signature:          payload.Signature,
-		Stale:              payload.Stale,
-	}
-}
 
-func decorateBTCVar30OracleHistory(items []oraclemodule.Payload) []oraclePayloadResponse {
-	decorated := make([]oraclePayloadResponse, 0, len(items))
-	for _, item := range items {
-		decorated = append(decorated, decorateBTCVar30OraclePayload(item))
-	}
-	return decorated
-}

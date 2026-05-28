@@ -13,7 +13,6 @@ import (
 	"github.com/numofx/matching-backend/internal/config"
 	"github.com/numofx/matching-backend/internal/instruments"
 	"github.com/numofx/matching-backend/internal/orders"
-	"github.com/numofx/matching-backend/internal/pricing"
 )
 
 type Engine struct {
@@ -116,13 +115,6 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 
 	fillPrice := candidate.Maker.LimitPriceTicks
 	logPrice := candidate.Maker.LimitPrice
-	logVolPercent := 0.0
-	if instrument.PricingModel == instruments.PricingModelVariance {
-		if display, err := pricing.VarianceDisplayFromTicks(instrument, fillPrice); err == nil {
-			logPrice = fmt.Sprintf("%.4f", display.VariancePrice)
-			logVolPercent = display.VolPercent
-		}
-	}
 	fillAmount, err := minDecimalString(remainingAmount(candidate.Taker), remainingAmount(candidate.Maker))
 	if err != nil {
 		slog.Error("compute fill amount", "market", instrument.Symbol, "error", err)
@@ -199,9 +191,8 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 				"price_semantics", instrument.PriceSemantics,
 				"maker_order_id", candidate.Maker.OrderID,
 				"taker_order_id", candidate.Taker.OrderID,
-				"variance_price", logPrice,
-				"variance_price_ticks", fillPrice,
-				"vol_percent", logVolPercent,
+				"fill_price", logPrice,
+				"fill_price_ticks", fillPrice,
 				"amount", fillAmount,
 				"executor_error", err,
 			)
@@ -245,9 +236,8 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 		"price_semantics", instrument.PriceSemantics,
 		"maker_order_id", candidate.Maker.OrderID,
 		"taker_order_id", candidate.Taker.OrderID,
-		"variance_price", logPrice,
-		"variance_price_ticks", fillPrice,
-		"vol_percent", logVolPercent,
+		"fill_price", logPrice,
+		"fill_price_ticks", fillPrice,
 		"amount", fillAmount,
 		"tx_hash", executorResp.TxHash,
 	)

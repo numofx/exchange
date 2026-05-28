@@ -115,10 +115,12 @@ func assetAndSubIDKey(assetAddress, subID string) string {
 
 func symbolAlias(symbol string) string {
 	switch symbol {
-	case CNGNSpotSymbol:
-		return CNGNSpotLegacySymbol
-	case CNGNApr2026Symbol:
-		return CNGNApr2026LegacySymbol
+	case CNGNJun2026Symbol:
+		return CNGNJun2026LegacySymbol
+	case CNGNNov2026Symbol:
+		return CNGNNov2026LegacySymbol
+	case CNGNMay2027Symbol:
+		return CNGNMay2027LegacySymbol
 	default:
 		return ""
 	}

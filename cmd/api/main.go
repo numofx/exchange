@@ -8,11 +8,7 @@ import (
 	"github.com/numofx/matching-backend/internal/api"
 	"github.com/numofx/matching-backend/internal/config"
 	"github.com/numofx/matching-backend/internal/db"
-	"github.com/numofx/matching-backend/internal/funding"
 	"github.com/numofx/matching-backend/internal/instruments"
-	btcvar30instrument "github.com/numofx/matching-backend/internal/instruments/btcvar30"
-	"github.com/numofx/matching-backend/internal/marketdata/deribit"
-	oraclemodule "github.com/numofx/matching-backend/internal/oracles/btcvar30"
 	"github.com/numofx/matching-backend/internal/orders"
 )
 
@@ -39,48 +35,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	deribitClient := deribit.NewClient(deribit.Config{
-		BaseURL: cfg.DeribitBaseURL,
-		WSURL:   cfg.DeribitWSURL,
-		Logger:  slog.Default(),
-	})
-	oracleRepo := oraclemodule.NewRepository(pool)
-	oracleSigner := oraclemodule.NewDeterministicSigner(cfg.BTCVar30OracleSigningKey)
-	oracleService := oraclemodule.NewService(
-		deribitClient,
-		oracleRepo,
-		oracleSigner,
-		slog.Default(),
-		cfg.BTCVar30OraclePollInterval,
-		cfg.BTCVar30OracleStaleAfter,
-	)
-
-	if cfg.BTCVar30Enabled {
-		go func() {
-			if err := oracleService.Run(ctx); err != nil && err != context.Canceled {
-				slog.Error("run btcvar30 oracle service", "error", err)
-			}
-		}()
-
-		if instrument, ok := registry.BySymbol(btcvar30instrument.Symbol); ok {
-			fundingService := funding.NewService(
-				ordersRepo,
-				oracleService,
-				instrument,
-				cfg.BTCVar30FundingInterval,
-				cfg.BTCVar30FundingCoeff,
-				cfg.BTCVar30FundingCap,
-				slog.Default(),
-			)
-			go func() {
-				if err := fundingService.Run(ctx); err != nil && err != context.Canceled {
-					slog.Error("run btcvar30 funding service", "error", err)
-				}
-			}()
-		}
-	}
-
-	server := api.NewServer(cfg, pool, registry, oracleService)
+	server := api.NewServer(cfg, pool, registry)
 	if err := server.Run(); err != nil {
 		slog.Error("run api server", "error", err)
 		os.Exit(1)
