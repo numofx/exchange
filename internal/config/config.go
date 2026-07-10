@@ -10,22 +10,23 @@ import (
 )
 
 type Config struct {
-	AppEnv                        string
-	APIAddr                       string
-	DatabaseURL                   string
-	MatcherPollInterval           time.Duration
-	ChainRPCURL                   string
-	ChainID                       string
-	MatchingAddress               string
-	EnforceMatchingCustody        bool
-	TradeModuleAddress            string
-	ExecutorURL                   string
-	ExecutorManagerData           string
-	ExpectedOrderOwner            string
-	ExpectedOrderSigner           string
-	DeribitBaseURL                string
-	DeribitWSURL                  string
+	AppEnv                 string
+	APIAddr                string
+	DatabaseURL            string
+	MatcherPollInterval    time.Duration
+	ChainRPCURL            string
+	ChainID                string
+	MatchingAddress        string
+	EnforceMatchingCustody bool
+	TradeModuleAddress     string
+	ExecutorURL            string
+	ExecutorManagerData    string
+	ExpectedOrderOwner     string
+	ExpectedOrderSigner    string
+	DeribitBaseURL         string
+	DeribitWSURL           string
 
+	CNGNSpotAssetAddress          string
 	CNGNJun2026FutureAssetAddress string
 	CNGNJun2026FutureSubID        string
 	CNGNNov2026FutureAssetAddress string
@@ -38,21 +39,22 @@ type Config struct {
 
 func Load() (Config, error) {
 	cfg := Config{
-		AppEnv:                        getenvDefault("APP_ENV", "dev"),
-		APIAddr:                       getenvDefault("API_ADDR", ":8080"),
-		DatabaseURL:                   os.Getenv("DATABASE_URL"),
-		ChainRPCURL:                   getenvDefault("CHAIN_RPC_URL", os.Getenv("RPC_URL")),
-		ChainID:                       os.Getenv("CHAIN_ID"),
-		MatchingAddress:               os.Getenv("MATCHING_ADDRESS"),
-		EnforceMatchingCustody:        getenvBool("ENFORCE_MATCHING_CUSTODY", true),
-		TradeModuleAddress:            os.Getenv("TRADE_MODULE_ADDRESS"),
-		ExecutorURL:                   os.Getenv("EXECUTOR_URL"),
-		ExecutorManagerData:           "0x",
-		ExpectedOrderOwner:            os.Getenv("EXPECTED_ORDER_OWNER"),
-		ExpectedOrderSigner:           os.Getenv("EXPECTED_ORDER_SIGNER"),
-		DeribitBaseURL:                getenvDefault("DERIBIT_BASE_URL", "https://test.deribit.com/api/v2"),
-		DeribitWSURL:                  getenvDefault("DERIBIT_WS_URL", "wss://test.deribit.com/ws/api/v2"),
+		AppEnv:                 getenvDefault("APP_ENV", "dev"),
+		APIAddr:                getenvDefault("API_ADDR", ":8080"),
+		DatabaseURL:            os.Getenv("DATABASE_URL"),
+		ChainRPCURL:            getenvDefault("CHAIN_RPC_URL", os.Getenv("RPC_URL")),
+		ChainID:                os.Getenv("CHAIN_ID"),
+		MatchingAddress:        os.Getenv("MATCHING_ADDRESS"),
+		EnforceMatchingCustody: getenvBool("ENFORCE_MATCHING_CUSTODY", true),
+		TradeModuleAddress:     os.Getenv("TRADE_MODULE_ADDRESS"),
+		ExecutorURL:            os.Getenv("EXECUTOR_URL"),
+		ExecutorManagerData:    "0x",
+		ExpectedOrderOwner:     os.Getenv("EXPECTED_ORDER_OWNER"),
+		ExpectedOrderSigner:    os.Getenv("EXPECTED_ORDER_SIGNER"),
+		DeribitBaseURL:         getenvDefault("DERIBIT_BASE_URL", "https://test.deribit.com/api/v2"),
+		DeribitWSURL:           getenvDefault("DERIBIT_WS_URL", "wss://test.deribit.com/ws/api/v2"),
 
+		CNGNSpotAssetAddress:          strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_SPOT_ASSET_ADDRESS"))),
 		CNGNJun2026FutureAssetAddress: strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_JUN30_2026_FUTURE_ASSET_ADDRESS"))),
 		CNGNJun2026FutureSubID:        strings.TrimSpace(os.Getenv("CNGN_JUN30_2026_FUTURE_SUB_ID")),
 		CNGNNov2026FutureAssetAddress: strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_NOV30_2026_FUTURE_ASSET_ADDRESS"))),

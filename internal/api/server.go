@@ -90,6 +90,7 @@ type presentedOrder struct {
 	DisplayLabel     string                 `json:"display_label,omitempty"`
 	DisplaySemantic  string                 `json:"display_semantics,omitempty"`
 	TickSize         string                 `json:"tick_size,omitempty"`
+	SpotContract     *spotOrderContractEcho `json:"spot_contract,omitempty"`
 }
 
 type orderResponse struct {
@@ -124,6 +125,7 @@ type presentedTrade struct {
 	ContractType   string                 `json:"contract_type,omitempty"`
 	SettlementType string                 `json:"settlement_type,omitempty"`
 	Market         string                 `json:"market,omitempty"`
+	SpotContract   *spotOrderContractEcho `json:"spot_contract,omitempty"`
 }
 
 type presentedTradeStats struct {
@@ -153,8 +155,6 @@ type marketDiagnosticsResponse struct {
 	TradeCount         int64  `json:"trade_count"`
 	LastTradeTimestamp *int64 `json:"last_trade_timestamp"`
 }
-
-
 
 func NewServer(cfg config.Config, pool *pgxpool.Pool, registry *instruments.Registry) *Server {
 	return &Server{
@@ -560,8 +560,6 @@ func cancelInternalHeaders(r *http.Request) map[string]string {
 	return headers
 }
 
-
-
 func (s *Server) resolveMarket(r *http.Request) instruments.Metadata {
 	if s.instruments == nil {
 		return instruments.Metadata{}
@@ -583,6 +581,9 @@ func (s *Server) resolveMarket(r *http.Request) instruments.Metadata {
 		}
 	}
 
+	if item, ok := s.instruments.BySymbol(instruments.CNGNSpotSymbol); ok {
+		return item
+	}
 	return instruments.Metadata{}
 }
 
@@ -627,6 +628,7 @@ func presentTrades(items []orders.TradeFill, instrument instruments.Metadata) []
 
 	presented := make([]presentedTrade, 0, len(items))
 	for _, item := range items {
+		spotContract, _ := deriveSpotContractFromTrade(item, instrument)
 		presented = append(presented, presentedTrade{
 			TradeID:        item.TradeID,
 			AssetAddress:   strings.ToLower(item.AssetAddress),
@@ -640,6 +642,7 @@ func presentTrades(items []orders.TradeFill, instrument instruments.Metadata) []
 			ContractType:   instrument.ContractType,
 			SettlementType: instrument.SettlementType,
 			Market:         instrument.Symbol,
+			SpotContract:   spotContract,
 		})
 	}
 	return presented
@@ -720,6 +723,7 @@ func (s *Server) marketDiagnosticsPayload(ctx context.Context, market instrument
 }
 
 func presentOrder(order orders.Order, instrument instruments.Metadata) presentedOrder {
+	spotContract, _ := deriveSpotContractFromOrder(order, instrument)
 	presented := presentedOrder{
 		OrderID:          order.OrderID,
 		OwnerAddress:     order.OwnerAddress,
@@ -750,6 +754,7 @@ func presentOrder(order orders.Order, instrument instruments.Metadata) presented
 		DisplayLabel:     instrument.DisplayLabel,
 		DisplaySemantic:  instrument.DisplaySemantics,
 		TickSize:         instrument.TickSize,
+		SpotContract:     spotContract,
 	}
 	return presented
 }
@@ -802,5 +807,3 @@ func (s *Server) presentMarket(ctx context.Context, market instruments.Metadata)
 
 	return presentation
 }
-
-
