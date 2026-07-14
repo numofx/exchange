@@ -434,4 +434,52 @@ contract UNIT_TestDeliverableFXManager is TestDeliverableFXManagerBase {
     assertEq(subAccounts.getBalance(aliceAcc, cngnAsset, 0), int(QUOTE_DELIVERY));
     assertEq(subAccounts.getBalance(bobAcc, usdcDeliveryAsset, 0), int(BASE_DELIVERY));
   }
+
+  function testFiveXLeverageOpensAtExactIM() public {
+    // 5x leverage: IM = 20% of base notional, MM = 15%
+    manager.setMarginParams(0.20e18, 0.15e18);
+
+    // 1 contract = 10,000 USDC base notional -> IM = 2,000 USDC per side
+    _fundCash(aliceAcc, 2_000e18);
+    _fundCash(bobAcc, 2_000e18);
+
+    _openFuturePosition(aliceAcc, bobAcc, int(ONE_CONTRACT));
+
+    // exactly at 5x: IM headroom is zero, MM headroom is 2,000 - 1,500 = 500
+    assertEq(manager.getMargin(aliceAcc, true), 0);
+    assertEq(manager.getMargin(bobAcc, true), 0);
+    assertEq(manager.getMargin(aliceAcc, false), 500e18);
+    assertEq(manager.getMargin(bobAcc, false), 500e18);
+  }
+
+  function testFiveXLeverageRejectsBelowIM() public {
+    manager.setMarginParams(0.20e18, 0.15e18);
+
+    // 1 wei of cash short of the 2,000 USDC IM requirement
+    _fundCash(aliceAcc, 2_000e18 - 1);
+    _fundCash(bobAcc, 2_000e18);
+
+    vm.expectRevert(IStandardManager.SRM_PortfolioBelowMargin.selector);
+    _openFuturePosition(aliceAcc, bobAcc, int(ONE_CONTRACT));
+  }
+
+  function testFiveXLeverageMaintenanceMarginBreach() public {
+    manager.setMarginParams(0.20e18, 0.15e18);
+
+    _fundCash(aliceAcc, 2_000e18);
+    _fundCash(bobAcc, 2_000e18);
+    _openFuturePosition(aliceAcc, bobAcc, int(ONE_CONTRACT));
+
+    // mark moves against the short (alice): +200 cNGN/USDC on 10,000 USDC notional
+    // at spot 1500 cNGN/USDC the VM loss is 10,000 * 200 = 2,000,000 cNGN ~= 1,333 USDC cash
+    fxFuture.setMarkPrice(fxSeries, uint64(block.timestamp + 1), 1700e18);
+
+    int aliceMM = manager.getMargin(aliceAcc, false);
+    int bobMM = manager.getMargin(bobAcc, false);
+
+    // alice's pending VM loss wipes her 500 MM headroom -> liquidatable
+    assertLt(aliceMM, 0);
+    // bob gains the same VM -> comfortably above MM
+    assertGt(bobMM, 500e18);
+  }
 }
