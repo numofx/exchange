@@ -90,6 +90,22 @@ contract DeployDeliverableFXMinimal is Utils {
         s.subAccounts, s.cash, s.auction, s.wrappedUsdcDeliverable, s.wrappedCngn, s.cngnSpotFeed
       );
 
+    address[] memory owned = new address[](10);
+    owned[0] = address(s.cash);
+    owned[1] = address(s.securityModule);
+    owned[2] = address(s.auction);
+    owned[3] = address(s.viewer);
+    owned[4] = address(s.manager);
+    owned[5] = address(s.future);
+    owned[6] = address(s.wrappedCngn);
+    // reused (env-provided) assets keep their existing owner
+    if (vm.envOr("WRAPPED_USDC_DELIVERABLE_ASSET_ADDRESS", address(0)) == address(0)) {
+      owned[7] = address(s.wrappedUsdcDeliverable);
+    }
+    if (vm.envOr("CNGN_SPOT_FEED_ADDRESS", address(0)) == address(0)) owned[8] = address(s.cngnSpotFeed);
+    if (vm.envOr("CNGN_TOKEN_ADDRESS", address(0)) == address(0)) owned[9] = s.cngnUnderlying;
+    _transferOwnership(owned);
+
     _writeCoreArtifact(s.subAccounts, s.cash, s.securityModule, s.auction);
     _writeWrappedUSDCArtifact(s.wrappedUsdcDeliverable, usdc);
     _writeWrappedCNGNArtifact(s.wrappedCngn, s.cngnSpotFeed, s.cngnUnderlying);

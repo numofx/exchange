@@ -127,6 +127,7 @@ contract Utils is Script {
     }
 
     for (uint i = 0; i < ownedContracts.length; i++) {
+      if (ownedContracts[i] == address(0)) continue;
       IOwnable2Step(ownedContracts[i]).transferOwnership(newOwner);
       if (IOwnable2Step(ownedContracts[i]).pendingOwner() != newOwner) revert("ownership transfer failed");
       console2.log("Ownership transfer initiated:", ownedContracts[i]);
