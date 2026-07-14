@@ -85,6 +85,15 @@ contract DeployCore is Utils {
 
         _setupCoreFunctions(deployment);
 
+        address[] memory owned = new address[](6);
+        owned[0] = address(deployment.cash);
+        owned[1] = address(deployment.securityModule);
+        owned[2] = address(deployment.auction);
+        owned[3] = address(deployment.srm);
+        owned[4] = address(deployment.srmViewer);
+        owned[5] = address(deployment.stableFeed);
+        _transferOwnership(owned);
+
         // write to output
         __writeToDeploymentsJson(deployment);
     }
