@@ -4,6 +4,11 @@ pragma solidity ^0.8.0;
 import "forge-std/Script.sol";
 import "./types.sol";
 
+interface IOwnable2Step {
+  function transferOwnership(address newOwner) external;
+  function pendingOwner() external view returns (address);
+}
+
 contract Utils is Script {
   function _deploymentArtifactName(string memory fileName) internal pure returns (string memory) {
     if (keccak256(bytes(fileName)) == keccak256(bytes("CNGN"))) {
@@ -109,6 +114,24 @@ contract Utils is Script {
     vm.writeJson(content, string.concat(deploymentDir, chainDir, file));
 
     console2.log("Written to deployment ", string.concat(deploymentDir, chainDir, file));
+  }
+
+  /// @dev nominate NEW_OWNER as pending owner of every deployed Ownable2Step contract.
+  ///      Ownership only changes once NEW_OWNER calls acceptOwnership() on each contract,
+  ///      so a typo'd address cannot brick the deployment.
+  function _transferOwnership(address[] memory ownedContracts) internal {
+    address newOwner = vm.envOr("NEW_OWNER", address(0));
+    if (newOwner == address(0)) {
+      console2.log("WARNING: NEW_OWNER not set - deployer keeps ownership of all contracts");
+      return;
+    }
+
+    for (uint i = 0; i < ownedContracts.length; i++) {
+      IOwnable2Step(ownedContracts[i]).transferOwnership(newOwner);
+      if (IOwnable2Step(ownedContracts[i]).pendingOwner() != newOwner) revert("ownership transfer failed");
+      console2.log("Ownership transfer initiated:", ownedContracts[i]);
+    }
+    console2.log("New owner must call acceptOwnership() on each contract above:", newOwner);
   }
 
   function _getMarketERC20(string memory name) internal view returns (address) {

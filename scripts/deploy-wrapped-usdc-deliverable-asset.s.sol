@@ -41,6 +41,10 @@ contract DeployWrappedUSCDeliverableAsset is Utils {
     if (!detail.isWhitelisted || detail.assetType != IStandardManager.AssetType.Base) revert("usdc base registration failed");
     if (!asset.whitelistedManager(address(deployment.srm))) revert("manager whitelist failed");
 
+    address[] memory owned = new address[](1);
+    owned[0] = address(asset);
+    _transferOwnership(owned);
+
     string memory objKey = "wrapped-usdc-deliverable";
     vm.serializeAddress(objKey, "base", address(asset));
     vm.serializeUint(objKey, "marketId", marketId);

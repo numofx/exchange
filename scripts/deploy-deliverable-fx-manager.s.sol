@@ -76,6 +76,12 @@ contract DeployDeliverableFXManager is Utils {
       INITIAL_MARK_PRICE
     );
 
+    address[] memory owned = new address[](3);
+    owned[0] = address(manager);
+    owned[1] = address(viewer);
+    owned[2] = address(future);
+    _transferOwnership(owned);
+
     _writeDeploymentArtifact(manager, viewer, future, subId, usdcDeliverableAsset, wrappedCngnAsset, cngnSpotFeed);
 
     console2.log("Deliverable FX manager deployed:", address(manager));
