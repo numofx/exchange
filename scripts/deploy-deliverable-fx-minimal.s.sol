@@ -34,10 +34,11 @@ contract BootstrapManager is IManager {
 }
 
 contract DeployDeliverableFXMinimal is Utils {
-  string internal constant FX_ARTIFACT_NAME = "CNGN_APR30_2026_FUTURE";
+  string internal constant FX_ARTIFACT_NAME = "CNGN_SEP16_2026_FUTURE";
 
-  uint64 internal constant EXPIRY = 1777507200;
-  uint64 internal constant LAST_TRADE_TIME = 1777420800;
+  // last trade: Sep 16 2026 15:00:00 WAT (14:00:00 UTC); atomic delivery 1s later
+  uint64 internal constant EXPIRY = 1789567201;
+  uint64 internal constant LAST_TRADE_TIME = 1789567200;
   uint internal constant CONTRACT_SIZE_BASE = 10_000e18;
   uint internal constant MIN_TRADE_INCREMENT = 0.001e18;
   uint internal constant TICK_SIZE = 1e18;
@@ -105,8 +106,8 @@ contract DeployDeliverableFXMinimal is Utils {
     console2.log("Deliverable FX viewer:", address(s.viewer));
     console2.log("Deliverable FX future:", address(s.future));
     console2.log("Series subId:", uint(s.subId));
-    console2.log("CNGN_APR30_2026_FUTURE_ASSET_ADDRESS=%s", address(s.future));
-    console2.log("CNGN_APR30_2026_FUTURE_SUB_ID=%s", vm.toString(uint(s.subId)));
+    console2.log("CNGN_SEP16_2026_FUTURE_ASSET_ADDRESS=%s", address(s.future));
+    console2.log("CNGN_SEP16_2026_FUTURE_SUB_ID=%s", vm.toString(uint(s.subId)));
 
     vm.stopBroadcast();
   }
@@ -272,7 +273,7 @@ contract DeployDeliverableFXMinimal is Utils {
     vm.serializeAddress(objKey, "manager", address(manager));
     vm.serializeAddress(objKey, "viewer", address(viewer));
     vm.serializeAddress(objKey, "future", address(future));
-    vm.serializeString(objKey, "symbol", "USDC/cNGN APR-30-2026");
+    vm.serializeString(objKey, "symbol", "USDC/cNGN SEP-16-2026");
     vm.serializeString(objKey, "subId", vm.toString(uint(subId)));
     vm.serializeUint(objKey, "expiry", EXPIRY);
     vm.serializeUint(objKey, "lastTradeTime", LAST_TRADE_TIME);
@@ -285,8 +286,8 @@ contract DeployDeliverableFXMinimal is Utils {
     vm.serializeString(objKey, "initialMarkPrice", vm.toString(INITIAL_MARK_PRICE));
     vm.serializeString(objKey, "normalIM", vm.toString(NORMAL_IM));
     vm.serializeString(objKey, "normalMM", vm.toString(NORMAL_MM));
-    vm.serializeAddress(objKey, "CNGN_APR30_2026_FUTURE_ASSET_ADDRESS", address(future));
-    string memory finalObj = vm.serializeString(objKey, "CNGN_APR30_2026_FUTURE_SUB_ID", vm.toString(uint(subId)));
+    vm.serializeAddress(objKey, "CNGN_SEP16_2026_FUTURE_ASSET_ADDRESS", address(future));
+    string memory finalObj = vm.serializeString(objKey, "CNGN_SEP16_2026_FUTURE_SUB_ID", vm.toString(uint(subId)));
 
     _writeToDeployments(FX_ARTIFACT_NAME, finalObj);
   }
