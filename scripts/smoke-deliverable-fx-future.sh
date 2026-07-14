@@ -10,7 +10,7 @@ MARKETS_SERVICE_ROOT="${MARKETS_SERVICE_ROOT:-$(cd "$ROOT/../markets-service" &&
 echo "[1/2] risk-core deliverable future smoke suite"
 (
   cd "$ROOT"
-  forge test --match-path test/risk-managers/unit-tests/StandardManager/TestStandardManager_DeliverableFuture.t.sol
+  forge test --match-path "test/risk-managers/unit-tests/DeliverableFXManager/*.t.sol"
 )
 
 echo "[2/2] markets-service listing smoke suite"

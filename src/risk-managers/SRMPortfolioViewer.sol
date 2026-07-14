@@ -13,7 +13,6 @@ import {ICashAsset} from "../interfaces/ICashAsset.sol";
 import {IPerpAsset} from "../interfaces/IPerpAsset.sol";
 import {IOptionAsset} from "../interfaces/IOptionAsset.sol";
 import {IDatedFutureAsset} from "../interfaces/IDatedFutureAsset.sol";
-import {IDeliverableFXFutureAsset} from "../interfaces/IDeliverableFXFutureAsset.sol";
 import {IStandardManager} from "../interfaces/IStandardManager.sol";
 import {BasePortfolioViewer} from "./BasePortfolioViewer.sol";
 
@@ -78,15 +77,12 @@ contract SRMPortfolioViewer is BasePortfolioViewer, ISRMPortfolioViewer {
         uint[] memory seenExpires,
         uint[] memory expiryOptionCounts,
         uint numExpires,
-        uint numFutures,
-        uint numDeliverableFutures
+        uint numFutures
       ) = _scanMarketAssets(assets, marketId);
 
       holding.marketId = marketId;
       holding.expiryHoldings = new IStandardManager.ExpiryHolding[](numExpires);
       holding.futurePositions = new IStandardManager.FuturePosition[](numFutures);
-      holding.deliverableFuturePositions =
-        new IStandardManager.DeliverableFuturePosition[](numDeliverableFutures);
 
       for (uint j; j < numExpires; j++) {
         holding.expiryHoldings[j].expiry = seenExpires[j];
@@ -106,8 +102,7 @@ contract SRMPortfolioViewer is BasePortfolioViewer, ISRMPortfolioViewer {
       uint[] memory seenExpires,
       uint[] memory expiryOptionCounts,
       uint numExpires,
-      uint numFutures,
-      uint numDeliverableFutures
+      uint numFutures
     )
   {
     seenExpires = new uint[](assets.length);
@@ -127,10 +122,6 @@ contract SRMPortfolioViewer is BasePortfolioViewer, ISRMPortfolioViewer {
       } else if (detail.assetType == IStandardManager.AssetType.DatedFuture) {
         holding.datedFuture = IDatedFutureAsset(address(currentAsset.asset));
         numFutures++;
-        holding.depegPenaltyPos += SignedMath.abs(currentAsset.balance);
-      } else if (detail.assetType == IStandardManager.AssetType.DeliverableFXFuture) {
-        holding.deliverableFuture = IDeliverableFXFutureAsset(address(currentAsset.asset));
-        numDeliverableFutures++;
         holding.depegPenaltyPos += SignedMath.abs(currentAsset.balance);
       } else if (detail.assetType == IStandardManager.AssetType.Option) {
         holding.option = IOptionAsset(address(currentAsset.asset));
@@ -152,7 +143,6 @@ contract SRMPortfolioViewer is BasePortfolioViewer, ISRMPortfolioViewer {
     uint numExpires
   ) internal view returns (IStandardManager.MarketHolding memory) {
     uint nextFutureIndex = 0;
-    uint nextDeliverableFutureIndex = 0;
 
     for (uint j; j < assets.length; j++) {
       ISubAccounts.AssetBalance memory currentAsset = assets[j];
@@ -167,10 +157,6 @@ contract SRMPortfolioViewer is BasePortfolioViewer, ISRMPortfolioViewer {
         holding.futurePositions[nextFutureIndex] =
           IStandardManager.FuturePosition({subId: currentAsset.subId, balance: currentAsset.balance});
         nextFutureIndex++;
-      } else if (detail.assetType == IStandardManager.AssetType.DeliverableFXFuture) {
-        holding.deliverableFuturePositions[nextDeliverableFutureIndex] =
-          IStandardManager.DeliverableFuturePosition({subId: currentAsset.subId, balance: currentAsset.balance});
-        nextDeliverableFutureIndex++;
       }
     }
 
