@@ -6,7 +6,6 @@ import "forge-std/Test.sol";
 import "../../src/SubAccounts.sol";
 import "../../src/assets/CashAsset.sol";
 import "../../src/assets/WrappedERC20Asset.sol";
-import "../../src/assets/WLWrappedERC20Asset.sol";
 import "../../src/assets/DeliverableFXFutureAsset.sol";
 import "../../src/interfaces/IAsset.sol";
 import "../../src/interfaces/ISpotFeed.sol";
@@ -56,9 +55,7 @@ contract FORK_TestDeliverableFXManagerBase is Test {
     string memory coreJson = vm.readFile(string.concat(root, "/deployments/8453/core.json"));
     string memory sharedJson = vm.readFile(string.concat(root, "/deployments/8453/shared.json"));
     string memory cngnJson = vm.readFile(string.concat(root, "/deployments/8453/WRAPPED_CNGN.json"));
-    string memory futureJson = vm.readFile(string.concat(root, "/deployments/8453/CNGN_APR30_2026_FUTURE.json"));
-
-    deployer = vm.envAddress("DEPLOYER_ADDRESS");
+    string memory futureJson = vm.readFile(string.concat(root, "/deployments/8453/CNGN_SEP16_2026_FUTURE.json"));
 
     subAccounts = SubAccounts(vm.parseJsonAddress(coreJson, ".subAccounts"));
     cash = CashAsset(vm.parseJsonAddress(coreJson, ".cash"));
@@ -70,6 +67,9 @@ contract FORK_TestDeliverableFXManagerBase is Test {
     manager = DeliverableFXManager(vm.parseJsonAddress(futureJson, ".manager"));
     quoteSpotFeed = manager.quoteSpotFeed();
 
+    // prank whoever currently owns the deployment (the MPC vault on mainnet)
+    deployer = future.owner();
+
     managerAccId = manager.accId();
     liveSeries = uint96(vm.parseJsonUint(futureJson, ".expiry"));
     liveExpiry = vm.parseJsonUint(futureJson, ".expiry");
@@ -78,12 +78,6 @@ contract FORK_TestDeliverableFXManagerBase is Test {
     aliceAcc = subAccounts.createAccountWithApproval(alice, address(this), manager);
     bobAcc = subAccounts.createAccountWithApproval(bob, address(this), manager);
     charlieAcc = subAccounts.createAccountWithApproval(charlie, address(this), manager);
-
-    vm.startPrank(deployer);
-    WLWrappedERC20Asset(address(cngnAsset)).setSubAccountWL(bobAcc, true);
-    WLWrappedERC20Asset(address(cngnAsset)).setSubAccountWL(charlieAcc, true);
-    WLWrappedERC20Asset(address(cngnAsset)).setSubAccountWL(managerAccId, true);
-    vm.stopPrank();
 
     vm.deal(address(this), 10 ether);
     vm.deal(alice, 10 ether);
@@ -135,7 +129,8 @@ contract FORK_TestDeliverableFXManagerAcceptance is FORK_TestDeliverableFXManage
     _fundCash(bobAcc, CASH_MARGIN_USDC);
     _fundCash(charlieAcc, CASH_MARGIN_USDC);
 
-    vm.warp(liveLastTradeTime - 1);
+    // open before the 3-day margin ramp; exposure increases are blocked inside it
+    vm.warp(liveLastTradeTime - 4 days);
     _transferFuture(aliceAcc, bobAcc, liveSeries, int(TWO_INCREMENTS));
 
     vm.prank(deployer);
@@ -205,7 +200,8 @@ contract FORK_TestDeliverableFXManagerAcceptance is FORK_TestDeliverableFXManage
     _fundCash(aliceAcc, CASH_MARGIN_USDC);
     _fundCash(bobAcc, CASH_MARGIN_USDC);
 
-    uint64 secondExpiry = uint64(block.timestamp + 45 days);
+    // second series closes after the live one so a single warp freezes both
+    uint64 secondExpiry = uint64(liveExpiry + 30 days);
     uint64 secondLastTrade = secondExpiry - 1 days;
 
     vm.prank(deployer);
@@ -220,7 +216,7 @@ contract FORK_TestDeliverableFXManagerAcceptance is FORK_TestDeliverableFXManage
       1550e18
     );
 
-    vm.warp(liveLastTradeTime - 1);
+    // open while both series are in the normal phase (before either margin ramp)
     _transferFuture(aliceAcc, bobAcc, liveSeries, int(ONE_INCREMENT));
     _transferFuture(aliceAcc, bobAcc, secondSeries, int(ONE_INCREMENT));
 
