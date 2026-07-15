@@ -108,8 +108,16 @@ def build_payload(feed: str, price_1e18: int, signer_key: str, signer_addr: str)
 
 
 def submit(rpc: str, relayer_key: str, feed: str, payload: str) -> str:
-  out = run(["cast", "send", feed, "acceptData(bytes)", payload, "--rpc-url", rpc, "--private-key", relayer_key, "--json"])
-  return json.loads(out)["transactionHash"]
+  # fixed gas limit: acceptData costs ~48k and eth_estimateGas is flaky on
+  # back-to-back sends from the same sender (phantom BLF_InvalidSignature)
+  out = run([
+    "cast", "send", feed, "acceptData(bytes)", payload,
+    "--gas-limit", "200000", "--rpc-url", rpc, "--private-key", relayer_key, "--json",
+  ])
+  receipt = json.loads(out)
+  if receipt.get("status") not in ("0x1", 1):
+    raise RuntimeError(f"tx reverted: {receipt['transactionHash']}")
+  return receipt["transactionHash"]
 
 
 def main() -> int:
