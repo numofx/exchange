@@ -11,7 +11,9 @@ contract UNIT_TestDeliverableFXManager is TestDeliverableFXManagerBase {
   uint internal constant SETTLEMENT_PRICE = 1600e18;
   uint internal constant BASE_DELIVERY = 10_000e18;
   uint internal constant QUOTE_DELIVERY = 16_000_000e18;
-  uint internal constant VM_DELTA = 1_000_000e18;
+  // mark 1500 -> 1600 on 10,000 USDC contract size: 1,000,000 cNGN PnL, credited as
+  // its USDC value at the new mark: 1,000,000 / 1600 = 625 USDC per contract
+  uint internal constant VM_DELTA = 625e18;
 
   function testVMUsesPreChangePositionOnTradeReduction() public {
     _fundCash(aliceAcc, 2_000_000e18);
@@ -471,7 +473,7 @@ contract UNIT_TestDeliverableFXManager is TestDeliverableFXManagerBase {
     _openFuturePosition(aliceAcc, bobAcc, int(ONE_CONTRACT));
 
     // mark moves against the short (alice): +200 cNGN/USDC on 10,000 USDC notional
-    // at spot 1500 cNGN/USDC the VM loss is 10,000 * 200 = 2,000,000 cNGN ~= 1,333 USDC cash
+    // VM loss is 10,000 * 200 = 2,000,000 cNGN, converted at the new mark 1700 ~= 1,176 USDC cash
     fxFuture.setMarkPrice(fxSeries, uint64(block.timestamp + 1), 1700e18);
 
     int aliceMM = manager.getMargin(aliceAcc, false);
