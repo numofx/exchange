@@ -170,7 +170,8 @@ contract DeployDeliverableFXMinimal is Utils {
 
     cngnUnderlying = vm.envOr("CNGN_TOKEN_ADDRESS", address(0));
     if (cngnUnderlying == address(0)) {
-      cngnUnderlying = address(new LyraERC20("cNGN", "cNGN", 18));
+      // 6 decimals to match the canonical cNGN deployment on Base mainnet
+      cngnUnderlying = address(new LyraERC20("cNGN", "cNGN", 6));
     }
     wrappedCngn = new WrappedERC20Asset(subAccounts, IERC20Metadata(cngnUnderlying));
 

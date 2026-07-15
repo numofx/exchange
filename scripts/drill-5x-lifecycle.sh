@@ -24,7 +24,8 @@ IM_CASH=2000000000             # 2,000 USDC (6 dec) = exact 20% IM on one 10,000
 UNDER_CASH=1999000000          # 1,999 USDC: below IM
 ONE_CONTRACT=1000000000000000000
 BASE_DELIVERY_USDC=10000000000 # 10,000 USDC (6 dec) short must deliver
-QUOTE_DELIVERY=15000000000000000000000000  # 15,000,000 cNGN (18 dec) long must deliver at px 1500
+QUOTE_DELIVERY=15000000000000000000000000  # 15,000,000 cNGN as 18-dec subaccount balance
+QUOTE_DELIVERY_TOK=15000000000000          # same amount in cNGN token units (6 dec)
 PX=1500000000000000000000      # 1500e18
 
 DEPLOY_DIR="deployments/31337"
@@ -151,10 +152,10 @@ expect_revert "exposure increase during ramp (DFXM_LeverageIncreaseBlocked)" tra
 step "fund deliverables before close (short: 10,000 USDC base; long: 15,000,000 cNGN quote; manager: quote float)"
 send "$USDC" "approve(address,uint256)" "$WUSDC" "$BASE_DELIVERY_USDC"
 send "$WUSDC" "deposit(uint256,uint256)" "$ALICE" "$BASE_DELIVERY_USDC"
-send "$CNGN" "mint(address,uint256)" "$DEPLOYER" 45000000000000000000000000
-send "$CNGN" "approve(address,uint256)" "$WCNGN" 45000000000000000000000000
-send "$WCNGN" "deposit(uint256,uint256)" "$BOB" "$QUOTE_DELIVERY"
-send "$WCNGN" "deposit(uint256,uint256)" "$MGR_ACC" "$QUOTE_DELIVERY"
+send "$CNGN" "mint(address,uint256)" "$DEPLOYER" 45000000000000
+send "$CNGN" "approve(address,uint256)" "$WCNGN" 45000000000000
+send "$WCNGN" "deposit(uint256,uint256)" "$BOB" "$QUOTE_DELIVERY_TOK"
+send "$WCNGN" "deposit(uint256,uint256)" "$MGR_ACC" "$QUOTE_DELIVERY_TOK"
 
 step "post settlement price (1500) and warp to atomic delivery time (expiry = lastTrade + 1s)"
 send "$FUTURE" "setSettlementPrice(uint96,uint256)" "$SUBID" "$PX"
