@@ -37,6 +37,7 @@ ROOT_DIR = SCRIPT_DIR.parent
 CHAIN_ID = 8453
 CONFIDENCE = 10**18
 DEADLINE_SEC = 60
+TIMESTAMP_SAFETY_SEC = 15  # feed rejects timestamps newer than block.timestamp
 CNGN_INTERVAL_SEC = 60          # heartbeat 180s
 STABLE_INTERVAL_SEC = 20 * 60   # heartbeat 3600s
 FX_API_URL = "https://open.er-api.com/v6/latest/USD"
@@ -96,8 +97,8 @@ def sign_feed_data(feed: str, key: str, inner: str, deadline: int, timestamp: in
 
 
 def build_payload(feed: str, price_1e18: int, signer_key: str, signer_addr: str) -> str:
-  timestamp = int(time.time())
-  deadline = timestamp + DEADLINE_SEC
+  timestamp = int(time.time()) - TIMESTAMP_SAFETY_SEC
+  deadline = timestamp + TIMESTAMP_SAFETY_SEC + DEADLINE_SEC
   inner = run(["cast", "abi-encode", "f(uint96,uint64)", str(price_1e18), str(CONFIDENCE)])
   sig = sign_feed_data(feed, signer_key, inner, deadline, timestamp)
   return run([
