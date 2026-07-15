@@ -1,50 +1,40 @@
 # Deployed Addresses
 
-## Base
+## Base (8453) — current deployment
 
-### NGN Linear Perp
+Deployed: 2026-07-15
+Owner (all contracts): MPC vault **Numo-Manager-Admin** `0x1dcA42ab54Bd3862853A821F84B29BF65245F435`
+Feed signer (cNGN spot + stable feed, 1-of-1): `0xdA1976E83D54B76D0c794B35262228960a1a918f`
 
-Date: 2026-03-16
-Chain ID: `8453`
-Artifact: [deployments/8453/NGN.json](/Users/robertleifke/Code/work/exchange-core/deployments/8453/NGN.json)
+### Core
 
-- `spotFeed`: `0x9FCD5895e0dE5d6F4f69064EE955989324D6Dc28`
-- `perp`: `0x07c9CbA48De1d5A403EC78b0204a5036b520DE1c`
-- `perpFeed`: `0xDeb37948A9c73b888f6832A6Ff1F3B39a8a12F0E`
-- `iapFeed`: `0x101CCADddA707F80A9C144d0263D6dF3Fe4FE73B`
-- `ibpFeed`: `0x08B6d59F567CDcf665192dc032e0C5C8c5C777D2`
+Artifact: [deployments/8453/core.json](deployments/8453/core.json)
 
-### NGN Squared Perp
+- `subAccounts`: `0x7019244E25FA416e6Ca2ed2F3cA25277aef72843`
+- `cash`: `0x6B232A2155Bd0C9bf741dB4cf8E7e8A0176A6fc6`
+- `securityModule`: `0x7d646B55Ae73fFdF44A4D37b77925f0e69550e7c`
+- `auction`: `0x0EfAe56b2b583b1E84c6E4269236163C1E8050E1`
+- `srm`: `0x3195Bd7e02d93982bCF8b34DF5B941fFCaE1E49b`
+- `srmViewer`: `0x1c08f30c204EE18EbBDc161c0f0864AFb826934b`
+- `stableFeed`: `0xDAe566adc61086535986AfBd80093B1DD8686797`
 
-Date: 2026-03-16
-Chain ID: `8453`
-Artifact: [deployments/8453/NGN_SQUARED.json](/Users/robertleifke/Code/work/exchange-core/deployments/8453/NGN_SQUARED.json)
+### USDC/cNGN SEP-16-2026 deliverable FX future
 
-- `spotFeed`: `0xa268936A80920B4A596b77d138591f7c527d54D3`
-- `perp`: `0xa9B9C8D76B9695b54D8a8bde998D95ca0eC0bcE6`
-- `perpFeed`: `0x801abe77c1E080dd13f080E51FB784Be7830e787`
-- `iapFeed`: `0x8cEe20Ed65AE335aD4c5fA5E488dF1FB94e928d4`
-- `ibpFeed`: `0x65AF06b9a00Ac6865CB4f68a543943Aa8504Cdf1`
-- `manager`: `0xBB623952F80feD409A2446d09325C6B226f560E6`
-- `viewer`: `0x410C71F7101D7A5Cee6480B0715173d26ABdb180`
+Artifact: [deployments/8453/CNGN_SEP16_2026_FUTURE.json](deployments/8453/CNGN_SEP16_2026_FUTURE.json)
 
-### BTC Squared Perp
+- `manager` (DeliverableFXManager): `0x66E3D42cE93DEb0675F56216f15c6592298B2E28`
+- `viewer`: `0x6bdD52484cd2d26eDA0bf1357B74Acda8C37AA81`
+- `future` (DeliverableFXFutureAsset): `0x9725e4b6ae24d8Bd76F3AcfDa6E90fC9284e82ef`
+- `baseAsset` (wrapped USDC): `0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84` (wraps native USDC `0x8335…2913`, 6 dec)
+- `quoteAsset` (wrapped cNGN): `0x9D806fD040a719D27a8E5E77dc5aE0ED1e089493` (wraps cNGN `0x46C8…EF5F`, 6 dec)
+- `spotFeed` (cNGN): `0x41512C6a2af5AcD219EbCcfaF34f7088A2999ABC`
+- Series subId: `1789567201` — last trade 2026-09-16 14:00:00 UTC, delivery 14:00:01 UTC
+- Margin: 20% IM / 15% MM (5x max leverage); 3-day lifecycle ramp to full collateral
 
-Date: 2026-03-15
-Chain ID: `8453`
-Artifact: [deployments/8453/BTC_SQUARED.json](/Users/robertleifke/Code/work/exchange-core/deployments/8453/BTC_SQUARED.json)
+## Base — ABANDONED deployment (pre-2026-07)
 
-- `spotFeed`: `0x0812f224D7329C6166040E377fEb2c46a73AdaCd`
-- `chainlinkBtcUsdOracle`: `0x64c911996D3c6aC71f9b455B1E8E7266BcbD848F`
-- `perp`: `0x0d5e36041064248445F8a8D5d0bBDc3b5c48fDA7`
-- `perpFeed`: `0x684b98Cf6467386AA3b73D8b6a50c034Ea034705`
-- `iapFeed`: `0x8a4089B354532dF320073c8fAde89dcAD69971DF`
-- `ibpFeed`: `0x420c4838BFbbfFb061717434a0767adDd0b95C8B`
-- `manager`: `0xBdae5e2dC9FC3b2e370cfD31fB88d86Dc4814B76`
-- `viewer`: `0xD0b29462394585250282A625EA1025143359e271`
-
-Live feed update transactions:
-
-- `perpFeed.acceptData`: `0xfe0eac33c96d1aae4394a8be1ee3ae42ef95c891dd69184ca4fb812ade8037a5`
-- `iapFeed.acceptData`: `0x0c262dcfc62607337a54fa66218fc9fb5d5d9e21bac272bf77f3d7e2fe9a56d1`
-- `ibpFeed.acceptData`: `0x3a9120801a6eb963846e8b3223de61676bb303854e5ba5ec398519dd4539ff01`
+The original deployment (owner `0xc7Be60b228B997C23094dDFdD71e22e2De6c9310`) is
+**abandoned**: the owner key is lost, the contracts cannot be administered, and the
+listed series have expired. Do not integrate against these addresses. This includes
+the NGN/BTC perps and the APR-30-2026 future previously listed here (manager
+`0x0777C37C3925666474C77f5907E3805177705543`, future `0x7528…E679`, and related feeds).
