@@ -146,14 +146,20 @@ def main() -> int:
         rounds.append((stable_feed, int(args.stable_price * 10**18), "stable"))
 
       for feed, price, label in rounds:
-        payload = build_payload(feed, price, signer_key, signer_addr)
-        if args.dry_run:
-          print(f"[dry-run] {label}: price={price} payload={payload[:42]}...")
-        else:
-          tx = submit(rpc, relayer_key, feed, payload)
-          print(f"{time.strftime('%H:%M:%S')} {label}: price={price} tx={tx}")
-          if label == "stable":
-            last_stable = started
+        for attempt in (1, 2):  # one retry per round; transient RPC nodes happen
+          try:
+            payload = build_payload(feed, price, signer_key, signer_addr)
+            if args.dry_run:
+              print(f"[dry-run] {label}: price={price} payload={payload[:42]}...")
+            else:
+              tx = submit(rpc, relayer_key, feed, payload)
+              print(f"{time.strftime('%H:%M:%S')} {label}: price={price} tx={tx}")
+              if label == "stable":
+                last_stable = started
+            break
+          except Exception as exc:
+            print(f"ERROR ({label}, attempt {attempt}): {exc}", file=sys.stderr)
+            time.sleep(2)
     except Exception as exc:  # keep the loop alive; staleness alerting is external
       print(f"ERROR: {exc}", file=sys.stderr)
 
