@@ -69,7 +69,9 @@ contract DeliverableFXFutureAsset is IDeliverableFXFutureAsset, PositionTracking
 
     uint oldMarkPrice = series.markPrice;
     int delta = int(markPrice) - int(oldMarkPrice);
-    series.cumulativeVMPerContract += (delta * int(uint(series.contractSizeBase))) / 1e18;
+    // VM accrues in cash (base/USDC) units: the quote-denominated PnL of the mark move
+    // (delta * contractSizeBase) converted at the new mark price.
+    series.cumulativeVMPerContract += (delta * int(uint(series.contractSizeBase))) / int(markPrice);
     series.markPrice = markPrice.toUint96();
     series.lastMarkTime = markTime;
 
@@ -106,10 +108,59 @@ contract DeliverableFXFutureAsset is IDeliverableFXFutureAsset, PositionTracking
     _updateTotalPositions(manager, preBalance, adjustment.amount);
     _updateDirectionalPositions(manager, preBalance, adjustment.amount);
 
+    // 1. Settle all outstanding VM on pre-trade position up to current mark price
     _synchronizeVM(adjustment.acc, uint96(adjustment.subId), preBalance);
 
     finalBalance = preBalance + adjustment.amount;
+
+    _blendVM(
+      adjustment.acc,
+      uint96(adjustment.subId),
+      preBalance,
+      finalBalance,
+      uint(uint256(adjustment.assetData))
+    );
+
     return (finalBalance, true);
+  }
+
+  function _blendVM(
+    uint acc,
+    uint96 subId,
+    int preBalance,
+    int finalBalance,
+    uint tradePrice
+  ) internal {
+    if (tradePrice != 0 && finalBalance - preBalance != 0) {
+      Series storage series = _series[subId];
+      int latest = series.cumulativeVMPerContract;
+      int amount = finalBalance - preBalance;
+      // Cash (base/USDC) units. Like setMarkPrice accruals, the increment (mark -> tradePrice)
+      // converts at its destination price, so marking to the trade price yields exactly zero VM.
+      int deltaVM =
+        (int(tradePrice) - int(uint(series.markPrice))) * int(uint(series.contractSizeBase)) / int(tradePrice);
+      int entryVM = latest + deltaVM;
+
+      if (preBalance == 0) {
+        accountLastCumulativeVM[acc][subId] = entryVM;
+      } else {
+        bool sameSign = (preBalance > 0 && finalBalance > 0) || (preBalance < 0 && finalBalance < 0);
+        bool absExposureIncreased = SignedMath.abs(finalBalance) > SignedMath.abs(preBalance);
+
+        if (sameSign && absExposureIncreased) {
+          accountLastCumulativeVM[acc][subId] =
+            (preBalance * latest + amount * entryVM) / finalBalance;
+        } else if (sameSign) {
+          int realizedVM = (amount * (latest - entryVM)) / 1e18;
+          accountCashToSettle[acc][subId] += realizedVM;
+          accountLastCumulativeVM[acc][subId] = latest;
+        } else {
+          int realizedVM = (-preBalance * (latest - entryVM)) / 1e18;
+          accountCashToSettle[acc][subId] += realizedVM;
+          accountLastCumulativeVM[acc][subId] = entryVM;
+        }
+      }
+    }
   }
 
   function settleAccountVM(uint accountId, uint96 subId) external returns (int cashDelta) {
