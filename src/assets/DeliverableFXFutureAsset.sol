@@ -20,7 +20,18 @@ contract DeliverableFXFutureAsset is IDeliverableFXFutureAsset, PositionTracking
   mapping(IManager manager => uint) public totalLongPosition;
   mapping(IManager manager => uint) public totalShortPosition;
 
+  /// max relative price change per mark/settlement update, 1e18-scaled fraction; 0 disables
+  uint public maxMarkDeviation;
+  /// max age of a submitted markTime in seconds; 0 disables
+  uint public maxMarkDelay;
+
   constructor(ISubAccounts _subAccounts) ManagerWhitelist(_subAccounts) {}
+
+  function setMarkBounds(uint _maxMarkDeviation, uint _maxMarkDelay) external onlyOwner {
+    maxMarkDeviation = _maxMarkDeviation;
+    maxMarkDelay = _maxMarkDelay;
+    emit MarkBoundsSet(_maxMarkDeviation, _maxMarkDelay);
+  }
 
   function createSeries(
     uint64 expiry,
@@ -65,9 +76,12 @@ contract DeliverableFXFutureAsset is IDeliverableFXFutureAsset, PositionTracking
   function setMarkPrice(uint96 subId, uint64 markTime, uint markPrice) external onlyOwner {
     Series storage series = _series[subId];
     if (!series.listed) revert DFXF_UnknownSeries();
+    if (series.settlementPriceSet) revert DFXF_SettlementPriceAlreadySet();
     if (markPrice == 0 || markTime <= series.lastMarkTime || markTime > series.expiry) revert DFXF_InvalidMark();
+    if (maxMarkDelay != 0 && uint(markTime) + maxMarkDelay < block.timestamp) revert DFXF_StaleMark();
 
     uint oldMarkPrice = series.markPrice;
+    _checkDeviation(oldMarkPrice, markPrice);
     int delta = int(markPrice) - int(oldMarkPrice);
     // VM accrues in cash (base/USDC) units: the quote-denominated PnL of the mark move
     // (delta * contractSizeBase) converted at the new mark price.
@@ -81,9 +95,26 @@ contract DeliverableFXFutureAsset is IDeliverableFXFutureAsset, PositionTracking
   function setSettlementPrice(uint96 subId, uint settlementPrice) external onlyOwner {
     Series storage series = _series[subId];
     if (!series.listed || settlementPrice == 0) revert DFXF_InvalidMark();
+    if (series.settlementPriceSet) revert DFXF_SettlementPriceAlreadySet();
+
+    uint oldMarkPrice = series.markPrice;
+    _checkDeviation(oldMarkPrice, settlementPrice);
+
+    // Accrue the final VM leg from the last mark to the fixing so trade-price
+    // economics hold even when no final mark was pushed at the fixing.
+    int delta = int(settlementPrice) - int(oldMarkPrice);
+    series.cumulativeVMPerContract += (delta * int(uint(series.contractSizeBase))) / int(settlementPrice);
+    series.markPrice = settlementPrice.toUint96();
+
     series.settlementPrice = settlementPrice.toUint96();
     series.settlementPriceSet = true;
-    emit SettlementPriceSet(subId, settlementPrice);
+    emit SettlementPriceSet(subId, settlementPrice, series.cumulativeVMPerContract);
+  }
+
+  function _checkDeviation(uint oldPrice, uint newPrice) internal view {
+    if (maxMarkDeviation == 0) return;
+    uint diff = newPrice > oldPrice ? newPrice - oldPrice : oldPrice - newPrice;
+    if (diff * 1e18 > oldPrice * maxMarkDeviation) revert DFXF_MarkDeviationExceeded();
   }
 
   function handleAdjustment(
