@@ -50,6 +50,12 @@ interface IDeliverableFXFutureAsset is IAsset, IPositionTracking {
 
   function setSettlementPrice(uint96 subId, uint settlementPrice) external;
 
+  function setMarkBounds(uint maxMarkDeviation, uint maxMarkDelay) external;
+
+  function maxMarkDeviation() external view returns (uint);
+
+  function maxMarkDelay() external view returns (uint);
+
   function settleAccountVM(uint accountId, uint96 subId) external returns (int cashDelta);
 
   function getSettlementAmounts(uint96 subId, int position) external view returns (uint baseAmount, uint quoteAmount);
@@ -78,7 +84,8 @@ interface IDeliverableFXFutureAsset is IAsset, IPositionTracking {
   event MarkPriceSet(
     uint96 indexed subId, uint64 markTime, uint oldMarkPrice, uint newMarkPrice, int cumulativeVMPerContract
   );
-  event SettlementPriceSet(uint96 indexed subId, uint settlementPrice);
+  event SettlementPriceSet(uint96 indexed subId, uint settlementPrice, int cumulativeVMPerContract);
+  event MarkBoundsSet(uint maxMarkDeviation, uint maxMarkDelay);
   event DeliverableFutureVMSynchronized(
     uint indexed accountId, uint96 indexed subId, int cashDelta, int cumulativeVMPerContract
   );
@@ -89,4 +96,7 @@ interface IDeliverableFXFutureAsset is IAsset, IPositionTracking {
   error DFXF_InvalidMark();
   error DFXF_TradingClosed();
   error DFXF_InvalidTradeIncrement();
+  error DFXF_MarkDeviationExceeded();
+  error DFXF_StaleMark();
+  error DFXF_SettlementPriceAlreadySet();
 }

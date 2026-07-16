@@ -44,6 +44,9 @@ contract DeployDeliverableFXMinimal is Utils {
   uint internal constant TICK_SIZE = 1e18;
   uint internal constant INITIAL_MARK_PRICE = 1500e18;
   uint internal constant POSITION_CAP = 1e36;
+  // max 5% price move per mark/settlement update; marks older than 10 min rejected
+  uint internal constant MAX_MARK_DEVIATION = 0.05e18;
+  uint internal constant MAX_MARK_DELAY = 600;
   // 20% IM = 5x max leverage; MM kept at 0.75x of IM
   uint internal constant NORMAL_IM = 0.20e18;
   uint internal constant NORMAL_MM = 0.15e18;
@@ -211,6 +214,7 @@ contract DeployDeliverableFXMinimal is Utils {
     wrappedUsdcDeliverable.setTotalPositionCap(IManager(address(manager)), POSITION_CAP);
     wrappedCngn.setTotalPositionCap(IManager(address(manager)), POSITION_CAP);
     future.setTotalPositionCap(IManager(address(manager)), POSITION_CAP);
+    future.setMarkBounds(MAX_MARK_DEVIATION, MAX_MARK_DELAY);
 
     manager.setProduct(
       IDeliverableFXFutureAsset(address(future)),
