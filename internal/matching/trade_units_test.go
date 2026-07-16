@@ -15,25 +15,25 @@ func TestComputeExecutionUnitsJUNUsesSignedPriceAndAmountScale(t *testing.T) {
 		Taker: junSignedOrder(
 			orders.SideBuy,
 			"0xCE2846771074E20fEc739CF97a60E6075D1E464b",
-			"1782777600",
+			"1789567201",
 			"1391",
 			"1",
 			"0",
-			tradeDataHex("0xCE2846771074E20fEc739CF97a60E6075D1E464b", "1782777600", "1391000000000000000000", "1000000000000000", true),
+			tradeDataHex("0xCE2846771074E20fEc739CF97a60E6075D1E464b", "1789567201", "1391000000000000000000", "1000000000000000", true),
 		),
 		Maker: junSignedOrder(
 			orders.SideSell,
 			"0xCE2846771074E20fEc739CF97a60E6075D1E464b",
-			"1782777600",
+			"1789567201",
 			"1390",
 			"1",
 			"0",
-			tradeDataHex("0xCE2846771074E20fEc739CF97a60E6075D1E464b", "1782777600", "1390000000000000000000", "1000000000000000", false),
+			tradeDataHex("0xCE2846771074E20fEc739CF97a60E6075D1E464b", "1789567201", "1390000000000000000000", "1000000000000000", false),
 		),
 	}
 
 	got, err := computeExecutionUnits(
-		instruments.Metadata{Symbol: instruments.CNGNJun2026Symbol},
+		instruments.Metadata{Symbol: instruments.CNGNSep2026Symbol},
 		candidate,
 		"1390",
 		"1",
@@ -54,25 +54,25 @@ func TestComputeExecutionUnitsRejectsFillAmountAboveRemainingDesired(t *testing.
 		Taker: junSignedOrder(
 			orders.SideBuy,
 			"0xCE2846771074E20fEc739CF97a60E6075D1E464b",
-			"1782777600",
+			"1789567201",
 			"1391",
 			"2",
 			"1",
-			tradeDataHex("0xCE2846771074E20fEc739CF97a60E6075D1E464b", "1782777600", "1391000000000000000000", "2000000000000000", true),
+			tradeDataHex("0xCE2846771074E20fEc739CF97a60E6075D1E464b", "1789567201", "1391000000000000000000", "2000000000000000", true),
 		),
 		Maker: junSignedOrder(
 			orders.SideSell,
 			"0xCE2846771074E20fEc739CF97a60E6075D1E464b",
-			"1782777600",
+			"1789567201",
 			"1390",
 			"2",
 			"1",
-			tradeDataHex("0xCE2846771074E20fEc739CF97a60E6075D1E464b", "1782777600", "1390000000000000000000", "2000000000000000", false),
+			tradeDataHex("0xCE2846771074E20fEc739CF97a60E6075D1E464b", "1789567201", "1390000000000000000000", "2000000000000000", false),
 		),
 	}
 
 	_, err := computeExecutionUnits(
-		instruments.Metadata{Symbol: instruments.CNGNJun2026Symbol},
+		instruments.Metadata{Symbol: instruments.CNGNSep2026Symbol},
 		candidate,
 		"1390",
 		"2",
@@ -88,7 +88,7 @@ func junSignedOrder(side orders.Side, asset string, subID string, limitTicks str
 		"nonce":         "1",
 		"module":        "0x0AAE65AaA66Fe7f54486cDbD007956d3De611990",
 		"data":          tradeData,
-		"expiry":        "1782777600",
+		"expiry":        "1789567201",
 		"owner":         "0xC7bE60b228b997c23094DdfdD71e22E2DE6C9310",
 		"signer":        "0xC7bE60b228b997c23094DdfdD71e22E2DE6C9310",
 	})

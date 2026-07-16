@@ -76,7 +76,7 @@ func TestCreateOrderRequestToParamsNormalizesJUNMinimumSizeToAtomicUnits(t *test
 		Nonce:         "1",
 		Side:          "buy",
 		AssetAddress:  "0xapr",
-		SubID:         "1782777600",
+		SubID:         "1789567201",
 		DesiredAmount: "0.001",
 		FilledAmount:  "0",
 		LimitPrice:    "1391",
@@ -87,8 +87,8 @@ func TestCreateOrderRequestToParamsNormalizesJUNMinimumSizeToAtomicUnits(t *test
 	}
 
 	params, err := req.toParams(config.Config{
-		CNGNJun2026FutureAssetAddress: "0xapr",
-		CNGNJun2026FutureSubID:        "1782777600",
+		CNGNSep2026FutureAssetAddress: "0xapr",
+		CNGNSep2026FutureSubID:        "1789567201",
 	})
 	if err != nil {
 		t.Fatalf("toParams returned error: %v", err)
@@ -111,7 +111,7 @@ func TestCreateOrderRequestToParamsRejectsJUNSubMinimumSize(t *testing.T) {
 		Nonce:         "1",
 		Side:          "buy",
 		AssetAddress:  "0xapr",
-		SubID:         "1782777600",
+		SubID:         "1789567201",
 		DesiredAmount: "0.0001",
 		FilledAmount:  "0",
 		LimitPrice:    "1391",
@@ -122,8 +122,8 @@ func TestCreateOrderRequestToParamsRejectsJUNSubMinimumSize(t *testing.T) {
 	}
 
 	_, err := req.toParams(config.Config{
-		CNGNJun2026FutureAssetAddress: "0xapr",
-		CNGNJun2026FutureSubID:        "1782777600",
+		CNGNSep2026FutureAssetAddress: "0xapr",
+		CNGNSep2026FutureSubID:        "1789567201",
 	})
 	if err == nil || err.Error() != "desired_amount must align to amount step 0.001" {
 		t.Fatalf("unexpected error: %v", err)
@@ -140,7 +140,7 @@ func TestCreateOrderRequestToParamsRejectsZeroNormalizedAtomicSize(t *testing.T)
 		Nonce:         "1",
 		Side:          "buy",
 		AssetAddress:  "0xapr",
-		SubID:         "1782777600",
+		SubID:         "1789567201",
 		DesiredAmount: "0",
 		FilledAmount:  "0",
 		LimitPrice:    "1391",
@@ -151,8 +151,8 @@ func TestCreateOrderRequestToParamsRejectsZeroNormalizedAtomicSize(t *testing.T)
 	}
 
 	_, err := req.toParams(config.Config{
-		CNGNJun2026FutureAssetAddress: "0xapr",
-		CNGNJun2026FutureSubID:        "1782777600",
+		CNGNSep2026FutureAssetAddress: "0xapr",
+		CNGNSep2026FutureSubID:        "1789567201",
 	})
 	if err == nil || err.Error() != "normalized atomic size is 0" {
 		t.Fatalf("unexpected error: %v", err)
@@ -170,7 +170,7 @@ func TestCreateOrderRequestToParamsEnforcesActionDataScaleInvariant(t *testing.T
 		Nonce:         "11",
 		Side:          "buy",
 		AssetAddress:  asset,
-		SubID:         "1782777600",
+		SubID:         "1789567201",
 		DesiredAmount: "0.001",
 		FilledAmount:  "0",
 		LimitPrice:    "1391",
@@ -180,8 +180,8 @@ func TestCreateOrderRequestToParamsEnforcesActionDataScaleInvariant(t *testing.T
 			"subaccount_id":"7",
 			"nonce":"11",
 			"module":"0x0aae65aaa66fe7f54486cdbd007956d3de611990",
-			"data":"` + mustTradeDataHex(asset, "1782777600", "1391000000000000000000", "1000000000000000", true) + `",
-			"expiry":"1782777600",
+			"data":"` + mustTradeDataHex(asset, "1789567201", "1391000000000000000000", "1000000000000000", true) + `",
+			"expiry":"1789567201",
 			"owner":"0xc7be60b228b997c23094ddfdd71e22e2de6c9310",
 			"signer":"0xc7be60b228b997c23094ddfdd71e22e2de6c9310"
 		}`),
@@ -189,8 +189,8 @@ func TestCreateOrderRequestToParamsEnforcesActionDataScaleInvariant(t *testing.T
 	}
 
 	params, err := req.toParams(config.Config{
-		CNGNJun2026FutureAssetAddress: asset,
-		CNGNJun2026FutureSubID:        "1782777600",
+		CNGNSep2026FutureAssetAddress: asset,
+		CNGNSep2026FutureSubID:        "1789567201",
 		EnforceActionDataInvariants:   true,
 	})
 	if err != nil {
@@ -212,7 +212,7 @@ func TestCreateOrderRequestToParamsRejectsActionDataScaleMismatch(t *testing.T) 
 		Nonce:         "12",
 		Side:          "buy",
 		AssetAddress:  asset,
-		SubID:         "1782777600",
+		SubID:         "1789567201",
 		DesiredAmount: "0.002",
 		FilledAmount:  "0",
 		LimitPrice:    "1391",
@@ -222,8 +222,8 @@ func TestCreateOrderRequestToParamsRejectsActionDataScaleMismatch(t *testing.T) 
 			"subaccount_id":"7",
 			"nonce":"12",
 			"module":"0x0aae65aaa66fe7f54486cdbd007956d3de611990",
-			"data":"` + mustTradeDataHex(asset, "1782777600", "1391000000000000000000", "1000000000000001", true) + `",
-			"expiry":"1782777600",
+			"data":"` + mustTradeDataHex(asset, "1789567201", "1391000000000000000000", "1000000000000001", true) + `",
+			"expiry":"1789567201",
 			"owner":"0xc7be60b228b997c23094ddfdd71e22e2de6c9310",
 			"signer":"0xc7be60b228b997c23094ddfdd71e22e2de6c9310"
 		}`),
@@ -231,8 +231,8 @@ func TestCreateOrderRequestToParamsRejectsActionDataScaleMismatch(t *testing.T) 
 	}
 
 	_, err := req.toParams(config.Config{
-		CNGNJun2026FutureAssetAddress: asset,
-		CNGNJun2026FutureSubID:        "1782777600",
+		CNGNSep2026FutureAssetAddress: asset,
+		CNGNSep2026FutureSubID:        "1789567201",
 		EnforceActionDataInvariants:   true,
 	})
 	if err == nil || err.Error() != "action_json.data.desiredAmount is not aligned with normalized desired_amount" {
@@ -251,7 +251,7 @@ func TestCreateOrderRequestToParamsAcceptsMarketMakerRawDesiredAmountPayload(t *
 		Nonce:         "13",
 		Side:          "buy",
 		AssetAddress:  asset,
-		SubID:         "1782777600",
+		SubID:         "1789567201",
 		DesiredAmount: "5000000000000000000",
 		FilledAmount:  "0",
 		LimitPrice:    "1355",
@@ -261,8 +261,8 @@ func TestCreateOrderRequestToParamsAcceptsMarketMakerRawDesiredAmountPayload(t *
 			"subaccount_id":"6",
 			"nonce":"13",
 			"module":"0x0aae65aaa66fe7f54486cdbd007956d3de611990",
-			"data":"` + mustTradeDataHex(asset, "1782777600", "1355000000000000000000", "5000000000000000000", true) + `",
-			"expiry":"1782777600",
+			"data":"` + mustTradeDataHex(asset, "1789567201", "1355000000000000000000", "5000000000000000000", true) + `",
+			"expiry":"1789567201",
 			"owner":"0xc7be60b228b997c23094ddfdd71e22e2de6c9310",
 			"signer":"0xc7be60b228b997c23094ddfdd71e22e2de6c9310"
 		}`),
@@ -270,8 +270,8 @@ func TestCreateOrderRequestToParamsAcceptsMarketMakerRawDesiredAmountPayload(t *
 	}
 
 	params, err := req.toParams(config.Config{
-		CNGNJun2026FutureAssetAddress: asset,
-		CNGNJun2026FutureSubID:        "1782777600",
+		CNGNSep2026FutureAssetAddress: asset,
+		CNGNSep2026FutureSubID:        "1789567201",
 		EnforceActionDataInvariants:   true,
 	})
 	if err != nil {

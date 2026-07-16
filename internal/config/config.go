@@ -27,8 +27,6 @@ type Config struct {
 	DeribitWSURL           string
 
 	CNGNSpotAssetAddress          string
-	CNGNJun2026FutureAssetAddress string
-	CNGNJun2026FutureSubID        string
 	CNGNSep2026FutureAssetAddress string
 	CNGNSep2026FutureSubID        string
 	CNGNNov2026FutureAssetAddress string
@@ -57,8 +55,6 @@ func Load() (Config, error) {
 		DeribitWSURL:           getenvDefault("DERIBIT_WS_URL", "wss://test.deribit.com/ws/api/v2"),
 
 		CNGNSpotAssetAddress:          strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_SPOT_ASSET_ADDRESS"))),
-		CNGNJun2026FutureAssetAddress: strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_JUN30_2026_FUTURE_ASSET_ADDRESS"))),
-		CNGNJun2026FutureSubID:        strings.TrimSpace(os.Getenv("CNGN_JUN30_2026_FUTURE_SUB_ID")),
 		CNGNSep2026FutureAssetAddress: strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_SEP16_2026_FUTURE_ASSET_ADDRESS"))),
 		CNGNSep2026FutureSubID:        strings.TrimSpace(os.Getenv("CNGN_SEP16_2026_FUTURE_SUB_ID")),
 		CNGNNov2026FutureAssetAddress: strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_NOV30_2026_FUTURE_ASSET_ADDRESS"))),

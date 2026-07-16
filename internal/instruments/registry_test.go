@@ -8,8 +8,8 @@ import (
 
 func TestDefaultRegistryIncludesDeliverableFutureByAssetAndSubID(t *testing.T) {
 	cfg := config.Config{
-		CNGNJun2026FutureAssetAddress: "0xF000000000000000000000000000000000000123",
-		CNGNJun2026FutureSubID:        "1782777600",
+		CNGNSep2026FutureAssetAddress: "0xF000000000000000000000000000000000000123",
+		CNGNSep2026FutureSubID:        "1789567201",
 		CNGNNov2026FutureAssetAddress: "0xF000000000000000000000000000000000000456",
 		CNGNNov2026FutureSubID:        "1795996800",
 		CNGNMay2027FutureAssetAddress: "0xF000000000000000000000000000000000000789",
@@ -19,12 +19,12 @@ func TestDefaultRegistryIncludesDeliverableFutureByAssetAndSubID(t *testing.T) {
 	registry := DefaultRegistry(cfg)
 
 	// Verify June Future
-	item, ok := registry.ByAssetAndSubID("0xf000000000000000000000000000000000000123", "1782777600")
+	item, ok := registry.ByAssetAndSubID("0xf000000000000000000000000000000000000123", "1789567201")
 	if !ok {
 		t.Fatalf("June deliverable future not found by asset/subId")
 	}
 
-	if item.Symbol != CNGNJun2026Symbol {
+	if item.Symbol != CNGNSep2026Symbol {
 		t.Fatalf("June symbol = %q", item.Symbol)
 	}
 	if item.ContractType != "deliverable_fx_future" {
@@ -36,7 +36,7 @@ func TestDefaultRegistryIncludesDeliverableFutureByAssetAndSubID(t *testing.T) {
 	if item.BaseAssetSymbol != "USDC" || item.QuoteAssetSymbol != "cNGN" {
 		t.Fatalf("June unexpected base/quote %q/%q", item.BaseAssetSymbol, item.QuoteAssetSymbol)
 	}
-	if item.SubID != "1782777600" {
+	if item.SubID != "1789567201" {
 		t.Fatalf("June subId = %q", item.SubID)
 	}
 	if !item.Enabled {
@@ -96,8 +96,8 @@ func TestDefaultRegistryIncludesDeliverableFutureByAssetAndSubID(t *testing.T) {
 
 func TestDefaultRegistryResolvesLegacyDisplaySymbolAlias(t *testing.T) {
 	cfg := config.Config{
-		CNGNJun2026FutureAssetAddress: "0xF000000000000000000000000000000000000123",
-		CNGNJun2026FutureSubID:        "1782777600",
+		CNGNSep2026FutureAssetAddress: "0xF000000000000000000000000000000000000123",
+		CNGNSep2026FutureSubID:        "1789567201",
 		CNGNNov2026FutureAssetAddress: "0xF000000000000000000000000000000000000456",
 		CNGNNov2026FutureSubID:        "1795996800",
 		CNGNMay2027FutureAssetAddress: "0xF000000000000000000000000000000000000789",
@@ -107,11 +107,11 @@ func TestDefaultRegistryResolvesLegacyDisplaySymbolAlias(t *testing.T) {
 	registry := DefaultRegistry(cfg)
 
 	// Verify June Legacy resolving
-	item, ok := registry.BySymbol(CNGNJun2026LegacySymbol)
+	item, ok := registry.BySymbol(CNGNSep2026LegacySymbol)
 	if !ok {
 		t.Fatalf("June deliverable future not found by legacy display symbol")
 	}
-	if item.Symbol != CNGNJun2026Symbol {
+	if item.Symbol != CNGNSep2026Symbol {
 		t.Fatalf("June canonical symbol = %q", item.Symbol)
 	}
 

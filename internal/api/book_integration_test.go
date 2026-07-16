@@ -54,12 +54,12 @@ func TestHandleBookAndTradesReturnEmptyArraysNotNull(t *testing.T) {
 	assetAddress := "0xfeed000000000000000000000000000000000777"
 
 	registry := instruments.DefaultRegistry(config.Config{
-		CNGNJun2026FutureAssetAddress: assetAddress,
-		CNGNJun2026FutureSubID:        "1782777600",
+		CNGNSep2026FutureAssetAddress: assetAddress,
+		CNGNSep2026FutureSubID:        "1789567201",
 	})
 	server := NewServer(config.Config{}, pool, registry)
 
-	bookReq := httptest.NewRequest(http.MethodGet, "/v1/book?asset_address="+assetAddress+"&sub_id=1782777600", nil)
+	bookReq := httptest.NewRequest(http.MethodGet, "/v1/book?asset_address="+assetAddress+"&sub_id=1789567201", nil)
 	bookRec := httptest.NewRecorder()
 	server.handleBook(bookRec, bookReq)
 
@@ -78,7 +78,7 @@ func TestHandleBookAndTradesReturnEmptyArraysNotNull(t *testing.T) {
 		t.Fatalf("expected null last_trade_timestamp in empty book response, got %v", *bookResp.MarketPresentation.LastTradeTimestamp)
 	}
 
-	tradesReq := httptest.NewRequest(http.MethodGet, "/v1/trades?asset_address="+assetAddress+"&sub_id=1782777600", nil)
+	tradesReq := httptest.NewRequest(http.MethodGet, "/v1/trades?asset_address="+assetAddress+"&sub_id=1789567201", nil)
 	tradesRec := httptest.NewRecorder()
 	server.handleTrades(tradesRec, tradesReq)
 
@@ -103,8 +103,8 @@ func TestHandleMarketDiagnosticsReportsRegisteredEmptyFuture(t *testing.T) {
 	assetAddress := "0xfeed000000000000000000000000000000000776"
 
 	registry := instruments.DefaultRegistry(config.Config{
-		CNGNJun2026FutureAssetAddress: assetAddress,
-		CNGNJun2026FutureSubID:        "1782777600",
+		CNGNSep2026FutureAssetAddress: assetAddress,
+		CNGNSep2026FutureSubID:        "1789567201",
 	})
 	server := NewServer(config.Config{}, pool, registry)
 
@@ -123,7 +123,7 @@ func TestHandleMarketDiagnosticsReportsRegisteredEmptyFuture(t *testing.T) {
 
 	var future *marketDiagnosticsResponse
 	for i := range diagnostics {
-		if diagnostics[i].Market == instruments.CNGNJun2026Symbol {
+		if diagnostics[i].Market == instruments.CNGNSep2026Symbol {
 			future = &diagnostics[i]
 			break
 		}
@@ -152,8 +152,8 @@ func TestHandleCreateOrderRejectsUndepositedSubaccount(t *testing.T) {
 	assetAddress := "0xfeed000000000000000000000000000000000777"
 
 	cfg := config.Config{
-		CNGNJun2026FutureAssetAddress: assetAddress,
-		CNGNJun2026FutureSubID:        "1782777600",
+		CNGNSep2026FutureAssetAddress: assetAddress,
+		CNGNSep2026FutureSubID:        "1789567201",
 	}
 	registry := instruments.DefaultRegistry(cfg)
 	server := NewServer(cfg, pool, registry)
@@ -168,7 +168,7 @@ func TestHandleCreateOrderRejectsUndepositedSubaccount(t *testing.T) {
 		"nonce":          "1",
 		"side":           "buy",
 		"asset_address":  assetAddress,
-		"sub_id":         "1782777600",
+		"sub_id":         "1789567201",
 		"desired_amount": "0.001",
 		"filled_amount":  "0",
 		"limit_price":    "1391",
@@ -200,7 +200,7 @@ func TestJUNDepositedCrossPathEndToEnd(t *testing.T) {
 	ctx := context.Background()
 	suffix := fmt.Sprintf("jun-deposited-%d", time.Now().UnixNano())
 	assetAddress := "0xfeed000000000000000000000000000000000776"
-	subID := "1782777600"
+	subID := "1789567201"
 
 	t.Cleanup(func() {
 		_, _ = pool.Exec(ctx, "delete from trade_fills where taker_order_id like $1 or maker_order_id like $1", suffix+"%")
@@ -208,8 +208,8 @@ func TestJUNDepositedCrossPathEndToEnd(t *testing.T) {
 	})
 
 	cfg := config.Config{
-		CNGNJun2026FutureAssetAddress: assetAddress,
-		CNGNJun2026FutureSubID:        subID,
+		CNGNSep2026FutureAssetAddress: assetAddress,
+		CNGNSep2026FutureSubID:        subID,
 	}
 	registry := instruments.DefaultRegistry(cfg)
 	server := NewServer(cfg, pool, registry)
@@ -316,15 +316,15 @@ insert into active_orders (
 `
 	assetAddress := "0xce2846771074e20fec739cf97a60e6075d1e464b"
 	expiry := time.Now().Add(time.Hour).Unix()
-	if _, err := pool.Exec(ctx, insertOrder, orderID, owner, owner, nonce, assetAddress, "1782777600", expiry); err != nil {
+	if _, err := pool.Exec(ctx, insertOrder, orderID, owner, owner, nonce, assetAddress, "1789567201", expiry); err != nil {
 		t.Fatalf("insert order: %v", err)
 	}
 
 	server := NewServer(config.Config{
 		CancelProtectedOrderPrefixes: []string{"smoke:"},
 	}, pool, instruments.DefaultRegistry(config.Config{
-		CNGNJun2026FutureAssetAddress: assetAddress,
-		CNGNJun2026FutureSubID:        "1782777600",
+		CNGNSep2026FutureAssetAddress: assetAddress,
+		CNGNSep2026FutureSubID:        "1789567201",
 	}))
 
 	serviceReq := httptest.NewRequest(http.MethodPost, "/v1/orders/cancel", strings.NewReader(`{"owner_address":"0xowner","nonce":"777001","service":"market-maker","reason":"refresh"}`))
@@ -377,13 +377,13 @@ insert into active_orders (
 ) values ($1, $2, $3, 6, 6, $4, 'buy', $5, $6, '10', '3', '1391', '1391', '0', $7, '{}'::jsonb, '0xsig', 'active')
 `
 	expiry := time.Now().Add(time.Hour).Unix()
-	if _, err := pool.Exec(ctx, insertOrder, orderID, "0xowner", "0xowner", "12345", assetAddress, "1782777600", expiry); err != nil {
+	if _, err := pool.Exec(ctx, insertOrder, orderID, "0xowner", "0xowner", "12345", assetAddress, "1789567201", expiry); err != nil {
 		t.Fatalf("insert order: %v", err)
 	}
 
 	cfg := config.Config{
-		CNGNJun2026FutureAssetAddress: assetAddress,
-		CNGNJun2026FutureSubID:        "1782777600",
+		CNGNSep2026FutureAssetAddress: assetAddress,
+		CNGNSep2026FutureSubID:        "1789567201",
 	}
 	server := NewServer(cfg, pool, instruments.DefaultRegistry(cfg))
 	req := httptest.NewRequest(http.MethodGet, "/v1/orders/"+orderID, nil)

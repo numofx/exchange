@@ -36,7 +36,7 @@ func TestFinalizeMatchWithPriceWritesTradeFillExactlyOnce(t *testing.T) {
 	takerID := suffix + "-taker"
 	makerID := suffix + "-maker"
 	assetAddress := "0xfeed000000000000000000000000000000000001"
-	subID := "1782777600"
+	subID := "1789567201"
 
 	t.Cleanup(func() {
 		_, _ = pool.Exec(ctx, "delete from trade_fills where taker_order_id = $1 or maker_order_id = $2", takerID, makerID)
@@ -83,7 +83,7 @@ func TestListTradesOrdersAndIsolatesMarkets(t *testing.T) {
 
 	assetA := "0xfeed0000000000000000000000000000000000aa"
 	assetB := "0xfeed0000000000000000000000000000000000bb"
-	subA := "1782777600"
+	subA := "1789567201"
 	subB := "1782864000"
 
 	t.Cleanup(func() {
@@ -141,7 +141,7 @@ func TestFinalizeMatchWithPriceWritesAtomicFillTradeRow(t *testing.T) {
 	takerID := suffix + "-taker"
 	makerID := suffix + "-maker"
 	assetAddress := "0xfeed0000000000000000000000000000000000cc"
-	subID := "1782777600"
+	subID := "1789567201"
 
 	t.Cleanup(func() {
 		_, _ = pool.Exec(ctx, "delete from trade_fills where taker_order_id = $1 or maker_order_id = $2", takerID, makerID)

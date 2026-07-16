@@ -12,8 +12,8 @@ import (
 
 func TestHandleMarketsIncludesDeliverableFutureMetadata(t *testing.T) {
 	registry := instruments.DefaultRegistry(config.Config{
-		CNGNJun2026FutureAssetAddress: "0xf000000000000000000000000000000000000123",
-		CNGNJun2026FutureSubID:        "1782777600",
+		CNGNSep2026FutureAssetAddress: "0xf000000000000000000000000000000000000123",
+		CNGNSep2026FutureSubID:        "1789567201",
 		CNGNNov2026FutureAssetAddress: "0xf000000000000000000000000000000000000456",
 		CNGNNov2026FutureSubID:        "1795996800",
 		CNGNMay2027FutureAssetAddress: "0xf000000000000000000000000000000000000789",
@@ -38,7 +38,7 @@ func TestHandleMarketsIncludesDeliverableFutureMetadata(t *testing.T) {
 	// Verify June Future
 	var found *marketPresentation
 	for i := range markets {
-		if markets[i].Market == instruments.CNGNJun2026Symbol {
+		if markets[i].Market == instruments.CNGNSep2026Symbol {
 			found = &markets[i]
 			break
 		}
@@ -56,10 +56,10 @@ func TestHandleMarketsIncludesDeliverableFutureMetadata(t *testing.T) {
 	if found.AssetAddress != "0xf000000000000000000000000000000000000123" {
 		t.Fatalf("June asset address = %q", found.AssetAddress)
 	}
-	if found.SubID != "1782777600" {
+	if found.SubID != "1789567201" {
 		t.Fatalf("June sub id = %q", found.SubID)
 	}
-	if found.ExpiryTimestamp != 1782777600 {
+	if found.ExpiryTimestamp != 1789567201 {
 		t.Fatalf("June unexpected expiry window %+v", found)
 	}
 	if found.LastTradeTimestamp != nil {

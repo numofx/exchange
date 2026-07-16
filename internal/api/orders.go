@@ -228,8 +228,8 @@ func normalizeAmountToAtomicUnits(field string, instrument instruments.Metadata,
 }
 
 func amountAtomicStep(instrument instruments.Metadata) string {
-	if instrument.Symbol == instruments.CNGNJun2026Symbol || instrument.Symbol == instruments.CNGNSep2026Symbol ||
-		instrument.Symbol == instruments.CNGNNov2026Symbol || instrument.Symbol == instruments.CNGNMay2027Symbol {
+	if instrument.Symbol == instruments.CNGNSep2026Symbol || instrument.Symbol == instruments.CNGNNov2026Symbol ||
+		instrument.Symbol == instruments.CNGNMay2027Symbol {
 		return instrument.MinSize
 	}
 	return "1"
