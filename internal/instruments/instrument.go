@@ -117,6 +117,8 @@ func symbolAlias(symbol string) string {
 	switch symbol {
 	case CNGNJun2026Symbol:
 		return CNGNJun2026LegacySymbol
+	case CNGNSep2026Symbol:
+		return CNGNSep2026LegacySymbol
 	case CNGNNov2026Symbol:
 		return CNGNNov2026LegacySymbol
 	case CNGNMay2027Symbol:

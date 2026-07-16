@@ -56,15 +56,17 @@ Important values:
 - `TRADE_MODULE_ADDRESS`
 - `CNGN_JUN30_2026_FUTURE_ASSET_ADDRESS`
 - `CNGN_JUN30_2026_FUTURE_SUB_ID`
+- `CNGN_SEP16_2026_FUTURE_ASSET_ADDRESS`
+- `CNGN_SEP16_2026_FUTURE_SUB_ID`
 - optionally `EXPECTED_ORDER_OWNER`
 - optionally `EXPECTED_ORDER_SIGNER`
 
 
 
-For the physically delivered `USDC-cNGN-JUN30-2026` future, the market is only enabled when both
-`CNGN_JUN30_2026_FUTURE_ASSET_ADDRESS` and `CNGN_JUN30_2026_FUTURE_SUB_ID` are set. The registry
-resolves this instrument by exact `(asset_address, sub_id)` and exposes the canonical market symbol
-`USDCcNGN-JUN30-2026`. Human-readable pair formatting remains in display fields such as
+Each physically delivered future (e.g. `USDC-cNGN-SEP16-2026`) is only enabled when both its
+`*_FUTURE_ASSET_ADDRESS` and `*_FUTURE_SUB_ID` env values are set. The registry resolves the
+instrument by exact `(asset_address, sub_id)` and exposes the canonical market symbol
+(e.g. `USDCcNGN-SEP16-2026`). Human-readable pair formatting remains in display fields such as
 `display_name` and `display_label`.
 
 - `contract_type=deliverable_fx_future`
