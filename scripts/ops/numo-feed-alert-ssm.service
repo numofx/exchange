@@ -1,0 +1,13 @@
+# Numo feed staleness check on EC2 — pulls RPC_URL/webhook from SSM. Scheduled by the timer.
+# Install: cp scripts/ops/numo-feed-alert-ssm.service /etc/systemd/system/numo-feed-alert.service
+#          cp scripts/ops/numo-feed-alert.timer /etc/systemd/system/
+#          systemctl daemon-reload && systemctl enable --now numo-feed-alert.timer
+[Unit]
+Description=Numo feed staleness check
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/home/ec2-user/risk-core
+ExecStart=/home/ec2-user/risk-core/scripts/ops/run-with-ssm.sh /usr/bin/python3 scripts/ops/check_feed_staleness.py
+Environment=AWS_REGION=us-east-1
