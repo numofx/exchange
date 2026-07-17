@@ -13,6 +13,8 @@ WorkingDirectory=/home/ec2-user/risk-core
 ExecStart=/home/ec2-user/risk-core/scripts/ops/run-with-ssm.sh /usr/bin/python3 scripts/publish_fx_feeds.py
 Environment=PATH=/home/ec2-user/.foundry/bin:/usr/local/bin:/usr/bin:/bin
 Environment=AWS_REGION=us-east-1
+# unbuffered so tx= success lines reach journald promptly
+Environment=PYTHONUNBUFFERED=1
 Restart=always
 RestartSec=5
 StandardOutput=journal
