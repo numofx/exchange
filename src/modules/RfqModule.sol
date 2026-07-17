@@ -34,6 +34,8 @@ contract RfqModule is IRfqModule, BaseModule {
 
   mapping(IPerpAsset => bool) public isPerpAsset;
 
+  mapping(address => bool) public isDatedFutureAsset;
+
   uint public feeRecipient;
 
   constructor(IMatching _matching, IAsset _quoteAsset, uint _feeRecipient) BaseModule(_matching) {
@@ -57,6 +59,13 @@ contract RfqModule is IRfqModule, BaseModule {
    */
   function setPerpAsset(IPerpAsset _perpAsset, bool isPerp) external onlyOwner {
     isPerpAsset[_perpAsset] = isPerp;
+  }
+
+  /**
+   * @dev set dated future asset mapping
+   */
+  function setDatedFutureAsset(address _asset, bool isDatedFuture) external onlyOwner {
+    isDatedFutureAsset[_asset] = isDatedFuture;
   }
 
   ////////////////////////
@@ -115,9 +124,13 @@ contract RfqModule is IRfqModule, BaseModule {
       TradeData memory tradeData = makerOrder.trades[i];
 
       int cashTransfer;
+      bytes32 assetData = bytes32(0);
       if (isPerpAsset[IPerpAsset(tradeData.asset)]) {
         int perpDelta = _getPerpDelta(tradeData.asset, tradeData.price.toInt256());
         cashTransfer = perpDelta.multiplyDecimal(tradeData.amount);
+      } else if (isDatedFutureAsset[tradeData.asset]) {
+        cashTransfer = 0;
+        assetData = bytes32(uint256(tradeData.price));
       } else {
         cashTransfer = tradeData.price.toInt256().multiplyDecimal(tradeData.amount);
       }
@@ -129,7 +142,7 @@ contract RfqModule is IRfqModule, BaseModule {
         amount: tradeData.amount,
         fromAcc: fill.takerAccount,
         toAcc: fill.makerAccount,
-        assetData: bytes32(0)
+        assetData: assetData
       });
 
       matchedOrders[i] = IRfqModule.MatchedOrderData({
