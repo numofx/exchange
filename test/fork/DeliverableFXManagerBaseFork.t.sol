@@ -17,11 +17,12 @@ import "openzeppelin/token/ERC20/extensions/IERC20Metadata.sol";
 contract FORK_TestDeliverableFXManagerBase is Test {
   uint internal constant ONE_INCREMENT = 0.001e18;
   uint internal constant TWO_INCREMENTS = 0.002e18;
-  uint internal constant SETTLEMENT_PRICE = 1600e18;
+  // must stay within the 5% mark-deviation bound of the live series' birth mark (1379.64)
+  uint internal constant SETTLEMENT_PRICE = 1400e18;
   uint internal constant BASE_PER_INCREMENT_18 = 10e18;
-  uint internal constant QUOTE_PER_INCREMENT_18 = 16_000e18;
+  uint internal constant QUOTE_PER_INCREMENT_18 = 14_000e18;
   uint internal constant CASH_MARGIN_USDC = 1_000 * 1e6;
-  uint internal constant MANAGER_CNGN_FUND = 64_000e18;
+  uint internal constant MANAGER_CNGN_FUND = 56_000e18;
 
   address internal deployer;
 
@@ -133,15 +134,21 @@ contract FORK_TestDeliverableFXManagerAcceptance is FORK_TestDeliverableFXManage
     vm.warp(liveLastTradeTime - 4 days);
     _transferFuture(aliceAcc, bobAcc, liveSeries, int(TWO_INCREMENTS));
 
+    IDeliverableFXFutureAsset.Series memory preMark = future.getSeries(liveSeries);
     vm.prank(deployer);
     future.setMarkPrice(liveSeries, uint64(block.timestamp), SETTLEMENT_PRICE);
 
     _transferFuture(aliceAcc, bobAcc, liveSeries, -int(ONE_INCREMENT));
 
+    // VM accrues in USDC: (deltaMark * contractSize / newMark) per contract, on the pre-reduction position
+    int vmPerContract = (int(SETTLEMENT_PRICE) - int(uint(preMark.markPrice))) * int(uint(preMark.contractSizeBase))
+      / int(SETTLEMENT_PRICE);
+    int expectedVM = int(TWO_INCREMENTS) * vmPerContract / 1e18;
+
     assertEq(subAccounts.getBalance(bobAcc, future, liveSeries), int(ONE_INCREMENT));
     assertEq(subAccounts.getBalance(aliceAcc, future, liveSeries), -int(ONE_INCREMENT));
-    assertEq(subAccounts.getBalance(bobAcc, cash, 0), int(3_000e18));
-    assertEq(subAccounts.getBalance(aliceAcc, cash, 0), -int(1_000e18));
+    assertEq(subAccounts.getBalance(bobAcc, cash, 0), int(1_000e18) + expectedVM);
+    assertEq(subAccounts.getBalance(aliceAcc, cash, 0), int(1_000e18) - expectedVM);
 
     vm.prank(deployer);
     future.setSettlementPrice(liveSeries, SETTLEMENT_PRICE);
