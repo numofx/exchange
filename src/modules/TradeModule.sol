@@ -33,6 +33,8 @@ contract TradeModule is ITradeModule, BaseModule {
 
   mapping(IPerpAsset => bool) public isPerpAsset;
 
+  mapping(address => bool) public isDatedFutureAsset;
+
   uint public feeRecipient;
 
   /// @dev we trust the nonce is unique for the given "VerifiedAction" for the owner
@@ -63,6 +65,13 @@ contract TradeModule is ITradeModule, BaseModule {
    */
   function setPerpAsset(IPerpAsset _perpAsset, bool isPerp) external onlyOwner {
     isPerpAsset[_perpAsset] = isPerp;
+  }
+
+  /**
+   * @dev set dated future asset mapping
+   */
+  function setDatedFutureAsset(address _asset, bool isDatedFuture) external onlyOwner {
+    isDatedFutureAsset[_asset] = isDatedFuture;
   }
 
   ////////////////////////
@@ -208,9 +217,13 @@ contract TradeModule is ITradeModule, BaseModule {
     uint startIndex
   ) internal {
     int amtQuote;
+    bytes32 assetData = bytes32(0);
     if (_isPerp(matchedOrder.data.asset)) {
       int perpDelta = _getPerpDelta(matchedOrder.data.asset, fillDetails.price);
       amtQuote = perpDelta.multiplyDecimal(int(fillDetails.amountFilled));
+    } else if (isDatedFutureAsset[matchedOrder.data.asset]) {
+      amtQuote = 0;
+      assetData = bytes32(uint256(fillDetails.price));
     } else {
       amtQuote = fillDetails.price.multiplyDecimal(int(fillDetails.amountFilled));
     }
@@ -233,7 +246,7 @@ contract TradeModule is ITradeModule, BaseModule {
       amount: isBidder ? int(fillDetails.amountFilled) : -int(fillDetails.amountFilled),
       fromAcc: isBidder ? filledOrder.subaccountId : filledOrder.data.recipientId,
       toAcc: isBidder ? matchedOrder.data.recipientId : matchedOrder.subaccountId,
-      assetData: bytes32(0)
+      assetData: assetData
     });
 
     transferBatch[startIndex + 2] = ISubAccounts.AssetTransfer({
