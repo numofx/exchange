@@ -16,6 +16,7 @@ import {Utils} from "./utils.sol";
 
 contract DeployDeliverableFXManager is Utils {
   string internal constant ARTIFACT_NAME = "CNGN_SEP16_2026_FUTURE";
+  string internal constant VAULT_ACTIONS_NAME = "CNGN_SEP16_2026_VAULT_ACTIONS";
   string internal constant ONCHAIN_MARKET_NAME = "USDC/cNGN SEP-16-2026";
 
   // last trade: Sep 16 2026 15:00:00 WAT (14:00:00 UTC); atomic delivery 1s later
@@ -24,7 +25,9 @@ contract DeployDeliverableFXManager is Utils {
   uint internal constant CONTRACT_SIZE_BASE = 10_000e18;
   uint internal constant MIN_TRADE_INCREMENT = 0.001e18;
   uint internal constant TICK_SIZE = 1e18;
-  uint internal constant INITIAL_MARK_PRICE = 1500e18;
+  // prevailing USD/NGN at deploy time so the series is born at reality
+  // (5% mark-deviation cap makes a wrong birth price expensive to walk back)
+  uint internal constant INITIAL_MARK_PRICE = 1379.64e18;
   uint internal constant POSITION_CAP = 1e36;
   // max 5% price move per mark/settlement update; marks older than 10 min rejected
   uint internal constant MAX_MARK_DEVIATION = 0.05e18;
@@ -54,15 +57,9 @@ contract DeployDeliverableFXManager is Utils {
       new DeliverableFXManager(deployment.subAccounts, deployment.cash, deployment.auction, viewer);
     DeliverableFXFutureAsset future = new DeliverableFXFutureAsset(deployment.subAccounts);
 
-    deployment.auction.setWhitelistManager(address(manager), true);
-    deployment.cash.setWhitelistManager(address(manager), true);
-
-    WrappedERC20Asset(usdcDeliverableAsset).setWhitelistManager(address(manager), true);
-    WrappedERC20Asset(wrappedCngnAsset).setWhitelistManager(address(manager), true);
+    // auction, cash, and the wrapped assets are owned by the admin vault; the
+    // required calls are written to a vault-actions artifact instead of executed here
     future.setWhitelistManager(address(manager), true);
-
-    WrappedERC20Asset(usdcDeliverableAsset).setTotalPositionCap(IManager(address(manager)), POSITION_CAP);
-    WrappedERC20Asset(wrappedCngnAsset).setTotalPositionCap(IManager(address(manager)), POSITION_CAP);
     future.setTotalPositionCap(IManager(address(manager)), POSITION_CAP);
     future.setMarkBounds(MAX_MARK_DEVIATION, MAX_MARK_DELAY);
 
@@ -89,6 +86,7 @@ contract DeployDeliverableFXManager is Utils {
     _transferOwnership(owned);
 
     _writeDeploymentArtifact(manager, viewer, future, subId, usdcDeliverableAsset, wrappedCngnAsset, cngnSpotFeed);
+    _writeVaultActions(deployment, usdcDeliverableAsset, wrappedCngnAsset, address(manager));
 
     console2.log("Deliverable FX manager deployed:", address(manager));
     console2.log("Deliverable FX viewer deployed:", address(viewer));
@@ -96,8 +94,68 @@ contract DeployDeliverableFXManager is Utils {
     console2.log("Series subId:", uint(subId));
     console2.log("CNGN_SEP16_2026_FUTURE_ASSET_ADDRESS=%s", address(future));
     console2.log("CNGN_SEP16_2026_FUTURE_SUB_ID=%s", vm.toString(uint(subId)));
+    console2.log("Vault must execute the calls in %s.json (plus acceptOwnership on the three new contracts if NEW_OWNER was set)", VAULT_ACTIONS_NAME);
 
     vm.stopBroadcast();
+  }
+
+  function _writeVaultActions(
+    Deployment memory deployment,
+    address usdcDeliverableAsset,
+    address wrappedCngnAsset,
+    address manager
+  ) internal {
+    string memory json = string.concat(
+      "[",
+      _vaultAction(
+        "auction.setWhitelistManager",
+        address(deployment.auction),
+        abi.encodeCall(deployment.auction.setWhitelistManager, (manager, true))
+      ),
+      ",",
+      _vaultAction(
+        "cash.setWhitelistManager",
+        address(deployment.cash),
+        abi.encodeCall(deployment.cash.setWhitelistManager, (manager, true))
+      ),
+      ",",
+      _vaultAction(
+        "wrappedUsdcDeliverable.setWhitelistManager",
+        usdcDeliverableAsset,
+        abi.encodeCall(WrappedERC20Asset(usdcDeliverableAsset).setWhitelistManager, (manager, true))
+      ),
+      ",",
+      _vaultAction(
+        "wrappedCngn.setWhitelistManager",
+        wrappedCngnAsset,
+        abi.encodeCall(WrappedERC20Asset(wrappedCngnAsset).setWhitelistManager, (manager, true))
+      ),
+      ",",
+      _vaultAction(
+        "wrappedUsdcDeliverable.setTotalPositionCap",
+        usdcDeliverableAsset,
+        abi.encodeCall(WrappedERC20Asset(usdcDeliverableAsset).setTotalPositionCap, (IManager(manager), POSITION_CAP))
+      ),
+      ",",
+      _vaultAction(
+        "wrappedCngn.setTotalPositionCap",
+        wrappedCngnAsset,
+        abi.encodeCall(WrappedERC20Asset(wrappedCngnAsset).setTotalPositionCap, (IManager(manager), POSITION_CAP))
+      ),
+      "]"
+    );
+
+    _writeToDeployments(VAULT_ACTIONS_NAME, json);
+  }
+
+  function _vaultAction(string memory description, address to, bytes memory data)
+    internal
+    pure
+    returns (string memory)
+  {
+    return string.concat(
+      '{"description":"', description, '","to":"', vm.toString(to), '","value":"0","data":"', vm.toString(data), '"}'
+    );
   }
 
   function _writeDeploymentArtifact(

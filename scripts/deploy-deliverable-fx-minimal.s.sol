@@ -42,7 +42,7 @@ contract DeployDeliverableFXMinimal is Utils {
   uint internal constant CONTRACT_SIZE_BASE = 10_000e18;
   uint internal constant MIN_TRADE_INCREMENT = 0.001e18;
   uint internal constant TICK_SIZE = 1e18;
-  uint internal constant INITIAL_MARK_PRICE = 1500e18;
+  uint internal constant INITIAL_MARK_PRICE = 1379.64e18;
   uint internal constant POSITION_CAP = 1e36;
   // max 5% price move per mark/settlement update; marks older than 10 min rejected
   uint internal constant MAX_MARK_DEVIATION = 0.05e18;
