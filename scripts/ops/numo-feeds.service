@@ -1,0 +1,24 @@
+# Numo cNGN/stable price publisher.
+# Install (as root, after editing User/paths for your host):
+#   cp scripts/ops/numo-feeds.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now numo-feeds
+[Unit]
+Description=Numo FX price publisher (Base mainnet)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=numo
+WorkingDirectory=/home/numo/risk-core
+# publisher reads RPC_URL / FEED_SIGNER_KEY / RELAYER_KEY from ~/.numo-feeds.env
+ExecStart=/usr/bin/python3 scripts/publish_fx_feeds.py
+# cast must be on PATH (foundryup installs to ~/.foundry/bin)
+Environment=PATH=/home/numo/.foundry/bin:/usr/local/bin:/usr/bin:/bin
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
