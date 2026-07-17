@@ -1,11 +1,11 @@
 # matching-executor
 
-TypeScript service that accepts offchain match payloads from `matching-backend`, ABI-encodes `TradeModule.OrderData`, simulates `Matching.verifyAndMatch(...)`, and submits the transaction against the sibling `../options/matching` contracts.
+TypeScript service that accepts offchain match payloads from `markets-service`, ABI-encodes `TradeModule.OrderData`, simulates `Matching.verifyAndMatch(...)`, and submits the transaction against the sibling `../execution-contracts` contracts.
 
 ## Responsibilities
 
 - accept match execution requests over HTTP
-- load ABIs and deployment addresses from the sibling `../options/matching` repo by default
+- load ABIs and deployment addresses from the sibling `../execution-contracts` repo by default
 - validate that the payload matches the `TradeModule`/`Matching` interface shape
 - ABI-encode `TradeModule.OrderData`
 - simulate `verifyAndMatch(...)`
@@ -40,7 +40,7 @@ Returns service status, resolved contract addresses, runtime mode flags, the der
 
 ### `POST /` or `POST /execute`
 
-Accepts the payload emitted by `matching-backend`:
+Accepts the payload emitted by `markets-service`:
 
 ```json
 {
@@ -133,7 +133,7 @@ node scripts/generate_trade_order.mjs > taker-order.json
 
 For sells, set `SIDE=sell`. `DESIRED_AMOUNT` stays a positive integer; the side is determined by `SIDE`, matching `TradeModule`'s `isBid` flag.
 
-The emitted JSON can be posted directly to [../matching-backend/scripts/submit_eoa_order_pair.sh](/Users/robertleifke/Code/work/matching-backend/scripts/submit_eoa_order_pair.sh) or the backend `/v1/orders` endpoint.
+The emitted JSON can be posted directly to the `markets-service` backend `/v1/orders` endpoint.
 
 ### Deliverable FX future example
 

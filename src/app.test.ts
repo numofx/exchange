@@ -12,7 +12,7 @@ const config: AppConfig = {
   rpcUrl: 'http://127.0.0.1:8545',
   privateKey: '0x1111111111111111111111111111111111111111111111111111111111111111',
   chainId: 8453,
-  matchingRepoPath: '/tmp/matching',
+  matchingRepoPath: '/tmp/execution-contracts',
   executorAddress: '0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A',
   expectedActionOwner: undefined,
   expectedActionSigner: undefined,

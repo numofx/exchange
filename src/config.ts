@@ -12,7 +12,7 @@ const envSchema = z.object({
   RPC_URL: z.string().url(),
   PRIVATE_KEY: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
   CHAIN_ID: z.coerce.number().int().positive(),
-  MATCHING_REPO_PATH: z.string().default('../options/matching'),
+  MATCHING_REPO_PATH: z.string().default('../execution-contracts'),
   MATCHING_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
   TRADE_MODULE_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
   EXPECTED_ACTION_OWNER: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
