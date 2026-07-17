@@ -22,9 +22,12 @@ Artifact: [deployments/8453/core.json](deployments/8453/core.json)
 
 Artifact: [deployments/8453/CNGN_SEP16_2026_FUTURE.json](deployments/8453/CNGN_SEP16_2026_FUTURE.json)
 
-- `manager` (DeliverableFXManager): `0x66E3D42cE93DEb0675F56216f15c6592298B2E28`
-- `viewer`: `0x6bdD52484cd2d26eDA0bf1357B74Acda8C37AA81`
-- `future` (DeliverableFXFutureAsset): `0x9725e4b6ae24d8Bd76F3AcfDa6E90fC9284e82ef`
+Redeployed 2026-07-17 with the VM-denomination fix and mark-price bounds
+(5% max deviation per update, 600s staleness cap). Initial mark 1379.64.
+
+- `manager` (DeliverableFXManager): `0xcE01f3D74400caE39bd7608cd2d286C2e3874d49`
+- `viewer`: `0xB0B4A877Ee72E00f677411AB828149431E659a56`
+- `future` (DeliverableFXFutureAsset): `0xDd9c2Ddf97a2Dc9B9d348DcD0ef776aF5291A1F9`
 - `baseAsset` (wrapped USDC): `0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84` (wraps native USDC `0x8335…2913`, 6 dec)
 - `quoteAsset` (wrapped cNGN): `0x9D806fD040a719D27a8E5E77dc5aE0ED1e089493` (wraps cNGN `0x46C8…EF5F`, 6 dec)
 - `spotFeed` (cNGN): `0x41512C6a2af5AcD219EbCcfaF34f7088A2999ABC`
@@ -38,3 +41,8 @@ The original deployment (owner `0xc7Be60b228B997C23094dDFdD71e22e2De6c9310`) is
 listed series have expired. Do not integrate against these addresses. This includes
 the NGN/BTC perps and the APR-30-2026 future previously listed here (manager
 `0x0777C37C3925666474C77f5907E3805177705543`, future `0x7528…E679`, and related feeds).
+
+Also abandoned (2026-07-17, VM denomination bug — accrued VM in cNGN but credited
+it 1:1 as USDC): the first SEP-16-2026 stack — manager `0x66E3D42cE93DEb0675F56216f15c6592298B2E28`,
+viewer `0x6bdD52484cd2d26eDA0bf1357B74Acda8C37AA81`, future `0x9725e4b6ae24d8Bd76F3AcfDa6E90fC9284e82ef`.
+Vault-owned but disused; never held positions.
