@@ -1,4 +1,8 @@
 {
+  "_status": "ABANDONED",
+  "_note": "February 2026 Base mainnet deployment. DO NOT USE. The Matching owner is 0xC7bE60b228b997c23094DdfdD71e22E2DE6C9310 — the abandoned/lost key (now carries an EIP-7702 delegation), so setTradeExecutor can never be called and no relayer can be authorized (tradeExecutors is false for all). Mainnet trading requires redeploying the Matching/RFQ/Trade stack under the MPC vault 0x1dcA42ab54Bd3862853A821F84B29BF65245F435, then regenerating this file. See DEPLOYED_ADDRESSES.md.",
+  "_owner": "0xC7bE60b228b997c23094DdfdD71e22E2DE6C9310",
+  "_requiredRedeployOwner": "0x1dcA42ab54Bd3862853A821F84B29BF65245F435",
   "atomicSigningExecutor": "0xbdF6Ce2549a5b7b05c1545eDe0C542f1a33Fb0Ec",
   "auctionUtil": "0x4098dE64F0CFB71E7697E715441132B2Be9d10b2",
   "deposit": "0x59f9ecdc3c0401426ffe440b9f62d3bEec7cAa99",
