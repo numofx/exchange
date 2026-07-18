@@ -81,11 +81,45 @@ contract DeployAll is Utils {
     deployment.atomicSigningExecutor = new AtomicSigningExecutor(deployment.matching);
 
     // whitelist helpers
-    deployment.matching.setTradeExecutor(0xf00A105BC009eA3a250024cbe1DCd0509c71C52b, true);
+    // Legacy Lyra keeper — skipped on clean deployments (e.g. mainnet) via SKIP_LEGACY_EXECUTOR=true.
+    if (!vm.envOr("SKIP_LEGACY_EXECUTOR", false)) {
+      deployment.matching.setTradeExecutor(0xf00A105BC009eA3a250024cbe1DCd0509c71C52b, true);
+    }
     deployment.matching.setTradeExecutor(address(deployment.atomicSigningExecutor), true);
 
-    // write to output
+    // Authorize the execution-service relayer (the EOA whose key is PRIVATE_KEY on that service),
+    // otherwise verifyAndMatch reverts for it. Optional; set RELAYER_EXECUTOR to enable.
+    address relayer = vm.envOr("RELAYER_EXECUTOR", address(0));
+    if (relayer != address(0)) {
+      deployment.matching.setTradeExecutor(relayer, true);
+    }
+
+    // Register a deliverable FX (dated) future on the trade + rfq modules so VM-blended fills
+    // price correctly (see DeliverableFXFutureAsset.handleAdjustment assetData path). Optional;
+    // set DATED_FUTURE_ASSET to enable.
+    address datedFuture = vm.envOr("DATED_FUTURE_ASSET", address(0));
+    if (datedFuture != address(0)) {
+      deployment.trade.setDatedFutureAsset(datedFuture, true);
+      deployment.rfq.setDatedFutureAsset(datedFuture, true);
+    }
+
+    // write to output (off-chain) before ownership handoff
     __writeToDeploymentsJson(deployment);
+
+    // Hand ownership to the MPC vault. Ownable2Step: this only sets pendingOwner — the vault
+    // must acceptOwnership() on each contract to complete the transfer. Done last so all the
+    // onlyOwner setup above executes as the deployer. Optional; set MATCHING_OWNER to enable.
+    address newOwner = vm.envOr("MATCHING_OWNER", address(0));
+    if (newOwner != address(0)) {
+      deployment.matching.transferOwnership(newOwner);
+      deployment.deposit.transferOwnership(newOwner);
+      deployment.trade.transferOwnership(newOwner);
+      deployment.transfer.transferOwnership(newOwner);
+      deployment.withdrawal.transferOwnership(newOwner);
+      deployment.liquidate.transferOwnership(newOwner);
+      deployment.rfq.transferOwnership(newOwner);
+      console2.log("Ownership transfer initiated; vault must acceptOwnership() on each:", newOwner);
+    }
   }
 
  
