@@ -68,11 +68,12 @@ contract LyraForkUpgradeTestLBTC is ForkBase {
         perpAsset: IPerpAsset(_getV2CoreContract(perpMarketName, "perp"))
       });
 
-      ProxyAdmin(_getMatchingContract(vaultFileName, "proxyAdmin")).upgradeAndCall(
-        ITransparentUpgradeableProxy(_getMatchingContract(vaultFileName, "token")),
-        address(implementation),
-        abi.encodeWithSelector(implementation.initialize.selector, owner, baseTsaInitParams, levBasisInitParams)
-      );
+      ProxyAdmin(_getMatchingContract(vaultFileName, "proxyAdmin"))
+        .upgradeAndCall(
+          ITransparentUpgradeableProxy(_getMatchingContract(vaultFileName, "token")),
+          address(implementation),
+          abi.encodeWithSelector(implementation.initialize.selector, owner, baseTsaInitParams, levBasisInitParams)
+        );
 
       tsa.isSigner(0x76a4A01f5159674e21196E9e68847694F5f2e988);
       tsa.setSubmitter(_getMatchingModule("atomicExecutor"), true);
@@ -105,11 +106,12 @@ contract LyraForkUpgradeTestLBTC is ForkBase {
         perpAsset: IPerpAsset(_getV2CoreContract(perpMarketName, "perp"))
       });
 
-      ProxyAdmin(_getMatchingContract(vaultFileName, "proxyAdmin")).upgradeAndCall(
-        ITransparentUpgradeableProxy(_getMatchingContract(vaultFileName, "token")),
-        address(implementation),
-        abi.encodeWithSelector(implementation.initialize.selector, owner, baseTsaInitParams, levBasisInitParams)
-      );
+      ProxyAdmin(_getMatchingContract(vaultFileName, "proxyAdmin"))
+        .upgradeAndCall(
+          ITransparentUpgradeableProxy(_getMatchingContract(vaultFileName, "token")),
+          address(implementation),
+          abi.encodeWithSelector(implementation.initialize.selector, owner, baseTsaInitParams, levBasisInitParams)
+        );
 
       tsa.isSigner(0x76a4A01f5159674e21196E9e68847694F5f2e988);
       tsa.setSubmitter(_getMatchingModule("atomicExecutor"), true);

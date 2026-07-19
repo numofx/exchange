@@ -38,8 +38,11 @@ contract LyraForkAddAssetsTest is ForkBase {
 
       console.log("market ID for market:", marketId);
 
-      (,, IStandardManager.OracleContingencyParams memory oracleContingencyParams,
-        IStandardManager.BaseMarginParams memory baseMarginParams) = Config.getSRMParams(markets[i]);
+      (
+        ,,
+        IStandardManager.OracleContingencyParams memory oracleContingencyParams,
+        IStandardManager.BaseMarginParams memory baseMarginParams
+      ) = Config.getSRMParams(markets[i]);
 
       _call(
         address(srm),

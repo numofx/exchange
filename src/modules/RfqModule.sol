@@ -130,7 +130,7 @@ contract RfqModule is IRfqModule, BaseModule {
         cashTransfer = perpDelta.multiplyDecimal(tradeData.amount);
       } else if (isDatedFutureAsset[tradeData.asset]) {
         cashTransfer = 0;
-        assetData = bytes32(uint256(tradeData.price));
+        assetData = bytes32(uint(tradeData.price));
       } else {
         cashTransfer = tradeData.price.toInt256().multiplyDecimal(tradeData.amount);
       }
@@ -146,10 +146,7 @@ contract RfqModule is IRfqModule, BaseModule {
       });
 
       matchedOrders[i] = IRfqModule.MatchedOrderData({
-        asset: tradeData.asset,
-        subId: tradeData.subId,
-        quoteAmt: cashTransfer,
-        baseAmt: tradeData.amount
+        asset: tradeData.asset, subId: tradeData.subId, quoteAmt: cashTransfer, baseAmt: tradeData.amount
       });
     }
 

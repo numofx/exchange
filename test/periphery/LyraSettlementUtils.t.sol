@@ -102,12 +102,7 @@ contract SettlementUtilTest is MatchingBase {
 
   function _transferPerp(uint fromAcc, uint toAcc, int amount) internal {
     ISubAccounts.AssetTransfer memory transfer = ISubAccounts.AssetTransfer({
-      fromAcc: fromAcc,
-      toAcc: toAcc,
-      asset: mockPerp,
-      subId: 0,
-      amount: amount,
-      assetData: ""
+      fromAcc: fromAcc, toAcc: toAcc, asset: mockPerp, subId: 0, amount: amount, assetData: ""
     });
     subAccounts.submitTransfer(transfer, "");
   }
