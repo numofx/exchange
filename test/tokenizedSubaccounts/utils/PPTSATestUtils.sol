@@ -25,13 +25,10 @@ contract PPTSATestUtils is TSATestUtils {
     rfqFeeFactor: 0.02e18
   });
 
-  CollateralManagementTSA.CollateralManagementParams public defaultCollateralManagementParams = CollateralManagementTSA
-    .CollateralManagementParams({
-    feeFactor: 0.01e18,
-    spotTransactionLeniency: 1.01e18,
-    worstSpotBuyPrice: 1.01e18,
-    worstSpotSellPrice: 0.99e18
-  });
+  CollateralManagementTSA.CollateralManagementParams public defaultCollateralManagementParams =
+    CollateralManagementTSA.CollateralManagementParams({
+      feeFactor: 0.01e18, spotTransactionLeniency: 1.01e18, worstSpotBuyPrice: 1.01e18, worstSpotSellPrice: 0.99e18
+    });
 
   function upgradeToPPTSA(string memory market, bool doesCallSpreads, bool isLong) internal {
     IWrappedERC20Asset wrappedDepositAsset;

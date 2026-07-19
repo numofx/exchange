@@ -18,9 +18,7 @@ import {IWithdrawalModule} from "../interfaces/IWithdrawalModule.sol";
 import {IMatching} from "../interfaces/IMatching.sol";
 import {IRfqModule} from "../interfaces/IRfqModule.sol";
 
-import {
-  StandardManager, IStandardManager, IVolFeed, IForwardFeed
-} from "v2-core/src/risk-managers/StandardManager.sol";
+import {StandardManager, IStandardManager, IVolFeed, IForwardFeed} from "v2-core/src/risk-managers/StandardManager.sol";
 import {ITradeModule} from "../interfaces/ITradeModule.sol";
 import {CollateralManagementTSA} from "./CollateralManagementTSA.sol";
 

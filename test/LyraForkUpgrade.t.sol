@@ -28,13 +28,13 @@ import "v2-core/src/SubAccounts.sol";
 import {ForkBase} from "./ForkBase.t.sol";
 
 contract LyraForkUpgradeTest is ForkBase {
-  CollateralManagementTSA.CollateralManagementParams public defaultCollateralManagementParams = CollateralManagementTSA
-    .CollateralManagementParams({
-    feeFactor: 10000000000000000,
-    spotTransactionLeniency: 1050000000000000000,
-    worstSpotSellPrice: 985000000000000000,
-    worstSpotBuyPrice: 1015000000000000000
-  });
+  CollateralManagementTSA.CollateralManagementParams public defaultCollateralManagementParams =
+    CollateralManagementTSA.CollateralManagementParams({
+      feeFactor: 10000000000000000,
+      spotTransactionLeniency: 1050000000000000000,
+      worstSpotSellPrice: 985000000000000000,
+      worstSpotBuyPrice: 1015000000000000000
+    });
 
   PrincipalProtectedTSA.PPTSAParams public defaultLrtppTSAParams = PrincipalProtectedTSA.PPTSAParams({
     maxMarkValueToStrikeDiffRatio: 700000000000000000,
@@ -136,9 +136,7 @@ contract LyraForkUpgradeTest is ForkBase {
 
     bytes memory depositData = abi.encode(
       IDepositModule.DepositData({
-        amount: 10e18,
-        asset: _getV2CoreContract("sUSDe", "base"),
-        managerForNewAccount: address(0)
+        amount: 10e18, asset: _getV2CoreContract("sUSDe", "base"), managerForNewAccount: address(0)
       })
     );
 
@@ -249,8 +247,7 @@ contract LyraForkUpgradeTest is ForkBase {
   function _verifyWithdraw(PrincipalProtectedTSA pptsa) internal {
     address deployer = 0xB176A44D819372A38cee878fB0603AEd4d26C5a5;
     IWithdrawalModule.WithdrawalData memory data = IWithdrawalModule.WithdrawalData({
-      asset: _getV2CoreContract(_readV2CoreDeploymentFile("sUSDe"), "base"),
-      assetAmount: 10e18
+      asset: _getV2CoreContract(_readV2CoreDeploymentFile("sUSDe"), "base"), assetAmount: 10e18
     });
 
     IActionVerifier.Action memory action = IActionVerifier.Action({

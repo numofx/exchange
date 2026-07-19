@@ -18,9 +18,7 @@ import {IWithdrawalModule} from "../interfaces/IWithdrawalModule.sol";
 import {ITradeModule} from "../interfaces/ITradeModule.sol";
 import {IMatching} from "../interfaces/IMatching.sol";
 
-import {
-  StandardManager, IStandardManager, IVolFeed, IForwardFeed
-} from "v2-core/src/risk-managers/StandardManager.sol";
+import {StandardManager, IStandardManager, IVolFeed, IForwardFeed} from "v2-core/src/risk-managers/StandardManager.sol";
 import "./CollateralManagementTSA.sol";
 
 /// @title CoveredCallTSA
@@ -147,7 +145,11 @@ contract CoveredCallTSA is CollateralManagementTSA {
   ///////////////////////
   // Action Validation //
   ///////////////////////
-  function _verifyAction(IMatching.Action memory action, bytes32 actionHash, bytes memory /* extraData */ )
+  function _verifyAction(
+    IMatching.Action memory action,
+    bytes32 actionHash,
+    bytes memory /* extraData */
+  )
     internal
     virtual
     override

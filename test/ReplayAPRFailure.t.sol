@@ -6,11 +6,11 @@ import "forge-std/console2.sol";
 
 interface IActionReplay {
   struct Action {
-    uint256 subaccountId;
-    uint256 nonce;
+    uint subaccountId;
+    uint nonce;
     address module;
     bytes data;
-    uint256 expiry;
+    uint expiry;
     address owner;
     address signer;
   }
@@ -48,10 +48,13 @@ contract ReplayAPRFailureTest is Test {
     });
 
     bytes[] memory signatures = new bytes[](2);
-    signatures[0] = hex"a03a0a65b10a11d107d6e82a70fdf4abbc8293dbbdb6c15df668d086aeb34e0f40d0d9753cfb4af58ab2726224a646ee423f520dfdb9a8ad25d9590d2797e79a1b";
-    signatures[1] = hex"571bd5d29fb5c51f07d9807ce3495be51d61e349428f39514be1acb58c7a84a509708300943a84ffc752d9b307c9aacb3f701665303727d675b7692d443640491b";
+    signatures[0] =
+      hex"a03a0a65b10a11d107d6e82a70fdf4abbc8293dbbdb6c15df668d086aeb34e0f40d0d9753cfb4af58ab2726224a646ee423f520dfdb9a8ad25d9590d2797e79a1b";
+    signatures[1] =
+      hex"571bd5d29fb5c51f07d9807ce3495be51d61e349428f39514be1acb58c7a84a509708300943a84ffc752d9b307c9aacb3f701665303727d675b7692d443640491b";
 
-    bytes memory actionData = hex"00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000007000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000000000120000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000de0b6b3a7640000000000000000000000000000000000000000000000000000000000000000056e00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+    bytes memory actionData =
+      hex"00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000007000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000000000120000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000de0b6b3a7640000000000000000000000000000000000000000000000000000000000000000056e00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
 
     _logDecodedOrderShapes(actions, actionData);
 
@@ -78,11 +81,11 @@ contract ReplayAPRFailureTest is Test {
     console2.log("maker_expiry", actions[1].expiry);
     console2.log("taker_is_bid", taker.isBid);
     console2.log("maker_is_bid", maker.isBid);
-    console2.log("taker_limit_price", uint256(taker.limitPrice));
-    console2.log("maker_limit_price", uint256(maker.limitPrice));
-    console2.log("taker_desired_amount", uint256(taker.desiredAmount));
-    console2.log("maker_desired_amount", uint256(maker.desiredAmount));
-    console2.log("fill_price", uint256(orderData.fillDetails[0].price));
+    console2.log("taker_limit_price", uint(taker.limitPrice));
+    console2.log("maker_limit_price", uint(maker.limitPrice));
+    console2.log("taker_desired_amount", uint(taker.desiredAmount));
+    console2.log("maker_desired_amount", uint(maker.desiredAmount));
+    console2.log("fill_price", uint(orderData.fillDetails[0].price));
     console2.log("fill_amount", orderData.fillDetails[0].amountFilled);
     console2.log("taker_fee", orderData.takerFee);
     console2.log("taker_account", orderData.takerAccount);
@@ -92,24 +95,24 @@ contract ReplayAPRFailureTest is Test {
 
 struct TradeData {
   address asset;
-  uint256 subId;
-  int256 limitPrice;
-  int256 desiredAmount;
-  uint256 worstFee;
-  uint256 recipientId;
+  uint subId;
+  int limitPrice;
+  int desiredAmount;
+  uint worstFee;
+  uint recipientId;
   bool isBid;
 }
 
 struct FillDetails {
-  uint256 filledAccount;
-  uint256 amountFilled;
-  int256 price;
-  uint256 fee;
+  uint filledAccount;
+  uint amountFilled;
+  int price;
+  uint fee;
 }
 
 struct OrderDataLocal {
-  uint256 takerAccount;
-  uint256 takerFee;
+  uint takerAccount;
+  uint takerFee;
   FillDetails[] fillDetails;
   bytes managerData;
 }

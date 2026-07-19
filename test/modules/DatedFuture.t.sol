@@ -73,7 +73,7 @@ contract DatedFutureTest is MatchingBase {
     cngnFeed.setSpot(1500e18, 1e18); // 1500 cNGN per USDC
 
     fxManager.setProduct(fxFuture, usdcDeliveryAsset, cngnAsset, cngnFeed);
-    fxManager.setMarginParams(0.10e18, 0.075e18);
+    fxManager.setMarginParams(0.1e18, 0.075e18);
 
     // 2. Set up the future series (1 contract = 10,000 USDC)
     fxExpiry = block.timestamp + 21 days;
@@ -111,7 +111,7 @@ contract DatedFutureTest is MatchingBase {
 
     // Fund accounts with initial margin (cash = USDC)
     usdc.mint(address(this), 1_000_000_000e18);
-    usdc.approve(address(cash), type(uint256).max);
+    usdc.approve(address(cash), type(uint).max);
     cash.deposit(fxTakerAcc, 100_000_000e18);
     cash.deposit(fxMakerAcc, 100_000_000e18);
   }
@@ -192,48 +192,96 @@ contract DatedFutureTest is MatchingBase {
     // Trade A
     {
       ITradeModule.TradeData memory camDataA = ITradeModule.TradeData({
-        asset: address(fxFuture), subId: fxSeries, limitPrice: 1550e18, desiredAmount: 1e18, worstFee: 1e18, recipientId: fxTakerAcc, isBid: true
+        asset: address(fxFuture),
+        subId: fxSeries,
+        limitPrice: 1550e18,
+        desiredAmount: 1e18,
+        worstFee: 1e18,
+        recipientId: fxTakerAcc,
+        isBid: true
       });
       ITradeModule.TradeData memory dougDataA = ITradeModule.TradeData({
-        asset: address(fxFuture), subId: fxSeries, limitPrice: 1550e18, desiredAmount: 1e18, worstFee: 1e18, recipientId: fxMakerAcc, isBid: false
+        asset: address(fxFuture),
+        subId: fxSeries,
+        limitPrice: 1550e18,
+        desiredAmount: 1e18,
+        worstFee: 1e18,
+        recipientId: fxMakerAcc,
+        isBid: false
       });
 
       IActionVerifier.Action[] memory actionsA = new IActionVerifier.Action[](2);
       bytes[] memory signaturesA = new bytes[](2);
-      (actionsA[0], signaturesA[0]) = _createActionAndSign(fxTakerAcc, 0, address(tradeModule), abi.encode(camDataA), block.timestamp + 1 days, cam, cam, camPk);
-      (actionsA[1], signaturesA[1]) = _createActionAndSign(fxMakerAcc, 0, address(tradeModule), abi.encode(dougDataA), block.timestamp + 1 days, doug, doug, dougPk);
+      (actionsA[0], signaturesA[0]) = _createActionAndSign(
+        fxTakerAcc, 0, address(tradeModule), abi.encode(camDataA), block.timestamp + 1 days, cam, cam, camPk
+      );
+      (actionsA[1], signaturesA[1]) = _createActionAndSign(
+        fxMakerAcc, 0, address(tradeModule), abi.encode(dougDataA), block.timestamp + 1 days, doug, doug, dougPk
+      );
       _verifyAndMatch(actionsA, signaturesA, _createMatchedTrade(fxTakerAcc, fxMakerAcc, 1e18, 1550e18, 0, 0));
     }
 
     // Trade B
     {
       ITradeModule.TradeData memory camDataB = ITradeModule.TradeData({
-        asset: address(fxFuture), subId: fxSeries, limitPrice: 1600e18, desiredAmount: 2e18, worstFee: 1e18, recipientId: fxTakerAcc, isBid: true
+        asset: address(fxFuture),
+        subId: fxSeries,
+        limitPrice: 1600e18,
+        desiredAmount: 2e18,
+        worstFee: 1e18,
+        recipientId: fxTakerAcc,
+        isBid: true
       });
       ITradeModule.TradeData memory dougDataB = ITradeModule.TradeData({
-        asset: address(fxFuture), subId: fxSeries, limitPrice: 1600e18, desiredAmount: 2e18, worstFee: 1e18, recipientId: fxMakerAcc, isBid: false
+        asset: address(fxFuture),
+        subId: fxSeries,
+        limitPrice: 1600e18,
+        desiredAmount: 2e18,
+        worstFee: 1e18,
+        recipientId: fxMakerAcc,
+        isBid: false
       });
 
       IActionVerifier.Action[] memory actionsB = new IActionVerifier.Action[](2);
       bytes[] memory signaturesB = new bytes[](2);
-      (actionsB[0], signaturesB[0]) = _createActionAndSign(fxTakerAcc, 1, address(tradeModule), abi.encode(camDataB), block.timestamp + 1 days, cam, cam, camPk);
-      (actionsB[1], signaturesB[1]) = _createActionAndSign(fxMakerAcc, 1, address(tradeModule), abi.encode(dougDataB), block.timestamp + 1 days, doug, doug, dougPk);
+      (actionsB[0], signaturesB[0]) = _createActionAndSign(
+        fxTakerAcc, 1, address(tradeModule), abi.encode(camDataB), block.timestamp + 1 days, cam, cam, camPk
+      );
+      (actionsB[1], signaturesB[1]) = _createActionAndSign(
+        fxMakerAcc, 1, address(tradeModule), abi.encode(dougDataB), block.timestamp + 1 days, doug, doug, dougPk
+      );
       _verifyAndMatch(actionsB, signaturesB, _createMatchedTrade(fxTakerAcc, fxMakerAcc, 2e18, 1600e18, 0, 0));
     }
 
     // Trade C
     {
       ITradeModule.TradeData memory camDataC = ITradeModule.TradeData({
-        asset: address(fxFuture), subId: fxSeries, limitPrice: 1650e18, desiredAmount: 3e18, worstFee: 1e18, recipientId: fxTakerAcc, isBid: true
+        asset: address(fxFuture),
+        subId: fxSeries,
+        limitPrice: 1650e18,
+        desiredAmount: 3e18,
+        worstFee: 1e18,
+        recipientId: fxTakerAcc,
+        isBid: true
       });
       ITradeModule.TradeData memory dougDataC = ITradeModule.TradeData({
-        asset: address(fxFuture), subId: fxSeries, limitPrice: 1650e18, desiredAmount: 3e18, worstFee: 1e18, recipientId: fxMakerAcc, isBid: false
+        asset: address(fxFuture),
+        subId: fxSeries,
+        limitPrice: 1650e18,
+        desiredAmount: 3e18,
+        worstFee: 1e18,
+        recipientId: fxMakerAcc,
+        isBid: false
       });
 
       IActionVerifier.Action[] memory actionsC = new IActionVerifier.Action[](2);
       bytes[] memory signaturesC = new bytes[](2);
-      (actionsC[0], signaturesC[0]) = _createActionAndSign(fxTakerAcc, 2, address(tradeModule), abi.encode(camDataC), block.timestamp + 1 days, cam, cam, camPk);
-      (actionsC[1], signaturesC[1]) = _createActionAndSign(fxMakerAcc, 2, address(tradeModule), abi.encode(dougDataC), block.timestamp + 1 days, doug, doug, dougPk);
+      (actionsC[0], signaturesC[0]) = _createActionAndSign(
+        fxTakerAcc, 2, address(tradeModule), abi.encode(camDataC), block.timestamp + 1 days, cam, cam, camPk
+      );
+      (actionsC[1], signaturesC[1]) = _createActionAndSign(
+        fxMakerAcc, 2, address(tradeModule), abi.encode(dougDataC), block.timestamp + 1 days, doug, doug, dougPk
+      );
       _verifyAndMatch(actionsC, signaturesC, _createMatchedTrade(fxTakerAcc, fxMakerAcc, 3e18, 1650e18, 0, 0));
     }
 
@@ -246,8 +294,7 @@ contract DatedFutureTest is MatchingBase {
     //   amount * (price - 1500) * size / price:
     //   1*(1550-1500)*S/1550 + 2*(1600-1500)*S/1600 + 3*(1650-1500)*S/1650
     //   ~= 322.58 + 1250 + 2727.27 ~= 4299.85 USDC (not the raw 7,000,000 cNGN-notional).
-    int takerLoss =
-      int(1 * _perContractVM(1550e18) + 2 * _perContractVM(1600e18) + 3 * _perContractVM(1650e18));
+    int takerLoss = int(1 * _perContractVM(1550e18) + 2 * _perContractVM(1600e18) + 3 * _perContractVM(1650e18));
     assertApproxEqAbs(camCashAfter, camCashBefore - takerLoss, VM_TOL);
     assertApproxEqAbs(dougCashAfter, dougCashBefore + takerLoss, VM_TOL);
 
@@ -269,16 +316,32 @@ contract DatedFutureTest is MatchingBase {
     // Step 1: Open long position of 10 contracts at 1600e18
     {
       ITradeModule.TradeData memory camData1 = ITradeModule.TradeData({
-        asset: address(fxFuture), subId: fxSeries, limitPrice: 1600e18, desiredAmount: 10e18, worstFee: 1e18, recipientId: fxTakerAcc, isBid: true
+        asset: address(fxFuture),
+        subId: fxSeries,
+        limitPrice: 1600e18,
+        desiredAmount: 10e18,
+        worstFee: 1e18,
+        recipientId: fxTakerAcc,
+        isBid: true
       });
       ITradeModule.TradeData memory dougData1 = ITradeModule.TradeData({
-        asset: address(fxFuture), subId: fxSeries, limitPrice: 1600e18, desiredAmount: 10e18, worstFee: 1e18, recipientId: fxMakerAcc, isBid: false
+        asset: address(fxFuture),
+        subId: fxSeries,
+        limitPrice: 1600e18,
+        desiredAmount: 10e18,
+        worstFee: 1e18,
+        recipientId: fxMakerAcc,
+        isBid: false
       });
 
       IActionVerifier.Action[] memory actions1 = new IActionVerifier.Action[](2);
       bytes[] memory signatures1 = new bytes[](2);
-      (actions1[0], signatures1[0]) = _createActionAndSign(fxTakerAcc, 0, address(tradeModule), abi.encode(camData1), block.timestamp + 1 days, cam, cam, camPk);
-      (actions1[1], signatures1[1]) = _createActionAndSign(fxMakerAcc, 0, address(tradeModule), abi.encode(dougData1), block.timestamp + 1 days, doug, doug, dougPk);
+      (actions1[0], signatures1[0]) = _createActionAndSign(
+        fxTakerAcc, 0, address(tradeModule), abi.encode(camData1), block.timestamp + 1 days, cam, cam, camPk
+      );
+      (actions1[1], signatures1[1]) = _createActionAndSign(
+        fxMakerAcc, 0, address(tradeModule), abi.encode(dougData1), block.timestamp + 1 days, doug, doug, dougPk
+      );
       _verifyAndMatch(actions1, signatures1, _createMatchedTrade(fxTakerAcc, fxMakerAcc, 10e18, 1600e18, 0, 0));
     }
 
@@ -290,16 +353,32 @@ contract DatedFutureTest is MatchingBase {
     // Step 2: Partially reduce position by selling 4 contracts at 1700e18 (leaving +6 contracts)
     {
       ITradeModule.TradeData memory camData2 = ITradeModule.TradeData({
-        asset: address(fxFuture), subId: fxSeries, limitPrice: 1700e18, desiredAmount: 4e18, worstFee: 1e18, recipientId: fxTakerAcc, isBid: false
+        asset: address(fxFuture),
+        subId: fxSeries,
+        limitPrice: 1700e18,
+        desiredAmount: 4e18,
+        worstFee: 1e18,
+        recipientId: fxTakerAcc,
+        isBid: false
       });
       ITradeModule.TradeData memory dougData2 = ITradeModule.TradeData({
-        asset: address(fxFuture), subId: fxSeries, limitPrice: 1700e18, desiredAmount: 4e18, worstFee: 1e18, recipientId: fxMakerAcc, isBid: true
+        asset: address(fxFuture),
+        subId: fxSeries,
+        limitPrice: 1700e18,
+        desiredAmount: 4e18,
+        worstFee: 1e18,
+        recipientId: fxMakerAcc,
+        isBid: true
       });
 
       IActionVerifier.Action[] memory actions2 = new IActionVerifier.Action[](2);
       bytes[] memory signatures2 = new bytes[](2);
-      (actions2[0], signatures2[0]) = _createActionAndSign(fxTakerAcc, 1, address(tradeModule), abi.encode(camData2), block.timestamp + 1 days, cam, cam, camPk);
-      (actions2[1], signatures2[1]) = _createActionAndSign(fxMakerAcc, 1, address(tradeModule), abi.encode(dougData2), block.timestamp + 1 days, doug, doug, dougPk);
+      (actions2[0], signatures2[0]) = _createActionAndSign(
+        fxTakerAcc, 1, address(tradeModule), abi.encode(camData2), block.timestamp + 1 days, cam, cam, camPk
+      );
+      (actions2[1], signatures2[1]) = _createActionAndSign(
+        fxMakerAcc, 1, address(tradeModule), abi.encode(dougData2), block.timestamp + 1 days, doug, doug, dougPk
+      );
       _verifyAndMatch(actions2, signatures2, _createMatchedTrade(fxTakerAcc, fxMakerAcc, 4e18, 1700e18, 0, 0));
     }
 
@@ -315,16 +394,32 @@ contract DatedFutureTest is MatchingBase {
     // Step 3: Reverse position by selling 10 contracts at 1800e18 (leaving -4 contracts short)
     {
       ITradeModule.TradeData memory camData3 = ITradeModule.TradeData({
-        asset: address(fxFuture), subId: fxSeries, limitPrice: 1800e18, desiredAmount: 10e18, worstFee: 1e18, recipientId: fxTakerAcc, isBid: false
+        asset: address(fxFuture),
+        subId: fxSeries,
+        limitPrice: 1800e18,
+        desiredAmount: 10e18,
+        worstFee: 1e18,
+        recipientId: fxTakerAcc,
+        isBid: false
       });
       ITradeModule.TradeData memory dougData3 = ITradeModule.TradeData({
-        asset: address(fxFuture), subId: fxSeries, limitPrice: 1800e18, desiredAmount: 10e18, worstFee: 1e18, recipientId: fxMakerAcc, isBid: true
+        asset: address(fxFuture),
+        subId: fxSeries,
+        limitPrice: 1800e18,
+        desiredAmount: 10e18,
+        worstFee: 1e18,
+        recipientId: fxMakerAcc,
+        isBid: true
       });
 
       IActionVerifier.Action[] memory actions3 = new IActionVerifier.Action[](2);
       bytes[] memory signatures3 = new bytes[](2);
-      (actions3[0], signatures3[0]) = _createActionAndSign(fxTakerAcc, 2, address(tradeModule), abi.encode(camData3), block.timestamp + 1 days, cam, cam, camPk);
-      (actions3[1], signatures3[1]) = _createActionAndSign(fxMakerAcc, 2, address(tradeModule), abi.encode(dougData3), block.timestamp + 1 days, doug, doug, dougPk);
+      (actions3[0], signatures3[0]) = _createActionAndSign(
+        fxTakerAcc, 2, address(tradeModule), abi.encode(camData3), block.timestamp + 1 days, cam, cam, camPk
+      );
+      (actions3[1], signatures3[1]) = _createActionAndSign(
+        fxMakerAcc, 2, address(tradeModule), abi.encode(dougData3), block.timestamp + 1 days, doug, doug, dougPk
+      );
       _verifyAndMatch(actions3, signatures3, _createMatchedTrade(fxTakerAcc, fxMakerAcc, 10e18, 1800e18, 0, 0));
     }
 
@@ -404,17 +499,15 @@ contract DatedFutureTest is MatchingBase {
     uint takerFee,
     uint makerFee
   ) internal pure returns (bytes memory) {
-    ITradeModule.FillDetails memory fillDetails =
-      ITradeModule.FillDetails({filledAccount: makerAcc, amountFilled: amountFilled, price: price, fee: makerFee});
+    ITradeModule.FillDetails memory fillDetails = ITradeModule.FillDetails({
+      filledAccount: makerAcc, amountFilled: amountFilled, price: price, fee: makerFee
+    });
 
     ITradeModule.FillDetails[] memory fills = new ITradeModule.FillDetails[](1);
     fills[0] = fillDetails;
 
     ITradeModule.OrderData memory orderData = ITradeModule.OrderData({
-      takerAccount: takerAccount,
-      takerFee: takerFee,
-      fillDetails: fills,
-      managerData: bytes("")
+      takerAccount: takerAccount, takerFee: takerFee, fillDetails: fills, managerData: bytes("")
     });
 
     return abi.encode(orderData);

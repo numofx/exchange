@@ -50,11 +50,8 @@ contract DeriveForkUpgradePM2 is ForkBase {
     console.log("- MM:", mm);
     console.log("- MTM:", mtm);
 
-    ProxyAdmin(_getV2CoreContract("ETH_2", "proxyAdmin")).upgradeAndCall(
-      ITransparentUpgradeableProxy(address(pm2)),
-      address(implementation),
-      new bytes(0)
-    );
+    ProxyAdmin(_getV2CoreContract("ETH_2", "proxyAdmin"))
+      .upgradeAndCall(ITransparentUpgradeableProxy(address(pm2)), address(implementation), new bytes(0));
 
     (mm, mtm, worstScen) = pm2.getMarginAndMtM(53874, false);
     console.log("Margin after upgrade for", uint(53874));
@@ -74,7 +71,7 @@ contract DeriveForkUpgradePM2 is ForkBase {
 
     address[] memory assets = SubAccounts(_getCoreContract("subAccounts")).getUniqueAssets(53874);
 
-    for (uint i=0; i<assets.length; i++) {
+    for (uint i = 0; i < assets.length; i++) {
       address asset = assets[i];
       ISpotFeed feed = pm2.collateralSpotFeeds(asset);
       if (feed != ISpotFeed(address(0))) {

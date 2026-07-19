@@ -42,8 +42,7 @@ contract LyraForkAddPerpTest is ForkBase {
       console.log("market ID for market:", marketId);
 
       (
-        IStandardManager.PerpMarginRequirements memory perpMarginReqs,
-        ,
+        IStandardManager.PerpMarginRequirements memory perpMarginReqs,,
         IStandardManager.OracleContingencyParams memory oracleContingencyParams,
       ) = Config.getSRMParams("OP");
 
