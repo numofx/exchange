@@ -41,6 +41,11 @@ type Config struct {
 	EventsPruneInterval     time.Duration // how often the prune job runs
 	EventsReconcileInterval time.Duration // backstop drain cadence in case a NOTIFY is missed
 	EventsSubBuffer         int           // per-subscriber channel depth before a slow consumer is dropped
+
+	// WebSocket auth (internal/wsauth) for the private 'orders' channel.
+	WSAuthDomain     string        // SIWE domain bound into the signed message
+	WSAuthMaxTTL     time.Duration // max validity window of a single signed auth frame (replay bound)
+	WSAllowedOrigins []string      // browser Origin allowlist; empty = same-origin only
 }
 
 func Load() (Config, error) {
@@ -91,6 +96,10 @@ func Load() (Config, error) {
 	cfg.EventsPruneInterval = getenvDurationDefault("EVENTS_PRUNE_INTERVAL", 5*time.Minute)
 	cfg.EventsReconcileInterval = getenvDurationDefault("EVENTS_RECONCILE_INTERVAL", 5*time.Second)
 	cfg.EventsSubBuffer = getenvIntDefault("EVENTS_SUB_BUFFER", 256)
+
+	cfg.WSAuthDomain = getenvDefault("WS_AUTH_DOMAIN", "markets.numo.xyz")
+	cfg.WSAuthMaxTTL = getenvDurationDefault("WS_AUTH_MAX_TTL", 5*time.Minute)
+	cfg.WSAllowedOrigins = getenvCSV("WS_ALLOWED_ORIGINS", "")
 
 	return cfg, nil
 }
