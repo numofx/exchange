@@ -1,0 +1,39 @@
+# .github/workflows/services-execution.yml
+# Depends on @numo/abis (committed generated source), so runs when the service OR
+# the abis package changes. No forge needed — @numo/abis compiles from committed .ts.
+# NOTE: @numo/abis must be BUILT before the service — its main/types resolve to dist/,
+# which is gitignored. Without the build step below, check/build/test all fail to
+# resolve '@numo/abis'.
+name: services-execution
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'services/execution/**'
+      - 'packages/abis/**'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/services-execution.yml'
+  pull_request:
+    paths:
+      - 'services/execution/**'
+      - 'packages/abis/**'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/services-execution.yml'
+concurrency:
+  group: services-execution-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @numo/abis build   # compile to dist/ first — service resolves main/types there
+      - run: pnpm --filter matching-executor run check
+      - run: pnpm --filter matching-executor run build
+      - run: pnpm --filter matching-executor test

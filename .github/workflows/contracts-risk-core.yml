@@ -1,0 +1,26 @@
+# .github/workflows/contracts-risk-core.yml
+name: contracts-risk-core
+on:
+  push:
+    branches: [main]
+    paths: ['contracts/risk-core/**', '.github/workflows/contracts-risk-core.yml']
+  pull_request:
+    paths: ['contracts/risk-core/**', '.github/workflows/contracts-risk-core.yml']
+concurrency:
+  group: risk-core-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts/risk-core
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive        # public submodules only — no SSH secret needed anymore
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: "1.7.1"  # exact pin — `stable` differs across machines (local foundryup vs GH). Run `foundryup --install 1.7.1` locally.
+      - run: forge fmt --check   # requires foundry.toml [fmt] keys to be valid — see PLAN note
+      - run: forge test -vvv

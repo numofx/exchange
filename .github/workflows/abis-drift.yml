@@ -1,0 +1,27 @@
+# .github/workflows/abis-drift.yml
+# Fails if packages/abis is out of sync with the contracts. An ABI change to the
+# signing executor should never land silently — this forces the regenerated,
+# committed files to match a fresh forge build.
+name: abis-drift
+on:
+  pull_request:
+    paths:
+      - 'contracts/execution/**'
+      - 'packages/abis/**'
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@v1
+      - run: cd contracts/execution && forge build
+      - run: node packages/abis/scripts/generate.mjs
+      - name: fail on drift
+        run: |
+          if [[ -n "$(git status --porcelain packages/abis/src/generated)" ]]; then
+            echo "::error::packages/abis is stale — run 'pnpm abis:generate' and commit."
+            git --no-pager diff packages/abis/src/generated
+            exit 1
+          fi

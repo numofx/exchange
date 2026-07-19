@@ -1,0 +1,34 @@
+# .github/workflows/contracts-execution.yml
+# execution depends on risk-core through the v2-core symlink, so a risk-core
+# change must re-run these tests too.
+name: contracts-execution
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'contracts/execution/**'
+      - 'contracts/risk-core/**'
+      - '.github/workflows/contracts-execution.yml'
+  pull_request:
+    paths:
+      - 'contracts/execution/**'
+      - 'contracts/risk-core/**'
+      - '.github/workflows/contracts-execution.yml'
+concurrency:
+  group: contracts-execution-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts/execution
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: "1.7.1"  # exact pin — `stable` differs across machines (local foundryup vs GH). Run `foundryup --install 1.7.1` locally.
+      - run: forge fmt --check   # requires foundry.toml [fmt] keys to be valid — see PLAN note
+      - run: forge test -vvv     # resolves v2-core/ -> ../risk-core via the in-repo symlink
