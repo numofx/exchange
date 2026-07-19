@@ -519,7 +519,11 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
   /**
    * @notice Get margin required for all dated futures positions in a market.
    */
-  function _getNetFutureMargin(MarketHolding memory marketHolding, bool isInitial) internal view returns (int netMargin) {
+  function _getNetFutureMargin(MarketHolding memory marketHolding, bool isInitial)
+    internal
+    view
+    returns (int netMargin)
+  {
     uint requirement = isInitial
       ? futureMarginRequirements[marketHolding.marketId].imReq
       : futureMarginRequirements[marketHolding.marketId].mmReq;
@@ -580,7 +584,11 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
     });
   }
 
-  function _getOptionExpiryVols(uint marketId, ExpiryHolding memory expiryHolding) internal view returns (uint[] memory vols) {
+  function _getOptionExpiryVols(uint marketId, ExpiryHolding memory expiryHolding)
+    internal
+    view
+    returns (uint[] memory vols)
+  {
     vols = new uint[](expiryHolding.options.length);
     for (uint j = 0; j < expiryHolding.options.length; ++j) {
       (uint vol,) = volFeeds[marketId].getVol(uint128(expiryHolding.options[j].strike), uint64(expiryHolding.expiry));
@@ -704,11 +712,7 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
     (uint vol,) = volFeeds[marketId].getVol(uint128(strike), uint64(expiry));
     OptionMarginParams memory params = optionMarginParams[marketId];
     OptionMarginHelper.OptionComputationContext memory ctx = OptionMarginHelper.OptionComputationContext({
-      expiry: expiry,
-      spotPrice: spotPrice,
-      forwardPrice: forwardPrice,
-      vol: vol,
-      isInitial: isInitial
+      expiry: expiry, spotPrice: spotPrice, forwardPrice: forwardPrice, vol: vol, isInitial: isInitial
     });
     OptionMarginHelper.IsolatedMarginInputs memory inputs =
       OptionMarginHelper.IsolatedMarginInputs({params: params, optionPos: optionPos, ctx: ctx});
@@ -775,5 +779,4 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
     if (fwdPrice == 0) revert SRM_NoForwardPrice();
     return (fwdPrice, confidence);
   }
-
 }

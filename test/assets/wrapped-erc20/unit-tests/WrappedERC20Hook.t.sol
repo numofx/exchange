@@ -91,8 +91,9 @@ contract UNIT_WrappedBaseAssetHook is Test {
 
     uint aliceAcc = subAccounts.createAccount(address(0xaa), manager);
     // cannot transfer to alice
-    ISubAccounts.AssetTransfer memory assetTransfer =
-      ISubAccounts.AssetTransfer({fromAcc: accId, toAcc: aliceAcc, asset: asset, subId: 0, amount: 1e18, assetData: ""});
+    ISubAccounts.AssetTransfer memory assetTransfer = ISubAccounts.AssetTransfer({
+      fromAcc: accId, toAcc: aliceAcc, asset: asset, subId: 0, amount: 1e18, assetData: ""
+    });
 
     vm.expectRevert(
       abi.encodeWithSelector(IAllowances.NotEnoughSubIdOrAssetAllowances.selector, address(this), aliceAcc, 1e18, 0, 0)

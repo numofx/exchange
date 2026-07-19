@@ -105,8 +105,7 @@ interface ISubAccounts is IERC721 {
    * @param delegate address to assign allowance to
    * @param allowances positive and negative amounts for each asset
    */
-  function setAssetAllowances(uint accountId, address delegate, IAllowances.AssetAllowance[] memory allowances)
-    external;
+  function setAssetAllowances(uint accountId, address delegate, IAllowances.AssetAllowance[] memory allowances) external;
 
   /**
    * @notice Sets bidirectional allowances for a specific subId.
@@ -115,8 +114,7 @@ interface ISubAccounts is IERC721 {
    * @param delegate address to assign allowance to
    * @param allowances positive and negative amounts for each (asset, subId)
    */
-  function setSubIdAllowances(uint accountId, address delegate, IAllowances.SubIdAllowance[] memory allowances)
-    external;
+  function setSubIdAllowances(uint accountId, address delegate, IAllowances.SubIdAllowance[] memory allowances) external;
 
   /////////////////////////
   // Balance Adjustments //

@@ -76,9 +76,9 @@ contract Allowances is IAllowances {
     uint allowancesLen = allowances.length;
     for (uint i; i < allowancesLen; i++) {
       positiveSubIdAllowance[accountId][owner][allowances[i].asset][allowances[i].subId][delegate] =
-        allowances[i].positive;
+      allowances[i].positive;
       negativeSubIdAllowance[accountId][owner][allowances[i].asset][allowances[i].subId][delegate] =
-        allowances[i].negative;
+      allowances[i].negative;
     }
   }
 

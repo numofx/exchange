@@ -393,9 +393,8 @@ contract DutchAuction is IDutchAuction, Ownable2Step, ReentrancyGuard {
     );
 
     // risk manager transfers portion of the account to the bidder, liquidator pays cash to accountId
-    ILiquidatableManager(address(subAccounts.manager(accountId))).executeBid(
-      accountId, bidderId, percentOfAccount, cashFromBidder, currentAuction.reservedCash
-    );
+    ILiquidatableManager(address(subAccounts.manager(accountId)))
+      .executeBid(accountId, bidderId, percentOfAccount, cashFromBidder, currentAuction.reservedCash);
 
     currentAuction.reservedCash += cashFromBidder;
 
@@ -439,9 +438,8 @@ contract DutchAuction is IDutchAuction, Ownable2Step, ReentrancyGuard {
       cash.socializeLoss(loss, bidderId);
     }
 
-    ILiquidatableManager(address(subAccounts.manager(accountId))).executeBid(
-      accountId, bidderId, percentOfAccount, 0, currentAuction.reservedCash
-    );
+    ILiquidatableManager(address(subAccounts.manager(accountId)))
+      .executeBid(accountId, bidderId, percentOfAccount, 0, currentAuction.reservedCash);
 
     // can terminate as soon as someone takes 100% of the account
     return (percentOfAccount == 1e18, percentOfAccount, cashToBidder);
@@ -653,9 +651,8 @@ contract DutchAuction is IDutchAuction, Ownable2Step, ReentrancyGuard {
       // during the slow auction
       uint timeElapsedInSlow = timeElapsed - params.fastAuctionLength;
       return params.fastAuctionCutoffPercentage
-        - uint(params.fastAuctionCutoffPercentage).multiplyDecimal(timeElapsedInSlow).divideDecimal(
-          params.slowAuctionLength
-        );
+        - uint(params.fastAuctionCutoffPercentage).multiplyDecimal(timeElapsedInSlow)
+          .divideDecimal(params.slowAuctionLength);
     }
   }
 

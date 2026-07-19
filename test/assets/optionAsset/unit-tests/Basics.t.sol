@@ -56,12 +56,7 @@ contract UNIT_TestOptionBasics is Test {
 
     vm.startPrank(alice);
     ISubAccounts.AssetTransfer memory assetTransfer = ISubAccounts.AssetTransfer({
-      fromAcc: bobAcc,
-      toAcc: aliceAcc,
-      asset: IAsset(option),
-      subId: 1,
-      amount: 1e18,
-      assetData: ""
+      fromAcc: bobAcc, toAcc: aliceAcc, asset: IAsset(option), subId: 1, amount: 1e18, assetData: ""
     });
     subAccounts.submitTransfer(assetTransfer, "");
     vm.stopPrank();
@@ -70,12 +65,7 @@ contract UNIT_TestOptionBasics is Test {
   function testUnWhitelistedManagerCheck() public {
     vm.startPrank(alice);
     ISubAccounts.AssetTransfer memory assetTransfer = ISubAccounts.AssetTransfer({
-      fromAcc: bobAcc,
-      toAcc: aliceAcc,
-      asset: IAsset(option),
-      subId: 1,
-      amount: 1e18,
-      assetData: ""
+      fromAcc: bobAcc, toAcc: aliceAcc, asset: IAsset(option), subId: 1, amount: 1e18, assetData: ""
     });
 
     vm.expectRevert(IManagerWhitelist.MW_UnknownManager.selector);
@@ -88,12 +78,7 @@ contract UNIT_TestOptionBasics is Test {
     // bob cannot transfer to alice
     vm.prank(bob);
     ISubAccounts.AssetTransfer memory assetTransfer = ISubAccounts.AssetTransfer({
-      fromAcc: bobAcc,
-      toAcc: aliceAcc,
-      asset: IAsset(option),
-      subId: 1,
-      amount: 1e18,
-      assetData: ""
+      fromAcc: bobAcc, toAcc: aliceAcc, asset: IAsset(option), subId: 1, amount: 1e18, assetData: ""
     });
 
     vm.expectRevert(

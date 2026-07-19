@@ -59,10 +59,7 @@ library Config {
     )
   {
     basisContParams = IPMRMLib.BasisContingencyParameters({
-      scenarioSpotUp: 1.05e18,
-      scenarioSpotDown: 0.95e18,
-      basisContAddFactor: 0.25e18,
-      basisContMultFactor: 0.01e18
+      scenarioSpotUp: 1.05e18, scenarioSpotDown: 0.95e18, basisContAddFactor: 0.25e18, basisContMultFactor: 0.01e18
     });
 
     otherContParams = IPMRMLib.OtherContingencyParameters({
@@ -76,18 +73,11 @@ library Config {
     });
 
     marginParams = IPMRMLib.MarginParameters({
-      imFactor: 1.3e18,
-      baseStaticDiscount: 0.95e18,
-      rateMultScale: 4e18,
-      rateAddScale: 0.05e18
+      imFactor: 1.3e18, baseStaticDiscount: 0.95e18, rateMultScale: 4e18, rateAddScale: 0.05e18
     });
 
     volShockParams = IPMRMLib.VolShockParameters({
-      volRangeUp: 0.45e18,
-      volRangeDown: 0.3e18,
-      shortTermPower: 0.3e18,
-      longTermPower: 0.13e18,
-      dteFloor: 1 days
+      volRangeUp: 0.45e18, volRangeDown: 0.3e18, shortTermPower: 0.3e18, longTermPower: 0.13e18, dteFloor: 1 days
     });
   }
 
@@ -144,10 +134,7 @@ library Config {
     )
   {
     basisContParams = IPMRMLib_2.BasisContingencyParameters({
-      scenarioSpotUp: 1.05e18,
-      scenarioSpotDown: 0.95e18,
-      basisContAddFactor: 0.25e18,
-      basisContMultFactor: 0.01e18
+      scenarioSpotUp: 1.05e18, scenarioSpotDown: 0.95e18, basisContAddFactor: 0.25e18, basisContMultFactor: 0.01e18
     });
 
     otherContParams = IPMRMLib_2.OtherContingencyParameters({
@@ -221,10 +208,7 @@ library Config {
     });
 
     oracleContingencyParams = IStandardManager.OracleContingencyParams({
-      perpThreshold: 0.4e18,
-      optionThreshold: 0.4e18,
-      baseThreshold: 0.4e18,
-      OCFactor: 0.4e18
+      perpThreshold: 0.4e18, optionThreshold: 0.4e18, baseThreshold: 0.4e18, OCFactor: 0.4e18
     });
 
     baseMarginParams = IStandardManager.BaseMarginParams({marginFactor: 0.8e18, IMScale: 0.8e18});

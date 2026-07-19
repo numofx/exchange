@@ -185,11 +185,7 @@ contract UNIT_InterestRateScenario is Test {
       vm.startPrank(address(manager));
       subAccounts.managerAdjustment(
         ISubAccounts.AssetAdjustment({
-          acc: accountToId(action.accA),
-          asset: cash,
-          subId: 0,
-          amount: action.amount,
-          assetData: bytes32(0)
+          acc: accountToId(action.accA), asset: cash, subId: 0, amount: action.amount, assetData: bytes32(0)
         })
       );
       cash.updateSettledCash(action.amount);

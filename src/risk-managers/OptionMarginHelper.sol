@@ -40,12 +40,18 @@ contract OptionMarginHelper {
     uint[] vols;
   }
 
-  function getIsolatedMargin(IsolatedMarginInputs calldata inputs) external view returns (int margin, int markToMarket) {
+  function getIsolatedMargin(IsolatedMarginInputs calldata inputs)
+    external
+    view
+    returns (int margin, int markToMarket)
+  {
     return _getIsolatedMargin(inputs.params, inputs.optionPos, inputs.ctx);
   }
 
   function getExpiryMargin(ExpiryMarginInputs calldata inputs) external view returns (int expiryMargin, int expiryMtm) {
-    if (inputs.vols.length != inputs.expiryHolding.options.length) revert IStandardManager.SRM_InvalidOptionMarginParams();
+    if (inputs.vols.length != inputs.expiryHolding.options.length) {
+      revert IStandardManager.SRM_InvalidOptionMarginParams();
+    }
 
     int maxLossMargin = _getMaxLoss(inputs.expiryHolding, 0);
     int totalIsolatedMargin;
@@ -67,30 +73,34 @@ contract OptionMarginHelper {
 
     if (inputs.expiryHolding.netCalls < 0) {
       uint unpairedScale = inputs.isInitial ? inputs.params.unpairedIMScale : inputs.params.unpairedMMScale;
-      maxLossMargin += unpairedScale.multiplyDecimal(inputs.forwardPrice).toInt256().multiplyDecimal(
-        inputs.expiryHolding.netCalls
-      );
+      maxLossMargin += unpairedScale.multiplyDecimal(inputs.forwardPrice).toInt256()
+        .multiplyDecimal(inputs.expiryHolding.netCalls);
     }
 
     expiryMargin = SignedMath.max(totalIsolatedMargin, maxLossMargin);
     if (!inputs.isInitial) return (expiryMargin, expiryMtm);
 
-    if (
-      inputs.ocParams.optionThreshold != 0 && inputs.localMinConf < uint(inputs.ocParams.optionThreshold)
-    ) {
+    if (inputs.ocParams.optionThreshold != 0 && inputs.localMinConf < uint(inputs.ocParams.optionThreshold)) {
       uint diff = 1e18 - inputs.localMinConf;
-      uint penalty = diff.multiplyDecimal(inputs.ocParams.OCFactor).multiplyDecimal(inputs.spotPrice).multiplyDecimal(
-        inputs.expiryHolding.totalShortPositions
-      );
+      uint penalty = diff.multiplyDecimal(inputs.ocParams.OCFactor).multiplyDecimal(inputs.spotPrice)
+        .multiplyDecimal(inputs.expiryHolding.totalShortPositions);
       expiryMargin -= penalty.toInt256();
     }
   }
 
-  function getMaxLoss(IStandardManager.ExpiryHolding calldata expiryHolding, uint price) external pure returns (int payoff) {
+  function getMaxLoss(IStandardManager.ExpiryHolding calldata expiryHolding, uint price)
+    external
+    pure
+    returns (int payoff)
+  {
     return _getMaxLoss(expiryHolding, price);
   }
 
-  function _getMaxLoss(IStandardManager.ExpiryHolding calldata expiryHolding, uint price) internal pure returns (int payoff) {
+  function _getMaxLoss(IStandardManager.ExpiryHolding calldata expiryHolding, uint price)
+    internal
+    pure
+    returns (int payoff)
+  {
     for (uint i = 0; i < expiryHolding.options.length; i++) {
       payoff += _getSettlementValue(
         expiryHolding.options[i].strike, expiryHolding.options[i].balance, price, expiryHolding.options[i].isCall
@@ -105,17 +115,20 @@ contract OptionMarginHelper {
     IStandardManager.Option calldata optionPos,
     OptionComputationContext memory ctx
   ) internal view returns (int margin, int markToMarket) {
-    markToMarket =
-      _getMarkToMarket(optionPos.balance, ctx.forwardPrice, optionPos.strike, ctx.expiry, ctx.vol, optionPos.isCall);
+    markToMarket = _getMarkToMarket(
+      optionPos.balance, ctx.forwardPrice, optionPos.strike, ctx.expiry, ctx.vol, optionPos.isCall
+    );
 
     if (optionPos.balance > 0) return (margin, markToMarket);
 
     if (optionPos.isCall) {
-      margin =
-        _getIsolatedMarginForCall(params, markToMarket, optionPos.strike, optionPos.balance, ctx.spotPrice, ctx.isInitial);
+      margin = _getIsolatedMarginForCall(
+        params, markToMarket, optionPos.strike, optionPos.balance, ctx.spotPrice, ctx.isInitial
+      );
     } else {
-      margin =
-        _getIsolatedMarginForPut(params, markToMarket, optionPos.strike, optionPos.balance, ctx.spotPrice, ctx.isInitial);
+      margin = _getIsolatedMarginForPut(
+        params, markToMarket, optionPos.strike, optionPos.balance, ctx.spotPrice, ctx.isInitial
+      );
     }
   }
 
@@ -211,5 +224,4 @@ contract OptionMarginHelper {
     }
     return 0;
   }
-
 }

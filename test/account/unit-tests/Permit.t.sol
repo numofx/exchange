@@ -261,12 +261,7 @@ contract UNIT_AccountPermit is Test, AccountTestBase {
 
     // bob send transfer to send money to himself!
     ISubAccounts.AssetTransfer memory transfer = ISubAccounts.AssetTransfer({
-      fromAcc: accountId,
-      toAcc: bobAcc,
-      asset: usdcAsset,
-      subId: subId,
-      amount: 1000e18,
-      assetData: bytes32(0)
+      fromAcc: accountId, toAcc: bobAcc, asset: usdcAsset, subId: subId, amount: 1000e18, assetData: bytes32(0)
     });
 
     int bobUsdcBefore = subAccounts.getBalance(bobAcc, usdcAsset, subId);

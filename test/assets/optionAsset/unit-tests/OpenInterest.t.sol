@@ -193,8 +193,9 @@ contract UNIT_OptionAssetOITest is Test {
 
   /// @dev util function to transfer
   function _transfer(uint from, uint to, int amount) internal {
-    ISubAccounts.AssetTransfer memory transfer =
-      ISubAccounts.AssetTransfer({fromAcc: from, toAcc: to, asset: option, subId: subId, amount: amount, assetData: ""});
+    ISubAccounts.AssetTransfer memory transfer = ISubAccounts.AssetTransfer({
+      fromAcc: from, toAcc: to, asset: option, subId: subId, amount: amount, assetData: ""
+    });
     subAccounts.submitTransfer(transfer, "");
   }
 }

@@ -138,8 +138,9 @@ contract UNIT_TestPMRM_2_EdgeCases is PMRM_2SimTest {
     cash.deposit(aliceAcc, 1e18);
 
     ISubAccounts.AssetTransfer[] memory transfers = new ISubAccounts.AssetTransfer[](1);
-    transfers[0] =
-      ISubAccounts.AssetTransfer({fromAcc: bobAcc, toAcc: aliceAcc, asset: cash, subId: 0, amount: 1e18, assetData: ""});
+    transfers[0] = ISubAccounts.AssetTransfer({
+      fromAcc: bobAcc, toAcc: aliceAcc, asset: cash, subId: 0, amount: 1e18, assetData: ""
+    });
 
     // can also CANNOT transfer cash from another account (doesn't require approvals)
     vm.expectRevert(IBaseManager.BM_AccountUnderLiquidation.selector);
@@ -152,8 +153,9 @@ contract UNIT_TestPMRM_2_EdgeCases is PMRM_2SimTest {
     baseAsset.deposit(aliceAcc, 1e18);
 
     // CANNOT transfer cash out
-    transfers[0] =
-      ISubAccounts.AssetTransfer({fromAcc: aliceAcc, toAcc: bobAcc, asset: cash, subId: 0, amount: 1e18, assetData: ""});
+    transfers[0] = ISubAccounts.AssetTransfer({
+      fromAcc: aliceAcc, toAcc: bobAcc, asset: cash, subId: 0, amount: 1e18, assetData: ""
+    });
     vm.expectRevert(IBaseManager.BM_AccountUnderLiquidation.selector);
     subAccounts.submitTransfers(transfers, "");
 
@@ -172,12 +174,7 @@ contract UNIT_TestPMRM_2_EdgeCases is PMRM_2SimTest {
 
     // CANNOT transfer base asset in
     transfers[0] = ISubAccounts.AssetTransfer({
-      fromAcc: bobAcc,
-      toAcc: aliceAcc,
-      asset: baseAsset,
-      subId: 0,
-      amount: 1e18,
-      assetData: ""
+      fromAcc: bobAcc, toAcc: aliceAcc, asset: baseAsset, subId: 0, amount: 1e18, assetData: ""
     });
     vm.expectRevert(IBaseManager.BM_AccountUnderLiquidation.selector);
     subAccounts.submitTransfers(transfers, "");
@@ -256,12 +253,7 @@ contract UNIT_TestPMRM_2_EdgeCases is PMRM_2SimTest {
       });
     }
     transfers[10] = ISubAccounts.AssetTransfer({
-      fromAcc: aliceAcc,
-      toAcc: bobAcc,
-      asset: mockPerp,
-      subId: 0,
-      amount: 10e18,
-      assetData: ""
+      fromAcc: aliceAcc, toAcc: bobAcc, asset: mockPerp, subId: 0, amount: 10e18, assetData: ""
     });
     subAccounts.submitTransfers(transfers, "");
     assertEq(subAccounts.getAccountBalances(bobAcc).length, 12);
