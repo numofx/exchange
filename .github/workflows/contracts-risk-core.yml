@@ -24,3 +24,5 @@ jobs:
           version: "1.7.1"  # exact pin — `stable` differs across machines (local foundryup vs GH). Run `foundryup --install 1.7.1` locally.
       - run: forge fmt --check   # requires foundry.toml [fmt] keys to be valid — see PLAN note
       - run: forge test -vvv
+        env:
+          BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}   # fork test (DeliverableFXManagerBaseFork) needs it
