@@ -1,23 +1,14 @@
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
 import type { Abi } from 'viem';
+import { matchingAbi, tradeModuleAbi } from '@numo/abis';
 
 export type ContractArtifacts = {
   matchingAbi: Abi;
   tradeModuleAbi: Abi;
 };
 
-export function loadContractArtifacts(repoPath: string): ContractArtifacts {
+export function loadContractArtifacts(): ContractArtifacts {
   return {
-    matchingAbi: loadAbi(path.join(repoPath, 'out', 'Matching.sol', 'Matching.json')),
-    tradeModuleAbi: loadAbi(path.join(repoPath, 'out', 'ITradeModule.sol', 'ITradeModule.json')),
+    matchingAbi: matchingAbi as unknown as Abi,
+    tradeModuleAbi: tradeModuleAbi as unknown as Abi,
   };
-}
-
-function loadAbi(artifactPath: string): Abi {
-  const artifact = JSON.parse(readFileSync(artifactPath, 'utf8')) as { abi?: Abi };
-  if (!artifact.abi) {
-    throw new Error(`artifact missing abi: ${artifactPath}`);
-  }
-  return artifact.abi;
 }

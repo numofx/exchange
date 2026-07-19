@@ -14,7 +14,8 @@
     "dotenv": "^16.4.7",
     "fastify": "^5.2.1",
     "viem": "^2.23.5",
-    "zod": "^3.24.2"
+    "zod": "^3.24.2",
+    "@numo/abis": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.13.10",

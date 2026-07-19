@@ -22,7 +22,6 @@ export function buildApp(args: {
     executor_address: getAddress(args.config.executorAddress),
     expected_action_owner: args.config.expectedActionOwner ? getAddress(args.config.expectedActionOwner) : null,
     expected_action_signer: args.config.expectedActionSigner ? getAddress(args.config.expectedActionSigner) : null,
-    matching_repo_path: args.config.matchingRepoPath,
     matching_address: getAddress(args.matchingAddress),
     trade_module_address: getAddress(args.tradeModuleAddress),
   }));

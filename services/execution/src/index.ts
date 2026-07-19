@@ -4,8 +4,8 @@ import { loadContractArtifacts } from './contracts.js';
 import { MatchExecutor } from './executor.js';
 
 const config = loadConfig();
-const deploymentAddresses = loadDeploymentAddresses(config.matchingRepoPath, config.chainId);
-const artifacts = loadContractArtifacts(config.matchingRepoPath);
+const deploymentAddresses = loadDeploymentAddresses(config.chainId);
+const artifacts = loadContractArtifacts();
 
 const matchingAddress = config.matchingAddress ?? deploymentAddresses.matching;
 const tradeModuleAddress = config.tradeModuleAddress ?? deploymentAddresses.trade;

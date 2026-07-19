@@ -1,0 +1,8 @@
+{
+  "name": "@numo/exchange-root",
+  "private": true,
+  "scripts": {
+    "abis:generate": "pnpm --filter @numo/abis generate",
+    "check": "pnpm -r run check"
+  }
+}
