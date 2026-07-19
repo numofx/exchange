@@ -1,6 +1,4 @@
 {
-  "_status": "ABANDONED",
-  "_note": "Abandoned Feb-2026 mainnet Matching (owner is the lost key 0xC7bE60b228b997c23094DdfdD71e22E2DE6C9310, now EIP-7702-delegated). No relayer can be authorized, so verifyAndMatch always reverts. Requires redeploy under MPC vault 0x1dcA42ab54Bd3862853A821F84B29BF65245F435. See execution-contracts/DEPLOYED_ADDRESSES.md. Present only so the loader boots; do not trade against it.",
-  "matching": "0xe4c2a55401F73A540CA6e1C43067Aa7164f89088",
-  "trade": "0x5fba217bFf9DfE7EDaD333972866DbA83c50B0f2"
+  "matching": "0x9E90A9cD13d859Bd6a08168082FB1F6F7405F191",
+  "trade": "0x44813aD30b2fFC1bB2871Eed9b19F63c8196eD1c"
 }
