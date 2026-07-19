@@ -115,8 +115,8 @@ contract PMRMLib is IPMRMLib, Ownable2Step {
     if (isInitial) {
       uint mFactor = marginParams.imFactor;
       if (portfolio.stablePrice < otherContParams.pegLossThreshold) {
-        mFactor +=
-          (otherContParams.pegLossThreshold - portfolio.stablePrice).multiplyDecimal(otherContParams.pegLossFactor);
+        mFactor += (otherContParams.pegLossThreshold - portfolio.stablePrice)
+        .multiplyDecimal(otherContParams.pegLossFactor);
       }
 
       minSPAN = minSPAN.multiplyDecimal(mFactor.toInt256());
@@ -259,8 +259,9 @@ contract PMRMLib is IPMRMLib, Ownable2Step {
 
       portfolio.staticContingency += _getOptionContingency(expiry, portfolio.spotPrice);
 
-      portfolio.confidenceContingency +=
-        _getConfidenceContingency(expiry.minConfidence, expiry.netOptions, portfolio.spotPrice);
+      portfolio.confidenceContingency += _getConfidenceContingency(
+        expiry.minConfidence, expiry.netOptions, portfolio.spotPrice
+      );
     }
 
     return portfolio;
@@ -269,9 +270,8 @@ contract PMRMLib is IPMRMLib, Ownable2Step {
   function _addStaticDiscount(IPMRM.ExpiryHoldings memory expiry) internal view {
     uint tAnnualised = Black76.annualise(expiry.secToExpiry.toUint64());
     uint shockRFR = expiry.rate.multiplyDecimal(marginParams.rateMultScale) + marginParams.rateAddScale;
-    expiry.staticDiscount = marginParams.baseStaticDiscount.multiplyDecimal(
-      FixedPointMathLib.exp(-tAnnualised.multiplyDecimal(shockRFR).toInt256())
-    );
+    expiry.staticDiscount = marginParams.baseStaticDiscount
+      .multiplyDecimal(FixedPointMathLib.exp(-tAnnualised.multiplyDecimal(shockRFR).toInt256()));
   }
 
   function _addVolShocks(IPMRM.ExpiryHoldings memory expiry) internal view {
@@ -282,8 +282,8 @@ contract PMRMLib is IPMRMLib, Ownable2Step {
 
     expiry.volShockUp = DecimalMath.UNIT + volShockParams.volRangeUp.multiplyDecimal(multShock);
     expiry.volShockDown = SignedMath.max(
-      0, SignedDecimalMath.UNIT - int(volShockParams.volRangeDown.multiplyDecimal(multShock))
-    ).toUint256();
+        0, SignedDecimalMath.UNIT - int(volShockParams.volRangeDown.multiplyDecimal(multShock))
+      ).toUint256();
   }
 
   ///////////////////
@@ -306,7 +306,11 @@ contract PMRMLib is IPMRMLib, Ownable2Step {
     portfolio.basisContingency += basisContingency.multiplyDecimal(basisContingencyFactor);
   }
 
-  function _getConfidenceContingency(uint minConfidence, uint amtAffected, uint spotPrice) internal view returns (uint) {
+  function _getConfidenceContingency(uint minConfidence, uint amtAffected, uint spotPrice)
+    internal
+    view
+    returns (uint)
+  {
     if (minConfidence < otherContParams.confThreshold) {
       return (DecimalMath.UNIT - minConfidence).multiplyDecimal(otherContParams.confMargin).multiplyDecimal(amtAffected)
         .multiplyDecimal(spotPrice);

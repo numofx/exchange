@@ -400,20 +400,10 @@ contract UNIT_TestBaseManager is Test {
     ISubAccounts.AssetTransfer[] memory transfers = new ISubAccounts.AssetTransfer[](2);
 
     transfers[0] = ISubAccounts.AssetTransfer({
-      fromAcc: bobAcc,
-      toAcc: aliceAcc,
-      asset: IAsset(option),
-      subId: callSubId,
-      amount: 10e18,
-      assetData: ""
+      fromAcc: bobAcc, toAcc: aliceAcc, asset: IAsset(option), subId: callSubId, amount: 10e18, assetData: ""
     });
     transfers[1] = ISubAccounts.AssetTransfer({
-      fromAcc: aliceAcc,
-      toAcc: bobAcc,
-      asset: IAsset(option),
-      subId: putSubId,
-      amount: 10e18,
-      assetData: ""
+      fromAcc: aliceAcc, toAcc: bobAcc, asset: IAsset(option), subId: putSubId, amount: 10e18, assetData: ""
     });
 
     vm.prank(alice);

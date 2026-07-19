@@ -60,7 +60,8 @@ contract BaseManagerTester is BaseManager {
     address,
     ISubAccounts.AssetDelta[] calldata, /*assetDeltas*/
     bytes memory
-  ) public {}
+  )
+    public {}
 
   function getMargin(uint, bool) external view returns (int) {}
 

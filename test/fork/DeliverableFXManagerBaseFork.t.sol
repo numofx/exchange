@@ -109,12 +109,7 @@ contract FORK_TestDeliverableFXManagerBase is Test {
 
   function _transferFuture(uint fromAcc, uint toAcc, uint96 subId, int amount) internal {
     ISubAccounts.AssetTransfer memory transfer = ISubAccounts.AssetTransfer({
-      fromAcc: fromAcc,
-      toAcc: toAcc,
-      asset: future,
-      subId: subId,
-      amount: amount,
-      assetData: ""
+      fromAcc: fromAcc, toAcc: toAcc, asset: future, subId: subId, amount: amount, assetData: ""
     });
     subAccounts.submitTransfer(transfer, "");
   }
@@ -156,12 +151,7 @@ contract FORK_TestDeliverableFXManagerAcceptance is FORK_TestDeliverableFXManage
     vm.warp(liveLastTradeTime + 1);
 
     ISubAccounts.AssetTransfer memory blocked = ISubAccounts.AssetTransfer({
-      fromAcc: aliceAcc,
-      toAcc: bobAcc,
-      asset: future,
-      subId: liveSeries,
-      amount: int(ONE_INCREMENT),
-      assetData: ""
+      fromAcc: aliceAcc, toAcc: bobAcc, asset: future, subId: liveSeries, amount: int(ONE_INCREMENT), assetData: ""
     });
     vm.expectRevert(IDeliverableFXFutureAsset.DFXF_TradingClosed.selector);
     subAccounts.submitTransfer(blocked, "");
@@ -213,14 +203,7 @@ contract FORK_TestDeliverableFXManagerAcceptance is FORK_TestDeliverableFXManage
 
     vm.prank(deployer);
     uint96 secondSeries = future.createSeries(
-      secondExpiry,
-      secondLastTrade,
-      address(usdcDeliveryAsset),
-      address(cngnAsset),
-      10_000e18,
-      0.001e18,
-      1e18,
-      1550e18
+      secondExpiry, secondLastTrade, address(usdcDeliveryAsset), address(cngnAsset), 10_000e18, 0.001e18, 1e18, 1550e18
     );
 
     // open while both series are in the normal phase (before either margin ramp)

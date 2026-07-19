@@ -51,22 +51,12 @@ contract INTEGRATION_MultiwayTradeTest is IntegrationTestBase {
 
     // Alice transfer to Bob
     transferBatch[0] = ISubAccounts.AssetTransfer({
-      fromAcc: aliceAcc,
-      toAcc: bobAcc,
-      asset: option,
-      subId: callId,
-      amount: amountOfContracts,
-      assetData: bytes32(0)
+      fromAcc: aliceAcc, toAcc: bobAcc, asset: option, subId: callId, amount: amountOfContracts, assetData: bytes32(0)
     });
 
     // Bob transfers to Charlie
     transferBatch[1] = ISubAccounts.AssetTransfer({
-      fromAcc: bobAcc,
-      toAcc: charlieAcc,
-      asset: option,
-      subId: callId,
-      amount: amountOfContracts,
-      assetData: bytes32(0)
+      fromAcc: bobAcc, toAcc: charlieAcc, asset: option, subId: callId, amount: amountOfContracts, assetData: bytes32(0)
     });
 
     // Charlie transfer to Alice (closing the loop)
@@ -102,22 +92,12 @@ contract INTEGRATION_MultiwayTradeTest is IntegrationTestBase {
 
     // Alice transfer to Bob
     transferBatch[0] = ISubAccounts.AssetTransfer({
-      fromAcc: aliceAcc,
-      toAcc: bobAcc,
-      asset: option,
-      subId: callId,
-      amount: amountOfContracts,
-      assetData: bytes32(0)
+      fromAcc: aliceAcc, toAcc: bobAcc, asset: option, subId: callId, amount: amountOfContracts, assetData: bytes32(0)
     });
 
     // Bob transfers to Charlie
     transferBatch[1] = ISubAccounts.AssetTransfer({
-      fromAcc: bobAcc,
-      toAcc: charlieAcc,
-      asset: option,
-      subId: callId,
-      amount: amountOfContracts,
-      assetData: bytes32(0)
+      fromAcc: bobAcc, toAcc: charlieAcc, asset: option, subId: callId, amount: amountOfContracts, assetData: bytes32(0)
     });
 
     subAccounts.submitTransfers(transferBatch, "");
@@ -151,22 +131,12 @@ contract INTEGRATION_MultiwayTradeTest is IntegrationTestBase {
 
     // Alice transfer to Bob
     transferBatch[0] = ISubAccounts.AssetTransfer({
-      fromAcc: aliceAcc,
-      toAcc: bobAcc,
-      asset: option,
-      subId: putId,
-      amount: amountOfContracts,
-      assetData: bytes32(0)
+      fromAcc: aliceAcc, toAcc: bobAcc, asset: option, subId: putId, amount: amountOfContracts, assetData: bytes32(0)
     });
 
     // Bob transfers to Charlie
     transferBatch[1] = ISubAccounts.AssetTransfer({
-      fromAcc: bobAcc,
-      toAcc: charlieAcc,
-      asset: option,
-      subId: putId,
-      amount: amountOfContracts,
-      assetData: bytes32(0)
+      fromAcc: bobAcc, toAcc: charlieAcc, asset: option, subId: putId, amount: amountOfContracts, assetData: bytes32(0)
     });
 
     subAccounts.submitTransfers(transferBatch, "");
@@ -203,40 +173,20 @@ contract INTEGRATION_MultiwayTradeTest is IntegrationTestBase {
 
     // Alice transfer option to Bob for premium
     transferBatch[0] = ISubAccounts.AssetTransfer({
-      fromAcc: aliceAcc,
-      toAcc: bobAcc,
-      asset: option,
-      subId: callId,
-      amount: amountOfContracts,
-      assetData: bytes32(0)
+      fromAcc: aliceAcc, toAcc: bobAcc, asset: option, subId: callId, amount: amountOfContracts, assetData: bytes32(0)
     });
 
     transferBatch[1] = ISubAccounts.AssetTransfer({
-      fromAcc: bobAcc,
-      toAcc: aliceAcc,
-      asset: cash,
-      subId: 0,
-      amount: premium,
-      assetData: bytes32(0)
+      fromAcc: bobAcc, toAcc: aliceAcc, asset: cash, subId: 0, amount: premium, assetData: bytes32(0)
     });
 
     // Bob transfers same option to Charlie for premium
     transferBatch[2] = ISubAccounts.AssetTransfer({
-      fromAcc: bobAcc,
-      toAcc: charlieAcc,
-      asset: option,
-      subId: callId,
-      amount: amountOfContracts,
-      assetData: bytes32(0)
+      fromAcc: bobAcc, toAcc: charlieAcc, asset: option, subId: callId, amount: amountOfContracts, assetData: bytes32(0)
     });
 
     transferBatch[3] = ISubAccounts.AssetTransfer({
-      fromAcc: charlieAcc,
-      toAcc: bobAcc,
-      asset: cash,
-      subId: 0,
-      amount: premium,
-      assetData: bytes32(0)
+      fromAcc: charlieAcc, toAcc: bobAcc, asset: cash, subId: 0, amount: premium, assetData: bytes32(0)
     });
 
     subAccounts.submitTransfers(transferBatch, "");
@@ -277,40 +227,20 @@ contract INTEGRATION_MultiwayTradeTest is IntegrationTestBase {
 
     // Alice transfer option to Bob for premium
     transferBatch[0] = ISubAccounts.AssetTransfer({
-      fromAcc: aliceAcc,
-      toAcc: bobAcc,
-      asset: option,
-      subId: putId,
-      amount: amountOfContracts,
-      assetData: bytes32(0)
+      fromAcc: aliceAcc, toAcc: bobAcc, asset: option, subId: putId, amount: amountOfContracts, assetData: bytes32(0)
     });
 
     transferBatch[1] = ISubAccounts.AssetTransfer({
-      fromAcc: bobAcc,
-      toAcc: aliceAcc,
-      asset: cash,
-      subId: 0,
-      amount: premium,
-      assetData: bytes32(0)
+      fromAcc: bobAcc, toAcc: aliceAcc, asset: cash, subId: 0, amount: premium, assetData: bytes32(0)
     });
 
     // Bob transfers same option to Charlie for premium
     transferBatch[2] = ISubAccounts.AssetTransfer({
-      fromAcc: bobAcc,
-      toAcc: charlieAcc,
-      asset: option,
-      subId: putId,
-      amount: amountOfContracts,
-      assetData: bytes32(0)
+      fromAcc: bobAcc, toAcc: charlieAcc, asset: option, subId: putId, amount: amountOfContracts, assetData: bytes32(0)
     });
 
     transferBatch[3] = ISubAccounts.AssetTransfer({
-      fromAcc: charlieAcc,
-      toAcc: bobAcc,
-      asset: cash,
-      subId: 0,
-      amount: premium,
-      assetData: bytes32(0)
+      fromAcc: charlieAcc, toAcc: bobAcc, asset: cash, subId: 0, amount: premium, assetData: bytes32(0)
     });
 
     subAccounts.submitTransfers(transferBatch, "");
@@ -350,22 +280,12 @@ contract INTEGRATION_MultiwayTradeTest is IntegrationTestBase {
 
     // Alice transfer to Bob
     transferBatch[0] = ISubAccounts.AssetTransfer({
-      fromAcc: aliceAcc,
-      toAcc: bobAcc,
-      asset: option,
-      subId: callId,
-      amount: amountOfContracts,
-      assetData: bytes32(0)
+      fromAcc: aliceAcc, toAcc: bobAcc, asset: option, subId: callId, amount: amountOfContracts, assetData: bytes32(0)
     });
 
     // Bob transfers to Charlie
     transferBatch[1] = ISubAccounts.AssetTransfer({
-      fromAcc: bobAcc,
-      toAcc: charlieAcc,
-      asset: option,
-      subId: callId,
-      amount: amountOfContracts,
-      assetData: bytes32(0)
+      fromAcc: bobAcc, toAcc: charlieAcc, asset: option, subId: callId, amount: amountOfContracts, assetData: bytes32(0)
     });
 
     // Charlie transfers to Dave

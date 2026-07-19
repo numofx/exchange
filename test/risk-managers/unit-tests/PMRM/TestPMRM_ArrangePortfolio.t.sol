@@ -19,9 +19,7 @@ contract UNIT_TestPMRM_ArrangePortfolio is PMRMTestBase {
     ISubAccounts.AssetBalance[] memory balances = new ISubAccounts.AssetBalance[](pmrm.maxExpiries() + 1);
     for (uint i = 0; i < balances.length; i++) {
       balances[i] = ISubAccounts.AssetBalance({
-        asset: IAsset(address(option)),
-        subId: OptionEncoding.toSubId(expiry + i, 1500e18, true),
-        balance: 1e18
+        asset: IAsset(address(option)), subId: OptionEncoding.toSubId(expiry + i, 1500e18, true), balance: 1e18
       });
     }
     vm.expectRevert(IPMRM.PMRM_TooManyExpiries.selector);
@@ -34,9 +32,7 @@ contract UNIT_TestPMRM_ArrangePortfolio is PMRMTestBase {
     uint expiry = block.timestamp - 5;
 
     balances[0] = ISubAccounts.AssetBalance({
-      asset: IAsset(address(option)),
-      subId: OptionEncoding.toSubId(expiry, 1500e18, true),
-      balance: 1e18
+      asset: IAsset(address(option)), subId: OptionEncoding.toSubId(expiry, 1500e18, true), balance: 1e18
     });
     IPMRM.Portfolio memory portfolio = pmrm.arrangePortfolioByBalances(balances);
 

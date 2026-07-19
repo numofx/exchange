@@ -79,11 +79,7 @@ contract WrappedERC20Asset is ManagerWhitelist, PositionTracking, IWrappedERC20A
 
     subAccounts.assetAdjustment(
       ISubAccounts.AssetAdjustment({
-        acc: accountId,
-        asset: IAsset(address(this)),
-        subId: 0,
-        amount: -int(adjustmentAmount),
-        assetData: bytes32(0)
+        acc: accountId, asset: IAsset(address(this)), subId: 0, amount: -int(adjustmentAmount), assetData: bytes32(0)
       }),
       true, // invoke the handleAdjustment hook
       ""

@@ -95,9 +95,10 @@ contract PMRMLib_2 is IPMRMLib_2, Ownable2Step {
       _skewShockParams.linearBaseCap <= 10e18 && _skewShockParams.absBaseCap <= 10e18
         && _skewShockParams.linearCBase >= -10e18 && _skewShockParams.linearCBase <= 10e18
         && _skewShockParams.absCBase >= -10e18 && _skewShockParams.absCBase <= 10e18 && _skewShockParams.minKStar >= 0
-        && _skewShockParams.minKStar <= 10e18 && _skewShockParams.widthScale >= 0 && _skewShockParams.widthScale <= 10e18
-        && _skewShockParams.volParamStatic >= 0 && _skewShockParams.volParamStatic <= 10e18
-        && _skewShockParams.volParamScale >= -20e18 && _skewShockParams.volParamScale <= 20e18,
+        && _skewShockParams.minKStar <= 10e18 && _skewShockParams.widthScale >= 0
+        && _skewShockParams.widthScale <= 10e18 && _skewShockParams.volParamStatic >= 0
+        && _skewShockParams.volParamStatic <= 10e18 && _skewShockParams.volParamScale >= -20e18
+        && _skewShockParams.volParamScale <= 20e18,
       PMRML2_InvalidSkewShockParameters()
     );
     skewShockParams = _skewShockParams;
@@ -170,9 +171,8 @@ contract PMRMLib_2 is IPMRMLib_2, Ownable2Step {
     returns (int scenarioPnL)
   {
     // Perp - we ignore mark value it is unaffected by any shock, and we only care about the difference to mtm
-    scenarioPnL += _getShockedPerpPnL(portfolio.perpPosition, portfolio.perpPrice, scenario.spotShock).multiplyDecimal(
-      scenario.dampeningFactor.toInt256()
-    );
+    scenarioPnL += _getShockedPerpPnL(portfolio.perpPosition, portfolio.perpPrice, scenario.spotShock)
+      .multiplyDecimal(scenario.dampeningFactor.toInt256());
 
     // Option
     for (uint j = 0; j < portfolio.expiries.length; ++j) {
@@ -227,9 +227,8 @@ contract PMRMLib_2 is IPMRMLib_2, Ownable2Step {
       }
 
       // Otherwise, we calculate the difference to the mtm, by shocking the cached value by the spot shock (i.e. -0.2)
-      scenarioPnL += collateral.value.toInt256().multiplyDecimal(scenario.spotShock.toInt256() - 1e18).multiplyDecimal(
-        scenario.dampeningFactor.toInt256()
-      );
+      scenarioPnL += collateral.value.toInt256().multiplyDecimal(scenario.spotShock.toInt256() - 1e18)
+        .multiplyDecimal(scenario.dampeningFactor.toInt256());
     }
 
     return scenarioPnL;
@@ -295,7 +294,7 @@ contract PMRMLib_2 is IPMRMLib_2, Ownable2Step {
 
     int sqrtTau = FixedPointMathLib.sqrt(Black76.annualise(secToExpiry)).toInt256();
 
-    int multCap = isLinear //
+    int multCap = isLinear  //
       ? skewShockParams.linearCBase.multiplyDecimal(sqrtTau) + skewShockParams.linearBaseCap.toInt256()
       : skewShockParams.absCBase.multiplyDecimal(sqrtTau) + skewShockParams.absBaseCap.toInt256();
 
@@ -370,8 +369,9 @@ contract PMRMLib_2 is IPMRMLib_2, Ownable2Step {
       _addStaticDiscount(expiry);
       _addOptionContingency(portfolio, expiry, portfolio.spotPrice);
 
-      portfolio.IMContingency +=
-        _getConfidenceContingency(expiry.minConfidence, expiry.netOptions.multiplyDecimal(portfolio.spotPrice));
+      portfolio.IMContingency += _getConfidenceContingency(
+        expiry.minConfidence, expiry.netOptions.multiplyDecimal(portfolio.spotPrice)
+      );
     }
 
     for (uint i = 0; i < portfolio.collaterals.length; ++i) {
@@ -398,14 +398,12 @@ contract PMRMLib_2 is IPMRMLib_2, Ownable2Step {
     uint tau = Black76.annualise(expiry.secToExpiry.toUint64());
 
     uint shockRfrPos = expiry.rate.multiplyDecimal(marginParams.longRateMultScale) + marginParams.longRateAddScale;
-    expiry.staticDiscountPos = marginParams.longBaseStaticDiscount.multiplyDecimal(
-      FixedPointMathLib.exp(-(tau.multiplyDecimal(shockRfrPos).toInt256()))
-    );
+    expiry.staticDiscountPos = marginParams.longBaseStaticDiscount
+      .multiplyDecimal(FixedPointMathLib.exp(-(tau.multiplyDecimal(shockRfrPos).toInt256())));
 
     uint shockRfrNeg = expiry.rate.multiplyDecimal(marginParams.shortRateMultScale) + marginParams.shortRateAddScale;
-    expiry.staticDiscountNeg = marginParams.shortBaseStaticDiscount.divideDecimal(
-      FixedPointMathLib.exp(-(tau.multiplyDecimal(shockRfrNeg).toInt256()))
-    );
+    expiry.staticDiscountNeg = marginParams.shortBaseStaticDiscount
+      .divideDecimal(FixedPointMathLib.exp(-(tau.multiplyDecimal(shockRfrNeg).toInt256())));
 
     expiry.staticDiscountNeg = Math.min(DecimalMath.UNIT.divideDecimal(uint(expiry.discount)), expiry.staticDiscountNeg);
   }
@@ -425,7 +423,10 @@ contract PMRMLib_2 is IPMRMLib_2, Ownable2Step {
   // Contingencies //
   ///////////////////
 
-  function _addBasisContingency(IPMRM_2.Portfolio memory portfolio, IPMRM_2.ExpiryHoldings memory expiry) internal view {
+  function _addBasisContingency(IPMRM_2.Portfolio memory portfolio, IPMRM_2.ExpiryHoldings memory expiry)
+    internal
+    view
+  {
     expiry.basisScenarioUpMtM =
       _getExpiryShockedMTM(expiry, basisContParams.scenarioSpotUp, IPMRM_2.VolShockDirection.None);
     expiry.basisScenarioDownMtM =
@@ -525,14 +526,10 @@ contract PMRMLib_2 is IPMRMLib_2, Ownable2Step {
   function getBasisContingencyScenarios() external view returns (IPMRM_2.Scenario[] memory scenarios) {
     scenarios = new IPMRM_2.Scenario[](3);
     scenarios[0] = IPMRM_2.Scenario({
-      spotShock: basisContParams.scenarioSpotUp,
-      volShock: IPMRM_2.VolShockDirection.None,
-      dampeningFactor: 1e18
+      spotShock: basisContParams.scenarioSpotUp, volShock: IPMRM_2.VolShockDirection.None, dampeningFactor: 1e18
     });
     scenarios[1] = IPMRM_2.Scenario({
-      spotShock: basisContParams.scenarioSpotDown,
-      volShock: IPMRM_2.VolShockDirection.None,
-      dampeningFactor: 1e18
+      spotShock: basisContParams.scenarioSpotDown, volShock: IPMRM_2.VolShockDirection.None, dampeningFactor: 1e18
     });
     scenarios[2] =
       IPMRM_2.Scenario({spotShock: DecimalMath.UNIT, volShock: IPMRM_2.VolShockDirection.None, dampeningFactor: 1e18});

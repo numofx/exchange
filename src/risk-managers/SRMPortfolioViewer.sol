@@ -57,8 +57,7 @@ contract SRMPortfolioViewer is BasePortfolioViewer, ISRMPortfolioViewer {
     (uint marketCount, int cashBalance, uint marketBitMap) = _countMarketsAndParseCash(assets);
 
     IStandardManager.StandardManagerPortfolio memory portfolio = IStandardManager.StandardManagerPortfolio({
-      cash: cashBalance,
-      marketHoldings: new IStandardManager.MarketHolding[](marketCount)
+      cash: cashBalance, marketHoldings: new IStandardManager.MarketHolding[](marketCount)
     });
 
     // for each market, need to count how many expires there are
@@ -173,7 +172,8 @@ contract SRMPortfolioViewer is BasePortfolioViewer, ISRMPortfolioViewer {
     uint expiryIndex = seenExpires.findInArray(expiry, numExpires).toUint256();
     IStandardManager.ExpiryHolding memory expiryHolding = holding.expiryHoldings[expiryIndex];
     uint nextIndex = expiryHolding.numOptions;
-    expiryHolding.options[nextIndex] = IStandardManager.Option({strike: strike, isCall: isCall, balance: currentAsset.balance});
+    expiryHolding.options[nextIndex] =
+      IStandardManager.Option({strike: strike, isCall: isCall, balance: currentAsset.balance});
     expiryHolding.numOptions = nextIndex + 1;
 
     if (isCall) {

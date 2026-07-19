@@ -26,7 +26,8 @@ contract ExploiterManager is ILiquidatableManager, BaseManager {
     address,
     ISubAccounts.AssetDelta[] calldata, /*assetDeltas*/
     bytes memory
-  ) public {}
+  )
+    public {}
 
   function setMarginMtm(int _margin, int _mtm) public {
     margin = _margin;

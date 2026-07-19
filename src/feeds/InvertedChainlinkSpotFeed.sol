@@ -51,7 +51,7 @@ contract InvertedChainlinkSpotFeed is Ownable2Step, ISpotFeed {
   function getSpot() external view returns (uint spotPrice, uint confidence) {
     _checkSequencer();
 
-    (, int256 answer,, uint256 updatedAt,) = aggregator.latestRoundData();
+    (, int answer,, uint updatedAt,) = aggregator.latestRoundData();
 
     if (answer <= 0) revert ICLF_InvalidPrice();
     if (updatedAt + heartbeat < block.timestamp) revert ICLF_DataTooOld();
@@ -78,7 +78,7 @@ contract InvertedChainlinkSpotFeed is Ownable2Step, ISpotFeed {
       return;
     }
 
-    (, int256 answer, uint256 startedAt,,) = sequencerUptimeFeed.latestRoundData();
+    (, int answer, uint startedAt,,) = sequencerUptimeFeed.latestRoundData();
 
     if (answer != 0) revert ICLF_SequencerDown();
     if (startedAt + sequencerGracePeriod > block.timestamp) revert ICLF_GracePeriodNotOver();

@@ -48,12 +48,7 @@ contract UNIT_CashAssetDeposit is Test {
     // TODO: wrong spot for test
     uint account2 = subAccounts.createAccount(address(this), manager);
     ISubAccounts.AssetTransfer memory transfer = ISubAccounts.AssetTransfer({
-      fromAcc: accountId,
-      toAcc: account2,
-      asset: cashAsset,
-      subId: 1,
-      amount: 1e18,
-      assetData: ""
+      fromAcc: accountId, toAcc: account2, asset: cashAsset, subId: 1, amount: 1e18, assetData: ""
     });
     vm.expectRevert(ICashAsset.CA_InvalidSubId.selector);
     subAccounts.submitTransfer(transfer, "");

@@ -103,12 +103,7 @@ contract AccountTestBase is Test {
 
   function transferToken(uint fromAcc, uint toAcc, IAsset asset, uint subId, int tokenAmounts) internal {
     ISubAccounts.AssetTransfer memory transfer = ISubAccounts.AssetTransfer({
-      fromAcc: fromAcc,
-      toAcc: toAcc,
-      asset: asset,
-      subId: subId,
-      amount: int(tokenAmounts),
-      assetData: bytes32(0)
+      fromAcc: fromAcc, toAcc: toAcc, asset: asset, subId: subId, amount: int(tokenAmounts), assetData: bytes32(0)
     });
 
     subAccounts.submitTransfer(transfer, "");

@@ -33,12 +33,7 @@ contract TestDeliverableFXVMBlend is TestDeliverableFXManagerBase {
   function _transferAtPrice(uint fromAcc, uint toAcc, int amount, uint tradePrice) internal {
     subAccounts.submitTransfer(
       ISubAccounts.AssetTransfer({
-        fromAcc: fromAcc,
-        toAcc: toAcc,
-        asset: fxFuture,
-        subId: fxSeries,
-        amount: amount,
-        assetData: bytes32(tradePrice)
+        fromAcc: fromAcc, toAcc: toAcc, asset: fxFuture, subId: fxSeries, amount: amount, assetData: bytes32(tradePrice)
       }),
       ""
     );

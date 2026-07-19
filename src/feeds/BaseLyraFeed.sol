@@ -99,9 +99,9 @@ abstract contract BaseLyraFeed is EIP712, Ownable2Step, IDataReceiver, IBaseLyra
         }
       }
 
-      if (
-        !SignatureChecker.isValidSignatureNow(feedData.signers[i], _hashTypedDataV4(hashedData), feedData.signatures[i])
-      ) {
+      if (!SignatureChecker.isValidSignatureNow(
+          feedData.signers[i], _hashTypedDataV4(hashedData), feedData.signatures[i]
+        )) {
         revert BLF_InvalidSignature();
       }
 

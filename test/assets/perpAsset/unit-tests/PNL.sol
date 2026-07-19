@@ -84,8 +84,9 @@ contract UNIT_PerpAssetPNL is Test {
   }
 
   function testRevertsForInvalidSubId() public {
-    ISubAccounts.AssetTransfer memory transfer =
-      ISubAccounts.AssetTransfer({fromAcc: aliceAcc, toAcc: bobAcc, asset: perp, subId: 1, amount: 1e18, assetData: ""});
+    ISubAccounts.AssetTransfer memory transfer = ISubAccounts.AssetTransfer({
+      fromAcc: aliceAcc, toAcc: bobAcc, asset: perp, subId: 1, amount: 1e18, assetData: ""
+    });
     vm.expectRevert(IPerpAsset.PA_InvalidSubId.selector);
     subAccounts.submitTransfer(transfer, "");
   }
@@ -327,8 +328,9 @@ contract UNIT_PerpAssetPNL is Test {
   }
 
   function _tradePerpContract(uint fromAcc, uint toAcc, int amount) internal {
-    ISubAccounts.AssetTransfer memory transfer =
-      ISubAccounts.AssetTransfer({fromAcc: fromAcc, toAcc: toAcc, asset: perp, subId: 0, amount: amount, assetData: ""});
+    ISubAccounts.AssetTransfer memory transfer = ISubAccounts.AssetTransfer({
+      fromAcc: fromAcc, toAcc: toAcc, asset: perp, subId: 0, amount: amount, assetData: ""
+    });
     subAccounts.submitTransfer(transfer, "");
   }
 }

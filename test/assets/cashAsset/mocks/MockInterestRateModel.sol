@@ -44,7 +44,16 @@ contract MockInterestRateModel is IInterestRateModel {
    *
    * @return Compounded interest rate: e^(rt) - 1
    */
-  function getBorrowInterestFactor(uint, /*_elapsedTime*/ uint /*_borrowRate*/ ) external pure override returns (uint) {
+  function getBorrowInterestFactor(
+    uint,
+    /*_elapsedTime*/
+    uint /*_borrowRate*/
+  )
+    external
+    pure
+    override
+    returns (uint)
+  {
     return 0.5 * 1e18; // must be pure function
   }
 
@@ -52,7 +61,15 @@ contract MockInterestRateModel is IInterestRateModel {
    * @notice MOCKED Calculates the current borrow rate as a linear equation
    * @return The borrow rate percentage as a mantissa
    */
-  function getBorrowRate(uint, /*supply*/ uint /*borrows*/ ) external view returns (uint) {
+  function getBorrowRate(
+    uint,
+    /*supply*/
+    uint /*borrows*/
+  )
+    external
+    view
+    returns (uint)
+  {
     return borrowRate;
   }
 
