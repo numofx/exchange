@@ -35,6 +35,12 @@ type Config struct {
 	CNGNMay2027FutureSubID        string
 	EnforceActionDataInvariants   bool
 	CancelProtectedOrderPrefixes  []string
+
+	// Real-time event pipeline (internal/events). See docs/realtime-api-design.md.
+	EventsPruneHorizon      time.Duration // max age of a market_events row (= max reconnect-replay window)
+	EventsPruneInterval     time.Duration // how often the prune job runs
+	EventsReconcileInterval time.Duration // backstop drain cadence in case a NOTIFY is missed
+	EventsSubBuffer         int           // per-subscriber channel depth before a slow consumer is dropped
 }
 
 func Load() (Config, error) {
@@ -81,7 +87,36 @@ func Load() (Config, error) {
 	}
 	cfg.MatcherPollInterval = pollInterval
 
+	cfg.EventsPruneHorizon = getenvDurationDefault("EVENTS_PRUNE_HORIZON", 2*time.Hour)
+	cfg.EventsPruneInterval = getenvDurationDefault("EVENTS_PRUNE_INTERVAL", 5*time.Minute)
+	cfg.EventsReconcileInterval = getenvDurationDefault("EVENTS_RECONCILE_INTERVAL", 5*time.Second)
+	cfg.EventsSubBuffer = getenvIntDefault("EVENTS_SUB_BUFFER", 256)
+
 	return cfg, nil
+}
+
+func getenvDurationDefault(key string, fallback time.Duration) time.Duration {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func getenvIntDefault(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
 
 func getenvDefault(key, fallback string) string {
