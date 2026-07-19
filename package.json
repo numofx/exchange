@@ -4,5 +4,6 @@
   "scripts": {
     "abis:generate": "pnpm --filter @numo/abis generate",
     "check": "pnpm -r run check"
-  }
+  },
+  "packageManager": "pnpm@8.7.3"
 }
