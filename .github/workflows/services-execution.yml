@@ -12,12 +12,16 @@ on:
       - 'services/execution/**'
       - 'packages/abis/**'
       - 'pnpm-workspace.yaml'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
       - '.github/workflows/services-execution.yml'
   pull_request:
     paths:
       - 'services/execution/**'
       - 'packages/abis/**'
       - 'pnpm-workspace.yaml'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
       - '.github/workflows/services-execution.yml'
 concurrency:
   group: services-execution-${{ github.ref }}
