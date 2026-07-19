@@ -1,0 +1,6 @@
+{
+  "base": "0x1c08f30c204EE18EbBDc161c0f0864AFb826934b",
+  "spotFeed": "0x3195Bd7e02d93982bCF8b34DF5B941fFCaE1E49b",
+  "symbol": "CNGN",
+  "wrappedAsset": "0x6B232A2155Bd0C9bf741dB4cf8E7e8A0176A6fc6"
+}

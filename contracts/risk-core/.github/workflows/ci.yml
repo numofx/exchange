@@ -1,0 +1,36 @@
+name: CI
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - "**"
+
+jobs:
+  ci-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup SSH
+        env: 
+          NUMO_UTILS_SSH: ${{secrets.NUMO_UTILS}}
+        run: mkdir $HOME/.ssh && echo "$NUMO_UTILS_SSH" > $HOME/.ssh/id_rsa && chmod 600 $HOME/.ssh/id_rsa
+
+      - name: Install Submodules
+        run: git submodule update --init --recursive
+  
+      - name: Install Foundry
+        uses: onbjerg/foundry-toolchain@v1
+        with:
+          version: stable
+      
+      # - name: Check snapshot
+      #   run: forge snapshot --check
+
+      - name: Check format
+        run: forge fmt --check
+
+      - name: Run Coverage
+        run: forge coverage --report summary

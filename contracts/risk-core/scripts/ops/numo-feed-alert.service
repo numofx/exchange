@@ -1,0 +1,9 @@
+# One-shot feed staleness check; scheduled by numo-feed-alert.timer.
+[Unit]
+Description=Numo feed staleness check
+
+[Service]
+Type=oneshot
+User=numo
+WorkingDirectory=/home/numo/risk-core
+ExecStart=/usr/bin/python3 scripts/ops/check_feed_staleness.py

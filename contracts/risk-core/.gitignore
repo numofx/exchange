@@ -1,0 +1,24 @@
+.idea
+out
+cache
+lcov.info
+broadcast
+lcov.info
+node_modules
+yarn-error.log
+.husky
+.vscode
+.DS_Store
+
+.env
+coverage
+coverage.json
+typechain
+typechain-types
+
+# Keep local deployment config folder, but not track any content
+scripts/input/31337/*
+!scripts/input/31337/.gitkeep 
+
+deployments/31337/*
+!deployments/31337/.gitkeep
