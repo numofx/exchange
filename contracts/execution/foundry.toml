@@ -1,0 +1,29 @@
+[profile.default]
+src = 'src'
+out = 'out'
+allow_paths = ["../../exchange-core"]
+include_paths = ["../../exchange-core"]
+
+optimizer = true
+optimizer_runs = 50
+fs_permissions = [{access = "read-write", path = "./"}, {access = "read", path = "../../exchange-core"}]
+
+solc_version="0.8.27"
+
+[fmt]
+line_length = 120
+tab_width = 2
+bracket_spacing = false
+int_types = 'short'
+multiline_func_header = 'attributes_first'
+quote_style = 'double'
+
+# See more config options https://github.com/foundry-rs/foundry/tree/master/config
+
+[rpc_endpoints]
+conduit_prod = "https://l2-prod-testnet-0eakp60405.t.conduit.xyz"
+conduit_staging = "https://l2-staging-9ns7v94tpj.t.conduit.xyz"
+sepolia = "https://sepolia.infura.io/v3/26251a7744c548a3adbc17880fc70764"
+
+[profile.CORE]
+src = "v2-core/src"
