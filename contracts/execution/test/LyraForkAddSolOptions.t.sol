@@ -142,5 +142,4 @@ contract LyraForkAddSolOptionsTest is ForkBase {
   //    }
   //
   //  }
-
-  }
+}
