@@ -274,7 +274,10 @@ abstract contract BaseManager is IBaseManager, Ownable2StepUpgradeable {
     uint, /*accountId*/
     uint, /*tradeId*/
     ISubAccounts.AssetDelta[] memory /*assetDeltas*/
-  ) internal virtual {
+  )
+    internal
+    virtual
+  {
     // Each manager must implement their own logic to charge OI fee
     revert BM_NotImplemented();
   }
@@ -454,12 +457,7 @@ abstract contract BaseManager is IBaseManager, Ownable2StepUpgradeable {
       );
       subAccounts.submitTransfer(
         ISubAccounts.AssetTransfer({
-          fromAcc: accId,
-          toAcc: to,
-          asset: cashAsset,
-          subId: 0,
-          amount: amount,
-          assetData: ""
+          fromAcc: accId, toAcc: to, asset: cashAsset, subId: 0, amount: amount, assetData: ""
         }),
         ""
       );

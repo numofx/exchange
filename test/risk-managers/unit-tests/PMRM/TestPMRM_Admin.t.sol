@@ -108,10 +108,7 @@ contract TestPMRM_Admin is PMRMTestBase {
 
   function testSetPMRMParametersBasisContingency() public {
     IPMRMLib.BasisContingencyParameters memory basisContParams = IPMRMLib.BasisContingencyParameters({
-      scenarioSpotUp: 1e18 + 1,
-      scenarioSpotDown: 2,
-      basisContAddFactor: 3,
-      basisContMultFactor: 4
+      scenarioSpotUp: 1e18 + 1, scenarioSpotDown: 2, basisContAddFactor: 3, basisContMultFactor: 4
     });
     lib.setBasisContingencyParams(basisContParams);
     IPMRMLib.BasisContingencyParameters memory resFwdContParams = lib.getBasisContingencyParams();

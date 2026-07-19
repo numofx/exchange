@@ -28,8 +28,7 @@ contract LyraForkTest is Utils {
     console.log("marketId:", marketId);
     ConfigJson memory config = _loadConfig();
     (
-      ,
-      ,
+      ,,
       IStandardManager.OracleContingencyParams memory oracleContingencyParams,
       IStandardManager.BaseMarginParams memory baseMarginParams
     ) = Config.getSRMParams(marketName);

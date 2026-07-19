@@ -270,8 +270,9 @@ contract UNIT_PerpAssetMigration is Test {
   }
 
   function _tradePerpContract(uint fromAcc, uint toAcc, int amount) internal {
-    ISubAccounts.AssetTransfer memory transfer =
-      ISubAccounts.AssetTransfer({fromAcc: fromAcc, toAcc: toAcc, asset: perp, subId: 0, amount: amount, assetData: ""});
+    ISubAccounts.AssetTransfer memory transfer = ISubAccounts.AssetTransfer({
+      fromAcc: fromAcc, toAcc: toAcc, asset: perp, subId: 0, amount: amount, assetData: ""
+    });
     subAccounts.submitTransfer(transfer, "");
   }
 }

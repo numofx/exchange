@@ -144,7 +144,9 @@ contract PerpAsset is IPerpAsset, PositionTracking, GlobalSubIdOITracking, Manag
    * @notice Set new funding convergence period
    */
   function setConvergencePeriod(uint _fundingConvergencePeriod) external onlyOwner {
-    if (_fundingConvergencePeriod < 0.05e18 || _fundingConvergencePeriod > 240e18) revert PA_InvalidConvergencePeriod();
+    if (_fundingConvergencePeriod < 0.05e18 || _fundingConvergencePeriod > 240e18) {
+      revert PA_InvalidConvergencePeriod();
+    }
     fundingConvergencePeriod = _fundingConvergencePeriod.toInt256();
 
     emit ConvergencePeriodUpdated(fundingConvergencePeriod);
@@ -323,11 +325,7 @@ contract PerpAsset is IPerpAsset, PositionTracking, GlobalSubIdOITracking, Manag
       // If the perp has been disabled/migration enabled delete the position after realising PNL/funding
       subAccounts.assetAdjustment(
         ISubAccounts.AssetAdjustment({
-          acc: accountId,
-          asset: IAsset(address(this)),
-          subId: 0,
-          amount: -positionSize,
-          assetData: bytes32(0)
+          acc: accountId, asset: IAsset(address(this)), subId: 0, amount: -positionSize, assetData: bytes32(0)
         }),
         false,
         ""

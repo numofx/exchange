@@ -142,21 +142,11 @@ contract UNIT_AccountBasic is Test, AccountTestBase {
     ISubAccounts.AssetTransfer[] memory transferBatch = new ISubAccounts.AssetTransfer[](5);
 
     transferBatch[0] = ISubAccounts.AssetTransfer({
-      fromAcc: aliceAcc,
-      toAcc: bobAcc,
-      asset: IAsset(usdcAsset),
-      subId: 0,
-      amount: amount,
-      assetData: bytes32(0)
+      fromAcc: aliceAcc, toAcc: bobAcc, asset: IAsset(usdcAsset), subId: 0, amount: amount, assetData: bytes32(0)
     });
 
     transferBatch[1] = ISubAccounts.AssetTransfer({
-      fromAcc: thisAcc,
-      toAcc: bobAcc,
-      asset: IAsset(usdcAsset),
-      subId: 0,
-      amount: amount,
-      assetData: bytes32(0)
+      fromAcc: thisAcc, toAcc: bobAcc, asset: IAsset(usdcAsset), subId: 0, amount: amount, assetData: bytes32(0)
     });
 
     transferBatch[2] = ISubAccounts.AssetTransfer({
@@ -256,7 +246,9 @@ contract UNIT_AccountBasic is Test, AccountTestBase {
     // assume calls from usdc
     vm.prank(address(usdcAsset));
     subAccounts.assetAdjustment(
-      ISubAccounts.AssetAdjustment({acc: newAccount, asset: usdcAsset, subId: 0, amount: amount, assetData: bytes32(0)}),
+      ISubAccounts.AssetAdjustment({
+        acc: newAccount, asset: usdcAsset, subId: 0, amount: amount, assetData: bytes32(0)
+      }),
       false,
       ""
     );
@@ -273,7 +265,9 @@ contract UNIT_AccountBasic is Test, AccountTestBase {
 
     vm.expectRevert(ISubAccounts.AC_OnlyAsset.selector);
     subAccounts.assetAdjustment(
-      ISubAccounts.AssetAdjustment({acc: newAccount, asset: usdcAsset, subId: 0, amount: amount, assetData: bytes32(0)}),
+      ISubAccounts.AssetAdjustment({
+        acc: newAccount, asset: usdcAsset, subId: 0, amount: amount, assetData: bytes32(0)
+      }),
       true,
       ""
     );

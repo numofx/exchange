@@ -212,16 +212,12 @@ contract LiquidationSimBase is PMRMTestBase {
     }
     if (data.InitialPortfolio.PerpPosition != 0) {
       balances[i++] = ISubAccounts.AssetBalance({
-        asset: IAsset(address(mockPerp)),
-        subId: 0,
-        balance: data.InitialPortfolio.PerpPosition
+        asset: IAsset(address(mockPerp)), subId: 0, balance: data.InitialPortfolio.PerpPosition
       });
     }
     if (data.InitialPortfolio.BasePosition != 0) {
       balances[i++] = ISubAccounts.AssetBalance({
-        asset: IAsset(address(baseAsset)),
-        subId: 0,
-        balance: data.InitialPortfolio.BasePosition
+        asset: IAsset(address(baseAsset)), subId: 0, balance: data.InitialPortfolio.BasePosition
       });
     }
 

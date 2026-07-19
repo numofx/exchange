@@ -504,12 +504,7 @@ contract GAS_MAX_PORTFOLIO is IntegrationTestBase {
       uint strike = startingStrike + i * 100e18;
       uint subId = market.option.getSubId(expiry, strike, true);
       transferBatch[i + 1] = ISubAccounts.AssetTransfer({
-        fromAcc: seller,
-        toAcc: buyer,
-        asset: market.option,
-        subId: subId,
-        amount: unit,
-        assetData: bytes32(0)
+        fromAcc: seller, toAcc: buyer, asset: market.option, subId: subId, amount: unit, assetData: bytes32(0)
       });
     }
     transferBatch[0] = ISubAccounts.AssetTransfer({
@@ -527,20 +522,10 @@ contract GAS_MAX_PORTFOLIO is IntegrationTestBase {
   function _tradePerp(Market storage market, int amount, int cashDiff, uint buyer, uint seller) internal {
     ISubAccounts.AssetTransfer[] memory transferBatch = new ISubAccounts.AssetTransfer[](2);
     transferBatch[0] = ISubAccounts.AssetTransfer({
-      fromAcc: buyer,
-      toAcc: seller,
-      asset: cash,
-      subId: 0,
-      amount: cashDiff,
-      assetData: bytes32(0)
+      fromAcc: buyer, toAcc: seller, asset: cash, subId: 0, amount: cashDiff, assetData: bytes32(0)
     });
     transferBatch[1] = ISubAccounts.AssetTransfer({
-      fromAcc: seller,
-      toAcc: buyer,
-      asset: market.perp,
-      subId: 0,
-      amount: amount,
-      assetData: bytes32(0)
+      fromAcc: seller, toAcc: buyer, asset: market.perp, subId: 0, amount: amount, assetData: bytes32(0)
     });
 
     subAccounts.submitTransfers(transferBatch, "");

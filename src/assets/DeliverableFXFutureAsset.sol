@@ -69,7 +69,15 @@ contract DeliverableFXFutureAsset is IDeliverableFXFutureAsset, PositionTracking
     });
 
     emit SeriesCreated(
-      subId, expiry, lastTradeTime, baseAsset, quoteAsset, contractSizeBase, minTradeIncrement, tickSize, initialMarkPrice
+      subId,
+      expiry,
+      lastTradeTime,
+      baseAsset,
+      quoteAsset,
+      contractSizeBase,
+      minTradeIncrement,
+      tickSize,
+      initialMarkPrice
     );
   }
 
@@ -144,24 +152,12 @@ contract DeliverableFXFutureAsset is IDeliverableFXFutureAsset, PositionTracking
 
     finalBalance = preBalance + adjustment.amount;
 
-    _blendVM(
-      adjustment.acc,
-      uint96(adjustment.subId),
-      preBalance,
-      finalBalance,
-      uint(uint256(adjustment.assetData))
-    );
+    _blendVM(adjustment.acc, uint96(adjustment.subId), preBalance, finalBalance, uint(uint(adjustment.assetData)));
 
     return (finalBalance, true);
   }
 
-  function _blendVM(
-    uint acc,
-    uint96 subId,
-    int preBalance,
-    int finalBalance,
-    uint tradePrice
-  ) internal {
+  function _blendVM(uint acc, uint96 subId, int preBalance, int finalBalance, uint tradePrice) internal {
     if (tradePrice != 0 && finalBalance - preBalance != 0) {
       Series storage series = _series[subId];
       int latest = series.cumulativeVMPerContract;
@@ -179,8 +175,7 @@ contract DeliverableFXFutureAsset is IDeliverableFXFutureAsset, PositionTracking
         bool absExposureIncreased = SignedMath.abs(finalBalance) > SignedMath.abs(preBalance);
 
         if (sameSign && absExposureIncreased) {
-          accountLastCumulativeVM[acc][subId] =
-            (preBalance * latest + amount * entryVM) / finalBalance;
+          accountLastCumulativeVM[acc][subId] = (preBalance * latest + amount * entryVM) / finalBalance;
         } else if (sameSign) {
           int realizedVM = (amount * (latest - entryVM)) / 1e18;
           accountCashToSettle[acc][subId] += realizedVM;
@@ -261,7 +256,8 @@ contract DeliverableFXFutureAsset is IDeliverableFXFutureAsset, PositionTracking
   function _updateDirectionalPositions(IManager manager, int preBalance, int change) internal {
     int postBalance = preBalance + change;
 
-    totalLongPosition[manager] = totalLongPosition[manager] + _positivePosition(postBalance) - _positivePosition(preBalance);
+    totalLongPosition[manager] =
+      totalLongPosition[manager] + _positivePosition(postBalance) - _positivePosition(preBalance);
     totalShortPosition[manager] =
       totalShortPosition[manager] + _negativePosition(postBalance) - _negativePosition(preBalance);
   }

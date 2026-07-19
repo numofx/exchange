@@ -40,7 +40,13 @@ contract LyraRateFeedStatic is Ownable2Step, IInterestRateFeed {
    * @notice Gets rate
    * @return ratePrice Rate with 18 decimals.
    */
-  function getInterestRate(uint64 /*expiry*/ ) public view returns (int, uint) {
+  function getInterestRate(
+    uint64 /*expiry*/
+  )
+    public
+    view
+    returns (int, uint)
+  {
     return (rate, confidence);
   }
 }

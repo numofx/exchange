@@ -42,7 +42,11 @@ contract DatedFutureAsset is IDatedFutureAsset, PositionTracking, ManagerWhiteli
   //      Owner-only      //
   //////////////////////////
 
-  function setContract(uint64 expiry, uint64 lastTradeTime, uint initialMarkPrice) external onlyOwner returns (uint96 subId) {
+  function setContract(uint64 expiry, uint64 lastTradeTime, uint initialMarkPrice)
+    external
+    onlyOwner
+    returns (uint96 subId)
+  {
     if (expiry <= block.timestamp || lastTradeTime >= expiry || initialMarkPrice == 0) {
       revert DFA_InvalidSchedule();
     }

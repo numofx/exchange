@@ -68,7 +68,7 @@ contract TestDeliverableFXManagerBase is Test {
     cngnFeed.setSpot(1500e18, 1e18);
 
     manager.setProduct(fxFuture, usdcDeliveryAsset, cngnAsset, cngnFeed);
-    manager.setMarginParams(0.10e18, 0.075e18);
+    manager.setMarginParams(0.1e18, 0.075e18);
 
     aliceAcc = subAccounts.createAccountWithApproval(alice, address(this), manager);
     bobAcc = subAccounts.createAccountWithApproval(bob, address(this), manager);
@@ -77,7 +77,14 @@ contract TestDeliverableFXManagerBase is Test {
     fxExpiry = block.timestamp + 21 days;
     fxLastTradeTime = fxExpiry - 1 days;
     fxSeries = fxFuture.createSeries(
-      uint64(fxExpiry), uint64(fxLastTradeTime), address(usdcDeliveryAsset), address(cngnAsset), 10_000e18, 0.001e18, 1e18, 1500e18
+      uint64(fxExpiry),
+      uint64(fxLastTradeTime),
+      address(usdcDeliveryAsset),
+      address(cngnAsset),
+      10_000e18,
+      0.001e18,
+      1e18,
+      1500e18
     );
 
     usdc.mint(address(this), 100_000_000e18);
@@ -99,12 +106,7 @@ contract TestDeliverableFXManagerBase is Test {
 
   function _openFuturePosition(uint shortAcc, uint longAcc, int amount) internal {
     ISubAccounts.AssetTransfer memory transfer = ISubAccounts.AssetTransfer({
-      fromAcc: shortAcc,
-      toAcc: longAcc,
-      asset: fxFuture,
-      subId: fxSeries,
-      amount: amount,
-      assetData: ""
+      fromAcc: shortAcc, toAcc: longAcc, asset: fxFuture, subId: fxSeries, amount: amount, assetData: ""
     });
     subAccounts.submitTransfer(transfer, "");
   }

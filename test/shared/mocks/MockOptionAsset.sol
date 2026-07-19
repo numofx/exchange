@@ -59,7 +59,10 @@ contract MockOption is MockPositionTracking, MockGlobalSubIdOITracking, IOptionA
     recordMangerChangeCalls = _record;
   }
 
-  function setSettlementPrice(uint /*expiry*/ ) external {
+  function setSettlementPrice(
+    uint /*expiry*/
+  )
+    external {
     // just to comply with interface
   }
 
@@ -71,7 +74,14 @@ contract MockOption is MockPositionTracking, MockGlobalSubIdOITracking, IOptionA
     mockedSubSettled[subId] = settled;
   }
 
-  function calcSettlementValue(uint subId, int /*balance*/ ) external view returns (int payout, bool priceSettled) {
+  function calcSettlementValue(
+    uint subId,
+    int /*balance*/
+  )
+    external
+    view
+    returns (int payout, bool priceSettled)
+  {
     return (mockedTotalSettlementValue[subId], mockedSubSettled[subId]);
   }
 

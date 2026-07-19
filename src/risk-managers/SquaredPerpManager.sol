@@ -64,16 +64,11 @@ contract SquaredPerpManager is ILiquidatableManager, BaseManager, ReentrancyGuar
 
   function setPerpRiskParams(IPerpAsset perp, PerpRiskParams calldata params) external onlyOwner {
     if (
-      params.maintenanceMarginRatio > params.initialMarginRatio
-        || params.initialMarginRatio >= 1e18
-        || params.maintenanceMarginRatio >= 1e18
-        || params.initialMaxLeverage < 1e18
-        || params.maintenanceMaxLeverage < 1e18
-        || params.initialMaxLeverage > params.maintenanceMaxLeverage
-        || params.initialSpotShockUp >= 1e18
-        || params.initialSpotShockDown >= 1e18
-        || params.maintenanceSpotShockUp >= 1e18
-        || params.maintenanceSpotShockDown >= 1e18
+      params.maintenanceMarginRatio > params.initialMarginRatio || params.initialMarginRatio >= 1e18
+        || params.maintenanceMarginRatio >= 1e18 || params.initialMaxLeverage < 1e18
+        || params.maintenanceMaxLeverage < 1e18 || params.initialMaxLeverage > params.maintenanceMaxLeverage
+        || params.initialSpotShockUp >= 1e18 || params.initialSpotShockDown >= 1e18
+        || params.maintenanceSpotShockUp >= 1e18 || params.maintenanceSpotShockDown >= 1e18
     ) {
       revert SPM_InvalidRiskParams();
     }
@@ -218,12 +213,10 @@ contract SquaredPerpManager is ILiquidatableManager, BaseManager, ReentrancyGuar
     (uint currentMark,) = perp.getPerpPrice();
     uint notional = SignedMath.abs(position).multiplyDecimal(currentMark);
 
-    uint ratioRequirement = notional.multiplyDecimal(
-      isInitial ? params.initialMarginRatio : params.maintenanceMarginRatio
-    );
-    uint leverageRequirement = notional.divideDecimal(
-      isInitial ? params.initialMaxLeverage : params.maintenanceMaxLeverage
-    );
+    uint ratioRequirement =
+      notional.multiplyDecimal(isInitial ? params.initialMarginRatio : params.maintenanceMarginRatio);
+    uint leverageRequirement =
+      notional.divideDecimal(isInitial ? params.initialMaxLeverage : params.maintenanceMaxLeverage);
     scenarioLoss = _getScenarioLoss(perp, params, position, isInitial, scenarioId, currentMark);
 
     requirement = ratioRequirement;
@@ -283,13 +276,15 @@ contract SquaredPerpManager is ILiquidatableManager, BaseManager, ReentrancyGuar
   {
     if (params.isSquared) {
       (uint spotPrice,) = SquaredPerpAsset(address(perp)).spotFeed().getSpot();
-      uint shockedUnderlying =
-        isUp ? spotPrice.multiplyDecimal(DecimalMath.UNIT + shock) : spotPrice.multiplyDecimal(DecimalMath.UNIT - shock);
+      uint shockedUnderlying = isUp
+        ? spotPrice.multiplyDecimal(DecimalMath.UNIT + shock)
+        : spotPrice.multiplyDecimal(DecimalMath.UNIT - shock);
       return shockedUnderlying.multiplyDecimal(shockedUnderlying);
     }
 
     (uint indexPrice,) = perp.getIndexPrice();
-    return isUp ? indexPrice.multiplyDecimal(DecimalMath.UNIT + shock) : indexPrice.multiplyDecimal(DecimalMath.UNIT - shock);
+    return
+      isUp ? indexPrice.multiplyDecimal(DecimalMath.UNIT + shock) : indexPrice.multiplyDecimal(DecimalMath.UNIT - shock);
   }
 
   function _chargeAllOIFee(address caller, uint accountId, uint tradeId, ISubAccounts.AssetDelta[] memory assetDeltas)

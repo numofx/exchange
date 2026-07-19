@@ -38,12 +38,7 @@ contract MockSM is ISecurityModule {
     }
 
     ISubAccounts.AssetTransfer memory transfer = ISubAccounts.AssetTransfer({
-      fromAcc: accountId,
-      toAcc: targetAccount,
-      asset: cash,
-      subId: 0,
-      amount: int(cashAmountPaid),
-      assetData: ""
+      fromAcc: accountId, toAcc: targetAccount, asset: cash, subId: 0, amount: int(cashAmountPaid), assetData: ""
     });
 
     subAccounts.submitTransfer(transfer, "");
