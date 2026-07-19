@@ -9,7 +9,7 @@ liquidations — treat the publisher as tier-1 infrastructure.
 ```bash
 # as the service user (assumed: numo, home /home/numo)
 curl -L https://foundry.sh | bash && ~/.foundry/bin/foundryup   # provides cast
-git clone https://github.com/numofx/risk-core.git ~/risk-core
+git clone --depth 1 https://github.com/numofx/exchange.git ~/exchange
 
 umask 077
 cat > ~/.numo-feeds.env <<'EOF'
@@ -20,7 +20,7 @@ ALERT_WEBHOOK_URL=<Slack/Discord webhook, optional>
 EOF
 
 # smoke test before installing units
-cd ~/risk-core
+cd ~/exchange/contracts/risk-core
 python3 scripts/publish_fx_feeds.py --once --dry-run
 python3 scripts/publish_fx_feeds.py --once
 python3 scripts/ops/check_feed_staleness.py
@@ -29,8 +29,8 @@ python3 scripts/ops/check_feed_staleness.py
 ## Install units (as root; edit User=/paths first if not numo)
 
 ```bash
-cp ~numo/risk-core/scripts/ops/numo-feeds.service /etc/systemd/system/
-cp ~numo/risk-core/scripts/ops/numo-feed-alert.{service,timer} /etc/systemd/system/
+cp ~/exchange/contracts/risk-core/scripts/ops/numo-feeds.service /etc/systemd/system/
+cp ~/exchange/contracts/risk-core/scripts/ops/numo-feed-alert.{service,timer} /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now numo-feeds numo-feed-alert.timer
 ```

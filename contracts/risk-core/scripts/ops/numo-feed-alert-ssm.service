@@ -8,6 +8,6 @@ Description=Numo feed staleness check
 [Service]
 Type=oneshot
 User=ec2-user
-WorkingDirectory=/home/ec2-user/risk-core
-ExecStart=/home/ec2-user/risk-core/scripts/ops/run-with-ssm.sh /usr/bin/python3 scripts/ops/check_feed_staleness.py
+WorkingDirectory=/home/ec2-user/exchange/contracts/risk-core
+ExecStart=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-ssm.sh /usr/bin/python3 scripts/ops/check_feed_staleness.py
 Environment=AWS_REGION=us-east-1
