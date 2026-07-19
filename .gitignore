@@ -1,0 +1,10 @@
+# build artifacts
+out/
+cache/
+**/node_modules/
+**/dist/
+.gocache/
+# secrets
+.env
+**/.env
+!**/.env.example
