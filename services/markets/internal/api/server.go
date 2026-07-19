@@ -19,8 +19,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/numofx/matching-backend/internal/config"
+	"github.com/numofx/matching-backend/internal/events"
 	"github.com/numofx/matching-backend/internal/instruments"
 	"github.com/numofx/matching-backend/internal/orders"
+	"github.com/numofx/matching-backend/internal/wsauth"
 )
 
 type Server struct {
@@ -29,6 +31,8 @@ type Server struct {
 	orders      *orders.Repository
 	instruments *instruments.Registry
 	custody     custodyChecker
+	hub         *events.Hub
+	wsAuth      wsauth.Verifier
 }
 
 type marketPresentation struct {
@@ -163,6 +167,8 @@ func NewServer(cfg config.Config, pool *pgxpool.Pool, registry *instruments.Regi
 		orders:      orders.NewRepository(pool),
 		instruments: registry,
 		custody:     newCustodyChecker(cfg),
+		hub:         events.NewHub(pool, cfg, slog.Default()),
+		wsAuth:      wsauth.Verifier{Domain: cfg.WSAuthDomain, MaxTTL: cfg.WSAuthMaxTTL},
 	}
 }
 
@@ -176,6 +182,16 @@ func (s *Server) Run() error {
 	router.Get("/debug/markets", s.handleMarketDiagnostics)
 	router.Post("/v1/orders", s.handleCreateOrder)
 	router.Post("/v1/orders/cancel", s.handleCancelOrder)
+	router.Get("/v1/ws", s.handleWS)
+
+	// Real-time event fan-out: tail market_events over LISTEN/NOTIFY for the whole process.
+	hubCtx, cancelHub := context.WithCancel(context.Background())
+	defer cancelHub()
+	go func() {
+		if err := s.hub.Run(hubCtx); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("events hub stopped", "error", err)
+		}
+	}()
 
 	s.logRegisteredMarkets()
 	slog.Info(
