@@ -1,0 +1,26 @@
+# .github/workflows/services-markets.yml
+name: services-markets
+on:
+  push:
+    branches: [main]
+    paths: ['services/markets/**', '.github/workflows/services-markets.yml']
+  pull_request:
+    paths: ['services/markets/**', '.github/workflows/services-markets.yml']
+concurrency:
+  group: services-markets-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/markets
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: services/markets/go.mod
+          cache-dependency-path: services/markets/go.sum
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./...
