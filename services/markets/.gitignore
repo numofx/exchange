@@ -1,0 +1,11 @@
+.env
+.DS_Store
+/api
+/migrate
+.cache/
+/bin
+bin/
+dist/
+coverage.out
+.gocache/
+scripts/.smoke/

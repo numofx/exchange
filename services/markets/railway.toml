@@ -1,0 +1,10 @@
+[build]
+builder = "RAILPACK"
+buildCommand = "go build -o out ./cmd/api && go build -o out-matcher ./cmd/matcher && go build -o migrate ./cmd/migrate"
+
+[deploy]
+preDeployCommand = "./scripts/predeploy.sh"
+startCommand = "./scripts/start.sh"
+runtime = "V2"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
