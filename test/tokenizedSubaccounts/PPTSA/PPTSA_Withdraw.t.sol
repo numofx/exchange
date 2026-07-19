@@ -126,11 +126,7 @@ contract PPTSA_ValidationTests is PPTSATestUtils {
     vm.prank(address(markets[MARKET].base));
     subAccounts.assetAdjustment(
       ISubAccounts.AssetAdjustment({
-        acc: tsaSubacc,
-        asset: markets[MARKET].base,
-        subId: 0,
-        amount: 10e18,
-        assetData: bytes32(0)
+        acc: tsaSubacc, asset: markets[MARKET].base, subId: 0, amount: 10e18, assetData: bytes32(0)
       }),
       true,
       ""

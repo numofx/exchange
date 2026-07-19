@@ -426,17 +426,15 @@ contract TradeModuleTest is MatchingBase {
     uint takerFee,
     uint makerFee
   ) internal pure returns (bytes memory) {
-    ITradeModule.FillDetails memory fillDetails =
-      ITradeModule.FillDetails({filledAccount: makerAcc, amountFilled: amountFilled, price: price, fee: makerFee});
+    ITradeModule.FillDetails memory fillDetails = ITradeModule.FillDetails({
+      filledAccount: makerAcc, amountFilled: amountFilled, price: price, fee: makerFee
+    });
 
     ITradeModule.FillDetails[] memory fills = new ITradeModule.FillDetails[](1);
     fills[0] = fillDetails;
 
     ITradeModule.OrderData memory orderData = ITradeModule.OrderData({
-      takerAccount: takerAccount,
-      takerFee: takerFee,
-      fillDetails: fills,
-      managerData: bytes("")
+      takerAccount: takerAccount, takerFee: takerFee, fillDetails: fills, managerData: bytes("")
     });
 
     bytes memory encodedAction = abi.encode(orderData);
@@ -449,10 +447,7 @@ contract TradeModuleTest is MatchingBase {
     returns (bytes memory)
   {
     ITradeModule.OrderData memory orderData = ITradeModule.OrderData({
-      takerAccount: takerAccount,
-      takerFee: takerFee,
-      fillDetails: makerFills,
-      managerData: bytes("")
+      takerAccount: takerAccount, takerFee: takerFee, fillDetails: makerFills, managerData: bytes("")
     });
 
     bytes memory encodedAction = abi.encode(orderData);

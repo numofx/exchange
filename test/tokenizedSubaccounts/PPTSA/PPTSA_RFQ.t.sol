@@ -187,7 +187,7 @@ contract PPTSA_ValidationTests is PPTSATestUtils {
     _executeDeposit(10e18);
     PrincipalProtectedTSA.PPTSAParams memory params = defaultPPTSAParams;
     CollateralManagementTSA.CollateralManagementParams memory collateralManagementParams =
-      defaultCollateralManagementParams;
+    defaultCollateralManagementParams;
     pptsa.setPPTSAParams(params);
     pptsa.setCollateralManagementParams(collateralManagementParams);
     int amount = 1e18;
@@ -220,7 +220,7 @@ contract PPTSA_ValidationTests is PPTSATestUtils {
     _executeDeposit(10e18);
     PrincipalProtectedTSA.PPTSAParams memory params = defaultPPTSAParams;
     CollateralManagementTSA.CollateralManagementParams memory collateralManagementParams =
-      defaultCollateralManagementParams;
+    defaultCollateralManagementParams;
     pptsa.setPPTSAParams(params);
     pptsa.setCollateralManagementParams(collateralManagementParams);
     int amount = 1e18;

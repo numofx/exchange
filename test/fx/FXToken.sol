@@ -126,7 +126,4 @@ contract FXTokenTest is Test {
     vm.expectRevert("FxToken: cannot block zero address");
     token.setBlocked(address(0), true);
   }
-
-
-
 }

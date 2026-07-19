@@ -176,7 +176,7 @@ contract DatedFutureForkTest is ForkBase {
 
     // 6. Fund subaccounts with initial margin (cash = USDC)
     deal(usdc, address(this), 1_000_000_000e6);
-    IERC20Metadata(usdc).approve(address(cash), type(uint256).max);
+    IERC20Metadata(usdc).approve(address(cash), type(uint).max);
     cash.deposit(fxTakerAcc, 100_000_000e6);
     cash.deposit(fxMakerAcc, 100_000_000e6);
   }
@@ -188,7 +188,7 @@ contract DatedFutureForkTest is ForkBase {
   function testPhysicalSettlementAtExpiryFork() public checkFork {
     uint lastTradeTime = fxFuture.getSeries(fxSeries).lastTradeTime;
     vm.warp(lastTradeTime - 1 days);
-    vm.store(address(cash), bytes32(uint256(12)), bytes32(block.timestamp));
+    vm.store(address(cash), bytes32(uint(12)), bytes32(block.timestamp));
 
     ITradeModule.TradeData memory camTradeData = ITradeModule.TradeData({
       asset: address(fxFuture),
@@ -213,8 +213,12 @@ contract DatedFutureForkTest is ForkBase {
     IActionVerifier.Action[] memory actions = new IActionVerifier.Action[](2);
     bytes[] memory signatures = new bytes[](2);
 
-    (actions[0], signatures[0]) = _createActionAndSign(fxTakerAcc, 0, address(tradeModule), abi.encode(camTradeData), block.timestamp + 1 days, cam, cam, camPk);
-    (actions[1], signatures[1]) = _createActionAndSign(fxMakerAcc, 0, address(tradeModule), abi.encode(dougTradeData), block.timestamp + 1 days, doug, doug, dougPk);
+    (actions[0], signatures[0]) = _createActionAndSign(
+      fxTakerAcc, 0, address(tradeModule), abi.encode(camTradeData), block.timestamp + 1 days, cam, cam, camPk
+    );
+    (actions[1], signatures[1]) = _createActionAndSign(
+      fxMakerAcc, 0, address(tradeModule), abi.encode(dougTradeData), block.timestamp + 1 days, doug, doug, dougPk
+    );
 
     // Match trade (success: no cash changed hands at T0, positions opened)
     matching.verifyAndMatch(actions, signatures, _createMatchedTrade(fxTakerAcc, fxMakerAcc, 1e18, 1600e18, 0, 0));
@@ -334,17 +338,15 @@ contract DatedFutureForkTest is ForkBase {
     uint takerFee,
     uint makerFee
   ) internal pure returns (bytes memory) {
-    ITradeModule.FillDetails memory fillDetails =
-      ITradeModule.FillDetails({filledAccount: makerAcc, amountFilled: amountFilled, price: price, fee: makerFee});
+    ITradeModule.FillDetails memory fillDetails = ITradeModule.FillDetails({
+      filledAccount: makerAcc, amountFilled: amountFilled, price: price, fee: makerFee
+    });
 
     ITradeModule.FillDetails[] memory fills = new ITradeModule.FillDetails[](1);
     fills[0] = fillDetails;
 
     ITradeModule.OrderData memory orderData = ITradeModule.OrderData({
-      takerAccount: takerAccount,
-      takerFee: takerFee,
-      fillDetails: fills,
-      managerData: bytes("")
+      takerAccount: takerAccount, takerFee: takerFee, fillDetails: fills, managerData: bytes("")
     });
 
     return abi.encode(orderData);

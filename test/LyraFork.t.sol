@@ -40,10 +40,7 @@ contract LyraForkTest is ForkBase {
       srm.setOracleContingencyParams(
         marketId,
         IStandardManager.OracleContingencyParams({
-          perpThreshold: 0.55e18,
-          optionThreshold: 0.55e18,
-          baseThreshold: 0.55e18,
-          OCFactor: 1e18
+          perpThreshold: 0.55e18, optionThreshold: 0.55e18, baseThreshold: 0.55e18, OCFactor: 1e18
         })
       );
 
@@ -77,12 +74,10 @@ contract LyraForkTest is ForkBase {
       Ownable2Step(_getV2CoreContract(deploymentFile, "iapFeed")).acceptOwnership();
       Ownable2Step(_getV2CoreContract(deploymentFile, "ibpFeed")).acceptOwnership();
 
-      TradeModule(_getMatchingContract("matching", "trade")).setPerpAsset(
-        IPerpAsset(_getV2CoreContract(deploymentFile, "perp")), true
-      );
-      TradeModule(_getMatchingContract("matching", "rfq")).setPerpAsset(
-        IPerpAsset(_getV2CoreContract(deploymentFile, "perp")), true
-      );
+      TradeModule(_getMatchingContract("matching", "trade"))
+        .setPerpAsset(IPerpAsset(_getV2CoreContract(deploymentFile, "perp")), true);
+      TradeModule(_getMatchingContract("matching", "rfq"))
+        .setPerpAsset(IPerpAsset(_getV2CoreContract(deploymentFile, "perp")), true);
       //      TradeModule(_getMatchingContract("matching", "liquidate")).setPerpAsset(IPerpAsset(_getV2CoreContract(deploymentFile, "perp")), true);
     }
   }

@@ -121,12 +121,7 @@ contract LyraAuctionUtils {
 
   function _transferCash(uint fromId, uint toId, uint amount, bytes memory managerData) internal {
     ISubAccounts.AssetTransfer memory adjustment = ISubAccounts.AssetTransfer({
-      fromAcc: fromId,
-      toAcc: toId,
-      asset: IAsset(cash),
-      subId: 0,
-      amount: amount.toInt256(),
-      assetData: bytes32(0)
+      fromAcc: fromId, toAcc: toId, asset: IAsset(cash), subId: 0, amount: amount.toInt256(), assetData: bytes32(0)
     });
     subAccounts.submitTransfer(adjustment, managerData);
   }

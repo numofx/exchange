@@ -20,13 +20,10 @@ contract CCTSATestUtils is TSATestUtils {
     optionMaxTimeToExpiry: 30 days
   });
 
-  CollateralManagementTSA.CollateralManagementParams public defaultCollateralManagementParams = CollateralManagementTSA
-    .CollateralManagementParams({
-    feeFactor: 0.01e18,
-    spotTransactionLeniency: 1.01e18,
-    worstSpotBuyPrice: 1.01e18,
-    worstSpotSellPrice: 0.99e18
-  });
+  CollateralManagementTSA.CollateralManagementParams public defaultCollateralManagementParams =
+    CollateralManagementTSA.CollateralManagementParams({
+      feeFactor: 0.01e18, spotTransactionLeniency: 1.01e18, worstSpotBuyPrice: 1.01e18, worstSpotSellPrice: 0.99e18
+    });
 
   function upgradeToCCTSA(string memory market) internal {
     IWrappedERC20Asset wrappedDepositAsset;

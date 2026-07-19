@@ -20,9 +20,7 @@ import {IWithdrawalModule} from "../interfaces/IWithdrawalModule.sol";
 import {IMatching} from "../interfaces/IMatching.sol";
 import {IWrappedERC20Asset} from "v2-core/src/interfaces/IWrappedERC20Asset.sol";
 
-import {
-  StandardManager, IStandardManager, IVolFeed, IForwardFeed
-} from "v2-core/src/risk-managers/StandardManager.sol";
+import {StandardManager, IStandardManager, IVolFeed, IForwardFeed} from "v2-core/src/risk-managers/StandardManager.sol";
 import {ITradeModule} from "../interfaces/ITradeModule.sol";
 import {CollateralManagementTSA} from "./CollateralManagementTSA.sol";
 
@@ -191,7 +189,11 @@ contract LeveragedBasisTSA is CollateralManagementTSA {
   ///////////////////////
   // Action Validation //
   ///////////////////////
-  function _verifyAction(IMatching.Action memory action, bytes32 actionHash, bytes memory /*extraData*/ )
+  function _verifyAction(
+    IMatching.Action memory action,
+    bytes32 actionHash,
+    bytes memory /*extraData*/
+  )
     internal
     virtual
     override
@@ -325,8 +327,9 @@ contract LeveragedBasisTSA is CollateralManagementTSA {
     }
     LBTSAStorage storage $ = _getLBTSAStorage();
 
-    uint newUnderlyingBase =
-      isWithdrawal ? (tradeHelperVars.underlyingBase.toInt256() + amtDelta).toUint256() : tradeHelperVars.underlyingBase;
+    uint newUnderlyingBase = isWithdrawal
+      ? (tradeHelperVars.underlyingBase.toInt256() + amtDelta).toUint256()
+      : tradeHelperVars.underlyingBase;
 
     // Leverage
     uint leverage = tradeHelperVars.baseBalance.divideDecimal(tradeHelperVars.underlyingBase);
@@ -339,7 +342,10 @@ contract LeveragedBasisTSA is CollateralManagementTSA {
 
     require(
       _isWithinBounds(
-        leverage.toInt256(), newLeverage.toInt256(), $.lbParams.leverageFloor.toInt256(), $.lbParams.leverageCeil.toInt256()
+        leverage.toInt256(),
+        newLeverage.toInt256(),
+        $.lbParams.leverageFloor.toInt256(),
+        $.lbParams.leverageCeil.toInt256()
       ),
       LBT_PostTradeLeverageOutOfRange()
     );
@@ -363,7 +369,9 @@ contract LeveragedBasisTSA is CollateralManagementTSA {
     return false;
   }
 
-  function _verifyEmaMarkLoss(ITradeModule.TradeData memory tradeData, TradeHelperVars memory tradeHelperVars) internal {
+  function _verifyEmaMarkLoss(ITradeModule.TradeData memory tradeData, TradeHelperVars memory tradeHelperVars)
+    internal
+  {
     LBTSAStorage storage $ = _getLBTSAStorage();
 
     int priceToCheck = (tradeHelperVars.isBaseTrade ? tradeHelperVars.basePrice : tradeHelperVars.perpPrice).toInt256();

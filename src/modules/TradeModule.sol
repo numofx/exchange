@@ -223,7 +223,7 @@ contract TradeModule is ITradeModule, BaseModule {
       amtQuote = perpDelta.multiplyDecimal(int(fillDetails.amountFilled));
     } else if (isDatedFutureAsset[matchedOrder.data.asset]) {
       amtQuote = 0;
-      assetData = bytes32(uint256(fillDetails.price));
+      assetData = bytes32(uint(fillDetails.price));
     } else {
       amtQuote = fillDetails.price.multiplyDecimal(int(fillDetails.amountFilled));
     }
