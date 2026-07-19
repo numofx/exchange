@@ -292,11 +292,7 @@ contract RfqModuleTest is MatchingBase {
     IRfqModule.TakerOrder memory takerOrder =
       IRfqModule.TakerOrder({orderHash: keccak256(abi.encode(rfqOrder.trades)), maxFee: 0});
     IRfqModule.FillData memory orderData = IRfqModule.FillData({
-      makerAccount: camAcc,
-      makerFee: 0,
-      takerAccount: dougAcc,
-      takerFee: 0,
-      managerData: managerData
+      makerAccount: camAcc, makerFee: 0, takerAccount: dougAcc, takerFee: 0, managerData: managerData
     });
 
     (actions, signatures) = _signAndGetActions(rfqOrder, takerOrder, 0, 0);

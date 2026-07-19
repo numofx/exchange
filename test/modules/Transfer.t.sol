@@ -16,9 +16,7 @@ contract TransferModuleTest is MatchingBase {
     transfers[0] = ITransferModule.Transfers({asset: address(cash), subId: 0, amount: 1e18});
 
     ITransferModule.TransferData memory transferData = ITransferModule.TransferData({
-      toAccountId: newAccountId,
-      managerForNewAccount: address(pmrm),
-      transfers: transfers
+      toAccountId: newAccountId, managerForNewAccount: address(pmrm), transfers: transfers
     });
 
     // sign action and submit

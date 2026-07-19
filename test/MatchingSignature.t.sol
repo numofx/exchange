@@ -17,8 +17,9 @@ contract MatchingSignatureTest is MatchingBase {
     bytes memory depositData = _encodeDepositData(1e18, address(cash), address(0));
     IActionVerifier.Action[] memory actions = new IActionVerifier.Action[](1);
     bytes[] memory signatures = new bytes[](1);
-    (actions[0], signatures[0]) =
-      _createActionAndSign(camAcc, 0, address(depositModule), depositData, block.timestamp + 1 minutes, cam, cam, camPk);
+    (actions[0], signatures[0]) = _createActionAndSign(
+      camAcc, 0, address(depositModule), depositData, block.timestamp + 1 minutes, cam, cam, camPk
+    );
 
     vm.warp(block.timestamp + 2 minutes);
 

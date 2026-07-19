@@ -26,13 +26,10 @@ contract LBTSATestUtils is TSATestUtils {
     maxSignatureExpiry: 60 * 60 * 24 * 7
   });
 
-  CollateralManagementTSA.CollateralManagementParams public defaultCollateralManagementParams = CollateralManagementTSA
-    .CollateralManagementParams({
-    feeFactor: 0.01e18,
-    spotTransactionLeniency: 0,
-    worstSpotBuyPrice: 0,
-    worstSpotSellPrice: 0
-  });
+  CollateralManagementTSA.CollateralManagementParams public defaultCollateralManagementParams =
+    CollateralManagementTSA.CollateralManagementParams({
+      feeFactor: 0.01e18, spotTransactionLeniency: 0, worstSpotBuyPrice: 0, worstSpotSellPrice: 0
+    });
 
   function upgradeToLBTSA() internal {
     tsaImplementation = new PublicLBTSA();

@@ -148,8 +148,9 @@ contract DepositModuleTest is MatchingBase {
     IActionVerifier.Action[] memory actions = new IActionVerifier.Action[](1);
     bytes[] memory signatures = new bytes[](1);
 
-    (actions[0], signatures[0]) =
-      _createActionAndSign(camAcc, 0, address(depositModule), depositData, block.timestamp + 1 weeks, cam, doug, dougPk);
+    (actions[0], signatures[0]) = _createActionAndSign(
+      camAcc, 0, address(depositModule), depositData, block.timestamp + 1 weeks, cam, doug, dougPk
+    );
 
     IERC20Metadata cashToken = IERC20BasedAsset(address(cash)).wrappedAsset();
     vm.startPrank(cam);

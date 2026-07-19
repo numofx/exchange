@@ -18,7 +18,7 @@ contract PPTSA_Admin is PPTSATestUtils {
   function testPPTAdmin() public {
     PrincipalProtectedTSA.PPTSAParams memory params = defaultPPTSAParams;
     CollateralManagementTSA.CollateralManagementParams memory collateralManagementParams =
-      defaultCollateralManagementParams;
+    defaultCollateralManagementParams;
     collateralManagementParams.feeFactor = 0.05e18;
     params.minSignatureExpiry = 6 minutes;
 
@@ -41,7 +41,7 @@ contract PPTSA_Admin is PPTSATestUtils {
     // test each boundary one by one
     PrincipalProtectedTSA.PPTSAParams memory params = defaultPPTSAParams;
     CollateralManagementTSA.CollateralManagementParams memory collateralManagementParams =
-      defaultCollateralManagementParams;
+    defaultCollateralManagementParams;
 
     params.minSignatureExpiry = 1 minutes - 1;
     vm.expectRevert(PrincipalProtectedTSA.PPT_InvalidParams.selector);

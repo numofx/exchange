@@ -124,7 +124,15 @@ abstract contract BaseOnChainSigningTSA is BaseTSA {
     return bytes4(0);
   }
 
-  function _isValidSignature(bytes32 _hash, bytes memory /* _signature */ ) internal view virtual returns (bool) {
+  function _isValidSignature(
+    bytes32 _hash,
+    bytes memory /* _signature */
+  )
+    internal
+    view
+    virtual
+    returns (bool)
+  {
     BaseSigningTSAStorage storage $ = _getBaseSigningTSAStorage();
 
     return !$.signaturesDisabled && $.signedData[_hash];
