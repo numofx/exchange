@@ -78,13 +78,13 @@ contract UNIT_SquaredPerpManager is Test {
         isWhitelisted: true,
         isSquared: false,
         initialMarginRatio: 0.15e18,
-        maintenanceMarginRatio: 0.10e18,
+        maintenanceMarginRatio: 0.1e18,
         initialMaxLeverage: 4e18,
         maintenanceMaxLeverage: 8e18,
-        initialSpotShockUp: 0.20e18,
-        initialSpotShockDown: 0.20e18,
-        maintenanceSpotShockUp: 0.10e18,
-        maintenanceSpotShockDown: 0.10e18
+        initialSpotShockUp: 0.2e18,
+        initialSpotShockDown: 0.2e18,
+        maintenanceSpotShockUp: 0.1e18,
+        maintenanceSpotShockDown: 0.1e18
       })
     );
 
@@ -93,14 +93,14 @@ contract UNIT_SquaredPerpManager is Test {
       SquaredPerpManager.PerpRiskParams({
         isWhitelisted: true,
         isSquared: true,
-        initialMarginRatio: 0.20e18,
+        initialMarginRatio: 0.2e18,
         maintenanceMarginRatio: 0.12e18,
         initialMaxLeverage: 5e18,
         maintenanceMaxLeverage: 5e18,
-        initialSpotShockUp: 0.20e18,
-        initialSpotShockDown: 0.20e18,
-        maintenanceSpotShockUp: 0.10e18,
-        maintenanceSpotShockDown: 0.10e18
+        initialSpotShockUp: 0.2e18,
+        initialSpotShockDown: 0.2e18,
+        maintenanceSpotShockUp: 0.1e18,
+        maintenanceSpotShockDown: 0.1e18
       })
     );
 
@@ -147,8 +147,8 @@ contract UNIT_SquaredPerpManager is Test {
     _tradePerp(linearPerp, aliceAcc, bobAcc, 1e18);
     _tradePerp(squaredPerp, aliceAcc, bobAcc, 1e18);
 
-    (, , uint linearShockLoss) = manager.getIsolatedRisk(linearPerp, bobAcc, true, 2);
-    (, , uint squaredShockLoss) = manager.getIsolatedRisk(squaredPerp, bobAcc, true, 2);
+    (,, uint linearShockLoss) = manager.getIsolatedRisk(linearPerp, bobAcc, true, 2);
+    (,, uint squaredShockLoss) = manager.getIsolatedRisk(squaredPerp, bobAcc, true, 2);
 
     assertEq(linearShockLoss, 8e18);
     assertEq(squaredShockLoss, 576e18);
@@ -185,8 +185,9 @@ contract UNIT_SquaredPerpManager is Test {
   }
 
   function _tradePerp(IPerpAsset perp, uint fromAcc, uint toAcc, int amount) internal {
-    ISubAccounts.AssetTransfer memory transfer =
-      ISubAccounts.AssetTransfer({fromAcc: fromAcc, toAcc: toAcc, asset: perp, subId: 0, amount: amount, assetData: ""});
+    ISubAccounts.AssetTransfer memory transfer = ISubAccounts.AssetTransfer({
+      fromAcc: fromAcc, toAcc: toAcc, asset: perp, subId: 0, amount: amount, assetData: ""
+    });
     subAccounts.submitTransfer(transfer, "");
   }
 }

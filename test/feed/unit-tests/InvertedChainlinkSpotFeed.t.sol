@@ -15,7 +15,8 @@ contract UNIT_InvertedChainlinkSpotFeed is Test {
     vm.warp(7 days);
     aggregator = new MockAggregatorV3(8);
     sequencerFeed = new MockAggregatorV3(0);
-    feed = new InvertedChainlinkSpotFeed(IAggregatorV3(address(aggregator)), IAggregatorV3(address(0)), 1 hours, 1 hours);
+    feed =
+      new InvertedChainlinkSpotFeed(IAggregatorV3(address(aggregator)), IAggregatorV3(address(0)), 1 hours, 1 hours);
   }
 
   function testInvertsAggregatorDecimalsTo18() public {

@@ -298,11 +298,7 @@ contract CashAsset is ICashAsset, Ownable2Step, ManagerWhitelist {
 
     subAccounts.assetAdjustment(
       ISubAccounts.AssetAdjustment({
-        acc: smId,
-        asset: ICashAsset(address(this)),
-        subId: 0,
-        amount: amountToSend,
-        assetData: bytes32(0)
+        acc: smId, asset: ICashAsset(address(this)), subId: 0, amount: amountToSend, assetData: bytes32(0)
       }),
       true, // do trigger callback on handleAdjustment so we apply interest
       ""

@@ -348,22 +348,12 @@ contract IntegrationTestBase is Test {
 
     // accA transfer asset A to accB
     transferBatch[0] = ISubAccounts.AssetTransfer({
-      fromAcc: accA,
-      toAcc: accB,
-      asset: assetA,
-      subId: subIdA,
-      amount: amountA,
-      assetData: bytes32(0)
+      fromAcc: accA, toAcc: accB, asset: assetA, subId: subIdA, amount: amountA, assetData: bytes32(0)
     });
 
     // accB transfer asset B to accA
     transferBatch[1] = ISubAccounts.AssetTransfer({
-      fromAcc: accB,
-      toAcc: accA,
-      asset: assetB,
-      subId: subIdB,
-      amount: amountB,
-      assetData: bytes32(0)
+      fromAcc: accB, toAcc: accA, asset: assetB, subId: subIdB, amount: amountB, assetData: bytes32(0)
     });
 
     subAccounts.submitTransfers(transferBatch, "");

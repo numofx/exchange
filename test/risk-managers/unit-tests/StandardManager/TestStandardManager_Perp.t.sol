@@ -134,12 +134,7 @@ contract UNIT_TestStandardManager is Test {
     MockOption badAsset = new MockOption(subAccounts);
     vm.expectRevert(IStandardManager.SRM_UnsupportedAsset.selector);
     ISubAccounts.AssetTransfer memory transfer = ISubAccounts.AssetTransfer({
-      fromAcc: aliceAcc,
-      toAcc: bobAcc,
-      asset: badAsset,
-      subId: 0,
-      amount: 1e18,
-      assetData: ""
+      fromAcc: aliceAcc, toAcc: bobAcc, asset: badAsset, subId: 0, amount: 1e18, assetData: ""
     });
     subAccounts.submitTransfer(transfer, "");
   }
@@ -271,12 +266,7 @@ contract UNIT_TestStandardManager is Test {
     // assume alice has 1000 unrealized pnl (report by perp contract)
     perp.mockAccountPnlAndFunding(aliceAcc, 0, 1000e18);
     ISubAccounts.AssetTransfer memory transfer = ISubAccounts.AssetTransfer({
-      fromAcc: aliceAcc,
-      toAcc: bobAcc,
-      asset: cash,
-      subId: 0,
-      amount: 1000e18,
-      assetData: ""
+      fromAcc: aliceAcc, toAcc: bobAcc, asset: cash, subId: 0, amount: 1000e18, assetData: ""
     });
 
     vm.expectRevert(IStandardManager.SRM_NoNegativeCash.selector);
@@ -294,8 +284,9 @@ contract UNIT_TestStandardManager is Test {
   }
 
   function _tradePerpContract(uint fromAcc, uint toAcc, int amount) internal {
-    ISubAccounts.AssetTransfer memory transfer =
-      ISubAccounts.AssetTransfer({fromAcc: fromAcc, toAcc: toAcc, asset: perp, subId: 0, amount: amount, assetData: ""});
+    ISubAccounts.AssetTransfer memory transfer = ISubAccounts.AssetTransfer({
+      fromAcc: fromAcc, toAcc: toAcc, asset: perp, subId: 0, amount: amount, assetData: ""
+    });
     subAccounts.submitTransfer(transfer, "");
   }
 

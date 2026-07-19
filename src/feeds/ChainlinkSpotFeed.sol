@@ -10,7 +10,7 @@ interface IAggregatorV3 {
   function latestRoundData()
     external
     view
-    returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound);
+    returns (uint80 roundId, int answer, uint startedAt, uint updatedAt, uint80 answeredInRound);
 }
 
 /**
@@ -37,7 +37,7 @@ contract ChainlinkSpotFeed is Ownable2Step, ISpotFeed {
   }
 
   function getSpot() external view returns (uint spotPrice, uint confidence) {
-    (, int256 answer,, uint256 updatedAt,) = aggregator.latestRoundData();
+    (, int answer,, uint updatedAt,) = aggregator.latestRoundData();
 
     if (answer <= 0) revert CLF_InvalidPrice();
     if (updatedAt + heartbeat < block.timestamp) revert CLF_DataTooOld();

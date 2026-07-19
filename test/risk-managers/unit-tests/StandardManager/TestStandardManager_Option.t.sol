@@ -631,12 +631,7 @@ contract UNIT_TestStandardManager_Option is Test {
       assetData: ""
     });
     transfers[1] = ISubAccounts.AssetTransfer({
-      fromAcc: longAcc,
-      toAcc: shortAcc,
-      asset: cash,
-      subId: 0,
-      amount: premium,
-      assetData: ""
+      fromAcc: longAcc, toAcc: shortAcc, asset: cash, subId: 0, amount: premium, assetData: ""
     });
     subAccounts.submitTransfers(transfers, "");
   }

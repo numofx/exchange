@@ -62,12 +62,7 @@ contract UNIT_PerpAssetFunding is Test {
 
     // open trades
     ISubAccounts.AssetTransfer memory transfer = ISubAccounts.AssetTransfer({
-      fromAcc: aliceAcc,
-      toAcc: bobAcc,
-      asset: perp,
-      subId: 0,
-      amount: defaultPosition,
-      assetData: ""
+      fromAcc: aliceAcc, toAcc: bobAcc, asset: perp, subId: 0, amount: defaultPosition, assetData: ""
     });
     subAccounts.submitTransfer(transfer, "");
   }

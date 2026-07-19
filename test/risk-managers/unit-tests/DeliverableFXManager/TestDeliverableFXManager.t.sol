@@ -24,12 +24,7 @@ contract UNIT_TestDeliverableFXManager is TestDeliverableFXManagerBase {
     fxFuture.setMarkPrice(fxSeries, uint64(block.timestamp + 1), SETTLEMENT_PRICE);
 
     ISubAccounts.AssetTransfer memory reduceTransfer = ISubAccounts.AssetTransfer({
-      fromAcc: bobAcc,
-      toAcc: aliceAcc,
-      asset: fxFuture,
-      subId: fxSeries,
-      amount: int(HALF_CONTRACT),
-      assetData: ""
+      fromAcc: bobAcc, toAcc: aliceAcc, asset: fxFuture, subId: fxSeries, amount: int(HALF_CONTRACT), assetData: ""
     });
     subAccounts.submitTransfer(reduceTransfer, "");
 
@@ -113,12 +108,7 @@ contract UNIT_TestDeliverableFXManager is TestDeliverableFXManagerBase {
     _openFuturePosition(aliceAcc, bobAcc, int(ONE_CONTRACT));
 
     ISubAccounts.AssetTransfer memory secondTransfer = ISubAccounts.AssetTransfer({
-      fromAcc: aliceAcc,
-      toAcc: bobAcc,
-      asset: fxFuture,
-      subId: secondSeries,
-      amount: int(ONE_CONTRACT),
-      assetData: ""
+      fromAcc: aliceAcc, toAcc: bobAcc, asset: fxFuture, subId: secondSeries, amount: int(ONE_CONTRACT), assetData: ""
     });
     subAccounts.submitTransfer(secondTransfer, "");
 
@@ -152,23 +142,13 @@ contract UNIT_TestDeliverableFXManager is TestDeliverableFXManagerBase {
     vm.warp(fxLastTradeTime - 12 hours);
 
     ISubAccounts.AssetTransfer memory increaseTransfer = ISubAccounts.AssetTransfer({
-      fromAcc: aliceAcc,
-      toAcc: bobAcc,
-      asset: fxFuture,
-      subId: fxSeries,
-      amount: int(HALF_CONTRACT),
-      assetData: ""
+      fromAcc: aliceAcc, toAcc: bobAcc, asset: fxFuture, subId: fxSeries, amount: int(HALF_CONTRACT), assetData: ""
     });
     vm.expectRevert(DeliverableFXManager.DFXM_LeverageIncreaseBlocked.selector);
     subAccounts.submitTransfer(increaseTransfer, "");
 
     ISubAccounts.AssetTransfer memory reduceTransfer = ISubAccounts.AssetTransfer({
-      fromAcc: bobAcc,
-      toAcc: aliceAcc,
-      asset: fxFuture,
-      subId: fxSeries,
-      amount: int(HALF_CONTRACT),
-      assetData: ""
+      fromAcc: bobAcc, toAcc: aliceAcc, asset: fxFuture, subId: fxSeries, amount: int(HALF_CONTRACT), assetData: ""
     });
     subAccounts.submitTransfer(reduceTransfer, "");
 
@@ -261,7 +241,9 @@ contract UNIT_TestDeliverableFXManager is TestDeliverableFXManagerBase {
   }
 
   function testPositionLimitsBlockMarketLongAndShortOIAtTradeTime() public {
-    manager.setPositionLimits(type(uint).max, type(uint).max, type(uint).max, type(uint).max, type(uint).max, 0.75e18, 0.75e18);
+    manager.setPositionLimits(
+      type(uint).max, type(uint).max, type(uint).max, type(uint).max, type(uint).max, 0.75e18, 0.75e18
+    );
 
     _fundCash(aliceAcc, 50_000_000e18);
     _fundCash(bobAcc, 50_000_000e18);
@@ -271,7 +253,9 @@ contract UNIT_TestDeliverableFXManager is TestDeliverableFXManagerBase {
   }
 
   function testPositionLimitsBlockPerAccountDirectionalExposure() public {
-    manager.setPositionLimits(type(uint).max, type(uint).max, 0.75e18, type(uint).max, type(uint).max, type(uint).max, type(uint).max);
+    manager.setPositionLimits(
+      type(uint).max, type(uint).max, 0.75e18, type(uint).max, type(uint).max, type(uint).max, type(uint).max
+    );
 
     _fundCash(aliceAcc, 50_000_000e18);
     _fundCash(bobAcc, 50_000_000e18);
@@ -279,7 +263,9 @@ contract UNIT_TestDeliverableFXManager is TestDeliverableFXManagerBase {
     vm.expectRevert(DeliverableFXManager.DFXM_PositionLimitExceeded.selector);
     _openFuturePosition(aliceAcc, bobAcc, int(ONE_CONTRACT));
 
-    manager.setPositionLimits(type(uint).max, type(uint).max, type(uint).max, 0.75e18, type(uint).max, type(uint).max, type(uint).max);
+    manager.setPositionLimits(
+      type(uint).max, type(uint).max, type(uint).max, 0.75e18, type(uint).max, type(uint).max, type(uint).max
+    );
 
     vm.expectRevert(DeliverableFXManager.DFXM_PositionLimitExceeded.selector);
     _openFuturePosition(aliceAcc, bobAcc, int(ONE_CONTRACT));
@@ -297,12 +283,7 @@ contract UNIT_TestDeliverableFXManager is TestDeliverableFXManagerBase {
     vm.warp(fxLastTradeTime + 1);
 
     ISubAccounts.AssetTransfer memory blockedTransfer = ISubAccounts.AssetTransfer({
-      fromAcc: bobAcc,
-      toAcc: charlieAcc,
-      asset: fxFuture,
-      subId: fxSeries,
-      amount: int(HALF_CONTRACT),
-      assetData: ""
+      fromAcc: bobAcc, toAcc: charlieAcc, asset: fxFuture, subId: fxSeries, amount: int(HALF_CONTRACT), assetData: ""
     });
 
     vm.expectRevert(IDeliverableFXFutureAsset.DFXF_TradingClosed.selector);
@@ -379,12 +360,7 @@ contract UNIT_TestDeliverableFXManager is TestDeliverableFXManagerBase {
     _openFuturePosition(aliceAcc, bobAcc, int(ONE_CONTRACT));
 
     ISubAccounts.AssetTransfer memory preFreezeTransfer = ISubAccounts.AssetTransfer({
-      fromAcc: bobAcc,
-      toAcc: charlieAcc,
-      asset: fxFuture,
-      subId: fxSeries,
-      amount: int(HALF_CONTRACT),
-      assetData: ""
+      fromAcc: bobAcc, toAcc: charlieAcc, asset: fxFuture, subId: fxSeries, amount: int(HALF_CONTRACT), assetData: ""
     });
     subAccounts.submitTransfer(preFreezeTransfer, "");
 
@@ -398,12 +374,7 @@ contract UNIT_TestDeliverableFXManager is TestDeliverableFXManagerBase {
     vm.warp(fxLastTradeTime + 1);
 
     ISubAccounts.AssetTransfer memory blockedTransfer = ISubAccounts.AssetTransfer({
-      fromAcc: bobAcc,
-      toAcc: charlieAcc,
-      asset: fxFuture,
-      subId: fxSeries,
-      amount: int(0.1e18),
-      assetData: ""
+      fromAcc: bobAcc, toAcc: charlieAcc, asset: fxFuture, subId: fxSeries, amount: int(0.1e18), assetData: ""
     });
     vm.expectRevert(IDeliverableFXFutureAsset.DFXF_TradingClosed.selector);
     subAccounts.submitTransfer(blockedTransfer, "");
@@ -439,7 +410,7 @@ contract UNIT_TestDeliverableFXManager is TestDeliverableFXManagerBase {
 
   function testFiveXLeverageOpensAtExactIM() public {
     // 5x leverage: IM = 20% of base notional, MM = 15%
-    manager.setMarginParams(0.20e18, 0.15e18);
+    manager.setMarginParams(0.2e18, 0.15e18);
 
     // 1 contract = 10,000 USDC base notional -> IM = 2,000 USDC per side
     _fundCash(aliceAcc, 2_000e18);
@@ -455,7 +426,7 @@ contract UNIT_TestDeliverableFXManager is TestDeliverableFXManagerBase {
   }
 
   function testFiveXLeverageRejectsBelowIM() public {
-    manager.setMarginParams(0.20e18, 0.15e18);
+    manager.setMarginParams(0.2e18, 0.15e18);
 
     // 1 wei of cash short of the 2,000 USDC IM requirement
     _fundCash(aliceAcc, 2_000e18 - 1);
@@ -466,7 +437,7 @@ contract UNIT_TestDeliverableFXManager is TestDeliverableFXManagerBase {
   }
 
   function testFiveXLeverageMaintenanceMarginBreach() public {
-    manager.setMarginParams(0.20e18, 0.15e18);
+    manager.setMarginParams(0.2e18, 0.15e18);
 
     _fundCash(aliceAcc, 2_000e18);
     _fundCash(bobAcc, 2_000e18);

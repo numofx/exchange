@@ -15,12 +15,7 @@ contract UNIT_TestStandardManager_Misc is TestStandardManagerBase {
     cash.deposit(aliceAcc, uint(amount));
 
     ISubAccounts.AssetTransfer memory transfer = ISubAccounts.AssetTransfer({
-      fromAcc: aliceAcc,
-      toAcc: bobAcc,
-      asset: cash,
-      subId: 0,
-      amount: amount,
-      assetData: ""
+      fromAcc: aliceAcc, toAcc: bobAcc, asset: cash, subId: 0, amount: amount, assetData: ""
     });
 
     subAccounts.submitTransfer(transfer, "");
@@ -85,12 +80,7 @@ contract UNIT_TestStandardManager_Misc is TestStandardManagerBase {
     ISubAccounts.AssetTransfer[] memory transfers = new ISubAccounts.AssetTransfer[](11);
     for (uint i; i < 11; i++) {
       transfers[i] = ISubAccounts.AssetTransfer({
-        fromAcc: aliceAcc,
-        toAcc: bobAcc,
-        asset: ethOption,
-        subId: i,
-        amount: 100e18,
-        assetData: ""
+        fromAcc: aliceAcc, toAcc: bobAcc, asset: ethOption, subId: i, amount: 100e18, assetData: ""
       });
     }
 
@@ -162,12 +152,7 @@ contract UNIT_TestStandardManager_Misc is TestStandardManagerBase {
       });
     }
     transfers[10] = ISubAccounts.AssetTransfer({
-      fromAcc: aliceAcc,
-      toAcc: bobAcc,
-      asset: ethPerp,
-      subId: 0,
-      amount: 10e18,
-      assetData: ""
+      fromAcc: aliceAcc, toAcc: bobAcc, asset: ethPerp, subId: 0, amount: 10e18, assetData: ""
     });
     subAccounts.submitTransfers(transfers, "");
     assertEq(subAccounts.getAccountBalances(bobAcc).length, 12);
@@ -233,18 +218,14 @@ contract UNIT_TestStandardManager_Misc is TestStandardManagerBase {
 
     // bob can still transfer assets without reverting
     ISubAccounts.AssetTransfer memory transfer = ISubAccounts.AssetTransfer({
-      fromAcc: bobAcc,
-      toAcc: aliceAcc,
-      asset: wbtcAsset,
-      subId: 0,
-      amount: 1e18,
-      assetData: ""
+      fromAcc: bobAcc, toAcc: aliceAcc, asset: wbtcAsset, subId: 0, amount: 1e18, assetData: ""
     });
     subAccounts.submitTransfer(transfer, "");
 
     // bob can still receive cash in a trade
-    transfer =
-      ISubAccounts.AssetTransfer({fromAcc: aliceAcc, toAcc: bobAcc, asset: cash, subId: 0, amount: 1e18, assetData: ""});
+    transfer = ISubAccounts.AssetTransfer({
+      fromAcc: aliceAcc, toAcc: bobAcc, asset: cash, subId: 0, amount: 1e18, assetData: ""
+    });
     subAccounts.submitTransfer(transfer, "");
     assertEq(_getCashBalance(bobAcc), -int(btcSpot) + 1e18);
 

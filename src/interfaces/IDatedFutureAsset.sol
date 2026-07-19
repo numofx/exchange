@@ -34,7 +34,9 @@ interface IDatedFutureAsset is IAsset, IPositionTracking {
   event DailyMarkSet(
     uint96 indexed subId, uint64 markTime, uint oldMarkPrice, uint newMarkPrice, int cumulativeDailyVMPerContract
   );
-  event FutureVMSynchronized(uint indexed accountId, uint96 indexed subId, int cashDelta, int cumulativeDailyVMPerContract);
+  event FutureVMSynchronized(
+    uint indexed accountId, uint96 indexed subId, int cashDelta, int cumulativeDailyVMPerContract
+  );
 
   error DFA_NotManager();
   error DFA_UnknownFuture();
