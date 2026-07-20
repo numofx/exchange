@@ -14,10 +14,17 @@ Env (or ~/.numo-mark-keeper.env):
   CALLBACK_SECRET     shared secret; the request must present it (header or body)
   CALLBACK_PORT       listen port (default 8799)
 
-NOTE: MPCVault's exact callback request/response JSON shape is confirmed during the
-pre-launch rehearsal. Parsing is defensive and this defaults to REJECT on anything it
-cannot positively verify, so an unconfirmed shape fails safe (no signature) rather than
-open. Adjust `extract_tx` / `approve_response` to the observed contract at rehearsal.
+CONTRACT (per MPCVault client-signer docs): the signer POSTs the pending request as a raw
+protobuf `SigningRequest` (Content-Type application/octet-stream), NOT JSON, and expects
+HTTP 200 = approve / 4xx = reject (plain-text body "approved"/"rejected") within 5s.
+
+==> REWORK BEFORE UNATTENDED USE: `extract_tx` must decode the protobuf SigningRequest
+(needs MPCVault's .proto for SigningRequest -> the EVM {to, input, value}); it currently
+expects JSON, so it will REJECT everything (fail-safe — nothing signs — but non-functional
+until the decoder lands). The `check()` validation below is correct and reusable as-is once
+the decode is in. Prove end-to-end on a throwaway series in rehearsal before this drives the
+live mark. Until then, marks are set manually (keeper prints calldata; a human approves in
+MPCVault) — that path does not use this callback.
 """
 
 from __future__ import annotations
@@ -102,12 +109,11 @@ def make_handler(rpc, future, feed, sub_id, secret):
       pass
 
     def _respond(self, approved: bool, reason: str):
-      # Response shape confirmed at rehearsal; default is an explicit approve flag.
-      payload = json.dumps({"approved": approved, "reason": reason}).encode()
+      # MPCVault contract: HTTP 200 = approve, 4xx = reject; body is plain text.
       self.send_response(200 if approved else 403)
-      self.send_header("Content-Type", "application/json")
+      self.send_header("Content-Type", "text/plain")
       self.end_headers()
-      self.wfile.write(payload)
+      self.wfile.write(b"approved" if approved else b"rejected")
       print(f"{time.strftime('%H:%M:%S')} {'APPROVE' if approved else 'REJECT '} {reason}",
             file=sys.stderr)
 
