@@ -1,0 +1,23 @@
+# Mark keeper callback — validates each MPCVault signing request before the client signer signs.
+# The client-signer container reaches it at host.docker.internal:8799.
+# ⚠️ Do NOT enable this + the signer + keeper for UNATTENDED use until mark_callback.py decodes
+#    the protobuf SigningRequest (needs MPCVault's .proto — see README-mark-keeper.md). Until then
+#    it rejects everything (fail-safe) and marks are set manually.
+[Unit]
+Description=Numo mark keeper callback (MPCVault signer validation)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/home/ec2-user/exchange/contracts/risk-core
+ExecStart=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-ssm-mark.sh /usr/bin/python3 scripts/mark_callback.py
+Environment=AWS_REGION=us-east-1
+Environment=CALLBACK_PORT=8799
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
