@@ -1,0 +1,13 @@
+# Mark staleness check on EC2 — pulls RPC_URL/webhook from SSM. Scheduled by the timer.
+# Install: cp scripts/ops/numo-mark-alert-ssm.service /etc/systemd/system/numo-mark-alert.service
+#          cp scripts/ops/numo-mark-alert.timer /etc/systemd/system/
+#          systemctl daemon-reload && systemctl enable --now numo-mark-alert.timer
+[Unit]
+Description=Numo mark staleness check
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/home/ec2-user/exchange/contracts/risk-core
+ExecStart=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-ssm.sh /usr/bin/python3 scripts/ops/check_mark_staleness.py
+Environment=AWS_REGION=us-east-1

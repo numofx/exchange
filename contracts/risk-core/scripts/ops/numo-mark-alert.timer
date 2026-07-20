@@ -1,0 +1,14 @@
+# Runs the mark staleness check every minute.
+# Install: cp scripts/ops/numo-mark-alert-ssm.service /etc/systemd/system/numo-mark-alert.service
+#          cp scripts/ops/numo-mark-alert.timer /etc/systemd/system/
+#          systemctl daemon-reload && systemctl enable --now numo-mark-alert.timer
+[Unit]
+Description=Numo mark staleness check every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target
