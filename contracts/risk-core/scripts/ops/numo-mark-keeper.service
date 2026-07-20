@@ -1,0 +1,21 @@
+# Mark keeper — reads spot + on-chain mark, submits setMarkPrice via the MPCVault client signer.
+# ⚠️ Do NOT enable for UNATTENDED use until the callback decodes the protobuf SigningRequest
+#    (README-mark-keeper.md). Until then marks are set MANUALLY:
+#    python3 scripts/mark_keeper.py --once --dry-run  ->  paste calldata into MPCVault  ->  approve.
+[Unit]
+Description=Numo mark keeper (setMarkPrice via MPCVault client signer)
+Requires=numo-mark-signer.service
+After=numo-mark-signer.service
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/home/ec2-user/exchange/contracts/risk-core
+ExecStart=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-ssm-mark.sh /usr/bin/python3 scripts/mark_keeper.py
+Environment=AWS_REGION=us-east-1
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

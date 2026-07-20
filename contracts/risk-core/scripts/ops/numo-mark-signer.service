@@ -1,0 +1,26 @@
+# MPCVault client-signer container for the mark keeper.
+# Renders config.yml (ssh key from host + vault uuid from SSM), then runs the signer image.
+# host-gateway lets the container reach the callback on the host (Linux needs --add-host).
+# ⚠️ Do NOT enable until the callback decodes the protobuf SigningRequest (README-mark-keeper.md).
+[Unit]
+Description=MPCVault client signer (mark keeper)
+Requires=numo-mark-callback.service docker.service
+After=numo-mark-callback.service docker.service
+
+[Service]
+Type=simple
+User=ec2-user
+Environment=AWS_REGION=us-east-1
+ExecStartPre=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/render-signer-config.sh
+ExecStartPre=-/usr/bin/docker rm -f mpcvault-signer
+ExecStart=/usr/bin/docker run --rm --name mpcvault-signer \
+  --add-host=host.docker.internal:host-gateway \
+  -p 127.0.0.1:8080:8080 \
+  -v /run/mpcvault/config.yml:/config.yml:ro \
+  ghcr.io/mpcvault/client-signer:latest --config-path=/config.yml
+ExecStop=/usr/bin/docker stop mpcvault-signer
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
