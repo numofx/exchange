@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import {
   encodeAbiParameters,
+  formatUnits,
   getAddress,
   createPublicClient,
   http,
@@ -181,8 +182,11 @@ async function main() {
     side: isBid ? 'buy' : 'sell',
     asset_address: assetAddress,
     sub_id: assetSubId,
-    desired_amount: desiredAmount.toString(),
-    filled_amount: filledAmount,
+    // The order body carries the HUMAN-DECIMAL contract amount; markets-service normalizes it to
+    // atomic units (÷ MinSize for futures). The SIGNED action (action_json.data) keeps the raw
+    // on-chain wei amount. DESIRED_AMOUNT / FILLED_AMOUNT are supplied in wei (1e18 per contract).
+    desired_amount: formatUnits(desiredAmount, 18),
+    filled_amount: filledAmount === '0' ? '0' : formatUnits(BigInt(filledAmount), 18),
     limit_price: limitPrice.toString(),
     worst_fee: worstFee.toString(),
     expiry: Number(expiry),
