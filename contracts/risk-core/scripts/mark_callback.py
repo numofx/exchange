@@ -1,61 +1,91 @@
 #!/usr/bin/env python3
 """MPCVault Client Signer callback — the function/parameter guardrail.
 
-The MPCVault Client Signer calls this endpoint before signing. We approve ONLY if the
-pending transaction is a setMarkPrice call to the deliverable FX future with in-bounds
-parameters; everything else (including setSettlementPrice and any other owner op) is
-rejected. This is the layer the MPCVault address-allowlist policy can't enforce (it sees
-address+amount, not the function).
+The client signer POSTs the pending request here before signing (a raw `SigningRequest`
+protobuf, Content-Type application/octet-stream) and expects HTTP 200 = approve /
+4xx = reject (plain-text body) within 5s. We approve ONLY setMarkPrice to the future with
+in-bounds params; everything else (setSettlementPrice, any other call) is rejected. Fail-closed.
 
-FAIL-CLOSED: any parse failure, unknown field shape, or check miss -> reject.
+We do NOT decode the protobuf. Instead we pull the request UUID out of the body and fetch the
+transaction via the REST `getSigningRequestDetails` endpoint, which returns {to, input, value}
+(+ evmInputDataDecode) as JSON — then validate that with the same `check()` used everywhere.
+Only the UUID comes from the protobuf (a verbatim string, regex-extractable). Proto ref if a
+real decode is ever wanted: github.com/mpcvault/mpcvaultapis.
 
-Env (or ~/.numo-mark-keeper.env):
-  RPC_URL             Base RPC (to re-read the live mark/spot for bounds)
-  CALLBACK_SECRET     shared secret; the request must present it (header or body)
-  CALLBACK_PORT       listen port (default 8799)
+MPCVault sends NO auth on the callback (per docs) — protect port 8799 by network isolation:
+do NOT open it in the security group; only the client-signer container reaches it via
+host.docker.internal. `check()` also bounds any request to setMarkPrice-to-future regardless.
 
-CONTRACT (per MPCVault client-signer docs): the signer POSTs the pending request as a raw
-protobuf `SigningRequest` (Content-Type application/octet-stream), NOT JSON, and expects
-HTTP 200 = approve / 4xx = reject (plain-text body "approved"/"rejected") within 5s.
+Env (via run-with-ssm-mark.sh):
+  RPC_URL, MPCVAULT_TOKEN, MPCVAULT_VAULT, CALLBACK_PORT (default 8799)
 
-==> REWORK BEFORE UNATTENDED USE: `extract_tx` must decode the protobuf SigningRequest
-(needs MPCVault's .proto for SigningRequest -> the EVM {to, input, value}); it currently
-expects JSON, so it will REJECT everything (fail-safe — nothing signs — but non-functional
-until the decoder lands). The `check()` validation below is correct and reusable as-is once
-the decode is in. Prove end-to-end on a throwaway series in rehearsal before this drives the
-live mark. Until then, marks are set manually (keeper prints calldata; a human approves in
-MPCVault) — that path does not use this callback.
+REHEARSAL-VERIFY: the getSigningRequestDetails response nesting and the `input` encoding
+(hex vs base64) are confirmed against a live call during rehearsal. Parsing is defensive and
+fails closed; prove one setMarkPrice on a throwaway series before enabling the signer/keeper.
 """
 
 from __future__ import annotations
 
-import json
+import base64
 import os
+import re
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from mark_keeper import artifact, get_series, get_spot, load_env_file, run  # noqa: E402
+from mark_keeper import MPCVAULT_BASE, artifact, get_series, get_spot, http_post, load_env_file, run  # noqa: E402
 
-# setMarkPrice(uint96,uint64,uint256) selector (verified: cast sig).
-SETMARKPRICE_SELECTOR = "0x272e3661"
+SETMARKPRICE_SELECTOR = "0x272e3661"  # setMarkPrice(uint96,uint64,uint256)
 DEVIATION_CAP_BPS = 500     # must stay within the on-chain 5% wall vs the last mark
 SANITY_VS_SPOT_BPS = 1000   # ...and within 10% of live spot (catches ratchet drift)
-MARKTIME_PAST_SEC = 300     # markTime not older than this
-MARKTIME_FUTURE_SEC = 120   # ...nor further ahead than this
+MARKTIME_PAST_SEC = 300
+MARKTIME_FUTURE_SEC = 120
+
+UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
 
-def extract_tx(body: dict) -> dict:
-  """Pull {to, input, value} out of the callback body, tolerant of nesting. Returns {}
-  if the expected fields aren't present (-> caller rejects)."""
-  candidates = [body, body.get("transaction", {}), body.get("evmSendCustom", {}),
-                body.get("signingRequest", {}), body.get("request", {})]
-  for c in candidates:
-    if isinstance(c, dict) and c.get("to") and (c.get("input") or c.get("data")):
-      return {"to": c["to"], "input": c.get("input") or c.get("data"), "value": str(c.get("value", "0"))}
-  return {}
+def normalize_input(s: str) -> str:
+  """Return 0x-hex calldata whether MPCVault gives us hex (0x/bare) or base64."""
+  s = (s or "").strip()
+  if s.startswith(("0x", "0X")):
+    return "0x" + s[2:].lower()
+  try:  # bare hex?
+    int(s, 16)
+    if len(s) % 2 == 0:
+      return "0x" + s.lower()
+  except ValueError:
+    pass
+  try:  # base64?
+    return "0x" + base64.b64decode(s).hex()
+  except Exception:
+    return s  # let check() reject it
+
+
+def resolve_tx(token: str, uuids: list[str], vault_uuid: str) -> dict | None:
+  """Look up each candidate UUID via getSigningRequestDetails; return the EVM custom tx of the
+  first that resolves to one. The vault UUID (if it appears in the body) is skipped."""
+  seen = set()
+  for u in uuids:
+    lu = u.lower()
+    if lu in seen or lu == (vault_uuid or "").lower():
+      continue
+    seen.add(lu)
+    try:
+      resp = http_post(MPCVAULT_BASE + "getSigningRequestDetails", token, {"uuid": u})
+    except Exception:
+      continue
+    sr = resp.get("signingRequest") or (resp.get("data") or {}).get("signingRequest") or {}
+    custom = sr.get("evmSendCustom") or {}
+    if custom.get("to"):
+      return {
+        "to": custom["to"],
+        "input": normalize_input(custom.get("input") or ""),
+        "value": str(custom.get("value", "0")),
+        "uuid": u,
+      }
+  return None
 
 
 def check(tx: dict, rpc: str, future: str, feed: str, sub_id: str) -> tuple[bool, str]:
@@ -103,9 +133,9 @@ def check(tx: dict, rpc: str, future: str, feed: str, sub_id: str) -> tuple[bool
   return True, f"ok: {last}->{mark} ({dev_bps}bps, spot {spot})"
 
 
-def make_handler(rpc, future, feed, sub_id, secret):
+def make_handler(rpc, token, vault_uuid, future, feed, sub_id):
   class Handler(BaseHTTPRequestHandler):
-    def log_message(self, *a):  # quiet default logging; we print our own
+    def log_message(self, *a):
       pass
 
     def _respond(self, approved: bool, reason: str):
@@ -114,18 +144,17 @@ def make_handler(rpc, future, feed, sub_id, secret):
       self.send_header("Content-Type", "text/plain")
       self.end_headers()
       self.wfile.write(b"approved" if approved else b"rejected")
-      print(f"{time.strftime('%H:%M:%S')} {'APPROVE' if approved else 'REJECT '} {reason}",
-            file=sys.stderr)
+      print(f"{time.strftime('%H:%M:%S')} {'APPROVE' if approved else 'REJECT '} {reason}", file=sys.stderr)
 
     def do_POST(self):
       try:
-        raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-        body = json.loads(raw or b"{}")
-        if secret and self.headers.get("x-callback-secret") != secret and body.get("secret") != secret:
-          return self._respond(False, "bad secret")
-        tx = extract_tx(body)
+        raw = self.rfile.read(int(self.headers.get("Content-Length", 0)) or 0)
+        uuids = UUID_RE.findall(raw.decode("latin-1", errors="ignore"))
+        if not uuids:
+          return self._respond(False, "no uuid in callback body")
+        tx = resolve_tx(token, uuids, vault_uuid)
         if not tx:
-          return self._respond(False, "no tx in callback body")
+          return self._respond(False, "could not resolve a signing-request tx from body uuids")
         ok, reason = check(tx, rpc, future, feed, sub_id)
         self._respond(ok, reason)
       except Exception as exc:  # fail closed
@@ -137,14 +166,15 @@ def make_handler(rpc, future, feed, sub_id, secret):
 def main() -> int:
   load_env_file(Path.home() / ".numo-mark-keeper.env")
   rpc = os.environ.get("RPC_URL") or "https://mainnet.base.org"
-  secret = os.environ.get("CALLBACK_SECRET", "")
+  token = os.environ.get("MPCVAULT_TOKEN", "")
+  vault_uuid = os.environ.get("MPCVAULT_VAULT", "")
   port = int(os.environ.get("CALLBACK_PORT", "8799"))
   fut = artifact("CNGN_SEP16_2026_FUTURE.json")
   future, feed, sub_id = fut["future"], fut["spotFeed"], str(fut["subId"])
-  if not secret:
-    print("WARNING: CALLBACK_SECRET unset — callback is unauthenticated (set it + IP allowlist)", file=sys.stderr)
+  if not token:
+    print("WARNING: MPCVAULT_TOKEN unset — cannot fetch signing-request details; will reject all", file=sys.stderr)
   print(f"callback listening :{port} | future {future} | subId {sub_id}", file=sys.stderr)
-  HTTPServer(("0.0.0.0", port), make_handler(rpc, future, feed, sub_id, secret)).serve_forever()
+  HTTPServer(("0.0.0.0", port), make_handler(rpc, token, vault_uuid, future, feed, sub_id)).serve_forever()
   return 0
 
 
