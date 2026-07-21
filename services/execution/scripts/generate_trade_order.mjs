@@ -182,12 +182,15 @@ async function main() {
     side: isBid ? 'buy' : 'sell',
     asset_address: assetAddress,
     sub_id: assetSubId,
-    // The order body carries the HUMAN-DECIMAL contract amount; markets-service normalizes it to
-    // atomic units (÷ MinSize for futures). The SIGNED action (action_json.data) keeps the raw
-    // on-chain wei amount. DESIRED_AMOUNT / FILLED_AMOUNT are supplied in wei (1e18 per contract).
+    // The order body carries the HUMAN-DECIMAL contract amount AND the HUMAN price; markets-service
+    // normalizes the amount to atomic units (÷ MinSize for futures) and the price to matcher ticks
+    // (÷ tick size). The SIGNED action (action_json.data) keeps the raw on-chain wei values. So the
+    // body must be the human values while the signed action stays wei — otherwise the body sits at a
+    // tick/atomic level the resting book (e.g. the market-maker at price 1377, not 1377e18) never
+    // crosses. DESIRED_AMOUNT / FILLED_AMOUNT / LIMIT_PRICE are supplied in wei (1e18 scaled).
     desired_amount: formatUnits(desiredAmount, 18),
     filled_amount: filledAmount === '0' ? '0' : formatUnits(BigInt(filledAmount), 18),
-    limit_price: limitPrice.toString(),
+    limit_price: formatUnits(limitPrice, 18),
     worst_fee: worstFee.toString(),
     expiry: Number(expiry),
     action_json: {
