@@ -15,15 +15,17 @@ MPCVault Client Signer. Design: `../../docs/mark-keeper-design.md`. Runs on the 
 - `numo-mark-callback.service`, `numo-mark-signer.service`, `numo-mark-keeper.service` — the
   unattended stack (callback → client-signer container → keeper).
 
-## ⚠️ BLOCKER before unattended: the callback needs MPCVault's protobuf schema
-Per the MPCVault client-signer docs, the callback body is a **raw `SigningRequest` protobuf**
-(`application/octet-stream`), and MPCVault does **not publish the `.proto`** or a decoder. So
-`mark_callback.py` cannot yet decode `{to, input, value}` to validate the tx — it currently
-rejects everything (fail-safe). **Action: request the `SigningRequest` .proto (and a decode
-example) from MPCVault support**, then implement `extract_tx` and rehearse ONE setMarkPrice on a
-throwaway series before enabling the signer + keeper services.
+## Before unattended: rehearse the callback (protobuf handled via the REST lookup)
+The callback body is a raw `SigningRequest` protobuf and MPCVault doesn't publish the `.proto`
+— so instead of decoding it, `mark_callback.py` pulls the request UUID out of the body (regex)
+and fetches the tx via REST `getSigningRequestDetails` (returns `{to, input, value}` as JSON),
+then validates with `check()`. No `.proto` needed. UUID-extraction / input-normalization /
+validation are unit-tested; the only unverified bit is the live `getSigningRequestDetails`
+response nesting + `input` encoding (hex vs base64) — **rehearse ONE setMarkPrice on a throwaway
+series** to confirm, then enable the signer + keeper services. (proto ref if ever needed:
+github.com/mpcvault/mpcvaultapis)
 
-Until that's done, **DO NOT** `enable` `numo-mark-signer` / `numo-mark-keeper` — set marks
+Until rehearsed + enabled, **DO NOT** `enable` `numo-mark-signer` / `numo-mark-keeper` — set marks
 **manually**: `python3 ../mark_keeper.py --once --dry-run` → paste the calldata into an MPCVault
 custom tx to `0xDd9c2Ddf97a2Dc9B9d348DcD0ef776aF5291A1F9` (Base) → approve. Margin/liquidation
 runs off the (already automated) spot feed, so a manually-updated mark is safe; the staleness
