@@ -13,6 +13,7 @@ User=ec2-user
 WorkingDirectory=/home/ec2-user/exchange/contracts/risk-core
 ExecStart=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-ssm-mark.sh /usr/bin/python3 scripts/mark_keeper.py
 Environment=AWS_REGION=us-east-1
+Environment=PATH=/home/ec2-user/.foundry/bin:/usr/local/bin:/usr/bin:/bin
 Environment=PYTHONUNBUFFERED=1
 Restart=always
 RestartSec=10
