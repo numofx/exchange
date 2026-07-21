@@ -143,10 +143,50 @@ def submit_via_mpcvault(token: str, vault_uuid: str, from_addr: str, future: str
   return executed.get("txHash") or executed.get("signingRequest", {}).get("txHash", "")
 
 
+def rehearse(token, vault_uuid, from_addr, rpc, future, feed, sub_id) -> int:
+  """Create a real setMarkPrice signing request, fetch its details, show the callback verdict,
+  then REJECT it — never executes/signs. Confirms the live getSigningRequestDetails response
+  shape + input encoding + the callback validation end-to-end without setting a mark. Safe to run
+  against the live subId (rejected, so no mark lands). See scripts/ops/REHEARSAL.md."""
+  import mark_callback as cb  # lazy: avoids a circular import at module load
+  series = get_series(rpc, future, sub_id)
+  target = clamp(get_spot(rpc, feed), series["markPrice"])
+  mt = int(time.time())
+  calldata = build_calldata(sub_id, mt, target)
+  print(f"[rehearse] setMarkPrice({sub_id}, {mt}, {target})  calldata={calldata[:20]}…")
+  created = http_post(MPCVAULT_BASE + "createSigningRequest", token, {
+    "vaultUuid": vault_uuid,
+    "evmSendCustom": {"chainId": str(CHAIN_ID), "from": from_addr, "to": future,
+                      "input": calldata, "value": "0",
+                      "gasFee": {"gasLimit": GAS_LIMIT, "maxFee": MAX_FEE_GWEI}},
+  })
+  uuid = (created.get("signingRequest") or {}).get("uuid") or created.get("uuid")
+  print(f"[rehearse] created signing request: {uuid}")
+  if not uuid:
+    print(f"[rehearse] ❌ no uuid in createSigningRequest response: {json.dumps(created)[:400]}")
+    return 1
+  details = http_post(MPCVAULT_BASE + "getSigningRequestDetails", token, {"uuid": uuid})
+  print(f"[rehearse] getSigningRequestDetails -> {json.dumps(details)[:600]}")
+  tx = cb.resolve_tx(token, [uuid], vault_uuid)
+  print(f"[rehearse] resolved tx: {tx}")
+  if tx:
+    ok, reason = cb.check(tx, rpc, future, feed, sub_id)
+    print(f"[rehearse] CALLBACK VERDICT: {'✅ APPROVE' if ok else '❌ REJECT'} — {reason}")
+  else:
+    print("[rehearse] ❌ could not resolve tx from getSigningRequestDetails — adjust resolve_tx to the real shape above")
+  try:
+    http_post(MPCVAULT_BASE + "rejectSigningRequest", token, {"uuid": uuid})
+    print("[rehearse] rejected the request — never executed/signed ✅")
+  except Exception as exc:
+    print(f"[rehearse] reject failed (harmless — it was never executed): {exc}")
+  return 0
+
+
 def main() -> int:
   parser = argparse.ArgumentParser()
   parser.add_argument("--once", action="store_true", help="one cycle then exit")
   parser.add_argument("--dry-run", action="store_true", help="read+decide, submit nothing")
+  parser.add_argument("--rehearse", action="store_true", help="create+inspect+reject a request (no sign)")
   parser.add_argument("--rpc-url", default=None)
   args = parser.parse_args()
 
@@ -161,6 +201,13 @@ def main() -> int:
 
   fut = artifact("CNGN_SEP16_2026_FUTURE.json")
   future, feed, sub_id = fut["future"], fut["spotFeed"], str(fut["subId"])
+
+  if args.rehearse:
+    if not (token and vault_uuid and vault_addr):
+      print("--rehearse needs MPCVAULT_TOKEN, MPCVAULT_VAULT, VAULT_ADDRESS", file=sys.stderr)
+      return 1
+    return rehearse(token, vault_uuid, vault_addr, rpc, future, feed, sub_id)
+
   print(f"future {future} | feed {feed} | subId {sub_id} | mode spot | dry_run={args.dry_run}")
 
   last_submit_ts = 0.0
