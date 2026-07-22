@@ -13,7 +13,8 @@ This repo is intentionally narrow. It is not a generic exchange backend.
 
 ## Responsibilities
 
-- expose a minimal API for order entry and book inspection
+- expose a REST API for order entry and book inspection
+- expose a WebSocket API for real-time `book`, `trades`, and (authenticated) `orders` streams
 - run a price-time matching loop
 - submit executor payloads for `Matching.verifyAndMatch(...)`
 
@@ -21,8 +22,6 @@ This repo is intentionally narrow. It is not a generic exchange backend.
 
 - RFQ
 - liquidation
-- multi-market support
-- websocket market data
 - a full frontend
 - direct onchain execution from Go
 
@@ -30,16 +29,20 @@ This repo is intentionally narrow. It is not a generic exchange backend.
 
 ```text
 cmd/
-  api/        HTTP API for orders and health checks
+  api/        HTTP + WebSocket API for orders, book inspection, and health checks
   matcher/    background matching worker
+  migrate/    database migration runner
 internal/
-  api/        HTTP server wiring and handlers
+  api/        HTTP/WebSocket server wiring and handlers
   config/     environment configuration
   db/         Postgres connection helpers
+  events/     LISTEN/NOTIFY event hub fanning market_events out to WS subscribers
   instruments/ instrument metadata and registry
   matching/   matching loop and orchestration
-  orders/     order model and repository contracts
-migrations/   database schema
+  orders/     order model, repository contracts, and stream snapshots
+  pricing/    price helpers
+  wsauth/     EIP-191 signature verification for authenticated WS channels
+migrations/   database schema (incl. market_events table + triggers)
 ```
 
 ## Configuration
