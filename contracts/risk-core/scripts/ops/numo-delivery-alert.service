@@ -9,4 +9,6 @@ Type=oneshot
 User=ec2-user
 WorkingDirectory=/home/ec2-user/exchange/contracts/risk-core
 ExecStart=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-ssm.sh /usr/bin/python3 scripts/ops/check_delivery_readiness.py
+# needs foundry's `cast` (on-chain reads) — systemd's default PATH omits ~/.foundry/bin
+Environment=PATH=/home/ec2-user/.foundry/bin:/usr/local/bin:/usr/bin:/bin
 Environment=AWS_REGION=us-east-1
