@@ -6,6 +6,9 @@ Deployed: 2026-07-15
 Owner (all contracts): MPC vault **Numo-Manager-Admin** `0x1dcA42ab54Bd3862853A821F84B29BF65245F435`
 Feed signer (cNGN spot + stable feed, 1-of-1): `0xdA1976E83D54B76D0c794B35262228960a1a918f`
 
+Core + future contracts verified on Basescan and Base Blockscout (2026-07-22).
+Dune decoding submitted for the same set (project `numo` → `numo_base.*` tables).
+
 ### Core
 
 Artifact: [deployments/8453/core.json](deployments/8453/core.json)
