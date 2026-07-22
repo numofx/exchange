@@ -30,6 +30,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import subprocess
@@ -51,7 +52,7 @@ TRIGGER_BPS = 30            # submit when |target-last|/last >= 0.30%
 HEARTBEAT_SEC = 30 * 60     # ...or at least this often
 POLL_SEC = 60               # loop cadence
 GAS_LIMIT = "300000"        # setMarkPrice is ~50-80k; generous ceiling
-MAX_FEE_GWEI = "0.5"        # Base is cheap; ceiling for the vault-paid gas
+MAX_FEE_WEI = "500000000"   # 0.5 gwei expressed in WEI — MPCVault gasFee.maxFee is wei, not gwei
 
 
 def run(cmd: list[str]) -> str:
@@ -114,10 +115,18 @@ def build_calldata(sub_id: str, mark_time: int, mark: int) -> str:
   return run(["cast", "calldata", "setMarkPrice(uint96,uint64,uint256)", sub_id, str(mark_time), str(mark)])
 
 
+def input_b64(calldata_hex: str) -> str:
+  """MPCVault's evmSendCustom.input is a base64 bytes field, NOT hex. Encode the raw
+  calldata bytes so the request stores/executes the correct data (and round-trips cleanly
+  through getSigningRequestDetails for the callback to verify)."""
+  return base64.b64encode(bytes.fromhex(calldata_hex[2:] if calldata_hex.startswith(("0x", "0X")) else calldata_hex)).decode()
+
+
 def http_post(url: str, token: str, body: dict) -> dict:
   req = urllib.request.Request(
     url, data=json.dumps(body).encode(),
-    headers={"Content-Type": "application/json", "x-mtoken": token}, method="POST")
+    headers={"Content-Type": "application/json", "x-mtoken": token,
+             "User-Agent": "numo-mark-keeper/1.0"}, method="POST")  # MPCVault WAF 403s default python-urllib UA
   with urllib.request.urlopen(req, timeout=20) as resp:
     return json.loads(resp.read())
 
@@ -131,8 +140,8 @@ def submit_via_mpcvault(token: str, vault_uuid: str, from_addr: str, future: str
     "vaultUuid": vault_uuid,
     "evmSendCustom": {
       "chainId": str(CHAIN_ID), "from": from_addr, "to": future,
-      "input": calldata, "value": "0",
-      "gasFee": {"gasLimit": GAS_LIMIT, "maxFee": MAX_FEE_GWEI},
+      "input": input_b64(calldata), "value": "0",
+      "gasFee": {"gasLimit": GAS_LIMIT, "maxFee": MAX_FEE_WEI},
     },
   })
   uuid = created["signingRequest"]["uuid"]
@@ -157,8 +166,8 @@ def rehearse(token, vault_uuid, from_addr, rpc, future, feed, sub_id) -> int:
   created = http_post(MPCVAULT_BASE + "createSigningRequest", token, {
     "vaultUuid": vault_uuid,
     "evmSendCustom": {"chainId": str(CHAIN_ID), "from": from_addr, "to": future,
-                      "input": calldata, "value": "0",
-                      "gasFee": {"gasLimit": GAS_LIMIT, "maxFee": MAX_FEE_GWEI}},
+                      "input": input_b64(calldata), "value": "0",
+                      "gasFee": {"gasLimit": GAS_LIMIT, "maxFee": MAX_FEE_WEI}},
   })
   uuid = (created.get("signingRequest") or {}).get("uuid") or created.get("uuid")
   print(f"[rehearse] created signing request: {uuid}")
