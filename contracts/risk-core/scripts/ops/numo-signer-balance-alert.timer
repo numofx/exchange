@@ -1,0 +1,11 @@
+# Balance drifts slowly (~0.0004 ETH/day), so every 6h is ample lead time against a 3-day warn.
+[Unit]
+Description=Numo feed-signer gas balance check every 6h
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=6h
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
