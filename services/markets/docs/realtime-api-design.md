@@ -1,7 +1,7 @@
 # Real-time market data: event pipeline + WebSocket protocol
 
 Design for the matcher → API event transport and the client-facing WebSocket API.
-Status: proposal. Scope: `services/markets` (`cmd/api`, `cmd/matcher`, Postgres).
+Status: shipped. Scope: `services/markets` (`cmd/api`, `cmd/matcher`, Postgres).
 
 ## Problem
 
@@ -181,14 +181,18 @@ address. Never broadcast one owner's order events to another.
    transaction ⇒ one contiguous `seq` block ⇒ no client sees a trade without the matching
    book/order deltas.
 
-## Build order (once this is approved)
+## Build order
 
-1. Migration `000008_create_market_events` + triggers on `active_orders` / `trade_fills`.
-2. `internal/events`: `Hub` (LISTEN loop, catch-up, per-conn subscriptions, prune job).
-3. `internal/api`: `GET /v1/ws` handler (`coder/websocket`), subscribe/auth/resume, snapshot
+Shipped:
+
+1. ✅ Migration `000008_create_market_events` + triggers on `active_orders` / `trade_fills`.
+2. ✅ `internal/events`: `Hub` (LISTEN loop, catch-up, per-conn subscriptions, prune job).
+3. ✅ `internal/api`: `GET /v1/ws` handler (`coder/websocket`), subscribe/auth/resume, snapshot
    readers reusing the existing `ListBook` / trades queries.
-4. Wire heartbeats, backpressure, metrics (subscribers/channel, events/s, replay count,
-   dropped-slow-consumers).
+4. ✅ Heartbeats, backpressure, slow-consumer drop wired in `internal/api/ws.go`.
+
+Not yet shipped:
+
 5. `ticker` channel after the `setMarkPrice` cadence job exists.
 
 ## Scale-out (later, not now)
