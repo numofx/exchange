@@ -1,0 +1,11 @@
+# Delivery is a slow, calendar-driven event — a daily check gives ample lead time.
+[Unit]
+Description=Numo delivery-readiness check daily
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=24h
+AccuracySec=1h
+
+[Install]
+WantedBy=timers.target
