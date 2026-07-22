@@ -147,7 +147,7 @@ def cmd_fix(rpc: str, price: int | None, dry_run: bool) -> int:
   return 0
 
 
-def cmd_settle(rpc: str, dry_run: bool) -> int:
+def cmd_settle(rpc: str, dry_run: bool, auto: bool) -> int:
   relayer = os.environ.get("RELAYER_KEY")
   if not dry_run and not relayer:
     print("--settle needs RELAYER_KEY (run via run-with-ssm.sh)", file=sys.stderr)
@@ -158,10 +158,19 @@ def cmd_settle(rpc: str, dry_run: bool) -> int:
   subaccounts = core["subAccounts"]
   s = get_series_full(rpc, future, sub_id)
   now = int(time.time())
+  # --auto (autonomous timer): quiet no-op (exit 0) until fixed AND expired, so it can run on a
+  # schedule for weeks without producing failed-unit noise. The fixing stays human-confirmed; this
+  # only auto-runs the mechanical, idempotent sweep once the settlement price is locked and expiry passed.
   if not s["settlementPriceSet"]:
+    if auto:
+      print("no-op: settlement price not set yet (awaiting human-confirmed --fix)")
+      return 0
     print("REFUSING: settlementPrice not set — run --fix first.", file=sys.stderr)
     return 1
   if now < s["expiry"]:
+    if auto:
+      print(f"no-op: fixed but not yet expired ({(s['expiry'] - now) // 60} min to expiry)")
+      return 0
     print(f"REFUSING: not yet expired (now < expiry {s['expiry']}).", file=sys.stderr)
     return 1
   last_acc = int(_call(rpc, subaccounts, "lastAccountId()(uint256)").split()[0])
@@ -190,7 +199,9 @@ def cmd_settle(rpc: str, dry_run: bool) -> int:
       print(f"  acct {acc}: settled tx={tx['transactionHash']}")
       settled += 1
   print(f"[settle] done: {settled} settled, {skipped} skipped of {len(positions)} positions.")
-  return 1 if skipped else 0
+  # In --auto, never fail the unit on skips — the delivery-readiness watchdog is the alerting channel
+  # for anything left unsettled. Manual runs still exit non-zero so the operator sees skips.
+  return 0 if auto else (1 if skipped else 0)
 
 
 def main() -> int:
@@ -201,6 +212,7 @@ def main() -> int:
   g.add_argument("--settle", action="store_true")
   p.add_argument("--price", type=int, default=None, help="settlement price, 1e18-scaled (default: on-chain spot)")
   p.add_argument("--dry-run", action="store_true")
+  p.add_argument("--auto", action="store_true", help="--settle: autonomous timer mode (quiet no-op until fixed+expired)")
   p.add_argument("--rpc-url", default=None)
   a = p.parse_args()
 
@@ -210,7 +222,7 @@ def main() -> int:
     return cmd_preview(rpc)
   if a.fix:
     return cmd_fix(rpc, a.price, a.dry_run)
-  return cmd_settle(rpc, a.dry_run)
+  return cmd_settle(rpc, a.dry_run, a.auto)
 
 
 if __name__ == "__main__":

@@ -81,6 +81,12 @@ def main() -> int:
   eff_price = s["settlementPrice"] if s["settlementPriceSet"] else s["markPrice"]
 
   problems: list[str] = []
+  # Freeze escalation: once trading has closed, the human-confirmed fixing must happen before delivery
+  # can proceed. Surface it first and loudly — the settle keeper stays a no-op until this is done.
+  if now >= s["lastTradeTime"] and not s["settlementPriceSet"]:
+    problems.append("!! FREEZE REACHED — trading is closed and the settlement price is NOT set. "
+                    "Confirm the Sep-16 fixing and run  delivery_keeper.py --fix  now (setSettlementPrice is one-shot).")
+
   need_base = need_quote = 0  # float acct4 must pay USDC to longs, cNGN to shorts
   for acc, pos in positions:
     base_amt = abs(pos) * s["contractSizeBase"] // 10**18
