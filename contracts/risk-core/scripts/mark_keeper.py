@@ -131,6 +131,18 @@ def http_post(url: str, token: str, body: dict) -> dict:
     return json.loads(resp.read())
 
 
+def client_signer_pubkey() -> str:
+  """Full ssh-ed25519 public key of our MPCVault client signer (createSigningRequest's
+  callbackClientSignerPublicKey). From CLIENT_SIGNER_PUBKEY env, else the .pub beside the
+  signer key (default ~/.mpcvault/client-signer-key.pub)."""
+  pk = os.environ.get("CLIENT_SIGNER_PUBKEY")
+  if pk:
+    return pk.strip()
+  path = os.environ.get("CLIENT_SIGNER_PUBKEY_FILE") or os.path.expanduser("~/.mpcvault/client-signer-key.pub")
+  with open(path) as fh:
+    return fh.read().strip()
+
+
 def submit_via_mpcvault(token: str, vault_uuid: str, from_addr: str, future: str, calldata: str) -> str:
   """CreateSigningRequest (custom payload) -> ExecuteSigningRequests -> txHash.
   NOTE: `input` hex encoding + gasFee units + execute response shape are confirmed
@@ -138,6 +150,10 @@ def submit_via_mpcvault(token: str, vault_uuid: str, from_addr: str, future: str
   isn't SUCCEEDED."""
   created = http_post(MPCVAULT_BASE + "createSigningRequest", token, {
     "vaultUuid": vault_uuid,
+    # Route the request to OUR client signer (empty -> it lands in the mobile app for manual
+    # signing, and executeSigningRequests then 403s "ClientSignerPublicKey is required").
+    "callbackClientSignerPublicKey": client_signer_pubkey(),
+    "broadcastTx": True,   # sign AND broadcast the setMarkPrice tx on-chain
     "evmSendCustom": {
       "chainId": str(CHAIN_ID), "from": from_addr, "to": future,
       "input": input_b64(calldata), "value": "0",
@@ -145,11 +161,15 @@ def submit_via_mpcvault(token: str, vault_uuid: str, from_addr: str, future: str
     },
   })
   uuid = created["signingRequest"]["uuid"]
+  # executeSigningRequests triggers the client signer (callback-validate -> MPC-sign -> broadcast).
+  # Its 200 body is {error, txHash, signatures} (no status field); success = no error + a txHash.
   executed = http_post(MPCVAULT_BASE + "executeSigningRequests", token, {"uuid": uuid})
-  status = executed.get("status") or executed.get("signingRequest", {}).get("status")
-  if status not in ("STATUS_SUCCEEDED", "SUCCEEDED"):
-    raise RuntimeError(f"signing not succeeded: status={status} resp={executed}")
-  return executed.get("txHash") or executed.get("signingRequest", {}).get("txHash", "")
+  if executed.get("error"):
+    raise RuntimeError(f"execute failed: {executed.get('error')} resp={executed}")
+  tx_hash = executed.get("txHash") or executed.get("signingRequest", {}).get("txHash", "")
+  if not tx_hash:
+    raise RuntimeError(f"no txHash in execute response: {executed}")
+  return tx_hash
 
 
 def rehearse(token, vault_uuid, from_addr, rpc, future, feed, sub_id) -> int:
