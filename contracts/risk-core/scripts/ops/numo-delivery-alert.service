@@ -1,0 +1,12 @@
+# Proactive delivery-readiness alert for the SEP-16 physical settlement. Gated on time-to-expiry
+# (silent until within DELIVERY_WARN_DAYS); inside the window it warns to Slack while the float
+# account is underfunded or a position can't deliver. Paired with numo-delivery-alert.timer.
+[Unit]
+Description=Numo delivery-readiness check (SEP16 physical settlement)
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/home/ec2-user/exchange/contracts/risk-core
+ExecStart=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-ssm.sh /usr/bin/python3 scripts/ops/check_delivery_readiness.py
+Environment=AWS_REGION=us-east-1
