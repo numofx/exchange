@@ -1,0 +1,13 @@
+# Autonomous settle sweep for the SEP-16 physical settlement. --auto = quiet no-op until the
+# (human-confirmed) fixing is done AND expiry has passed, then settleDeliverableFuture over every
+# ready position. Idempotent + permissionless (plain RELAYER_KEY tx). Paired with the .timer.
+[Unit]
+Description=Numo delivery settle sweep (SEP16, auto)
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/home/ec2-user/exchange/contracts/risk-core
+ExecStart=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-ssm.sh /usr/bin/python3 scripts/delivery_keeper.py --settle --auto
+Environment=PATH=/home/ec2-user/.foundry/bin:/usr/local/bin:/usr/bin:/bin
+Environment=AWS_REGION=us-east-1

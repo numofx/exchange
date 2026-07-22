@@ -1,0 +1,11 @@
+# Every 30 min: no-op until fixed+expired, then settles promptly (within ~30 min of expiry).
+[Unit]
+Description=Numo delivery settle sweep every 30 min
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=30min
+AccuracySec=2min
+
+[Install]
+WantedBy=timers.target
