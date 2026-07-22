@@ -17,6 +17,7 @@ Environment=AWS_REGION=us-east-1
 ExecStartPre=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/render-signer-config.sh
 ExecStartPre=-/usr/bin/docker rm -f mpcvault-signer
 ExecStart=/usr/bin/docker run --rm --name mpcvault-signer \
+  --user 0:0 \
   --add-host=host.docker.internal:host-gateway \
   -p 127.0.0.1:8080:8080 \
   -v /run/mpcvault/config.yml:/config.yml:ro \
