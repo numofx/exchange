@@ -4,6 +4,7 @@ cache/
 **/node_modules/
 **/dist/
 .gocache/
+__pycache__/
 # secrets
 .env
 **/.env
