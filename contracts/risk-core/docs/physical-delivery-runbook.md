@@ -69,9 +69,15 @@ accountId, subId)` recomputes the reservation (longs reserve cNGN = quoteAmount,
    position can't settle and is liquidation-eligible.
 5. **Settlement-price source:** decide the Sep-16 fixing (spot at 14:00) and confirm it's within
    `maxMarkDeviation` of the last mark. Keep the mark keeper running into the close.
-6. **Build a delivery keeper/runbook:** at freeze → `setSettlementPrice` (MPC-vault-signed, like the mark
-   keeper); at expiry → loop `settleAllExpiredDeliverableFutures` / `settleDeliverableFuture` over every account
-   with a position. Verify `previewSettlement`/`isDeliveryReady` per account first.
+6. **Delivery keeper — BUILT: `scripts/delivery_keeper.py`** (three fail-closed phases, run in order):
+   - `run-with-ssm.sh    python3 scripts/delivery_keeper.py --preview` — READ-ONLY status: phase, float-account
+     balance vs the exact USDC+cNGN it must hold, and every account's position/readiness. Run it first & often.
+   - `run-with-ssm-mark.sh python3 scripts/delivery_keeper.py --fix [--price <1e18>] [--dry-run]` — at/after the
+     freeze, MPC-vault-signs `setSettlementPrice` (defaults to on-chain spot; within maxMarkDeviation of the last
+     mark). Refuses while still trading.
+   - `run-with-ssm.sh    python3 scripts/delivery_keeper.py --settle [--dry-run]` — at/after expiry, sweeps
+     accounts 1..lastAccountId and calls `settleDeliverableFuture` for each ready, unsettled position (plain
+     RELAYER_KEY tx). Refuses before the fixing/expiry; skips+logs unready accounts; idempotent.
 7. **DRY-RUN the whole thing on a short-dated test series** well before September (create a series expiring in
    minutes, trade a small pos, fund acct 4, setSettlementPrice, settle) — this is the single highest-value
    de-risking step, since delivery is entirely untested.
