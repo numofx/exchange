@@ -1,0 +1,12 @@
+# Proactive gas-balance alert for the feed-signer EOA. Fires to Slack (ALERT_WEBHOOK_URL from SSM)
+# while there's still days of runway — before the wallet empties, the feed stalls, and getSpot()
+# freezes the market. Paired with numo-signer-balance-alert.timer.
+[Unit]
+Description=Numo feed-signer gas balance check
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/home/ec2-user/exchange/contracts/risk-core
+ExecStart=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-ssm.sh /usr/bin/python3 scripts/ops/check_signer_balance.py
+Environment=AWS_REGION=us-east-1
