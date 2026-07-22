@@ -10,6 +10,9 @@ After=numo-mark-callback.service docker.service
 [Service]
 Type=simple
 User=ec2-user
+# systemd pre-creates /run/mpcvault owned by ec2-user (render-signer-config.sh writes config.yml there)
+RuntimeDirectory=mpcvault
+RuntimeDirectoryMode=0700
 Environment=AWS_REGION=us-east-1
 ExecStartPre=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/render-signer-config.sh
 ExecStartPre=-/usr/bin/docker rm -f mpcvault-signer
