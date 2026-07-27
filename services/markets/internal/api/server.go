@@ -154,6 +154,7 @@ type presentedCandle struct {
 	Low         string    `json:"low"`
 	Close       string    `json:"close"`
 	Volume      string    `json:"volume"`
+	QuoteVolume string    `json:"quote_volume"`
 	TradeCount  int64     `json:"trade_count"`
 }
 
@@ -410,6 +411,7 @@ func presentCandles(items []orders.Candle) []presentedCandle {
 			Low:         item.Low,
 			Close:       item.Close,
 			Volume:      item.Volume,
+			QuoteVolume: item.QuoteVolume,
 			TradeCount:  item.TradeCount,
 		})
 	}

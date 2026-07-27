@@ -82,6 +82,10 @@ values ($1, $2, $3, '2', 'buy', $4, $5, $6)`,
 		if candle.Volume != "6" || candle.TradeCount != 3 {
 			t.Errorf("volume/count = %s/%d, want 6/3", candle.Volume, candle.TradeCount)
 		}
+		// (1379 + 1381 + 1377) * 2 = 8274
+		if candle.QuoteVolume != "8274" {
+			t.Errorf("quote_volume = %s, want 8274", candle.QuoteVolume)
+		}
 	})
 
 	t.Run("empty range yields an empty array not null", func(t *testing.T) {
