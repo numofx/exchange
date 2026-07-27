@@ -84,6 +84,11 @@ values ($1, $2, $3, $4, 'buy', $5, $6, $7)`,
 	if first.TradeCount != 4 {
 		t.Errorf("bucket A trade_count = %d, want 4", first.TradeCount)
 	}
+	// 1380*1 + 1390*2 + 1370*3 + 1385*4 = 1380+2780+4110+5540 = 13810.
+	// Accumulated per trade: it is not derivable from volume and the OHLC.
+	if first.QuoteVolume != "13810" {
+		t.Errorf("bucket A quote_volume = %s, want 13810", first.QuoteVolume)
+	}
 
 	second := candles[1]
 	if !second.BucketStart.Equal(base.Add(2 * time.Hour)) {

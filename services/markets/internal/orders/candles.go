@@ -18,7 +18,13 @@ type Candle struct {
 	High        string
 	Low         string
 	Close       string
-	Volume      string
+	// Volume is base volume: the summed trade size in engine units.
+	Volume string
+	// QuoteVolume is sum(size * price), accumulated per trade before aggregation.
+	// It cannot be recovered from Volume and the OHLC afterwards, and spot needs it:
+	// the UI shows spot notional in USDC, which is the engine cNGN amount times the
+	// engine price.
+	QuoteVolume string
 	TradeCount  int64
 }
 
@@ -107,13 +113,14 @@ aggregated as (
     (array_agg(price order by price::numeric asc))[1]             as low,
     (array_agg(price order by created_at desc, trade_id desc))[1] as close,
     sum(size::numeric)::text                                     as volume,
+    sum(size::numeric * price::numeric)::text                    as quote_volume,
     count(*)::bigint                                             as trade_count
   from bucketed
   group by bucket_start
   order by bucket_start desc
   limit $6
 )
-select bucket_start, open, high, low, close, volume, trade_count
+select bucket_start, open, high, low, close, volume, quote_volume, trade_count
 from aggregated
 order by bucket_start asc
 `
@@ -149,6 +156,7 @@ order by bucket_start asc
 			&candle.Low,
 			&candle.Close,
 			&candle.Volume,
+			&candle.QuoteVolume,
 			&candle.TradeCount,
 		); err != nil {
 			return nil, mapPGError(err)
