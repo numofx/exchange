@@ -359,7 +359,7 @@ func (r *Repository) BestBidAndAsk(ctx context.Context, assetAddress string, sub
 }
 
 func (r *Repository) AcquireMatchCandidate(ctx context.Context, assetAddress string, subID string, now time.Time) (*MatchCandidate, error) {
-	slog.Info(
+	slog.Debug(
 		"acquire_match_candidate_start",
 		"asset_address", strings.ToLower(assetAddress),
 		"sub_id", subID,
@@ -386,7 +386,7 @@ func (r *Repository) AcquireMatchCandidate(ctx context.Context, assetAddress str
 		return nil, err
 	}
 	if bid == nil || ask == nil {
-		slog.Info(
+		slog.Debug(
 			"acquire_match_candidate_no_pair",
 			"asset_address", strings.ToLower(assetAddress),
 			"sub_id", subID,
@@ -400,6 +400,31 @@ func (r *Repository) AcquireMatchCandidate(ctx context.Context, assetAddress str
 	}
 
 	taker, maker := chooseTakerMaker(*bid, *ask)
+
+	// Only reserve a pair that will actually trade. The book is uncrossed on the
+	// vast majority of ticks, and reserving there churns both rows through
+	// 'matching' -> 'active' for nothing.
+	crossed, err := Crosses(taker, maker)
+	if err != nil {
+		return nil, err
+	}
+	if !crossed {
+		slog.Debug(
+			"acquire_match_candidate_not_crossed",
+			"asset_address", strings.ToLower(assetAddress),
+			"sub_id", subID,
+			"taker_order_id", taker.OrderID,
+			"taker_price_ticks", taker.LimitPriceTicks,
+			"maker_order_id", maker.OrderID,
+			"maker_price_ticks", maker.LimitPriceTicks,
+		)
+		// Commit anyway: expireOrders above may have marked orders expired.
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+
 	if err := reserveOrders(ctx, tx, []string{taker.OrderID, maker.OrderID}); err != nil {
 		return nil, err
 	}
@@ -661,7 +686,7 @@ func (r *Repository) bestBySide(ctx context.Context, assetAddress string, subID 
 }
 
 func lockBestBySide(ctx context.Context, tx pgx.Tx, assetAddress string, subID string, side Side) (*Order, error) {
-	slog.Info(
+	slog.Debug(
 		"lock_best_by_side_start",
 		"asset_address", strings.ToLower(assetAddress),
 		"sub_id", subID,
@@ -686,7 +711,7 @@ for update skip locked
 	order, err := scanOrder(tx.QueryRow(ctx, query, assetAddress, subID, side))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			slog.Info(
+			slog.Debug(
 				"lock_best_by_side_empty",
 				"asset_address", strings.ToLower(assetAddress),
 				"sub_id", subID,
@@ -697,7 +722,7 @@ for update skip locked
 		return nil, err
 	}
 
-	slog.Info(
+	slog.Debug(
 		"lock_best_by_side_hit",
 		"asset_address", strings.ToLower(assetAddress),
 		"sub_id", subID,
@@ -810,6 +835,31 @@ insert into trade_fills (
 		maker.OrderID,
 	)
 	return mapPGError(err)
+}
+
+// Crosses reports whether taker's limit price reaches maker's. Callers must
+// check this BEFORE reserving the pair: reserving flips both rows to
+// 'matching', and the active_orders_event trigger turns every such flip into a
+// market_events row. Reserving speculatively on an uncrossed book costs four
+// writes per poll tick per market and produces nothing.
+func Crosses(taker Order, maker Order) (bool, error) {
+	takerPrice, ok := new(big.Int).SetString(taker.LimitPriceTicks, 10)
+	if !ok {
+		return false, fmt.Errorf("invalid taker price %q", taker.LimitPriceTicks)
+	}
+	makerPrice, ok := new(big.Int).SetString(maker.LimitPriceTicks, 10)
+	if !ok {
+		return false, fmt.Errorf("invalid maker price %q", maker.LimitPriceTicks)
+	}
+
+	switch taker.Side {
+	case SideBuy:
+		return takerPrice.Cmp(makerPrice) >= 0, nil
+	case SideSell:
+		return takerPrice.Cmp(makerPrice) <= 0, nil
+	default:
+		return false, fmt.Errorf("unsupported taker side %q", taker.Side)
+	}
 }
 
 func chooseTakerMaker(left Order, right Order) (Order, Order) {

@@ -2,7 +2,6 @@ package matching
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"math/big"
 	"strings"
@@ -251,24 +250,11 @@ func remainingAmount(order orders.Order) string {
 	return remaining
 }
 
+// crosses delegates to orders.Crosses, which AcquireMatchCandidate applies
+// before reserving. The check is repeated here because the candidate is read
+// outside that transaction and the engine must not submit an uncrossed pair.
 func crosses(taker orders.Order, maker orders.Order) (bool, error) {
-	takerPrice, ok := new(big.Int).SetString(taker.LimitPriceTicks, 10)
-	if !ok {
-		return false, slogError("invalid taker price")
-	}
-	makerPrice, ok := new(big.Int).SetString(maker.LimitPriceTicks, 10)
-	if !ok {
-		return false, slogError("invalid maker price")
-	}
-
-	switch taker.Side {
-	case orders.SideBuy:
-		return takerPrice.Cmp(makerPrice) >= 0, nil
-	case orders.SideSell:
-		return takerPrice.Cmp(makerPrice) <= 0, nil
-	default:
-		return false, fmt.Errorf("unsupported taker side %q", taker.Side)
-	}
+	return orders.Crosses(taker, maker)
 }
 
 func minDecimalString(a string, b string) (string, error) {
