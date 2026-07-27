@@ -147,6 +147,22 @@ type tradesResponse struct {
 	NextBeforeTradeID  int64               `json:"next_before_trade_id,omitempty"`
 }
 
+type presentedCandle struct {
+	BucketStart time.Time `json:"bucket_start"`
+	Open        string    `json:"open"`
+	High        string    `json:"high"`
+	Low         string    `json:"low"`
+	Close       string    `json:"close"`
+	Volume      string    `json:"volume"`
+	TradeCount  int64     `json:"trade_count"`
+}
+
+type candlesResponse struct {
+	MarketPresentation marketPresentation `json:"market_presentation"`
+	Interval           string             `json:"interval"`
+	Candles            []presentedCandle  `json:"candles"`
+}
+
 type marketDiagnosticsResponse struct {
 	Market             string `json:"market"`
 	AssetAddress       string `json:"asset_address"`
@@ -178,6 +194,7 @@ func (s *Server) Run() error {
 	router.Get("/v1/markets", s.handleMarkets)
 	router.Get("/v1/book", s.handleBook)
 	router.Get("/v1/trades", s.handleTrades)
+	router.Get("/v1/candles", s.handleCandles)
 	router.Get("/v1/orders/{order_id}", s.handleGetOrderStatus)
 	router.Get("/debug/markets", s.handleMarketDiagnostics)
 	router.Post("/v1/orders", s.handleCreateOrder)
@@ -318,6 +335,100 @@ func (s *Server) handleTrades(w http.ResponseWriter, r *http.Request) {
 		Trades:             presentTrades(items, market),
 		NextBeforeTradeID:  nextBeforeTradeID,
 	})
+}
+
+func (s *Server) handleCandles(w http.ResponseWriter, r *http.Request) {
+	market := s.resolveMarket(r)
+	if market.AssetAddress == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown market"})
+		return
+	}
+
+	interval, err := orders.ParseCandleInterval(defaultString(r.URL.Query().Get("interval"), "1h"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "interval must be one of " + strings.Join(orders.CandleIntervalNames(), ", "),
+		})
+		return
+	}
+
+	limit := int32(200)
+	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
+		parsed, err := strconv.Atoi(rawLimit)
+		if err != nil || parsed <= 0 || parsed > 1000 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "limit must be between 1 and 1000"})
+			return
+		}
+		limit = int32(parsed)
+	}
+
+	start, err := parseOptionalTime(r.URL.Query().Get("start"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "start must be an RFC3339 timestamp"})
+		return
+	}
+	end, err := parseOptionalTime(r.URL.Query().Get("end"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "end must be an RFC3339 timestamp"})
+		return
+	}
+	if !start.IsZero() && !end.IsZero() && !end.After(start) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "end must be after start"})
+		return
+	}
+
+	items, err := s.orders.ListCandles(
+		r.Context(),
+		strings.ToLower(market.AssetAddress),
+		market.SubID,
+		interval,
+		start,
+		end,
+		limit,
+	)
+	if err != nil {
+		slog.Error("list candles", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load candles"})
+		return
+	}
+	s.logMarketQuery(r.Context(), "candles_query", market)
+
+	writeJSON(w, http.StatusOK, candlesResponse{
+		MarketPresentation: s.presentMarket(r.Context(), market),
+		Interval:           interval.Name,
+		Candles:            presentCandles(items),
+	})
+}
+
+func presentCandles(items []orders.Candle) []presentedCandle {
+	presented := make([]presentedCandle, 0, len(items))
+	for _, item := range items {
+		presented = append(presented, presentedCandle{
+			BucketStart: item.BucketStart,
+			Open:        item.Open,
+			High:        item.High,
+			Low:         item.Low,
+			Close:       item.Close,
+			Volume:      item.Volume,
+			TradeCount:  item.TradeCount,
+		})
+	}
+	return presented
+}
+
+func defaultString(value string, fallback string) string {
+	if trimmed := strings.TrimSpace(value); trimmed != "" {
+		return trimmed
+	}
+	return fallback
+}
+
+func parseOptionalTime(value string) (time.Time, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return time.Time{}, nil
+	}
+	return time.Parse(time.RFC3339, trimmed)
 }
 
 func (s *Server) handleGetOrderStatus(w http.ResponseWriter, r *http.Request) {
