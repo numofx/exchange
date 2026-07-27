@@ -273,7 +273,9 @@ func TestJUNDepositedCrossPathEndToEnd(t *testing.T) {
 		t.Fatal("expected match candidate")
 	}
 
-	if err := repo.FinalizeMatchWithPrice(ctx, candidate.Taker.OrderID, candidate.Maker.OrderID, "1390", "1000000"); err != nil {
+	// desired_amount "0.001" is one lot (MinSize "0.001"), so a full fill is 1
+	// atomic unit — not a raw 1e6-scaled value.
+	if err := repo.FinalizeMatchWithPrice(ctx, candidate.Taker.OrderID, candidate.Maker.OrderID, "1390", "1"); err != nil {
 		t.Fatalf("finalize match: %v", err)
 	}
 
@@ -291,7 +293,7 @@ func TestJUNDepositedCrossPathEndToEnd(t *testing.T) {
 	if len(trades.Trades) != 1 {
 		t.Fatalf("expected 1 trade, got %d body=%s", len(trades.Trades), tradesRec.Body.String())
 	}
-	if trades.Trades[0].Size != "1000000" || trades.Trades[0].Price != "1390" {
+	if trades.Trades[0].Size != "1" || trades.Trades[0].Price != "1390" {
 		t.Fatalf("unexpected trade %+v", trades.Trades[0])
 	}
 }
