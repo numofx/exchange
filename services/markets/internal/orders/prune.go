@@ -64,15 +64,51 @@ where order_id = any (
 	}
 }
 
-// RunPruneLoop prunes terminal orders on a ticker until ctx is cancelled. A zero
-// interval or horizon disables it. Run this in exactly one process — the API
-// service — so the matcher does not compete for the same rows.
+// pruneStartupDelay is how long after boot the first prune runs: short enough
+// that a frequently-redeployed service still prunes, long enough to stay out of
+// the way of startup work. A var so tests need not wait a real minute.
+var pruneStartupDelay = time.Minute
+
+// RunPruneLoop prunes terminal orders shortly after startup and then on a ticker
+// until ctx is cancelled. A zero interval or horizon disables it. Run this in
+// exactly one process — the API service — so the matcher does not compete for the
+// same rows.
+//
+// The startup run is not optional: a ticker alone means a service redeployed more
+// often than `every` never prunes at all, and deploys can easily be more frequent
+// than the default hour.
 func (r *Repository) RunPruneLoop(ctx context.Context, horizon time.Duration, every time.Duration, batch int, log *slog.Logger) {
 	if every <= 0 || horizon <= 0 {
 		return
 	}
 	if log == nil {
 		log = slog.Default()
+	}
+
+	runOnce := func() bool {
+		removed, err := r.PruneTerminalOrders(ctx, horizon, batch)
+		if err != nil {
+			if ctx.Err() != nil {
+				return false
+			}
+			log.Warn("orders prune", "error", err, "rows_removed_before_error", removed)
+			return true
+		}
+		if removed > 0 {
+			log.Info("orders pruned", "rows", removed, "horizon", horizon.String())
+		}
+		return true
+	}
+
+	startup := time.NewTimer(pruneStartupDelay)
+	defer startup.Stop()
+	select {
+	case <-ctx.Done():
+		return
+	case <-startup.C:
+		if !runOnce() {
+			return
+		}
 	}
 
 	ticker := time.NewTicker(every)
@@ -82,16 +118,8 @@ func (r *Repository) RunPruneLoop(ctx context.Context, horizon time.Duration, ev
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			removed, err := r.PruneTerminalOrders(ctx, horizon, batch)
-			if err != nil {
-				if ctx.Err() != nil {
-					return
-				}
-				log.Warn("orders prune", "error", err, "rows_removed_before_error", removed)
-				continue
-			}
-			if removed > 0 {
-				log.Info("orders pruned", "rows", removed, "horizon", horizon.String())
+			if !runOnce() {
+				return
 			}
 		}
 	}
