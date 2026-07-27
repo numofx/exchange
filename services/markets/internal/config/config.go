@@ -42,6 +42,13 @@ type Config struct {
 	EventsReconcileInterval time.Duration // backstop drain cadence in case a NOTIFY is missed
 	EventsSubBuffer         int           // per-subscriber channel depth before a slow consumer is dropped
 
+	// Retention for terminal rows in active_orders (internal/orders). Market-maker
+	// requoting leaves a cancelled row per replaced quote — thousands per day — and
+	// without this the table grows without bound. 'filled' orders are never pruned.
+	OrdersPruneHorizon  time.Duration // max age of a cancelled/expired order row
+	OrdersPruneInterval time.Duration // how often the prune job runs; 0 disables it
+	OrdersPruneBatch    int           // rows deleted per statement, to bound WAL per transaction
+
 	// WebSocket auth (internal/wsauth) for the private 'orders' channel.
 	WSAuthDomain     string        // SIWE domain bound into the signed message
 	WSAuthMaxTTL     time.Duration // max validity window of a single signed auth frame (replay bound)
@@ -96,6 +103,10 @@ func Load() (Config, error) {
 	cfg.EventsPruneInterval = getenvDurationDefault("EVENTS_PRUNE_INTERVAL", 5*time.Minute)
 	cfg.EventsReconcileInterval = getenvDurationDefault("EVENTS_RECONCILE_INTERVAL", 5*time.Second)
 	cfg.EventsSubBuffer = getenvIntDefault("EVENTS_SUB_BUFFER", 256)
+
+	cfg.OrdersPruneHorizon = getenvDurationDefault("ORDERS_PRUNE_HORIZON", 30*24*time.Hour)
+	cfg.OrdersPruneInterval = getenvDurationDefault("ORDERS_PRUNE_INTERVAL", time.Hour)
+	cfg.OrdersPruneBatch = getenvIntDefault("ORDERS_PRUNE_BATCH", 5000)
 
 	cfg.WSAuthDomain = getenvDefault("WS_AUTH_DOMAIN", "markets.numo.xyz")
 	cfg.WSAuthMaxTTL = getenvDurationDefault("WS_AUTH_MAX_TTL", 5*time.Minute)
