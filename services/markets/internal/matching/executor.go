@@ -15,6 +15,13 @@ import (
 	"github.com/numofx/matching-backend/internal/orders"
 )
 
+// makerFillFeeZero is the fee charged on every maker fill. Maker fees are
+// guaranteed 0.00% across all markets, so this is always "0" — do not make it
+// per-market or configurable without also lifting the enforcement in
+// execution-service (which rejects any non-zero maker fill fee before it
+// reaches the chain).
+const makerFillFeeZero = "0"
+
 type ExecutorClient struct {
 	url         string
 	managerData string
@@ -173,7 +180,7 @@ func buildExecutorRequest(market string, candidate orders.MatchCandidate, manage
 					FilledAccount: candidate.Maker.SubaccountID,
 					AmountFilled:  amount,
 					Price:         price,
-					Fee:           "0",
+					Fee:           makerFillFeeZero,
 				},
 			},
 			ManagerData: defaultManagerData(managerData),
