@@ -5,6 +5,22 @@ const addressSchema = z.string().regex(/^0x[0-9a-fA-F]{40}$/, 'expected address'
 const decimalStringSchema = z.string().regex(/^[0-9]+$/, 'expected unsigned decimal string');
 const signedDecimalStringSchema = z.string().regex(/^-?[0-9]+$/, 'expected signed decimal string');
 
+// Maker fees are guaranteed 0.00% across all markets: every resting order that
+// gets filled pays no fee. Enforced here at the on-chain submission chokepoint —
+// the single path every trade in every market takes before settlement — so no
+// matcher change or upstream bug can push a maker fee through. Makers also sign
+// worstFee=0, so the TradeModule caps it cryptographically; this is defense in depth.
+const makerFillFeeSchema = decimalStringSchema.refine(
+  (value) => {
+    try {
+      return BigInt(value) === 0n;
+    } catch {
+      return false;
+    }
+  },
+  { message: 'maker fill fee must be 0 (0.00% maker fee is guaranteed across all markets)' },
+);
+
 export const actionSchema = z.object({
   subaccount_id: decimalStringSchema,
   nonce: decimalStringSchema,
@@ -19,7 +35,7 @@ export const fillDetailSchema = z.object({
   filled_account: decimalStringSchema,
   amount_filled: decimalStringSchema,
   price: signedDecimalStringSchema,
-  fee: decimalStringSchema,
+  fee: makerFillFeeSchema,
 });
 
 export const orderDataSchema = z.object({

@@ -106,6 +106,30 @@ test('POST /execute validates request payload', async () => {
   await app.close();
 });
 
+test('POST /execute rejects a non-zero maker fill fee (0.00% maker fee guaranteed)', async () => {
+  const app = buildApp({
+    config,
+    executor: {
+      execute: async (): Promise<ExecuteMatchResponse> => ({ accepted: true, tx_hash: 'dry-run' }),
+    },
+    matchingAddress: '0x00000000000000000000000000000000000000aa',
+    tradeModuleAddress: '0x00000000000000000000000000000000000000bb',
+  });
+
+  const makerFeePayload = {
+    ...requestPayload,
+    order_data: {
+      ...requestPayload.order_data,
+      fill_details: [{ ...requestPayload.order_data.fill_details[0], fee: '1' }],
+    },
+  };
+
+  const response = await app.inject({ method: 'POST', url: '/execute', payload: makerFeePayload });
+  assert.equal(response.statusCode, 400);
+
+  await app.close();
+});
+
 test('assertPayloadConsistency rejects owner mismatch when an expected owner is configured', () => {
   assert.throws(
     () =>
