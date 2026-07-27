@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -39,6 +40,18 @@ func TestWSBookEndToEnd(t *testing.T) {
 	defer cancel()
 	wsApplyMigrations(ctx, t, pool)
 
+	// Unique per run, and removed afterwards: a fixed order_id/nonce leaves a row
+	// that collides on active_orders_owner_nonce_idx with the next run and with
+	// other tests sharing this database. Registered after the pool defers so it
+	// runs while the pool is still open (defers are LIFO; t.Cleanup is too late).
+	wsNonce := time.Now().UnixNano()
+	wsOrderID := fmt.Sprintf("ws-ord-%d", wsNonce)
+	wsOwner := fmt.Sprintf("0xws%d", wsNonce)
+	defer func() {
+		_, _ = pool.Exec(ctx, "delete from market_events where payload->>'order_id' = $1", wsOrderID)
+		_, _ = pool.Exec(ctx, "delete from active_orders where order_id = $1", wsOrderID)
+	}()
+
 	cfg := config.Config{
 		EventsReconcileInterval: 500 * time.Millisecond,
 		EventsSubBuffer:         64,
@@ -72,7 +85,8 @@ func TestWSBookEndToEnd(t *testing.T) {
 	// place an order -> expect a live book update with seq > snapshot seq
 	if _, err := pool.Exec(ctx, `insert into active_orders
 		(order_id,owner_address,signer_address,subaccount_id,recipient_id,nonce,side,asset_address,sub_id,desired_amount,filled_amount,limit_price,limit_price_ticks,worst_fee,expiry,action_json,signature,status)
-		values ('ws-ord-1','0xabc','0xsig',1,1,1,'buy',$1,0,'5','0','1380','1380','0',9999999999,'{}','0xsig','active')`, asset); err != nil {
+		values ($2,$3,'0xsig',1,1,$4,'buy',$1,0,'5','0','1380','1380','0',9999999999,'{}','0xsig','active')`,
+		asset, wsOrderID, wsOwner, wsNonce); err != nil {
 		t.Fatalf("insert order: %v", err)
 	}
 

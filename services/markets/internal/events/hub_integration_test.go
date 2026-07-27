@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"os"
 	"sort"
@@ -34,8 +35,23 @@ func TestHubPipeline(t *testing.T) {
 	defer cancel()
 	applyMigrations(ctx, t, pool)
 
-	const market = "0xdd9c2ddf97a2dc9b9d348dcd0ef776af5291a1f9:0"
-	const asset = "0xDd9c2Ddf97a2Dc9B9d348DcD0ef776aF5291A1F9"
+	// Unique per run: the replay assertion below counts every book event on this
+	// market, so a fixed address collides with anything else in the same database
+	// (api's ws test writes to the real futures asset) and with earlier runs.
+	// Mixed case is deliberate — it exercises the trigger's lower() on market_key.
+	assetHex := fmt.Sprintf("%040X", time.Now().UnixNano())
+	asset := "0x" + assetHex
+	market := strings.ToLower(asset) + ":0"
+	orderID := "ord-" + assetHex
+
+	// Must be a defer, not t.Cleanup: defers run LIFO at function exit and this one
+	// is registered after `defer pool.Close()`, so it runs while the pool is still
+	// open. A t.Cleanup here would fire after pool.Close() and silently no-op.
+	defer func() {
+		_, _ = pool.Exec(ctx, "delete from market_events where market_key = $1", market)
+		_, _ = pool.Exec(ctx, "delete from trade_fills where taker_order_id = $1", orderID)
+		_, _ = pool.Exec(ctx, "delete from active_orders where order_id = $1", orderID)
+	}()
 
 	cfg := config.Config{
 		EventsPruneHorizon:      time.Hour,
@@ -62,7 +78,7 @@ func TestHubPipeline(t *testing.T) {
 	// place an order -> expect a book level_delta (+5) and an owner-scoped order_update
 	mustExec(ctx, t, pool, `insert into active_orders
 		(order_id,owner_address,signer_address,subaccount_id,recipient_id,nonce,side,asset_address,sub_id,desired_amount,filled_amount,limit_price,limit_price_ticks,worst_fee,expiry,action_json,signature,status)
-		values ('ord-1','0xABCDEF0000000000000000000000000000000001','0xsigner',7,7,1,'buy',$1,0,'5','0','1380','1380','0',9999999999,'{}','0xsig','active')`, asset)
+		values ($2,'0xABCDEF0000000000000000000000000000000001','0xsigner',7,7,1,'buy',$1,0,'5','0','1380','1380','0',9999999999,'{}','0xsig','active')`, asset, orderID)
 
 	book := waitEvent(t, bookSub, "book")
 	if book.Channel != ChannelBook || !strings.Contains(string(book.Payload), `"size_delta": "5"`) {
@@ -75,9 +91,9 @@ func TestHubPipeline(t *testing.T) {
 
 	// a trade fill on a non-subscribed channel must NOT reach the book subscriber
 	mustExec(ctx, t, pool, `insert into trade_fills(asset_address,sub_id,price,size,aggressor_side,taker_order_id,maker_order_id)
-		values ($1,0,'1380','2','buy','ord-1','ord-2')`, asset)
+		values ($1,0,'1380','2','buy',$2,'ord-2')`, asset, orderID)
 	// cancel -> another book delta (-5) should arrive next on the book sub (proving trades didn't jump the queue)
-	mustExec(ctx, t, pool, `update active_orders set status='cancelled' where order_id='ord-1'`)
+	mustExec(ctx, t, pool, `update active_orders set status='cancelled' where order_id=$1`, orderID)
 	book2 := waitEvent(t, bookSub, "book")
 	if !strings.Contains(string(book2.Payload), `"size_delta": "-5"`) {
 		t.Fatalf("expected -5 book delta after cancel, got: %s", book2.Payload)
