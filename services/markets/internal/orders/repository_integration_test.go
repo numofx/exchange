@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -297,4 +298,92 @@ func countOrderEvents(t *testing.T, pool *pgxpool.Pool, orderIDs ...string) int 
 		t.Fatalf("count market_events: %v", err)
 	}
 	return count
+}
+
+func TestPruneTerminalOrdersRespectsHorizonAndKeepsFilled(t *testing.T) {
+	pool := openTestPool(t)
+	repo := NewRepository(pool)
+	ctx := context.Background()
+	suffix := fmt.Sprintf("it-prune-%d", time.Now().UnixNano())
+
+	assetAddress := "0xfeed0000000000000000000000000000000000ee"
+	subID := "1789567201"
+
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "delete from active_orders where order_id like $1", suffix+"%")
+	})
+
+	insertOrder := `
+insert into active_orders (
+  order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
+  desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at
+) values ($1, $2, '0xsigner', 1, 1, $3, 'buy', $4, $5, '100', '0', '1380', '1380', '0', $6, '{}'::jsonb, '0xsig', $7, $8)
+`
+
+	expiry := time.Now().Add(time.Hour).Unix()
+	now := time.Now().UTC()
+	// (id suffix, status, age) — only stale cancelled/expired rows may be pruned.
+	rows := []struct {
+		name   string
+		status string
+		age    time.Duration
+	}{
+		{"stale-cancelled", "cancelled", 48 * time.Hour},
+		{"stale-expired", "expired", 48 * time.Hour},
+		{"stale-filled", "filled", 48 * time.Hour},
+		{"fresh-cancelled", "cancelled", time.Minute},
+		{"active", "active", 48 * time.Hour},
+	}
+	for i, row := range rows {
+		id := suffix + "-" + row.name
+		nonce := fmt.Sprintf("%d", 900000+i)
+		if _, err := pool.Exec(ctx, insertOrder, id, "0xowner"+id, nonce, assetAddress, subID, expiry, row.status, now.Add(-row.age)); err != nil {
+			t.Fatalf("insert %s: %v", row.name, err)
+		}
+	}
+
+	removed, err := repo.PruneTerminalOrders(ctx, 24*time.Hour, 2)
+	if err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if removed != 2 {
+		t.Fatalf("pruned %d rows, want 2 (stale cancelled + stale expired)", removed)
+	}
+
+	survivors := map[string]bool{}
+	pgRows, err := pool.Query(ctx, "select order_id from active_orders where order_id like $1", suffix+"%")
+	if err != nil {
+		t.Fatalf("query survivors: %v", err)
+	}
+	defer pgRows.Close()
+	for pgRows.Next() {
+		var id string
+		if err := pgRows.Scan(&id); err != nil {
+			t.Fatalf("scan survivor: %v", err)
+		}
+		survivors[strings.TrimPrefix(id, suffix+"-")] = true
+	}
+	if err := pgRows.Err(); err != nil {
+		t.Fatalf("iterate survivors: %v", err)
+	}
+
+	for _, want := range []string{"stale-filled", "fresh-cancelled", "active"} {
+		if !survivors[want] {
+			t.Errorf("%s was pruned but must be kept", want)
+		}
+	}
+	for _, gone := range []string{"stale-cancelled", "stale-expired"} {
+		if survivors[gone] {
+			t.Errorf("%s survived the prune", gone)
+		}
+	}
+
+	// Second run is a no-op: nothing stale is left.
+	again, err := repo.PruneTerminalOrders(ctx, 24*time.Hour, 2)
+	if err != nil {
+		t.Fatalf("second prune: %v", err)
+	}
+	if again != 0 {
+		t.Fatalf("second prune removed %d rows, want 0", again)
+	}
 }

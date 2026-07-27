@@ -193,6 +193,23 @@ func (s *Server) Run() error {
 		}
 	}()
 
+	// Retention for terminal orders. Runs here rather than in the matcher so exactly
+	// one process prunes; without it active_orders grows without bound (a cancelled
+	// row per replaced market-maker quote).
+	go s.orders.RunPruneLoop(
+		hubCtx,
+		s.cfg.OrdersPruneHorizon,
+		s.cfg.OrdersPruneInterval,
+		s.cfg.OrdersPruneBatch,
+		slog.Default(),
+	)
+	slog.Info(
+		"orders_prune_config",
+		"horizon", s.cfg.OrdersPruneHorizon.String(),
+		"interval", s.cfg.OrdersPruneInterval.String(),
+		"batch", s.cfg.OrdersPruneBatch,
+	)
+
 	s.logRegisteredMarkets()
 	slog.Info(
 		"custody_guard_config",
