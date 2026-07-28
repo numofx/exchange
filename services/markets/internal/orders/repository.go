@@ -358,7 +358,20 @@ func (r *Repository) BestBidAndAsk(ctx context.Context, assetAddress string, sub
 	return bid, ask, nil
 }
 
-func (r *Repository) AcquireMatchCandidate(ctx context.Context, assetAddress string, subID string, now time.Time) (*MatchCandidate, error) {
+// MatchGate reports whether a crossed pair should be skipped this tick. It is
+// consulted BEFORE the pair is reserved, because reserving is what costs: two
+// status UPDATEs plus the market_events rows the trigger writes for each. A pair
+// that cannot settle would otherwise churn that at the full poll rate until it
+// expires.
+type MatchGate func(taker Order, maker Order) bool
+
+func (r *Repository) AcquireMatchCandidate(
+	ctx context.Context,
+	assetAddress string,
+	subID string,
+	now time.Time,
+	gate MatchGate,
+) (*MatchCandidate, error) {
 	slog.Debug(
 		"acquire_match_candidate_start",
 		"asset_address", strings.ToLower(assetAddress),
@@ -417,6 +430,21 @@ func (r *Repository) AcquireMatchCandidate(ctx context.Context, assetAddress str
 			"taker_price_ticks", taker.LimitPriceTicks,
 			"maker_order_id", maker.OrderID,
 			"maker_price_ticks", maker.LimitPriceTicks,
+		)
+		// Commit anyway: expireOrders above may have marked orders expired.
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+
+	if gate != nil && gate(taker, maker) {
+		slog.Debug(
+			"acquire_match_candidate_gated",
+			"asset_address", strings.ToLower(assetAddress),
+			"sub_id", subID,
+			"taker_order_id", taker.OrderID,
+			"maker_order_id", maker.OrderID,
 		)
 		// Commit anyway: expireOrders above may have marked orders expired.
 		if err := tx.Commit(ctx); err != nil {
