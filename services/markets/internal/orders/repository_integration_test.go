@@ -212,7 +212,7 @@ insert into active_orders (
 	eventsBefore := countOrderEvents(t, pool, bidID, askID)
 
 	for i := 0; i < 5; i++ {
-		candidate, err := repo.AcquireMatchCandidate(ctx, assetAddress, subID, time.Now())
+		candidate, err := repo.AcquireMatchCandidate(ctx, assetAddress, subID, time.Now(), nil)
 		if err != nil {
 			t.Fatalf("acquire on uncrossed book: %v", err)
 		}
@@ -269,7 +269,7 @@ insert into active_orders (
 		t.Fatalf("insert ask: %v", err)
 	}
 
-	candidate, err := repo.AcquireMatchCandidate(ctx, assetAddress, subID, time.Now())
+	candidate, err := repo.AcquireMatchCandidate(ctx, assetAddress, subID, time.Now(), nil)
 	if err != nil {
 		t.Fatalf("acquire on crossed book: %v", err)
 	}
@@ -385,5 +385,80 @@ insert into active_orders (
 	}
 	if again != 0 {
 		t.Fatalf("second prune removed %d rows, want 0", again)
+	}
+}
+
+func TestAcquireMatchCandidateSkipsGatedPairWithoutReserving(t *testing.T) {
+	pool := openTestPool(t)
+	repo := NewRepository(pool)
+	ctx := context.Background()
+	suffix := fmt.Sprintf("it-gated-%d", time.Now().UnixNano())
+
+	bidID := suffix + "-bid"
+	askID := suffix + "-ask"
+	assetAddress := "0xfeed0000000000000000000000000000000000ab"
+	subID := "1789567201"
+
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "delete from market_events where payload->>'order_id' in ($1, $2)", bidID, askID)
+		_, _ = pool.Exec(ctx, "delete from active_orders where order_id in ($1, $2)", bidID, askID)
+	})
+
+	insertOrder := `
+insert into active_orders (
+  order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
+  desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status
+) values ($1, $2, '0xsigner', 1, 1, $3, $4, $5, $6, '100', '0', $7, $8, '0', $9, '{}'::jsonb, '0xsig', 'active')
+`
+	expiry := time.Now().Add(time.Hour).Unix()
+	// A crossed book: without the gate this pair would be reserved every tick.
+	if _, err := pool.Exec(ctx, insertOrder, bidID, "0xowner"+bidID, "970001", SideBuy, assetAddress, subID, "1382", "1382", expiry); err != nil {
+		t.Fatalf("insert bid: %v", err)
+	}
+	if _, err := pool.Exec(ctx, insertOrder, askID, "0xowner"+askID, "970002", SideSell, assetAddress, subID, "1378", "1378", expiry); err != nil {
+		t.Fatalf("insert ask: %v", err)
+	}
+
+	eventsBefore := countOrderEvents(t, pool, bidID, askID)
+
+	gateCalls := 0
+	gate := func(taker Order, maker Order) bool {
+		gateCalls++
+		return true
+	}
+
+	for i := 0; i < 5; i++ {
+		candidate, err := repo.AcquireMatchCandidate(ctx, assetAddress, subID, time.Now(), gate)
+		if err != nil {
+			t.Fatalf("acquire with gate: %v", err)
+		}
+		if candidate != nil {
+			t.Fatalf("gated pair was still returned: %+v", candidate)
+		}
+	}
+
+	if gateCalls != 5 {
+		t.Errorf("gate consulted %d times, want 5", gateCalls)
+	}
+	for _, id := range []string{bidID, askID} {
+		var status string
+		if err := pool.QueryRow(ctx, "select status from active_orders where order_id = $1", id).Scan(&status); err != nil {
+			t.Fatalf("read status %s: %v", id, err)
+		}
+		if status != "active" {
+			t.Errorf("order %s status = %s, want active (gated pair must not be reserved)", id, status)
+		}
+	}
+	if got := countOrderEvents(t, pool, bidID, askID); got != eventsBefore {
+		t.Errorf("gated ticks wrote %d market_events rows, want 0", got-eventsBefore)
+	}
+
+	// With the gate open the same pair reserves normally.
+	candidate, err := repo.AcquireMatchCandidate(ctx, assetAddress, subID, time.Now(), func(Order, Order) bool { return false })
+	if err != nil {
+		t.Fatalf("acquire with open gate: %v", err)
+	}
+	if candidate == nil {
+		t.Fatal("open gate should have produced a candidate")
 	}
 }

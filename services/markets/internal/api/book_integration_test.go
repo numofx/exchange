@@ -265,7 +265,7 @@ func TestJUNDepositedCrossPathEndToEnd(t *testing.T) {
 	submit(makePayload(askID, "6", "1", "sell", "1390"))
 	submit(makePayload(buyID, "7", "2", "buy", "1391"))
 
-	candidate, err := repo.AcquireMatchCandidate(ctx, assetAddress, subID, time.Now().UTC())
+	candidate, err := repo.AcquireMatchCandidate(ctx, assetAddress, subID, time.Now().UTC(), nil)
 	if err != nil {
 		t.Fatalf("acquire match candidate: %v", err)
 	}

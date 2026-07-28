@@ -19,6 +19,7 @@ type Engine struct {
 	orders   *orders.Repository
 	executor *ExecutorClient
 	registry *instruments.Registry
+	backoff  *matchBackoff
 }
 
 const reconciliationTimeout = 5 * time.Second
@@ -29,6 +30,7 @@ func NewEngine(cfg config.Config, pool *pgxpool.Pool) *Engine {
 		orders:   orders.NewRepository(pool),
 		executor: NewExecutorClient(cfg.ExecutorURL, cfg.ExecutorManagerData),
 		registry: instruments.DefaultRegistry(cfg),
+		backoff:  newMatchBackoff(),
 	}
 }
 
@@ -53,7 +55,9 @@ func (e *Engine) Run(ctx context.Context) error {
 func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Metadata) {
 	now := time.Now()
 
-	candidate, err := e.orders.AcquireMatchCandidate(ctx, instrument.AssetAddress, instrument.SubID, now)
+	candidate, err := e.orders.AcquireMatchCandidate(
+		ctx, instrument.AssetAddress, instrument.SubID, now, e.backoff.shouldSkip,
+	)
 	if err != nil {
 		slog.Error("acquire match candidate", "market", instrument.Symbol, "error", err)
 		return
@@ -120,6 +124,7 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 		return
 	}
 	if fillAmount == "0" {
+		e.noteMatchFailure(instrument.Symbol, *candidate, "zero_fill")
 		slog.Error(
 			"crossed_order_zero_fill",
 			"market", instrument.Symbol,
@@ -137,6 +142,7 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 
 	executionFill, err := computeExecutionUnits(instrument, *candidate, fillPrice, fillAmount)
 	if err != nil {
+		e.noteMatchFailure(instrument.Symbol, *candidate, "invariant_failed")
 		slog.Error(
 			"match_trace_invariant_failed",
 			"market", instrument.Symbol,
@@ -185,6 +191,7 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 			}
 
 			release = false
+			e.backoff.clear(candidate.Taker, candidate.Maker)
 			slog.Warn("reconciled match after executor error",
 				"market", instrument.Symbol,
 				"price_semantics", instrument.PriceSemantics,
@@ -198,6 +205,7 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 			return
 		}
 
+		e.noteMatchFailure(instrument.Symbol, *candidate, "executor_error")
 		slog.Error("submit match", "market", instrument.Symbol, "taker_order_id", candidate.Taker.OrderID, "maker_order_id", candidate.Maker.OrderID, "error", err)
 		_ = e.orders.MarkMatchFailed(reconcileCtx, []string{candidate.Taker.OrderID, candidate.Maker.OrderID}, err.Error())
 		return
@@ -229,6 +237,7 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 	)
 
 	release = false
+	e.backoff.clear(candidate.Taker, candidate.Maker)
 
 	slog.Info("match executed",
 		"market", instrument.Symbol,
@@ -239,6 +248,21 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 		"fill_price_ticks", fillPrice,
 		"amount", fillAmount,
 		"tx_hash", executorResp.TxHash,
+	)
+}
+
+// noteMatchFailure widens the retry window for a pair that just failed, so an
+// unsettleable cross cannot spin at the poll rate until one side expires.
+func (e *Engine) noteMatchFailure(market string, candidate orders.MatchCandidate, reason string) {
+	attempts, retryIn := e.backoff.recordFailure(candidate.Taker, candidate.Maker)
+	slog.Warn(
+		"match_backoff",
+		"market", market,
+		"reason", reason,
+		"taker_order_id", candidate.Taker.OrderID,
+		"maker_order_id", candidate.Maker.OrderID,
+		"consecutive_failures", attempts,
+		"retry_in", retryIn.String(),
 	)
 }
 
