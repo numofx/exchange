@@ -71,6 +71,12 @@ func TestHandleMarketsIncludesDeliverableFutureMetadata(t *testing.T) {
 	if found.TickSize != "1" {
 		t.Fatalf("June tick size = %q", found.TickSize)
 	}
+	if found.MinSize != "0.001" {
+		t.Fatalf("June min size = %q", found.MinSize)
+	}
+	if found.ContractMultiplier != "10000" {
+		t.Fatalf("June contract multiplier = %q", found.ContractMultiplier)
+	}
 
 	// Verify November Future
 	var foundNov *marketPresentation
@@ -146,4 +152,3 @@ func TestHandleMarketsIncludesDeliverableFutureMetadata(t *testing.T) {
 		t.Fatalf("May 2027 tick size = %q", foundMay.TickSize)
 	}
 }
-
