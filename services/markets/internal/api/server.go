@@ -48,6 +48,8 @@ type marketPresentation struct {
 	DisplayName        string `json:"display_name,omitempty"`
 	DisplayLabel       string `json:"display_label,omitempty"`
 	TickSize           string `json:"tick_size,omitempty"`
+	MinSize            string `json:"min_size,omitempty"`
+	ContractMultiplier string `json:"contract_multiplier,omitempty"`
 	SettlementNote     string `json:"settlement_note,omitempty"`
 	PricingModel       string `json:"pricing_model,omitempty"`
 	DisplayPriceKind   string `json:"display_price_kind,omitempty"`
@@ -907,31 +909,33 @@ func presentOrder(order orders.Order, instrument instruments.Metadata) presented
 
 func presentMarket(market instruments.Metadata) marketPresentation {
 	return marketPresentation{
-		Market:           market.Symbol,
-		ContractType:     market.ContractType,
-		SettlementType:   market.SettlementType,
-		BaseAssetSymbol:  market.BaseAssetSymbol,
-		QuoteAssetSymbol: market.QuoteAssetSymbol,
-		ExpiryTimestamp:  market.ExpiryTimestamp,
-		PriceSemantics:   market.PriceSemantics,
-		DisplaySemantics: market.DisplaySemantics,
-		DisplayName:      market.DisplayName,
-		DisplayLabel:     market.DisplayLabel,
-		TickSize:         market.TickSize,
-		SettlementNote:   market.SettlementNote,
-		PricingModel:     market.PricingModel,
-		DisplayPriceKind: market.DisplayPriceKind,
-		AssetAddress:     strings.ToLower(market.AssetAddress),
-		SubID:            market.SubID,
-		OrderEntrySpec:   market.OrderEntrySpec,
-		UIPriceUnit:      market.UIPriceUnit,
-		UISizeUnit:       market.UISizeUnit,
-		UISideMeaning:    market.UISideMeaning,
-		EnginePriceUnit:  market.EnginePriceUnit,
-		EngineAmountUnit: market.EngineAmountUnit,
-		EngineSidePolicy: market.EngineSidePolicy,
-		UIPriceToEngine:  market.UIPriceToEngine,
-		UISizeToEngine:   market.UISizeToEngine,
+		Market:             market.Symbol,
+		ContractType:       market.ContractType,
+		SettlementType:     market.SettlementType,
+		BaseAssetSymbol:    market.BaseAssetSymbol,
+		QuoteAssetSymbol:   market.QuoteAssetSymbol,
+		ExpiryTimestamp:    market.ExpiryTimestamp,
+		PriceSemantics:     market.PriceSemantics,
+		DisplaySemantics:   market.DisplaySemantics,
+		DisplayName:        market.DisplayName,
+		DisplayLabel:       market.DisplayLabel,
+		TickSize:           market.TickSize,
+		MinSize:            market.MinSize,
+		ContractMultiplier: market.ContractMultiplier,
+		SettlementNote:     market.SettlementNote,
+		PricingModel:       market.PricingModel,
+		DisplayPriceKind:   market.DisplayPriceKind,
+		AssetAddress:       strings.ToLower(market.AssetAddress),
+		SubID:              market.SubID,
+		OrderEntrySpec:     market.OrderEntrySpec,
+		UIPriceUnit:        market.UIPriceUnit,
+		UISizeUnit:         market.UISizeUnit,
+		UISideMeaning:      market.UISideMeaning,
+		EnginePriceUnit:    market.EnginePriceUnit,
+		EngineAmountUnit:   market.EngineAmountUnit,
+		EngineSidePolicy:   market.EngineSidePolicy,
+		UIPriceToEngine:    market.UIPriceToEngine,
+		UISizeToEngine:     market.UISizeToEngine,
 	}
 }
 
