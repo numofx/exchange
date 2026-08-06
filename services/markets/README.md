@@ -98,6 +98,33 @@ Relevant env:
 - `MATCHING_ADDRESS=0x...`
 - `CHAIN_RPC_URL=https://...` (required when custody guard is enabled and matching is configured)
 
+### Order Signature Verification
+
+The API rebuilds the EIP-712 digest `ActionVerifier` checks on-chain and recovers the signer from
+`signature`. A signature that does not authorize the action can never settle, so without this the
+order rests on the book as depth that cannot trade until it expires, and the matcher retries it on
+the backoff schedule the whole time.
+
+Contract signers are handled: when local recovery does not match, the signer is checked for code
+and, if it has any, `isValidSignature` is called per ERC-1271 — mirroring
+`SignatureChecker.isValidSignatureNow` in `ActionVerifier`. Session-key authorization
+(`signer != owner`) is not checked here; it stays an on-chain concern.
+
+Relevant env:
+
+- `ENFORCE_ORDER_SIGNATURES=false` (default) — signatures are always checked and logged; this flag
+  decides whether a bad one is rejected. Keep it off until the logs show a clean run against real
+  traffic, since a digest that does not match the contract would reject every order.
+- `CHAIN_ID` and `MATCHING_ADDRESS` — the EIP-712 domain. Verification is skipped entirely if
+  either is unset.
+- `CHAIN_RPC_URL` — only needed to resolve contract signers.
+
+Log lines to watch:
+
+- `order_signature_invalid` — the signature did not authorize the action
+- `order_signature_unverifiable` — the check could not complete (for example an RPC failure), which
+  never rejects, even when enforcing
+
 `EXECUTOR_URL` is the endpoint for a separate executor process, likely implemented in
 TypeScript with `viem`, that performs simulation and submits `verifyAndMatch(...)`.
 
