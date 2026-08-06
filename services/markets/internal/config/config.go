@@ -18,6 +18,11 @@ type Config struct {
 	ChainID                string
 	MatchingAddress        string
 	EnforceMatchingCustody bool
+	// EnforceOrderSignatures rejects an order whose signature does not authorize its action.
+	// Off by default: the digest must match ActionVerifier exactly, and a mismatch would reject
+	// every order, so turn it on only after the mismatch logs show a clean run against real
+	// traffic. Signatures are checked and logged either way.
+	EnforceOrderSignatures bool
 	TradeModuleAddress     string
 	ExecutorURL            string
 	ExecutorManagerData    string
@@ -64,6 +69,7 @@ func Load() (Config, error) {
 		ChainID:                os.Getenv("CHAIN_ID"),
 		MatchingAddress:        os.Getenv("MATCHING_ADDRESS"),
 		EnforceMatchingCustody: getenvBool("ENFORCE_MATCHING_CUSTODY", true),
+		EnforceOrderSignatures: getenvBool("ENFORCE_ORDER_SIGNATURES", false),
 		TradeModuleAddress:     os.Getenv("TRADE_MODULE_ADDRESS"),
 		ExecutorURL:            os.Getenv("EXECUTOR_URL"),
 		ExecutorManagerData:    "0x",
