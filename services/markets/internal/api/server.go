@@ -31,6 +31,7 @@ type Server struct {
 	orders      *orders.Repository
 	instruments *instruments.Registry
 	custody     custodyChecker
+	signatures  signatureChecker
 	hub         *events.Hub
 	wsAuth      wsauth.Verifier
 }
@@ -186,6 +187,7 @@ func NewServer(cfg config.Config, pool *pgxpool.Pool, registry *instruments.Regi
 		orders:      orders.NewRepository(pool),
 		instruments: registry,
 		custody:     newCustodyChecker(cfg),
+		signatures:  newSignatureChecker(cfg),
 		hub:         events.NewHub(pool, cfg, slog.Default()),
 		wsAuth:      wsauth.Verifier{Domain: cfg.WSAuthDomain, MaxTTL: cfg.WSAuthMaxTTL},
 	}
@@ -504,6 +506,16 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 	if s.custody != nil {
 		if err := s.custody.ValidateDeposited(r.Context(), params.SubaccountID); err != nil {
 			slog.Warn("order_submit_rejected_custody", "order_id", params.OrderID, "subaccount_id", params.SubaccountID, "error", err)
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	// A bad signature can never settle, so the order would rest on the book as phantom depth
+	// until expiry while the matcher retried it. Checking here is strictly cheaper than the
+	// custody call above. Reported only until EnforceOrderSignatures is on, so the digest can be
+	// proven against real traffic before it can reject anything.
+	if err := s.verifyOrderSignature(r.Context(), req, params); err != nil {
+		if s.cfg.EnforceOrderSignatures {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
