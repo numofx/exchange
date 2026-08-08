@@ -26,8 +26,7 @@ contract DeployWrappedUSDTDeliverableAsset is Utils {
     uint deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     vm.startBroadcast(deployerPrivateKey);
 
-    address usdt = vm.parseJsonAddress(_readDeploymentFile("shared"), ".usdt");
-    if (usdt == address(0)) revert("shared.usdt missing");
+    address usdt = _stableAssetOf("USDT");
 
     Deployment memory deployment = _loadDeployment();
     WrappedERC20Asset asset = new WrappedERC20Asset(deployment.subAccounts, IERC20Metadata(usdt));
