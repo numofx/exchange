@@ -106,8 +106,14 @@ func TestERC1271LiveContractSignerAccepted(t *testing.T) {
 	if v == nil {
 		t.Fatal("NewVerifier returned nil")
 	}
-	if err := v.Verify(context.Background(), action, signature, wallet); err != nil {
+	path, err := v.Verify(context.Background(), action, signature, wallet)
+	if err != nil {
 		t.Fatalf("contract signature rejected: %v", err)
+	}
+	// Against a real deployed contract, not a stub: this is what proves the production log line
+	// would report "erc1271" rather than silently taking the EOA path.
+	if path != PathERC1271 {
+		t.Fatalf("want path %q against a real contract signer, got %q", PathERC1271, path)
 	}
 }
 
@@ -129,7 +135,7 @@ func TestERC1271LiveWrongSignerRejected(t *testing.T) {
 	signature := signDigest(t, otherKey, digest)
 
 	v := NewVerifier(domain.ChainID, domain.VerifyingContract, rpcURL)
-	err = v.Verify(context.Background(), action, signature, wallet)
+	_, err = v.Verify(context.Background(), action, signature, wallet)
 	if !errors.Is(err, ErrInvalidSignature) {
 		t.Fatalf("want ErrInvalidSignature, got %v", err)
 	}
@@ -153,7 +159,7 @@ func TestERC1271LiveTamperedActionRejected(t *testing.T) {
 	tampered.Expiry = "1999999999"
 
 	v := NewVerifier(domain.ChainID, domain.VerifyingContract, rpcURL)
-	err = v.Verify(context.Background(), tampered, signature, wallet)
+	_, err = v.Verify(context.Background(), tampered, signature, wallet)
 	if !errors.Is(err, ErrInvalidSignature) {
 		t.Fatalf("want ErrInvalidSignature for a tampered action, got %v", err)
 	}
