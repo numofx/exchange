@@ -42,8 +42,17 @@ contract DeployDeliverableFXManager is Utils {
 
     if (LAST_TRADE_TIME >= EXPIRY) revert("invalid future schedule");
 
-    address usdcDeliverableAsset = vm.envAddress("WRAPPED_USDC_DELIVERABLE_ASSET_ADDRESS");
-    if (usdcDeliverableAsset == address(0)) revert("WRAPPED_USDC_DELIVERABLE_ASSET_ADDRESS is required");
+    // The base leg is whichever stable this chain deployed: USDC (Base) or USDT (Celo).
+    // Exactly one env var is set; setting both is a config error rather than a preference.
+    address usdcDeliverable = vm.envOr("WRAPPED_USDC_DELIVERABLE_ASSET_ADDRESS", address(0));
+    address usdtDeliverable = vm.envOr("WRAPPED_USDT_DELIVERABLE_ASSET_ADDRESS", address(0));
+    if (usdcDeliverable != address(0) && usdtDeliverable != address(0)) {
+      revert("set only one of WRAPPED_USDC/USDT_DELIVERABLE_ASSET_ADDRESS");
+    }
+    address stableDeliverableAsset = usdcDeliverable != address(0) ? usdcDeliverable : usdtDeliverable;
+    if (stableDeliverableAsset == address(0)) {
+      revert("WRAPPED_USDC_DELIVERABLE_ASSET_ADDRESS or WRAPPED_USDT_DELIVERABLE_ASSET_ADDRESS is required");
+    }
 
     string memory cngnDeployment = _readDeploymentFile("CNGN");
     address wrappedCngnAsset = vm.parseJsonAddress(cngnDeployment, ".base");
@@ -64,14 +73,14 @@ contract DeployDeliverableFXManager is Utils {
     future.setMarkBounds(MAX_MARK_DEVIATION, MAX_MARK_DELAY);
 
     manager.setProduct(
-      IDeliverableFXFutureAsset(address(future)), IAsset(usdcDeliverableAsset), IAsset(wrappedCngnAsset), ISpotFeed(cngnSpotFeed)
+      IDeliverableFXFutureAsset(address(future)), IAsset(stableDeliverableAsset), IAsset(wrappedCngnAsset), ISpotFeed(cngnSpotFeed)
     );
     manager.setMarginParams(NORMAL_IM, NORMAL_MM);
 
     uint96 subId = future.createSeries(
       EXPIRY,
       LAST_TRADE_TIME,
-      usdcDeliverableAsset,
+      stableDeliverableAsset,
       wrappedCngnAsset,
       uint128(CONTRACT_SIZE_BASE),
       uint128(MIN_TRADE_INCREMENT),
@@ -85,8 +94,8 @@ contract DeployDeliverableFXManager is Utils {
     owned[2] = address(future);
     _transferOwnership(owned);
 
-    _writeDeploymentArtifact(manager, viewer, future, subId, usdcDeliverableAsset, wrappedCngnAsset, cngnSpotFeed);
-    _writeVaultActions(deployment, usdcDeliverableAsset, wrappedCngnAsset, address(manager));
+    _writeDeploymentArtifact(manager, viewer, future, subId, stableDeliverableAsset, wrappedCngnAsset, cngnSpotFeed);
+    _writeVaultActions(deployment, stableDeliverableAsset, wrappedCngnAsset, address(manager));
 
     console2.log("Deliverable FX manager deployed:", address(manager));
     console2.log("Deliverable FX viewer deployed:", address(viewer));
@@ -101,7 +110,7 @@ contract DeployDeliverableFXManager is Utils {
 
   function _writeVaultActions(
     Deployment memory deployment,
-    address usdcDeliverableAsset,
+    address stableDeliverableAsset,
     address wrappedCngnAsset,
     address manager
   ) internal {
@@ -121,8 +130,8 @@ contract DeployDeliverableFXManager is Utils {
       ",",
       _vaultAction(
         "wrappedUsdcDeliverable.setWhitelistManager",
-        usdcDeliverableAsset,
-        abi.encodeCall(WrappedERC20Asset(usdcDeliverableAsset).setWhitelistManager, (manager, true))
+        stableDeliverableAsset,
+        abi.encodeCall(WrappedERC20Asset(stableDeliverableAsset).setWhitelistManager, (manager, true))
       ),
       ",",
       _vaultAction(
@@ -133,8 +142,8 @@ contract DeployDeliverableFXManager is Utils {
       ",",
       _vaultAction(
         "wrappedUsdcDeliverable.setTotalPositionCap",
-        usdcDeliverableAsset,
-        abi.encodeCall(WrappedERC20Asset(usdcDeliverableAsset).setTotalPositionCap, (IManager(manager), POSITION_CAP))
+        stableDeliverableAsset,
+        abi.encodeCall(WrappedERC20Asset(stableDeliverableAsset).setTotalPositionCap, (IManager(manager), POSITION_CAP))
       ),
       ",",
       _vaultAction(
@@ -163,7 +172,7 @@ contract DeployDeliverableFXManager is Utils {
     BasePortfolioViewer viewer,
     DeliverableFXFutureAsset future,
     uint96 subId,
-    address usdcDeliverableAsset,
+    address stableDeliverableAsset,
     address wrappedCngnAsset,
     address cngnSpotFeed
   ) internal {
@@ -176,7 +185,7 @@ contract DeployDeliverableFXManager is Utils {
     vm.serializeString(objKey, "subId", vm.toString(uint(subId)));
     vm.serializeUint(objKey, "expiry", EXPIRY);
     vm.serializeUint(objKey, "lastTradeTime", LAST_TRADE_TIME);
-    vm.serializeAddress(objKey, "baseAsset", usdcDeliverableAsset);
+    vm.serializeAddress(objKey, "baseAsset", stableDeliverableAsset);
     vm.serializeAddress(objKey, "quoteAsset", wrappedCngnAsset);
     vm.serializeAddress(objKey, "spotFeed", cngnSpotFeed);
     vm.serializeString(objKey, "contractSizeBase", vm.toString(CONTRACT_SIZE_BASE));

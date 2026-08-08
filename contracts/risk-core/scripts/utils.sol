@@ -36,10 +36,29 @@ contract Utils is Script {
   function _loadConfig() internal view returns (ConfigJson memory config) {
     string memory file = _readDeploymentFile("shared");
 
-    config.usdc = abi.decode(vm.parseJson(file, ".usdc"), (address));
+    // A chain declares exactly one USD stable: `usdc` (Base) or `usdt` (Celo). They are
+    // separate tokens backing separate wrapped assets, so neither key stands in for the
+    // other — a chain that sets neither, or both, is a config error caught by _stableAsset.
+    if (vm.keyExistsJson(file, ".usdc")) {
+      config.usdc = abi.decode(vm.parseJson(file, ".usdc"), (address));
+    }
+    if (vm.keyExistsJson(file, ".usdt")) {
+      config.usdt = abi.decode(vm.parseJson(file, ".usdt"), (address));
+    }
     config.feedSigners = abi.decode(vm.parseJson(file, ".feedSigners"), (address[]));
     config.useMockedFeed = abi.decode(vm.parseJson(file, ".useMockedFeed"), (bool));
     config.requiredSigners = abi.decode(vm.parseJson(file, ".requiredSigners"), (uint8));
+  }
+
+  /// @dev the chain's USD stable: backs CashAsset and the deliverable base leg.
+  ///      Returns the token and its symbol, which names the derived deployment artifacts.
+  function _stableAsset(ConfigJson memory config) internal pure returns (address token, string memory symbol) {
+    if (config.usdc != address(0) && config.usdt != address(0)) {
+      revert("shared: set only one of usdc/usdt");
+    }
+    if (config.usdc != address(0)) return (config.usdc, "USDC");
+    if (config.usdt != address(0)) return (config.usdt, "USDT");
+    revert("shared: usdc or usdt required");
   }
 
   /// @dev get config from current chainId

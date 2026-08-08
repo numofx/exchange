@@ -30,4 +30,7 @@ numo_testnet = "https://l2-prod-testnet-0eakp60405.t.conduit.xyz"
 
 numo_mainnet = "https://rpc.lyra.finance"
 
+# Celo mainnet (42220). Keyed RPC — set CELO_RPC_URL in .env, never inline the key here.
+celo = "${CELO_RPC_URL}"
+
 local = "http://localhost:8545"

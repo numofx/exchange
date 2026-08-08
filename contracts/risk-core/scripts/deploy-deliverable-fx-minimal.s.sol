@@ -57,7 +57,8 @@ contract DeployDeliverableFXMinimal is Utils {
     CashAsset cash;
     SecurityModule securityModule;
     DutchAuction auction;
-    WrappedERC20Asset wrappedUsdcDeliverable;
+    WrappedERC20Asset wrappedStableDeliverable;
+    string stableSymbol; // "USDC" or "USDT" — names the derived market and artifact
     WrappedERC20Asset wrappedCngn;
     ISpotFeed cngnSpotFeed;
     address cngnUnderlying;
@@ -75,22 +76,21 @@ contract DeployDeliverableFXMinimal is Utils {
     s.deployer = vm.addr(deployerPrivateKey);
     if (LAST_TRADE_TIME >= EXPIRY) revert("invalid future schedule");
 
-    string memory shared = _readDeploymentFile("shared");
-    address usdc = vm.parseJsonAddress(shared, ".usdc");
-    if (usdc == address(0)) revert("shared.usdc missing");
+    address stable;
+    (stable, s.stableSymbol) = _stableAsset(_loadConfig());
 
-    (s.subAccounts, s.cash, s.securityModule, s.auction) = _deployMinimalCore(usdc);
+    (s.subAccounts, s.cash, s.securityModule, s.auction) = _deployMinimalCore(stable);
 
     (
-      s.wrappedUsdcDeliverable,
+      s.wrappedStableDeliverable,
       s.wrappedCngn,
       s.cngnSpotFeed,
       s.cngnUnderlying
-    ) = _deployDeliverableAssets(s.subAccounts, s.deployer);
+    ) = _deployDeliverableAssets(s.subAccounts, s.deployer, stable, s.stableSymbol);
 
     (s.viewer, s.manager, s.future, s.subId) =
       _deployDeliverableStack(
-        s.subAccounts, s.cash, s.auction, s.wrappedUsdcDeliverable, s.wrappedCngn, s.cngnSpotFeed
+        s.subAccounts, s.cash, s.auction, s.wrappedStableDeliverable, s.wrappedCngn, s.cngnSpotFeed
       );
 
     address[] memory owned = new address[](10);
@@ -102,23 +102,23 @@ contract DeployDeliverableFXMinimal is Utils {
     owned[5] = address(s.future);
     owned[6] = address(s.wrappedCngn);
     // reused (env-provided) assets keep their existing owner
-    if (vm.envOr("WRAPPED_USDC_DELIVERABLE_ASSET_ADDRESS", address(0)) == address(0)) {
-      owned[7] = address(s.wrappedUsdcDeliverable);
+    if (_existingStableDeliverable(s.stableSymbol) == address(0)) {
+      owned[7] = address(s.wrappedStableDeliverable);
     }
     if (vm.envOr("CNGN_SPOT_FEED_ADDRESS", address(0)) == address(0)) owned[8] = address(s.cngnSpotFeed);
     if (vm.envOr("CNGN_TOKEN_ADDRESS", address(0)) == address(0)) owned[9] = s.cngnUnderlying;
     _transferOwnership(owned);
 
     _writeCoreArtifact(s.subAccounts, s.cash, s.securityModule, s.auction);
-    _writeWrappedUSDCArtifact(s.wrappedUsdcDeliverable, usdc);
+    _writeWrappedStableArtifact(s.wrappedStableDeliverable, stable, s.stableSymbol);
     _writeWrappedCNGNArtifact(s.wrappedCngn, s.cngnSpotFeed, s.cngnUnderlying);
     _writeDeliverableFXArtifact(
-      s.manager, s.viewer, s.future, s.subId, s.wrappedUsdcDeliverable, s.wrappedCngn, s.cngnSpotFeed
+      s.manager, s.viewer, s.future, s.subId, s.wrappedStableDeliverable, s.wrappedCngn, s.cngnSpotFeed, s.stableSymbol
     );
 
     console2.log("Deployer:", s.deployer);
     console2.log("Minimal core deployed");
-    console2.log("Wrapped USDC deliverable:", address(s.wrappedUsdcDeliverable));
+    console2.log(string.concat("Wrapped ", s.stableSymbol, " deliverable:"), address(s.wrappedStableDeliverable));
     console2.log("Wrapped CNGN:", address(s.wrappedCngn));
     console2.log("CNGN spot feed:", address(s.cngnSpotFeed));
     console2.log("Deliverable FX manager:", address(s.manager));
@@ -131,7 +131,7 @@ contract DeployDeliverableFXMinimal is Utils {
     vm.stopBroadcast();
   }
 
-  function _deployMinimalCore(address usdc)
+  function _deployMinimalCore(address stable)
     internal
     returns (SubAccounts subAccounts, CashAsset cash, SecurityModule securityModule, DutchAuction auction)
   {
@@ -139,7 +139,7 @@ contract DeployDeliverableFXMinimal is Utils {
 
     (uint minRate, uint rateMultiplier, uint highRateMultiplier, uint optimalUtil) = Config.getDefaultInterestRateModel();
     InterestRateModel rateModel = new InterestRateModel(minRate, rateMultiplier, highRateMultiplier, optimalUtil);
-    cash = new CashAsset(subAccounts, IERC20Metadata(usdc), rateModel);
+    cash = new CashAsset(subAccounts, IERC20Metadata(stable), rateModel);
 
     BootstrapManager bootstrapManager = new BootstrapManager();
     securityModule = new SecurityModule(subAccounts, ICashAsset(address(cash)), IManager(address(bootstrapManager)));
@@ -153,22 +153,25 @@ contract DeployDeliverableFXMinimal is Utils {
     securityModule.setWhitelistModule(address(auction), true);
   }
 
-  function _deployDeliverableAssets(SubAccounts subAccounts, address deployer)
+  function _deployDeliverableAssets(
+    SubAccounts subAccounts,
+    address deployer,
+    address stable,
+    string memory stableSymbol
+  )
     internal
     returns (
-      WrappedERC20Asset wrappedUsdcDeliverable,
+      WrappedERC20Asset wrappedStableDeliverable,
       WrappedERC20Asset wrappedCngn,
       ISpotFeed cngnSpotFeed,
       address cngnUnderlying
     )
   {
-    address usdc = vm.parseJsonAddress(_readDeploymentFile("shared"), ".usdc");
-
-    address usdcDeliverableExisting = vm.envOr("WRAPPED_USDC_DELIVERABLE_ASSET_ADDRESS", address(0));
-    if (usdcDeliverableExisting == address(0)) {
-      wrappedUsdcDeliverable = new WrappedERC20Asset(subAccounts, IERC20Metadata(usdc));
+    address stableDeliverableExisting = _existingStableDeliverable(stableSymbol);
+    if (stableDeliverableExisting == address(0)) {
+      wrappedStableDeliverable = new WrappedERC20Asset(subAccounts, IERC20Metadata(stable));
     } else {
-      wrappedUsdcDeliverable = WrappedERC20Asset(usdcDeliverableExisting);
+      wrappedStableDeliverable = WrappedERC20Asset(stableDeliverableExisting);
     }
 
     cngnUnderlying = vm.envOr("CNGN_TOKEN_ADDRESS", address(0));
@@ -194,7 +197,7 @@ contract DeployDeliverableFXMinimal is Utils {
     SubAccounts subAccounts,
     CashAsset cash,
     DutchAuction auction,
-    WrappedERC20Asset wrappedUsdcDeliverable,
+    WrappedERC20Asset wrappedStableDeliverable,
     WrappedERC20Asset wrappedCngn,
     ISpotFeed cngnSpotFeed
   ) internal returns (BasePortfolioViewer viewer, DeliverableFXManager manager, DeliverableFXFutureAsset future, uint96 subId) {
@@ -207,18 +210,18 @@ contract DeployDeliverableFXMinimal is Utils {
     auction.setWhitelistManager(address(manager), true);
     cash.setWhitelistManager(address(manager), true);
 
-    wrappedUsdcDeliverable.setWhitelistManager(address(manager), true);
+    wrappedStableDeliverable.setWhitelistManager(address(manager), true);
     wrappedCngn.setWhitelistManager(address(manager), true);
     future.setWhitelistManager(address(manager), true);
 
-    wrappedUsdcDeliverable.setTotalPositionCap(IManager(address(manager)), POSITION_CAP);
+    wrappedStableDeliverable.setTotalPositionCap(IManager(address(manager)), POSITION_CAP);
     wrappedCngn.setTotalPositionCap(IManager(address(manager)), POSITION_CAP);
     future.setTotalPositionCap(IManager(address(manager)), POSITION_CAP);
     future.setMarkBounds(MAX_MARK_DEVIATION, MAX_MARK_DELAY);
 
     manager.setProduct(
       IDeliverableFXFutureAsset(address(future)),
-      IAsset(address(wrappedUsdcDeliverable)),
+      IAsset(address(wrappedStableDeliverable)),
       IAsset(address(wrappedCngn)),
       cngnSpotFeed
     );
@@ -227,7 +230,7 @@ contract DeployDeliverableFXMinimal is Utils {
     subId = future.createSeries(
       EXPIRY,
       LAST_TRADE_TIME,
-      address(wrappedUsdcDeliverable),
+      address(wrappedStableDeliverable),
       address(wrappedCngn),
       uint128(CONTRACT_SIZE_BASE),
       uint128(MIN_TRADE_INCREMENT),
@@ -259,14 +262,29 @@ contract DeployDeliverableFXMinimal is Utils {
     _writeToDeployments("core", finalObj);
   }
 
-  function _writeWrappedUSDCArtifact(WrappedERC20Asset wrappedUsdcDeliverable, address usdc) internal {
-    string memory objKey = "wrapped-usdc-deliverable";
-    vm.serializeAddress(objKey, "base", address(wrappedUsdcDeliverable));
-    vm.serializeAddress(objKey, "wrappedAsset", usdc);
-    vm.serializeAddress(objKey, "WRAPPED_USDC_DELIVERABLE_ASSET_ADDRESS", address(wrappedUsdcDeliverable));
-    vm.serializeString(objKey, "marketName", "WRAPPED_USDC_DELIVERABLE");
-    string memory finalObj = vm.serializeString(objKey, "symbol", "WRAPPED_USDC_DELIVERABLE");
-    _writeToDeployments("WRAPPED_USDC_DELIVERABLE", finalObj);
+  /// @dev artifact + env var name for the chain's stable, e.g. WRAPPED_USDT_DELIVERABLE on Celo
+  function _stableDeliverableName(string memory stableSymbol) internal pure returns (string memory) {
+    return string.concat("WRAPPED_", stableSymbol, "_DELIVERABLE");
+  }
+
+  /// @dev an already-deployed wrapped stable to reuse instead of deploying a fresh one
+  function _existingStableDeliverable(string memory stableSymbol) internal view returns (address) {
+    return vm.envOr(string.concat(_stableDeliverableName(stableSymbol), "_ASSET_ADDRESS"), address(0));
+  }
+
+  function _writeWrappedStableArtifact(
+    WrappedERC20Asset wrappedStableDeliverable,
+    address stable,
+    string memory stableSymbol
+  ) internal {
+    string memory name = _stableDeliverableName(stableSymbol);
+    string memory objKey = _toLower(name);
+    vm.serializeAddress(objKey, "base", address(wrappedStableDeliverable));
+    vm.serializeAddress(objKey, "wrappedAsset", stable);
+    vm.serializeAddress(objKey, string.concat(name, "_ASSET_ADDRESS"), address(wrappedStableDeliverable));
+    vm.serializeString(objKey, "marketName", name);
+    string memory finalObj = vm.serializeString(objKey, "symbol", name);
+    _writeToDeployments(name, finalObj);
   }
 
   function _writeWrappedCNGNArtifact(WrappedERC20Asset wrappedCngn, ISpotFeed cngnSpotFeed, address cngnUnderlying)
@@ -285,20 +303,21 @@ contract DeployDeliverableFXMinimal is Utils {
     BasePortfolioViewer viewer,
     DeliverableFXFutureAsset future,
     uint96 subId,
-    WrappedERC20Asset wrappedUsdcDeliverable,
+    WrappedERC20Asset wrappedStableDeliverable,
     WrappedERC20Asset wrappedCngn,
-    ISpotFeed cngnSpotFeed
+    ISpotFeed cngnSpotFeed,
+    string memory stableSymbol
   ) internal {
     string memory objKey = "deliverable-fx-future";
 
     vm.serializeAddress(objKey, "manager", address(manager));
     vm.serializeAddress(objKey, "viewer", address(viewer));
     vm.serializeAddress(objKey, "future", address(future));
-    vm.serializeString(objKey, "symbol", "USDC/cNGN SEP-16-2026");
+    vm.serializeString(objKey, "symbol", string.concat(stableSymbol, "/cNGN SEP-16-2026"));
     vm.serializeString(objKey, "subId", vm.toString(uint(subId)));
     vm.serializeUint(objKey, "expiry", EXPIRY);
     vm.serializeUint(objKey, "lastTradeTime", LAST_TRADE_TIME);
-    vm.serializeAddress(objKey, "baseAsset", address(wrappedUsdcDeliverable));
+    vm.serializeAddress(objKey, "baseAsset", address(wrappedStableDeliverable));
     vm.serializeAddress(objKey, "quoteAsset", address(wrappedCngn));
     vm.serializeAddress(objKey, "spotFeed", address(cngnSpotFeed));
     vm.serializeString(objKey, "contractSizeBase", vm.toString(CONTRACT_SIZE_BASE));
