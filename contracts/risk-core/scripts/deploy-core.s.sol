@@ -54,7 +54,8 @@ contract DeployCore is Utils {
         deployment.rateModel = new InterestRateModel(minRate, rateMultiplier, highRateMultiplier, optimalUtil);
 
         // nonce + 2
-        deployment.cash = new CashAsset(deployment.subAccounts, IERC20Metadata(config.usdc), deployment.rateModel);
+        (address stable,) = _stableAsset(config);
+        deployment.cash = new CashAsset(deployment.subAccounts, IERC20Metadata(stable), deployment.rateModel);
 
         // nonce + 3: Deploy Viewer
         deployment.srmViewer = new SRMPortfolioViewer(deployment.subAccounts, deployment.cash);
@@ -70,7 +71,7 @@ contract DeployCore is Utils {
 
         deployment.srm.setLiquidation(deployment.auction);
 
-        // Deploy USDC stable feed
+        // Deploy the stable feed (price of the chain's USD stable against USD)
         LyraSpotFeed stableFeed = new LyraSpotFeed();
         stableFeed.setHeartbeat(Config.STABLE_HEARTBEAT);
         for (uint i = 0; i < config.feedSigners.length; ++i) {

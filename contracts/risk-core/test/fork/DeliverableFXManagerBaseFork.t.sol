@@ -86,7 +86,7 @@ contract FORK_TestDeliverableFXManagerBase is Test {
     vm.deal(charlie, 10 ether);
 
     deal(address(usdc), address(this), 1_000_000 * 1e6);
-    deal(address(cngn), address(this), 1_000_000_000e18);
+    deal(address(cngn), address(this), 1_000_000_000e6);
 
     usdc.approve(address(cash), type(uint).max);
     usdc.approve(address(usdcDeliveryAsset), type(uint).max);
@@ -99,12 +99,16 @@ contract FORK_TestDeliverableFXManagerBase is Test {
     cash.deposit(accountId, underlyingUsdc);
   }
 
+  /// @dev takes the token's NATIVE units (USDC is 6dp on Base)
   function _depositWrappedUSDC(uint accountId, uint underlyingUsdc) internal {
     usdcDeliveryAsset.deposit(accountId, underlyingUsdc);
   }
 
+  /// @dev takes the 18-decimal sub-account amount and converts down to the token's
+  ///      native units, which is what WrappedERC20Asset.deposit expects. cNGN is 6dp
+  ///      on Base, so passing an 18-decimal figure straight through over-funds by 1e12.
   function _depositWrappedCNGN(uint accountId, uint amount18) internal {
-    cngnAsset.deposit(accountId, amount18);
+    cngnAsset.deposit(accountId, amount18 / (10 ** (18 - cngn.decimals())));
   }
 
   function _transferFuture(uint fromAcc, uint toAcc, uint96 subId, int amount) internal {
