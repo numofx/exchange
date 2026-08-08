@@ -75,8 +75,14 @@ func TestERC1271SelectorMatchesItsDefinition(t *testing.T) {
 func TestERC1271ContractSignerAccepted(t *testing.T) {
 	v, calls := stubRPC(t, "0x60806040", magicValueWord, "")
 
-	if err := v.Verify(context.Background(), liveAction, liveSignature, contractSigner); err != nil {
+	path, err := v.Verify(context.Background(), liveAction, liveSignature, contractSigner)
+	if err != nil {
 		t.Fatalf("a contract signer returning the magic value must be accepted, got %v", err)
+	}
+	// The path is what makes the contract branch observable in production; acceptance alone
+	// cannot distinguish it from an EOA signature.
+	if path != PathERC1271 {
+		t.Fatalf("want path %q, got %q", PathERC1271, path)
 	}
 	if len(*calls) != 2 || (*calls)[0].Method != "eth_getCode" || (*calls)[1].Method != "eth_call" {
 		t.Fatalf("expected eth_getCode then eth_call, got %+v", *calls)
@@ -88,9 +94,12 @@ func TestERC1271ContractSignerRejected(t *testing.T) {
 	zeroWord := "0x" + strings.Repeat("0", 64)
 	v, _ := stubRPC(t, "0x60806040", zeroWord, "")
 
-	err := v.Verify(context.Background(), liveAction, liveSignature, contractSigner)
+	path, err := v.Verify(context.Background(), liveAction, liveSignature, contractSigner)
 	if !errors.Is(err, ErrInvalidSignature) {
 		t.Fatalf("expected ErrInvalidSignature, got %v", err)
+	}
+	if path != PathNone {
+		t.Fatalf("a rejection must report no path, got %q", path)
 	}
 }
 
@@ -98,7 +107,7 @@ func TestERC1271ContractSignerRejected(t *testing.T) {
 func TestNonContractSignerSkipsERC1271(t *testing.T) {
 	v, calls := stubRPC(t, "0x", magicValueWord, "")
 
-	err := v.Verify(context.Background(), liveAction, liveSignature, contractSigner)
+	_, err := v.Verify(context.Background(), liveAction, liveSignature, contractSigner)
 	if !errors.Is(err, ErrInvalidSignature) {
 		t.Fatalf("expected ErrInvalidSignature, got %v", err)
 	}
@@ -114,7 +123,7 @@ func TestNonContractSignerSkipsERC1271(t *testing.T) {
 func TestERC1271RPCFailureIsNotARejection(t *testing.T) {
 	v, _ := stubRPC(t, "0x60806040", "", "execution reverted")
 
-	err := v.Verify(context.Background(), liveAction, liveSignature, contractSigner)
+	_, err := v.Verify(context.Background(), liveAction, liveSignature, contractSigner)
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -130,7 +139,7 @@ func TestERC1271RPCFailureIsNotARejection(t *testing.T) {
 func TestERC1271CallDataEncoding(t *testing.T) {
 	v, calls := stubRPC(t, "0x60806040", magicValueWord, "")
 
-	if err := v.Verify(context.Background(), liveAction, liveSignature, contractSigner); err != nil {
+	if _, err := v.Verify(context.Background(), liveAction, liveSignature, contractSigner); err != nil {
 		t.Fatalf("verify: %v", err)
 	}
 
@@ -196,8 +205,12 @@ func TestERC1271CallDataEncoding(t *testing.T) {
 func TestValidEOASignatureMakesNoRPCCall(t *testing.T) {
 	v, calls := stubRPC(t, "0x", magicValueWord, "")
 
-	if err := v.Verify(context.Background(), liveAction, liveSignature, liveSigner); err != nil {
+	path, err := v.Verify(context.Background(), liveAction, liveSignature, liveSigner)
+	if err != nil {
 		t.Fatalf("the live signature must verify locally, got %v", err)
+	}
+	if path != PathEOA {
+		t.Fatalf("want path %q, got %q", PathEOA, path)
 	}
 	if len(*calls) != 0 {
 		t.Fatalf("expected no RPC calls, got %+v", *calls)

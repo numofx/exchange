@@ -13,12 +13,18 @@ import (
 
 type stubSignatureChecker struct {
 	err    error
+	path   ordersig.SignaturePath
 	called bool
 }
 
-func (s *stubSignatureChecker) Verify(context.Context, ordersig.Action, string, string) error {
+func (s *stubSignatureChecker) Verify(
+	context.Context,
+	ordersig.Action,
+	string,
+	string,
+) (ordersig.SignaturePath, error) {
 	s.called = true
-	return s.err
+	return s.path, s.err
 }
 
 func testRequest() createOrderRequest {
