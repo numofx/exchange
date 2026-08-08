@@ -46,6 +46,11 @@ contract TestDeliverableFXManagerBase is Test {
 
     usdc = new MockERC20("USDC", "USDC");
     cngn = new MockERC20("cNGN", "cNGN");
+    // Both legs are 6dp in every live deployment (USDC/cNGN on Base, USDT/cNGN on Celo).
+    // Must be set before the WrappedERC20Assets are constructed — they cache decimals
+    // as an immutable. Leaving these at the 18dp mock default skips the conversion path.
+    usdc.setDecimals(6);
+    cngn.setDecimals(6);
     cash = new MockCash(usdc, subAccounts);
     portfolioViewer = new BasePortfolioViewer(subAccounts, cash);
     manager = new DeliverableFXManager(
@@ -98,10 +103,13 @@ contract TestDeliverableFXManagerBase is Test {
     cash.deposit(acc, amount);
   }
 
-  function _depositWrapped(MockERC20 token, WrappedERC20Asset asset, uint account, uint amount) internal {
-    token.mint(address(this), amount);
-    token.approve(address(asset), amount);
-    asset.deposit(account, amount);
+  /// @dev `amount18` is the intended 18-decimal sub-account balance; it is converted down to
+  ///      the token's native units, which is what WrappedERC20Asset.deposit consumes.
+  function _depositWrapped(MockERC20 token, WrappedERC20Asset asset, uint account, uint amount18) internal {
+    uint native = amount18 / (10 ** (18 - token.decimals()));
+    token.mint(address(this), native);
+    token.approve(address(asset), native);
+    asset.deposit(account, native);
   }
 
   function _openFuturePosition(uint shortAcc, uint longAcc, int amount) internal {

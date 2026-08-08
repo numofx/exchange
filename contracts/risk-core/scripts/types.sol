@@ -31,7 +31,10 @@ import {OptionSettlementHelper} from "../src/periphery/OptionSettlementHelper.so
 import {PerpSettlementHelper} from "../src/periphery/PerpSettlementHelper.sol";
 
 struct ConfigJson {
+  // The chain's USD stable. USDC and USDT are distinct tokens with distinct wrapped
+  // assets — a chain sets exactly one. Resolve via Utils._stableAsset().
   address usdc;
+  address usdt;
   bool useMockedFeed;
   address[] feedSigners;
   uint8 requiredSigners;
