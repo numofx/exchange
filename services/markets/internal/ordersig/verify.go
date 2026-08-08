@@ -17,6 +17,21 @@ import (
 // only rejection a client can act on: every other error means the check could not be completed.
 var ErrInvalidSignature = errors.New("signature does not authorize this action")
 
+// SignaturePath records how a signature was authorized, so callers can tell an EOA-signed order
+// from a contract-signed one. Acceptance alone cannot distinguish them, which left the ERC-1271
+// branch unobservable in production: a contract signature that verified looked exactly like an
+// EOA signature that verified.
+type SignaturePath string
+
+const (
+	// PathNone is returned alongside any error.
+	PathNone SignaturePath = ""
+	// PathEOA means the signature recovered locally to the signer, with no chain read.
+	PathEOA SignaturePath = "eoa"
+	// PathERC1271 means the signer is a contract and it accepted the signature on-chain.
+	PathERC1271 SignaturePath = "erc1271"
+)
+
 // ERC-1271 magic value returned by isValidSignature(bytes32,bytes) for a valid signature.
 const erc1271MagicValue = "0x1626ba7e"
 
@@ -56,44 +71,49 @@ func NewVerifier(chainID string, matchingAddress string, rpcURL string) *Verifie
 // ActionVerifier.sessionKeys and needs its own chain read; an order signed by a validly
 // registered session key still passes here, and one signed by an unregistered key is caught
 // on-chain as it is today.
-func (v *Verifier) Verify(ctx context.Context, action Action, signature string, signerAddress string) error {
+func (v *Verifier) Verify(
+	ctx context.Context,
+	action Action,
+	signature string,
+	signerAddress string,
+) (SignaturePath, error) {
 	digest, err := Digest(v.domain, action)
 	if err != nil {
-		return fmt.Errorf("build digest: %w", err)
+		return PathNone, fmt.Errorf("build digest: %w", err)
 	}
 	sig, err := DecodeSignature(signature)
 	if err != nil {
-		return fmt.Errorf("%w: %s", ErrInvalidSignature, err)
+		return PathNone, fmt.Errorf("%w: %s", ErrInvalidSignature, err)
 	}
 
 	want := strings.ToLower(strings.TrimSpace(signerAddress))
 
 	recovered, recoverErr := Recover(digest, sig)
 	if recoverErr == nil && recovered == want {
-		return nil
+		return PathEOA, nil
 	}
 
 	// Not a plain EOA signature. It may still be a valid contract signature, but only if the
 	// signer actually is a contract — an EOA whose signature did not recover is simply invalid.
 	hasCode, err := v.hasCode(ctx, want)
 	if err != nil {
-		return fmt.Errorf("check signer code: %w", err)
+		return PathNone, fmt.Errorf("check signer code: %w", err)
 	}
 	if !hasCode {
 		if recoverErr != nil {
-			return fmt.Errorf("%w: %s", ErrInvalidSignature, recoverErr)
+			return PathNone, fmt.Errorf("%w: %s", ErrInvalidSignature, recoverErr)
 		}
-		return fmt.Errorf("%w: recovered %s", ErrInvalidSignature, recovered)
+		return PathNone, fmt.Errorf("%w: recovered %s", ErrInvalidSignature, recovered)
 	}
 
 	valid, err := v.isValidERC1271Signature(ctx, want, digest, sig)
 	if err != nil {
-		return fmt.Errorf("erc-1271 check: %w", err)
+		return PathNone, fmt.Errorf("erc-1271 check: %w", err)
 	}
 	if !valid {
-		return ErrInvalidSignature
+		return PathNone, ErrInvalidSignature
 	}
-	return nil
+	return PathERC1271, nil
 }
 
 // hasCode reports whether address is a contract.

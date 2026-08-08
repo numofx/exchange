@@ -12,9 +12,15 @@ import (
 	"github.com/numofx/matching-backend/internal/ordersig"
 )
 
-// signatureChecker verifies that an order's signature authorizes its action.
+// signatureChecker verifies that an order's signature authorizes its action, reporting which path
+// authorized it so a contract signature can be told apart from an EOA one.
 type signatureChecker interface {
-	Verify(ctx context.Context, action ordersig.Action, signature string, signerAddress string) error
+	Verify(
+		ctx context.Context,
+		action ordersig.Action,
+		signature string,
+		signerAddress string,
+	) (ordersig.SignaturePath, error)
 }
 
 // newSignatureChecker returns nil when the service is not configured to verify signatures, which
@@ -44,9 +50,22 @@ func (s *Server) verifyOrderSignature(ctx context.Context, req createOrderReques
 		return nil
 	}
 
-	err = s.signatures.Verify(ctx, action, req.Signature, params.SignerAddress)
+	path, err := s.signatures.Verify(ctx, action, req.Signature, params.SignerAddress)
 	switch {
 	case err == nil:
+		// Only the contract path is logged. An EOA signature is settled locally and is already
+		// evidenced by the order being accepted under enforcement; a contract signature is the
+		// one that reaches out to the chain, and without this line a successful ERC-1271 check
+		// is indistinguishable from an EOA one — which left that branch unobservable in
+		// production even while it was enforcing.
+		if path == ordersig.PathERC1271 {
+			slog.Info(
+				"order_signature_verified",
+				"order_id", params.OrderID,
+				"signer_address", params.SignerAddress,
+				"path", string(path),
+			)
+		}
 		return nil
 	case errors.Is(err, ordersig.ErrInvalidSignature):
 		slog.Warn(
