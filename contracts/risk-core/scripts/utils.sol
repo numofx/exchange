@@ -61,6 +61,26 @@ contract Utils is Script {
     revert("shared: usdc or usdt required");
   }
 
+  /// @dev the chain's stable, asserted to be the one the calling script deploys for.
+  ///      Points at the right script instead of failing on a missing JSON key.
+  function _stableAssetOf(string memory expected) internal view returns (address) {
+    (address token, string memory symbol) = _stableAsset(_loadConfig());
+    if (keccak256(bytes(symbol)) != keccak256(bytes(expected))) {
+      revert(
+        string.concat(
+          "chain stable is ",
+          symbol,
+          ", not ",
+          expected,
+          " - run deploy-wrapped-",
+          _toLower(symbol),
+          "-deliverable-asset.s.sol"
+        )
+      );
+    }
+    return token;
+  }
+
   /// @dev get config from current chainId
   function _loadDeployment() internal view returns (Deployment memory deployment) {
     string memory content = _readDeploymentFile("core");
