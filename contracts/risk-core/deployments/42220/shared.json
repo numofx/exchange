@@ -1,0 +1,9 @@
+{
+  "usdt": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+  "cngn": "0xF6829D7393dAe24509eb1E52eE8e572e2E271a4f",
+  "useMockedFeed": false,
+  "requiredSigners": 1,
+  "feedSigners": [
+    "0xdA1976E83D54B76D0c794B35262228960a1a918f"
+  ]
+}

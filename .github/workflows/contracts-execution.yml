@@ -31,4 +31,5 @@ jobs:
         with:
           version: "1.7.1"  # exact pin — `stable` differs across machines (local foundryup vs GH). Run `foundryup --install 1.7.1` locally.
       - run: forge fmt --check   # requires foundry.toml [fmt] keys to be valid — see PLAN note
+      - run: forge build scripts/*.s.sol   # scripts/ sits outside foundry's default `script` path, so forge test never compiles it
       - run: forge test -vvv     # resolves v2-core/ -> ../risk-core via the in-repo symlink

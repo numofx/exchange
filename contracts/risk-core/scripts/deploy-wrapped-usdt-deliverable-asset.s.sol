@@ -12,21 +12,24 @@ import {IERC20Metadata} from "openzeppelin/token/ERC20/extensions/IERC20Metadata
 import {Deployment} from "./types.sol";
 import {Utils} from "./utils.sol";
 
-contract DeployWrappedUSCDeliverableAsset is Utils {
-  string internal constant ARTIFACT_NAME = "WRAPPED_USDC_DELIVERABLE";
-  string internal constant MARKET_NAME = "WRAPPED_USDC_DELIVERABLE";
+/// @dev USDT counterpart of deploy-wrapped-usdc-deliverable-asset.s.sol, for chains whose
+///      shared.json declares `usdt` (Celo). USDT is a separate token from USDC and gets its
+///      own wrapped asset, market, and deployment artifact — the two are never interchanged.
+contract DeployWrappedUSDTDeliverableAsset is Utils {
+  string internal constant ARTIFACT_NAME = "WRAPPED_USDT_DELIVERABLE";
+  string internal constant MARKET_NAME = "WRAPPED_USDT_DELIVERABLE";
   uint internal constant POSITION_CAP = 1e36;
   uint internal constant MARGIN_FACTOR = 0.98e18;
   uint internal constant IM_SCALE = 0.98e18;
 
   function run() external {
-    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+    uint deployerPrivateKey = vm.envUint("PRIVATE_KEY");
     vm.startBroadcast(deployerPrivateKey);
 
-    address usdc = _stableAssetOf("USDC");
+    address usdt = _stableAssetOf("USDT");
 
     Deployment memory deployment = _loadDeployment();
-    WrappedERC20Asset asset = new WrappedERC20Asset(deployment.subAccounts, IERC20Metadata(usdc));
+    WrappedERC20Asset asset = new WrappedERC20Asset(deployment.subAccounts, IERC20Metadata(usdt));
 
     asset.setWhitelistManager(address(deployment.srm), true);
     asset.setTotalPositionCap(IManager(address(deployment.srm)), POSITION_CAP);
@@ -37,26 +40,28 @@ contract DeployWrappedUSCDeliverableAsset is Utils {
     deployment.srm.setBaseAssetMarginFactor(marketId, MARGIN_FACTOR, IM_SCALE);
 
     IStandardManager.AssetDetail memory detail = deployment.srm.assetDetails(asset);
-    if (!detail.isWhitelisted || detail.assetType != IStandardManager.AssetType.Base) revert("usdc base registration failed");
+    if (!detail.isWhitelisted || detail.assetType != IStandardManager.AssetType.Base) {
+      revert("usdt base registration failed");
+    }
     if (!asset.whitelistedManager(address(deployment.srm))) revert("manager whitelist failed");
 
     address[] memory owned = new address[](1);
     owned[0] = address(asset);
     _transferOwnership(owned);
 
-    string memory objKey = "wrapped-usdc-deliverable";
+    string memory objKey = "wrapped-usdt-deliverable";
     vm.serializeAddress(objKey, "base", address(asset));
     vm.serializeUint(objKey, "marketId", marketId);
-    vm.serializeAddress(objKey, "wrappedAsset", usdc);
+    vm.serializeAddress(objKey, "wrappedAsset", usdt);
     vm.serializeString(objKey, "symbol", MARKET_NAME);
     vm.serializeString(objKey, "marginFactor", vm.toString(MARGIN_FACTOR));
     vm.serializeString(objKey, "IMScale", vm.toString(IM_SCALE));
-    vm.serializeAddress(objKey, "WRAPPED_USDC_DELIVERABLE_ASSET_ADDRESS", address(asset));
+    vm.serializeAddress(objKey, "WRAPPED_USDT_DELIVERABLE_ASSET_ADDRESS", address(asset));
     string memory finalObj = vm.serializeString(objKey, "marketName", MARKET_NAME);
     _writeToDeployments(ARTIFACT_NAME, finalObj);
 
-    console2.log("Wrapped USDC deliverable asset deployed:", address(asset));
-    console2.log("WRAPPED_USDC_DELIVERABLE_ASSET_ADDRESS=%s", address(asset));
+    console2.log("Wrapped USDT deliverable asset deployed:", address(asset));
+    console2.log("WRAPPED_USDT_DELIVERABLE_ASSET_ADDRESS=%s", address(asset));
 
     vm.stopBroadcast();
   }
