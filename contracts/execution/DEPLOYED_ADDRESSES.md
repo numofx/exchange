@@ -4,9 +4,9 @@
 
 Matching/RFQ/Trade stack redeployed under the MPC vault
 `0x1dcA42ab54Bd3862853A821F84B29BF65245F435`, wired to the vault-owned risk-core
-(subAccounts `0x7019…2843`). Ownership is `Ownable2Step`: transfer to the vault is
-**initiated** (deployer is `pendingOwner` → vault); the vault must `acceptOwnership()`
-on all 7 contracts to finalize. Deployer: `0x2D724867d3AeD4A9F09c096B87F939285DD3AE2D`.
+(subAccounts `0x7019…2843`). Ownership is `Ownable2Step` and the transfer is
+**finalized**: as of 2026-08-08 all 7 contracts report `owner` = the vault and
+`pendingOwner` = `0x0`. Deployer: `0x2D724867d3AeD4A9F09c096B87F939285DD3AE2D`.
 
 See [deployments/8453/matching.json](deployments/8453/matching.json).
 
@@ -27,8 +27,16 @@ Config verified on-chain: SEP-16 future `0xDd9c2Ddf…A1F9` registered as a date
 trade + rfq; relayer `0xeaBca823B4d35d8F2eac09edB55C42D8077fbFcA` authorized as trade
 executor; legacy Lyra keeper NOT authorized.
 
-**Remaining to fully go live:** (1) vault `acceptOwnership()` on the 7 contracts;
-(2) execution-service `PRIVATE_KEY` set to the relayer key; (3) one settlement test fill.
+**Fully live as of 2026-08-08.** All three remaining items are done:
+
+1. Vault `acceptOwnership()` — `owner` = vault and `pendingOwner` = `0x0` on all 7
+   (`matching`, `trade`, `rfq`, `deposit`, `withdrawal`, `transfer`, `liquidate`),
+   read from Base mainnet.
+2. `PRIVATE_KEY` is set on the execution-service deployment.
+3. Settlement is exercised, not just smoke-tested: the relayer
+   `0xeaBca823B4d35d8F2eac09edB55C42D8077fbFcA` has submitted 20 transactions, and real
+   spot and futures fills have settled through it — a USDC/cNGN spot trade and a
+   SEP-16-2026 futures round trip (open and close) both moved subaccount balances on-chain.
 
 ## Base (8453) — superseded / abandoned (Feb 2026)
 
