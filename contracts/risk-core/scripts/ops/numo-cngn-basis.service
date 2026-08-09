@@ -1,0 +1,18 @@
+# Samples the cNGN reference prices (er_api / alt_fx / on-chain feed / mark / DEX depth)
+# into a CSV, to decide the Sep-16 settlement fixing on evidence rather than on whatever
+# the feed happens to publish. Data only accrues with wall-clock time, so run it early.
+# Paired with numo-cngn-basis.timer.
+#
+# Deliberately does NOT use run-with-ssm.sh: that wrapper fetches the feed-signer and
+# relayer keys, and this collector is read-only and signs nothing. Least privilege — it
+# takes the public RPC instead. Point RPC_URL at a private endpoint here if preferred.
+[Unit]
+Description=Numo cNGN reference-price basis sample
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/home/ec2-user/exchange/contracts/risk-core
+ExecStart=/usr/bin/python3 scripts/ops/log_cngn_basis.py --once
+Environment=RPC_URL=https://mainnet.base.org
+Environment=BASIS_CSV=/home/ec2-user/numo-cngn-basis.csv

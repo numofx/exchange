@@ -1,0 +1,15 @@
+# The upstream FX source only refreshes daily, so 30m sampling is already far finer than
+# the data — it's chosen to catch the on-chain feed/mark moving between refreshes, and to
+# notice promptly if real cNGN/USDC pool depth ever appears. Persistent=true so a reboot
+# doesn't silently leave a gap in a dataset whose whole value is its span.
+[Unit]
+Description=Numo cNGN reference-price basis sample every 30m
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=30min
+AccuracySec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
