@@ -44,10 +44,33 @@ systemctl list-timers numo-feed-alert.timer
 
 Kill `numo-feeds` for ~2 minutes to confirm the alert fires, then restart it.
 
+## Basis logger (evidence for the Sep-16 fixing)
+
+`log_cngn_basis.py` samples the competing cNGN reference prices into a CSV so the
+settlement fixing (physical-delivery-runbook.md item 5) gets decided on data. It is
+read-only, signs nothing, and never alerts — so it runs without `run-with-ssm.sh`.
+
+```bash
+cp ~/exchange/contracts/risk-core/scripts/ops/numo-cngn-basis.{service,timer} /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now numo-cngn-basis.timer
+python3 scripts/ops/log_cngn_basis.py --summary   # divergence report
+```
+
+Start it early — the dataset's value is its span, and the deadline is fixed.
+As of 2026-08-02 the two free FX sources disagree by ~27bps (about the mark keeper's
+30bps trigger), and all three cNGN/USDC pools on Base hold dust, so there is no
+on-chain market to fix against. The pool columns exist to catch that changing.
+
 ## Notes
 
-- The relayer wallet pays ~0.0003 ETH/day; top it up before it empties —
-  the alert will fire on staleness if it runs dry.
+- The relayer wallet pays ~0.00042 ETH/day (measured 2026-08-02: 1512 tx/day at
+  ~0.00000028 ETH each); top it up before it empties — the alert will fire on
+  staleness if it runs dry.
+- **Two wallets need gas, not one.** The relayer above submits `acceptData`; the MPC
+  vault `0x1dcA42ab…F435` pays for `setMarkPrice` itself (~48 tx/day, onlyOwner, so it
+  cannot be delegated to the relayer). `check_signer_balance.py` takes one
+  `SIGNER_ADDRESS` — run a second instance against the vault, or a dry vault freezes
+  the mark exactly as a dry relayer freezes the feed.
 - The signer key never needs ETH and must never set an EIP-7702 delegation.
 - The staleness monitor reads the feeds' packed `spotDetail` storage word
   (slot 6) directly, so it works even while `getSpot()` is reverting.
