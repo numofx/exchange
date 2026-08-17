@@ -44,6 +44,10 @@ type CancelOrderParams struct {
 	OwnerAddress string
 	Nonce        string
 	Reason       string
+	// CancelledBy records who asked for the cancel, for the audit trail. Today it is the
+	// best-effort requester the handler resolves from request headers, so it is untrusted; once
+	// cancels are signature-authorized it becomes the verified signer.
+	CancelledBy string
 }
 
 type MatchCandidate struct {
@@ -217,16 +221,23 @@ returning order_id, owner_address, signer_address, subaccount_id, recipient_id, 
 }
 
 func (r *Repository) CancelByOwnerNonce(ctx context.Context, params CancelOrderParams) (Order, error) {
+	// Stamp the audit columns in the same UPDATE that flips the status, so a cancelled row always
+	// carries when/why/by-whom. nullIfEmpty keeps cancelled_at as the sole "was this cancelled?"
+	// signal — an unspecified reason is stored as NULL rather than a placeholder string.
 	const query = `
 update active_orders
-set status = $3
+set status = $3,
+    cancelled_at = now(),
+    cancel_reason = $4,
+    cancelled_by = $5
 where owner_address = $1 and nonce = $2 and status = 'active'
 returning order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
           desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at
 `
 
 	order := Order{}
-	if err := r.pool.QueryRow(ctx, query, params.OwnerAddress, params.Nonce, StatusCancelled).Scan(
+	if err := r.pool.QueryRow(ctx, query, params.OwnerAddress, params.Nonce, StatusCancelled,
+		nullIfEmpty(params.Reason), nullIfEmpty(params.CancelledBy)).Scan(
 		&order.OrderID,
 		&order.OwnerAddress,
 		&order.SignerAddress,
@@ -299,8 +310,8 @@ select
   status,
   desired_amount,
   filled_amount,
-  ''::text as cancel_reason,
-  created_at as updated_at
+  coalesce(cancel_reason, '') as cancel_reason,
+  coalesce(cancelled_at, created_at) as updated_at
 from active_orders
 where order_id = $1
 `
@@ -930,6 +941,15 @@ func scanOrder(row pgx.Row) (Order, error) {
 	}
 
 	return order, nil
+}
+
+// nullIfEmpty maps a blank string to a SQL NULL so an unset audit field stays NULL rather than an
+// empty string — the read path leans on cancelled_at being NULL to mean "not cancelled".
+func nullIfEmpty(s string) any {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	return s
 }
 
 func mapPGError(err error) error {
