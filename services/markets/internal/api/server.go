@@ -580,9 +580,15 @@ func (s *Server) handleCancelOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		reason = "unspecified"
+	}
 	cancelParams := orders.CancelOrderParams{
 		OwnerAddress: strings.ToLower(req.OwnerAddress),
 		Nonce:        req.Nonce,
+		Reason:       reason,
+		CancelledBy:  requester,
 	}
 	targetOrder, err := s.orders.FindActiveByOwnerNonce(r.Context(), cancelParams)
 	if err != nil {
@@ -617,10 +623,6 @@ func (s *Server) handleCancelOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reason := strings.TrimSpace(req.Reason)
-	if reason == "" {
-		reason = "unspecified"
-	}
 	slog.Info(
 		"order_cancel_trace",
 		"order_id", order.OrderID,
