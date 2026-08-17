@@ -580,9 +580,15 @@ func (s *Server) handleCancelOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		reason = "unspecified"
+	}
 	cancelParams := orders.CancelOrderParams{
 		OwnerAddress: strings.ToLower(req.OwnerAddress),
 		Nonce:        req.Nonce,
+		Reason:       reason,
+		CancelledBy:  requester,
 	}
 	targetOrder, err := s.orders.FindActiveByOwnerNonce(r.Context(), cancelParams)
 	if err != nil {
@@ -605,6 +611,13 @@ func (s *Server) handleCancelOrder(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
 		return
 	}
+	// Signature check is observe-first: the outcome is always logged, but a cancel is rejected on
+	// it only once EnforceCancelSignatures is on, so unsigned clients keep working until they ship
+	// signed cancels. An unverifiable check (RPC failure) returns nil and never rejects.
+	if sigErr := s.verifyCancelSignature(r.Context(), req, time.Now()); sigErr != nil && s.cfg.EnforceCancelSignatures {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": sigErr.Error()})
+		return
+	}
 
 	order, err := s.orders.CancelByOwnerNonce(r.Context(), cancelParams)
 	if err != nil {
@@ -617,10 +630,6 @@ func (s *Server) handleCancelOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reason := strings.TrimSpace(req.Reason)
-	if reason == "" {
-		reason = "unspecified"
-	}
 	slog.Info(
 		"order_cancel_trace",
 		"order_id", order.OrderID,

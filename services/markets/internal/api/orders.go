@@ -252,6 +252,22 @@ type cancelOrderRequest struct {
 	Nonce        string `json:"nonce"`
 	Reason       string `json:"reason"`
 	Service      string `json:"service"`
+	// The following authorize the cancel. They are optional on the wire until
+	// ENFORCE_CANCEL_SIGNATURES is on: a request without them is unverifiable, which is logged and
+	// (with enforcement off) still allowed. SignerAddress defaults to OwnerAddress — the owner
+	// signing for itself — and Expiry bounds how long the signature can be replayed.
+	SignerAddress string `json:"signer_address"`
+	Expiry        string `json:"expiry"`
+	Signature     string `json:"signature"`
+}
+
+// signerOrOwner is who the cancel signature must recover to: the explicit signer if one was sent,
+// otherwise the owner signing for itself.
+func (r cancelOrderRequest) signerOrOwner() string {
+	if s := strings.TrimSpace(r.SignerAddress); s != "" {
+		return strings.ToLower(s)
+	}
+	return strings.ToLower(strings.TrimSpace(r.OwnerAddress))
 }
 
 func (r cancelOrderRequest) validate() error {

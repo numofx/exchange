@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/numofx/matching-backend/internal/config"
 	"github.com/numofx/matching-backend/internal/orders"
@@ -15,6 +16,11 @@ type stubSignatureChecker struct {
 	err    error
 	path   ordersig.SignaturePath
 	called bool
+
+	// Cancel path, tracked separately so cancel tests don't collide with order tests.
+	cancelErr    error
+	cancelPath   ordersig.SignaturePath
+	cancelCalled bool
 }
 
 func (s *stubSignatureChecker) Verify(
@@ -25,6 +31,16 @@ func (s *stubSignatureChecker) Verify(
 ) (ordersig.SignaturePath, error) {
 	s.called = true
 	return s.path, s.err
+}
+
+func (s *stubSignatureChecker) VerifyCancel(
+	context.Context,
+	ordersig.Cancel,
+	string,
+	string,
+) (ordersig.SignaturePath, error) {
+	s.cancelCalled = true
+	return s.cancelPath, s.cancelErr
 }
 
 func testRequest() createOrderRequest {
@@ -106,6 +122,121 @@ func TestEnforcementFlagGatesRejection(t *testing.T) {
 			}
 			err := s.verifyOrderSignature(context.Background(), testRequest(), orders.CreateOrderParams{OrderID: "o1"})
 			rejects := err != nil && s.cfg.EnforceOrderSignatures
+			if rejects != tc.wantRejects {
+				t.Fatalf("enforce=%v produced reject=%v, want %v", tc.enforce, rejects, tc.wantRejects)
+			}
+		})
+	}
+}
+
+func TestVerifyCancelSignature(t *testing.T) {
+	owner := "0x3448ac0a3283951a2afd5b3a582329eca43cb47b"
+	now := time.Unix(1_786_000_000, 0)
+	futureExpiry := "1786000600"
+
+	signedReq := func() cancelOrderRequest {
+		return cancelOrderRequest{
+			OwnerAddress: owner,
+			Nonce:        "7319532056794814",
+			Expiry:       futureExpiry,
+			Signature:    "0xdeadbeef",
+		}
+	}
+
+	t.Run("no checker configured is not a rejection", func(t *testing.T) {
+		s := &Server{}
+		if err := s.verifyCancelSignature(context.Background(), signedReq(), now); err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+	})
+
+	t.Run("valid signature passes and runs the verifier", func(t *testing.T) {
+		stub := &stubSignatureChecker{}
+		s := &Server{signatures: stub}
+		if err := s.verifyCancelSignature(context.Background(), signedReq(), now); err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if !stub.cancelCalled {
+			t.Fatal("verifier should have been called")
+		}
+	})
+
+	t.Run("missing signature is reported without calling the verifier", func(t *testing.T) {
+		stub := &stubSignatureChecker{}
+		s := &Server{signatures: stub}
+		req := signedReq()
+		req.Signature = ""
+		if err := s.verifyCancelSignature(context.Background(), req, now); err == nil {
+			t.Fatal("expected an error for an unsigned cancel")
+		}
+		if stub.cancelCalled {
+			t.Fatal("verifier should not run without a signature")
+		}
+	})
+
+	t.Run("a non-owner signer is reported (no session keys yet)", func(t *testing.T) {
+		s := &Server{signatures: &stubSignatureChecker{}}
+		req := signedReq()
+		req.SignerAddress = "0x000000000000000000000000000000000000dead"
+		if err := s.verifyCancelSignature(context.Background(), req, now); err == nil {
+			t.Fatal("expected an error when signer is not the owner")
+		}
+	})
+
+	t.Run("a missing or past expiry is reported", func(t *testing.T) {
+		s := &Server{signatures: &stubSignatureChecker{}}
+		req := signedReq()
+		req.Expiry = "1785999999" // before now
+		if err := s.verifyCancelSignature(context.Background(), req, now); err == nil {
+			t.Fatal("expected an error for a past expiry")
+		}
+		req.Expiry = ""
+		if err := s.verifyCancelSignature(context.Background(), req, now); err == nil {
+			t.Fatal("expected an error for a missing expiry")
+		}
+	})
+
+	t.Run("invalid signature is reported", func(t *testing.T) {
+		s := &Server{signatures: &stubSignatureChecker{cancelErr: ordersig.ErrInvalidSignature}}
+		if err := s.verifyCancelSignature(context.Background(), signedReq(), now); err == nil {
+			t.Fatal("expected an error for an invalid signature")
+		}
+	})
+
+	// An RPC failure means "could not check", which must not reject a possibly-valid cancel.
+	t.Run("unverifiable does not reject", func(t *testing.T) {
+		s := &Server{signatures: &stubSignatureChecker{cancelErr: errors.New("rpc timeout")}}
+		if err := s.verifyCancelSignature(context.Background(), signedReq(), now); err != nil {
+			t.Fatalf("a failed check must not reject, got %v", err)
+		}
+	})
+}
+
+// The flag gates whether a reported cancel-signature problem becomes a rejection, exactly as it
+// does for orders.
+func TestCancelEnforcementFlagGatesRejection(t *testing.T) {
+	now := time.Unix(1_786_000_000, 0)
+	req := cancelOrderRequest{
+		OwnerAddress: "0x3448ac0a3283951a2afd5b3a582329eca43cb47b",
+		Nonce:        "1",
+		Expiry:       "1786000600",
+		Signature:    "0xdeadbeef",
+	}
+	for _, tc := range []struct {
+		name        string
+		enforce     bool
+		wantRejects bool
+	}{
+		{"reporting only", false, false},
+		{"enforcing", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Server{
+				cfg:        config.Config{EnforceCancelSignatures: tc.enforce},
+				signatures: &stubSignatureChecker{cancelErr: ordersig.ErrInvalidSignature},
+			}
+			err := s.verifyCancelSignature(context.Background(), req, now)
+			rejects := err != nil && s.cfg.EnforceCancelSignatures
 			if rejects != tc.wantRejects {
 				t.Fatalf("enforce=%v produced reject=%v, want %v", tc.enforce, rejects, tc.wantRejects)
 			}
