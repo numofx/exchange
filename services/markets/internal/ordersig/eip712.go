@@ -33,6 +33,13 @@ const (
 		"uint256 expiry,address owner,address signer)"
 	domainTypeString = "EIP712Domain(string name,string version,uint256 chainId," +
 		"address verifyingContract)"
+
+	// cancelTypeString is this venue's own type: unlike Action it never reaches a contract, so it
+	// carries no module or data — just the identity of the order being cancelled (owner, nonce),
+	// the authorizing signer, and a short expiry that bounds how long the signature can be replayed.
+	// It is signed against the same "Matching" domain as an order, so a cancel is bound to one chain
+	// and one verifying contract and cannot be replayed onto another venue.
+	cancelTypeString = "Cancel(address owner,address signer,uint256 nonce,uint256 expiry)"
 )
 
 var (
@@ -75,6 +82,62 @@ func Digest(d Domain, a Action) ([]byte, error) {
 	h.Write([]byte{0x19, 0x01})
 	h.Write(separator)
 	h.Write(structHash)
+	return h.Sum(nil), nil
+}
+
+// Cancel is the off-chain authorization to cancel the resting order identified by (Owner, Nonce).
+// Signer is who authorized it — the owner today, a session key once those are supported. All
+// fields are base-10 strings, matching how they arrive on the wire.
+type Cancel struct {
+	Owner  string
+	Signer string
+	Nonce  string
+	Expiry string
+}
+
+// CancelDigest returns the 32-byte EIP-712 digest a Cancel signature is checked against:
+// keccak256("\x19\x01" || domainSeparator || structHash), over the same Matching domain as an order.
+func CancelDigest(d Domain, c Cancel) ([]byte, error) {
+	separator, err := domainSeparator(d)
+	if err != nil {
+		return nil, err
+	}
+	structHash, err := cancelStructHash(c)
+	if err != nil {
+		return nil, err
+	}
+
+	h := sha3.NewLegacyKeccak256()
+	h.Write([]byte{0x19, 0x01})
+	h.Write(separator)
+	h.Write(structHash)
+	return h.Sum(nil), nil
+}
+
+func cancelStructHash(c Cancel) ([]byte, error) {
+	owner, err := encodeAddress(c.Owner)
+	if err != nil {
+		return nil, fmt.Errorf("owner: %w", err)
+	}
+	signer, err := encodeAddress(c.Signer)
+	if err != nil {
+		return nil, fmt.Errorf("signer: %w", err)
+	}
+	nonce, err := encodeUint(c.Nonce)
+	if err != nil {
+		return nil, fmt.Errorf("nonce: %w", err)
+	}
+	expiry, err := encodeUint(c.Expiry)
+	if err != nil {
+		return nil, fmt.Errorf("expiry: %w", err)
+	}
+
+	h := sha3.NewLegacyKeccak256()
+	h.Write(keccak([]byte(cancelTypeString)))
+	h.Write(owner)
+	h.Write(signer)
+	h.Write(nonce)
+	h.Write(expiry)
 	return h.Sum(nil), nil
 }
 

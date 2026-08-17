@@ -23,13 +23,19 @@ type Config struct {
 	// every order, so turn it on only after the mismatch logs show a clean run against real
 	// traffic. Signatures are checked and logged either way.
 	EnforceOrderSignatures bool
-	TradeModuleAddress     string
-	ExecutorURL            string
-	ExecutorManagerData    string
-	ExpectedOrderOwner     string
-	ExpectedOrderSigner    string
-	DeribitBaseURL         string
-	DeribitWSURL           string
+	// EnforceCancelSignatures rejects a cancel whose signature does not authorize it. Off by
+	// default and rolled out the same way as EnforceOrderSignatures: the signature is checked and
+	// logged either way, and enforcement is flipped on only once the logs show real clients are
+	// signing cancels cleanly. Until a client sends a signature, an unsigned cancel is simply
+	// unverifiable and — with enforcement off — still allowed, exactly as it is today.
+	EnforceCancelSignatures bool
+	TradeModuleAddress      string
+	ExecutorURL             string
+	ExecutorManagerData     string
+	ExpectedOrderOwner      string
+	ExpectedOrderSigner     string
+	DeribitBaseURL          string
+	DeribitWSURL            string
 
 	CNGNSpotAssetAddress          string
 	CNGNSep2026FutureAssetAddress string
@@ -62,21 +68,22 @@ type Config struct {
 
 func Load() (Config, error) {
 	cfg := Config{
-		AppEnv:                 getenvDefault("APP_ENV", "dev"),
-		APIAddr:                getenvDefault("API_ADDR", ":8080"),
-		DatabaseURL:            os.Getenv("DATABASE_URL"),
-		ChainRPCURL:            getenvDefault("CHAIN_RPC_URL", os.Getenv("RPC_URL")),
-		ChainID:                os.Getenv("CHAIN_ID"),
-		MatchingAddress:        os.Getenv("MATCHING_ADDRESS"),
-		EnforceMatchingCustody: getenvBool("ENFORCE_MATCHING_CUSTODY", true),
-		EnforceOrderSignatures: getenvBool("ENFORCE_ORDER_SIGNATURES", false),
-		TradeModuleAddress:     os.Getenv("TRADE_MODULE_ADDRESS"),
-		ExecutorURL:            os.Getenv("EXECUTOR_URL"),
-		ExecutorManagerData:    "0x",
-		ExpectedOrderOwner:     os.Getenv("EXPECTED_ORDER_OWNER"),
-		ExpectedOrderSigner:    os.Getenv("EXPECTED_ORDER_SIGNER"),
-		DeribitBaseURL:         getenvDefault("DERIBIT_BASE_URL", "https://test.deribit.com/api/v2"),
-		DeribitWSURL:           getenvDefault("DERIBIT_WS_URL", "wss://test.deribit.com/ws/api/v2"),
+		AppEnv:                  getenvDefault("APP_ENV", "dev"),
+		APIAddr:                 getenvDefault("API_ADDR", ":8080"),
+		DatabaseURL:             os.Getenv("DATABASE_URL"),
+		ChainRPCURL:             getenvDefault("CHAIN_RPC_URL", os.Getenv("RPC_URL")),
+		ChainID:                 os.Getenv("CHAIN_ID"),
+		MatchingAddress:         os.Getenv("MATCHING_ADDRESS"),
+		EnforceMatchingCustody:  getenvBool("ENFORCE_MATCHING_CUSTODY", true),
+		EnforceOrderSignatures:  getenvBool("ENFORCE_ORDER_SIGNATURES", false),
+		EnforceCancelSignatures: getenvBool("ENFORCE_CANCEL_SIGNATURES", false),
+		TradeModuleAddress:      os.Getenv("TRADE_MODULE_ADDRESS"),
+		ExecutorURL:             os.Getenv("EXECUTOR_URL"),
+		ExecutorManagerData:     "0x",
+		ExpectedOrderOwner:      os.Getenv("EXPECTED_ORDER_OWNER"),
+		ExpectedOrderSigner:     os.Getenv("EXPECTED_ORDER_SIGNER"),
+		DeribitBaseURL:          getenvDefault("DERIBIT_BASE_URL", "https://test.deribit.com/api/v2"),
+		DeribitWSURL:            getenvDefault("DERIBIT_WS_URL", "wss://test.deribit.com/ws/api/v2"),
 
 		CNGNSpotAssetAddress:          strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_SPOT_ASSET_ADDRESS"))),
 		CNGNSep2026FutureAssetAddress: strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_SEP16_2026_FUTURE_ASSET_ADDRESS"))),
