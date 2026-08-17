@@ -6,18 +6,27 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/numofx/matching-backend/internal/config"
 	"github.com/numofx/matching-backend/internal/orders"
 	"github.com/numofx/matching-backend/internal/ordersig"
 )
 
-// signatureChecker verifies that an order's signature authorizes its action, reporting which path
-// authorized it so a contract signature can be told apart from an EOA one.
+// signatureChecker verifies that an order's or cancel's signature authorizes it, reporting which
+// path authorized it so a contract signature can be told apart from an EOA one.
 type signatureChecker interface {
 	Verify(
 		ctx context.Context,
 		action ordersig.Action,
+		signature string,
+		signerAddress string,
+	) (ordersig.SignaturePath, error)
+	VerifyCancel(
+		ctx context.Context,
+		cancel ordersig.Cancel,
 		signature string,
 		signerAddress string,
 	) (ordersig.SignaturePath, error)
@@ -80,6 +89,74 @@ func (s *Server) verifyOrderSignature(ctx context.Context, req createOrderReques
 		slog.Warn("order_signature_unverifiable", "order_id", params.OrderID, "error", err)
 		return nil
 	}
+}
+
+// verifyCancelSignature checks that a cancel is authorized and logs the outcome, mirroring
+// verifyOrderSignature. The returned error is the actionable rejection — a missing, malformed, or
+// invalid signature, a non-owner signer, or a missing/expired validity window — which the caller
+// enforces only when EnforceCancelSignatures is on. A check that could not be completed (an RPC
+// failure resolving a contract signer) returns nil: enforcing on an infra blip would reject valid
+// cancels, the same reasoning verifyOrderSignature applies.
+//
+// now is passed in so the expiry check is testable.
+func (s *Server) verifyCancelSignature(ctx context.Context, req cancelOrderRequest, now time.Time) error {
+	if s.signatures == nil {
+		return nil
+	}
+
+	owner := strings.ToLower(strings.TrimSpace(req.OwnerAddress))
+	signer := req.signerOrOwner()
+
+	if strings.TrimSpace(req.Signature) == "" {
+		slog.Warn("cancel_signature_missing", "owner", owner, "nonce", req.Nonce, "enforced", s.cfg.EnforceCancelSignatures)
+		return fmt.Errorf("cancel must be signed")
+	}
+	// Session keys are not supported for cancels yet: there is no on-chain registry to resolve a
+	// signer that is not the owner, so require them to match. Relaxing this is the session-key step.
+	if signer != owner {
+		slog.Warn("cancel_signature_signer_not_owner", "owner", owner, "signer", signer, "enforced", s.cfg.EnforceCancelSignatures)
+		return fmt.Errorf("cancel signer must be the owner")
+	}
+	// A cancel signature with no future expiry could be replayed indefinitely.
+	expiry, err := parseFutureUnix(req.Expiry, now)
+	if err != nil {
+		slog.Warn("cancel_signature_expiry_invalid", "owner", owner, "nonce", req.Nonce, "error", err, "enforced", s.cfg.EnforceCancelSignatures)
+		return fmt.Errorf("cancel expiry: %w", err)
+	}
+
+	cancel := ordersig.Cancel{
+		Owner:  owner,
+		Signer: signer,
+		Nonce:  strings.TrimSpace(req.Nonce),
+		Expiry: strconv.FormatInt(expiry, 10),
+	}
+	path, err := s.signatures.VerifyCancel(ctx, cancel, req.Signature, signer)
+	switch {
+	case err == nil:
+		if path == ordersig.PathERC1271 {
+			slog.Info("cancel_signature_verified", "owner", owner, "nonce", req.Nonce, "path", string(path))
+		}
+		return nil
+	case errors.Is(err, ordersig.ErrInvalidSignature):
+		slog.Warn("cancel_signature_invalid", "owner", owner, "nonce", req.Nonce, "enforced", s.cfg.EnforceCancelSignatures, "error", err)
+		return fmt.Errorf("signature does not authorize this cancel")
+	default:
+		slog.Warn("cancel_signature_unverifiable", "owner", owner, "nonce", req.Nonce, "error", err)
+		return nil
+	}
+}
+
+// parseFutureUnix parses a base-10 unix-seconds string and requires it to be strictly in the
+// future relative to now.
+func parseFutureUnix(raw string, now time.Time) (int64, error) {
+	value, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("must be a unix-seconds integer")
+	}
+	if value <= now.Unix() {
+		return 0, fmt.Errorf("must be in the future")
+	}
+	return value, nil
 }
 
 // actionFromJSON pulls the seven Action fields out of action_json. The values are used only to

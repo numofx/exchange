@@ -81,6 +81,35 @@ func (v *Verifier) Verify(
 	if err != nil {
 		return PathNone, fmt.Errorf("build digest: %w", err)
 	}
+	return v.verifyDigest(ctx, digest, signature, signerAddress)
+}
+
+// VerifyCancel reports whether signature authorizes cancel on behalf of signerAddress. It shares
+// the EOA-then-ERC-1271 path with Verify; only the digest differs. Like Verify it does not check
+// that signer is authorized for owner (signer != owner): there is no on-chain session-key registry
+// to consult for an off-chain-only cancel, so the caller decides who may sign for whom.
+func (v *Verifier) VerifyCancel(
+	ctx context.Context,
+	cancel Cancel,
+	signature string,
+	signerAddress string,
+) (SignaturePath, error) {
+	digest, err := CancelDigest(v.domain, cancel)
+	if err != nil {
+		return PathNone, fmt.Errorf("build cancel digest: %w", err)
+	}
+	return v.verifyDigest(ctx, digest, signature, signerAddress)
+}
+
+// verifyDigest checks a signature against a precomputed digest, recovering locally first and
+// falling back to ERC-1271 only when the signer is a contract. It is the shared core of Verify and
+// VerifyCancel.
+func (v *Verifier) verifyDigest(
+	ctx context.Context,
+	digest []byte,
+	signature string,
+	signerAddress string,
+) (SignaturePath, error) {
 	sig, err := DecodeSignature(signature)
 	if err != nil {
 		return PathNone, fmt.Errorf("%w: %s", ErrInvalidSignature, err)
