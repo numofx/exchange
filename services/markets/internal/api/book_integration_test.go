@@ -362,6 +362,95 @@ insert into active_orders (
 	}
 }
 
+// A cancel must leave an auditable trace: the reason and requester on the row, and a status
+// endpoint that reports a real cancel_reason and an updated_at at the cancel time rather than the
+// hardcoded ''/created_at that made a cancel indistinguishable from an expiry.
+func TestHandleCancelOrderRecordsAudit(t *testing.T) {
+	pool := openTestPool(t)
+	ctx := context.Background()
+	suffix := fmt.Sprintf("cancel-audit-%d", time.Now().UnixNano())
+	orderID := "manual:" + suffix
+	owner := "0xaudit0000000000000000000000000000000001"
+	nonce := "778220"
+	assetAddress := "0xce2846771074e20fec739cf97a60e6075d1e464b"
+
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "delete from active_orders where order_id = $1", orderID)
+	})
+
+	insertOrder := `
+insert into active_orders (
+  order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
+  desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status
+) values ($1, $2, $2, 6, 6, $3, 'sell', $4, $5, '1', '0', '1390', '1390', '0', $6, '{}'::jsonb, '0xsig', 'active')
+`
+	expiry := time.Now().Add(time.Hour).Unix()
+	if _, err := pool.Exec(ctx, insertOrder, orderID, owner, nonce, assetAddress, "1789567201", expiry); err != nil {
+		t.Fatalf("insert order: %v", err)
+	}
+
+	cfg := config.Config{
+		CNGNSep2026FutureAssetAddress: assetAddress,
+		CNGNSep2026FutureSubID:        "1789567201",
+	}
+	server := NewServer(cfg, pool, instruments.DefaultRegistry(cfg))
+
+	beforeCancel := time.Now().Add(-time.Second)
+	body := fmt.Sprintf(`{"owner_address":%q,"nonce":%q,"reason":"trader clicked cancel"}`, owner, nonce)
+	cancelReq := httptest.NewRequest(http.MethodPost, "/v1/orders/cancel", strings.NewReader(body))
+	cancelReq.Header.Set("X-Principal", "trader-42")
+	cancelRec := httptest.NewRecorder()
+	server.handleCancelOrder(cancelRec, cancelReq)
+	if cancelRec.Code != http.StatusOK {
+		t.Fatalf("cancel status = %d body=%s", cancelRec.Code, cancelRec.Body.String())
+	}
+
+	// The row carries when/why/by-whom.
+	var (
+		reason      string
+		cancelledBy string
+		cancelledAt time.Time
+	)
+	if err := pool.QueryRow(ctx,
+		"select cancel_reason, cancelled_by, cancelled_at from active_orders where order_id = $1", orderID,
+	).Scan(&reason, &cancelledBy, &cancelledAt); err != nil {
+		t.Fatalf("query audit columns: %v", err)
+	}
+	if reason != "trader clicked cancel" {
+		t.Fatalf("cancel_reason = %q", reason)
+	}
+	if cancelledBy != "trader-42" {
+		t.Fatalf("cancelled_by = %q", cancelledBy)
+	}
+	if cancelledAt.Before(beforeCancel) {
+		t.Fatalf("cancelled_at %s is before the cancel request", cancelledAt)
+	}
+
+	// The status endpoint surfaces them, and updated_at tracks the cancel, not created_at.
+	statusReq := httptest.NewRequest(http.MethodGet, "/v1/orders/"+orderID, nil)
+	routeCtx := chi.NewRouteContext()
+	routeCtx.URLParams.Add("order_id", orderID)
+	statusReq = statusReq.WithContext(context.WithValue(statusReq.Context(), chi.RouteCtxKey, routeCtx))
+	statusRec := httptest.NewRecorder()
+	server.handleGetOrderStatus(statusRec, statusReq)
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("status endpoint = %d body=%s", statusRec.Code, statusRec.Body.String())
+	}
+	var payload orderStatusResponse
+	if err := json.Unmarshal(statusRec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal status: %v", err)
+	}
+	if payload.Status != orderrepo.StatusCancelled {
+		t.Fatalf("status = %s", payload.Status)
+	}
+	if payload.CancelReason != "trader clicked cancel" {
+		t.Fatalf("cancel_reason = %q", payload.CancelReason)
+	}
+	if payload.UpdatedAt.Before(beforeCancel) {
+		t.Fatalf("updated_at %s did not advance to the cancel time", payload.UpdatedAt)
+	}
+}
+
 func TestHandleGetOrderStatusByID(t *testing.T) {
 	pool := openTestPool(t)
 	ctx := context.Background()
