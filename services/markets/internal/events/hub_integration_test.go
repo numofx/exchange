@@ -37,7 +37,7 @@ func TestHubPipeline(t *testing.T) {
 
 	// Unique per run: the replay assertion below counts every book event on this
 	// market, so a fixed address collides with anything else in the same database
-	// (api's ws test writes to the real futures asset) and with earlier runs.
+	// (api's ws test writes to the real spot asset) and with earlier runs.
 	// Mixed case is deliberate — it exercises the trigger's lower() on market_key.
 	assetHex := fmt.Sprintf("%040X", time.Now().UnixNano())
 	asset := "0x" + assetHex

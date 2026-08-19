@@ -60,9 +60,6 @@ func NewRegistry(items []Metadata) *Registry {
 
 	for _, item := range items {
 		registry.bySymbol[item.Symbol] = item
-		if alias := symbolAlias(item.Symbol); alias != "" {
-			registry.bySymbol[alias] = item
-		}
 		if item.AssetAddress != "" && item.SubID != "" {
 			registry.byAssetAndSubID[assetAndSubIDKey(item.AssetAddress, item.SubID)] = item
 		}
@@ -111,17 +108,4 @@ func (r *Registry) ByAssetAndSubID(assetAddress, subID string) (Metadata, bool) 
 
 func assetAndSubIDKey(assetAddress, subID string) string {
 	return assetAddress + "|" + subID
-}
-
-func symbolAlias(symbol string) string {
-	switch symbol {
-	case CNGNSep2026Symbol:
-		return CNGNSep2026LegacySymbol
-	case CNGNNov2026Symbol:
-		return CNGNNov2026LegacySymbol
-	case CNGNMay2027Symbol:
-		return CNGNMay2027LegacySymbol
-	default:
-		return ""
-	}
 }

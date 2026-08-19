@@ -62,13 +62,9 @@ func TestCreateOrderRequestToParamsRejectsUnexpectedConfiguredSigner(t *testing.
 	}
 }
 
-
-
-
-
-func TestCreateOrderRequestToParamsNormalizesJUNMinimumSizeToAtomicUnits(t *testing.T) {
+func TestCreateOrderRequestToParamsRejectsFractionalAmount(t *testing.T) {
 	req := createOrderRequest{
-		OrderID:       "order-apr-min-size",
+		OrderID:       "order-fractional-size",
 		OwnerAddress:  "0xabc",
 		SignerAddress: "0xabc",
 		SubaccountID:  "10",
@@ -76,42 +72,7 @@ func TestCreateOrderRequestToParamsNormalizesJUNMinimumSizeToAtomicUnits(t *test
 		Nonce:         "1",
 		Side:          "buy",
 		AssetAddress:  "0xapr",
-		SubID:         "1789567201",
-		DesiredAmount: "0.001",
-		FilledAmount:  "0",
-		LimitPrice:    "1391",
-		WorstFee:      "1",
-		Expiry:        time.Now().Add(time.Hour).Unix(),
-		ActionJSON:    json.RawMessage(`{"subaccount_id":"10","nonce":"1","module":"0xtrade","data":"0xaaa","expiry":"100","owner":"0xabc","signer":"0xabc"}`),
-		Signature:     "0xsig",
-	}
-
-	params, err := req.toParams(config.Config{
-		CNGNSep2026FutureAssetAddress: "0xapr",
-		CNGNSep2026FutureSubID:        "1789567201",
-	})
-	if err != nil {
-		t.Fatalf("toParams returned error: %v", err)
-	}
-	if params.DesiredAmount != "1" {
-		t.Fatalf("desired amount = %s", params.DesiredAmount)
-	}
-	if params.FilledAmount != "0" {
-		t.Fatalf("filled amount = %s", params.FilledAmount)
-	}
-}
-
-func TestCreateOrderRequestToParamsRejectsJUNSubMinimumSize(t *testing.T) {
-	req := createOrderRequest{
-		OrderID:       "order-apr-sub-min-size",
-		OwnerAddress:  "0xabc",
-		SignerAddress: "0xabc",
-		SubaccountID:  "10",
-		RecipientID:   "10",
-		Nonce:         "1",
-		Side:          "buy",
-		AssetAddress:  "0xapr",
-		SubID:         "1789567201",
+		SubID:         "0",
 		DesiredAmount: "0.0001",
 		FilledAmount:  "0",
 		LimitPrice:    "1391",
@@ -121,18 +82,15 @@ func TestCreateOrderRequestToParamsRejectsJUNSubMinimumSize(t *testing.T) {
 		Signature:     "0xsig",
 	}
 
-	_, err := req.toParams(config.Config{
-		CNGNSep2026FutureAssetAddress: "0xapr",
-		CNGNSep2026FutureSubID:        "1789567201",
-	})
-	if err == nil || err.Error() != "desired_amount must align to amount step 0.001" {
+	_, err := req.toParams(config.Config{})
+	if err == nil || err.Error() != "desired_amount must align to amount step 1" {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestCreateOrderRequestToParamsRejectsZeroNormalizedAtomicSize(t *testing.T) {
 	req := createOrderRequest{
-		OrderID:       "order-apr-zero-size",
+		OrderID:       "order-zero-size",
 		OwnerAddress:  "0xabc",
 		SignerAddress: "0xabc",
 		SubaccountID:  "10",
@@ -140,7 +98,7 @@ func TestCreateOrderRequestToParamsRejectsZeroNormalizedAtomicSize(t *testing.T)
 		Nonce:         "1",
 		Side:          "buy",
 		AssetAddress:  "0xapr",
-		SubID:         "1789567201",
+		SubID:         "0",
 		DesiredAmount: "0",
 		FilledAmount:  "0",
 		LimitPrice:    "1391",
@@ -150,10 +108,7 @@ func TestCreateOrderRequestToParamsRejectsZeroNormalizedAtomicSize(t *testing.T)
 		Signature:     "0xsig",
 	}
 
-	_, err := req.toParams(config.Config{
-		CNGNSep2026FutureAssetAddress: "0xapr",
-		CNGNSep2026FutureSubID:        "1789567201",
-	})
+	_, err := req.toParams(config.Config{})
 	if err == nil || err.Error() != "normalized atomic size is 0" {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -162,7 +117,7 @@ func TestCreateOrderRequestToParamsRejectsZeroNormalizedAtomicSize(t *testing.T)
 func TestCreateOrderRequestToParamsEnforcesActionDataScaleInvariant(t *testing.T) {
 	asset := "0xce2846771074e20fec739cf97a60e6075d1e464b"
 	req := createOrderRequest{
-		OrderID:       "order-apr-scale-check",
+		OrderID:       "order-scale-check",
 		OwnerAddress:  "0xc7be60b228b997c23094ddfdd71e22e2de6c9310",
 		SignerAddress: "0xc7be60b228b997c23094ddfdd71e22e2de6c9310",
 		SubaccountID:  "7",
@@ -170,8 +125,8 @@ func TestCreateOrderRequestToParamsEnforcesActionDataScaleInvariant(t *testing.T
 		Nonce:         "11",
 		Side:          "buy",
 		AssetAddress:  asset,
-		SubID:         "1789567201",
-		DesiredAmount: "0.001",
+		SubID:         "0",
+		DesiredAmount: "1",
 		FilledAmount:  "0",
 		LimitPrice:    "1391",
 		WorstFee:      "0",
@@ -180,19 +135,15 @@ func TestCreateOrderRequestToParamsEnforcesActionDataScaleInvariant(t *testing.T
 			"subaccount_id":"7",
 			"nonce":"11",
 			"module":"0x0aae65aaa66fe7f54486cdbd007956d3de611990",
-			"data":"` + mustTradeDataHex(asset, "1789567201", "1391000000000000000000", "1000000000000000", true) + `",
-			"expiry":"1789567201",
+			"data":"` + mustTradeDataHex(asset, "0", "1391000000000000000000", "1000000000000000", true) + `",
+			"expiry":"2000000000",
 			"owner":"0xc7be60b228b997c23094ddfdd71e22e2de6c9310",
 			"signer":"0xc7be60b228b997c23094ddfdd71e22e2de6c9310"
 		}`),
 		Signature: "0xsig",
 	}
 
-	params, err := req.toParams(config.Config{
-		CNGNSep2026FutureAssetAddress: asset,
-		CNGNSep2026FutureSubID:        "1789567201",
-		EnforceActionDataInvariants:   true,
-	})
+	params, err := req.toParams(config.Config{EnforceActionDataInvariants: true})
 	if err != nil {
 		t.Fatalf("toParams returned error: %v", err)
 	}
@@ -204,7 +155,7 @@ func TestCreateOrderRequestToParamsEnforcesActionDataScaleInvariant(t *testing.T
 func TestCreateOrderRequestToParamsRejectsActionDataScaleMismatch(t *testing.T) {
 	asset := "0xce2846771074e20fec739cf97a60e6075d1e464b"
 	req := createOrderRequest{
-		OrderID:       "order-apr-scale-mismatch",
+		OrderID:       "order-scale-mismatch",
 		OwnerAddress:  "0xc7be60b228b997c23094ddfdd71e22e2de6c9310",
 		SignerAddress: "0xc7be60b228b997c23094ddfdd71e22e2de6c9310",
 		SubaccountID:  "7",
@@ -212,8 +163,8 @@ func TestCreateOrderRequestToParamsRejectsActionDataScaleMismatch(t *testing.T) 
 		Nonce:         "12",
 		Side:          "buy",
 		AssetAddress:  asset,
-		SubID:         "1789567201",
-		DesiredAmount: "0.002",
+		SubID:         "0",
+		DesiredAmount: "2",
 		FilledAmount:  "0",
 		LimitPrice:    "1391",
 		WorstFee:      "0",
@@ -222,19 +173,15 @@ func TestCreateOrderRequestToParamsRejectsActionDataScaleMismatch(t *testing.T) 
 			"subaccount_id":"7",
 			"nonce":"12",
 			"module":"0x0aae65aaa66fe7f54486cdbd007956d3de611990",
-			"data":"` + mustTradeDataHex(asset, "1789567201", "1391000000000000000000", "1000000000000001", true) + `",
-			"expiry":"1789567201",
+			"data":"` + mustTradeDataHex(asset, "0", "1391000000000000000000", "1000000000000001", true) + `",
+			"expiry":"2000000000",
 			"owner":"0xc7be60b228b997c23094ddfdd71e22e2de6c9310",
 			"signer":"0xc7be60b228b997c23094ddfdd71e22e2de6c9310"
 		}`),
 		Signature: "0xsig",
 	}
 
-	_, err := req.toParams(config.Config{
-		CNGNSep2026FutureAssetAddress: asset,
-		CNGNSep2026FutureSubID:        "1789567201",
-		EnforceActionDataInvariants:   true,
-	})
+	_, err := req.toParams(config.Config{EnforceActionDataInvariants: true})
 	if err == nil || err.Error() != "action_json.data.desiredAmount is not aligned with normalized desired_amount" {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -243,7 +190,7 @@ func TestCreateOrderRequestToParamsRejectsActionDataScaleMismatch(t *testing.T) 
 func TestCreateOrderRequestToParamsAcceptsMarketMakerRawDesiredAmountPayload(t *testing.T) {
 	asset := "0xce2846771074e20fec739cf97a60e6075d1e464b"
 	req := createOrderRequest{
-		OrderID:       "order-apr-mm-raw-desired",
+		OrderID:       "order-mm-raw-desired",
 		OwnerAddress:  "0xc7be60b228b997c23094ddfdd71e22e2de6c9310",
 		SignerAddress: "0xc7be60b228b997c23094ddfdd71e22e2de6c9310",
 		SubaccountID:  "6",
@@ -251,7 +198,7 @@ func TestCreateOrderRequestToParamsAcceptsMarketMakerRawDesiredAmountPayload(t *
 		Nonce:         "13",
 		Side:          "buy",
 		AssetAddress:  asset,
-		SubID:         "1789567201",
+		SubID:         "0",
 		DesiredAmount: "5000000000000000000",
 		FilledAmount:  "0",
 		LimitPrice:    "1355",
@@ -261,26 +208,22 @@ func TestCreateOrderRequestToParamsAcceptsMarketMakerRawDesiredAmountPayload(t *
 			"subaccount_id":"6",
 			"nonce":"13",
 			"module":"0x0aae65aaa66fe7f54486cdbd007956d3de611990",
-			"data":"` + mustTradeDataHex(asset, "1789567201", "1355000000000000000000", "5000000000000000000", true) + `",
-			"expiry":"1789567201",
+			"data":"` + mustTradeDataHex(asset, "0", "1355000000000000000000", "5000000000000000000", true) + `",
+			"expiry":"2000000000",
 			"owner":"0xc7be60b228b997c23094ddfdd71e22e2de6c9310",
 			"signer":"0xc7be60b228b997c23094ddfdd71e22e2de6c9310"
 		}`),
 		Signature: "0xsig",
 	}
 
-	params, err := req.toParams(config.Config{
-		CNGNSep2026FutureAssetAddress: asset,
-		CNGNSep2026FutureSubID:        "1789567201",
-		EnforceActionDataInvariants:   true,
-	})
+	params, err := req.toParams(config.Config{EnforceActionDataInvariants: true})
 	if err != nil {
 		t.Fatalf("toParams returned error: %v", err)
 	}
 	if params.LimitPriceTicks != "1355" {
 		t.Fatalf("limit_price_ticks = %s", params.LimitPriceTicks)
 	}
-	if params.DesiredAmount != "5000000000000000000000" {
+	if params.DesiredAmount != "5000000000000000000" {
 		t.Fatalf("desired_amount = %s", params.DesiredAmount)
 	}
 }
