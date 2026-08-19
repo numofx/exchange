@@ -110,16 +110,16 @@ Endpoint: `GET /v1/ws` (chi route, upgraded via **`coder/websocket`**). JSON tex
 
 Client → server:
 ```jsonc
-{"op":"subscribe","channel":"book","market":"cNGN-SEP16","since_seq":10423}  // since_seq optional
-{"op":"unsubscribe","channel":"book","market":"cNGN-SEP16"}
+{"op":"subscribe","channel":"book","market":"USDCcNGN-SPOT","since_seq":10423}  // since_seq optional
+{"op":"unsubscribe","channel":"book","market":"USDCcNGN-SPOT"}
 {"op":"auth","token":"<signed>"}   // required before subscribing to 'orders'
 {"op":"ping"}
 ```
 
 Server → client:
 ```jsonc
-{"channel":"book","market":"cNGN-SEP16","type":"snapshot","seq":10440,"data":{...}}
-{"channel":"book","market":"cNGN-SEP16","type":"update","seq":10441,"data":{...}}
+{"channel":"book","market":"USDCcNGN-SPOT","type":"snapshot","seq":10440,"data":{...}}
+{"channel":"book","market":"USDCcNGN-SPOT","type":"update","seq":10441,"data":{...}}
 {"type":"pong"}
 {"type":"error","code":"resume_too_old","message":"resubscribe for a fresh snapshot"}
 ```

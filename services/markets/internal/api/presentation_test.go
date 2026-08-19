@@ -8,10 +8,7 @@ import (
 	"github.com/numofx/matching-backend/internal/orders"
 )
 
-
-
-
-func TestPresentTradesIncludesDeliverableMetadata(t *testing.T) {
+func TestPresentTradesIncludesMarketMetadata(t *testing.T) {
 	items := []orders.TradeFill{{
 		TradeID:       1,
 		AssetAddress:  "0xf000000000000000000000000000000000000123",
@@ -24,24 +21,22 @@ func TestPresentTradesIncludesDeliverableMetadata(t *testing.T) {
 		CreatedAt:     time.Unix(1789567201, 0).UTC(),
 	}}
 	instrument := instruments.Metadata{
-		Symbol:         instruments.CNGNSep2026Symbol,
-		ContractType:   "deliverable_fx_future",
-		SettlementType: "physical_delivery",
+		Symbol:         instruments.CNGNSpotSymbol,
+		ContractType:   "spot",
+		SettlementType: "spot",
 	}
 
 	presented := presentTrades(items, instrument)
 	if len(presented) != 1 {
 		t.Fatalf("len = %d", len(presented))
 	}
-	if presented[0].Market != instruments.CNGNSep2026Symbol {
+	if presented[0].Market != instruments.CNGNSpotSymbol {
 		t.Fatalf("market = %q", presented[0].Market)
 	}
-	if presented[0].ContractType != "deliverable_fx_future" {
+	if presented[0].ContractType != "spot" {
 		t.Fatalf("contract type = %q", presented[0].ContractType)
 	}
-	if presented[0].SettlementType != "physical_delivery" {
+	if presented[0].SettlementType != "spot" {
 		t.Fatalf("settlement type = %q", presented[0].SettlementType)
 	}
 }
-
-

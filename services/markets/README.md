@@ -57,21 +57,19 @@ Important values:
 - `CHAIN_ID`
 - `MATCHING_ADDRESS`
 - `TRADE_MODULE_ADDRESS`
-- `CNGN_SEP16_2026_FUTURE_ASSET_ADDRESS`
-- `CNGN_SEP16_2026_FUTURE_SUB_ID`
+- `CNGN_SPOT_ASSET_ADDRESS`
 - optionally `EXPECTED_ORDER_OWNER`
 - optionally `EXPECTED_ORDER_SIGNER`
 
 
 
-Each physically delivered future (e.g. `USDC-cNGN-SEP16-2026`) is only enabled when both its
-`*_FUTURE_ASSET_ADDRESS` and `*_FUTURE_SUB_ID` env values are set. The registry resolves the
+The spot market is only enabled when `CNGN_SPOT_ASSET_ADDRESS` is set. The registry resolves the
 instrument by exact `(asset_address, sub_id)` and exposes the canonical market symbol
-(e.g. `USDCcNGN-SEP16-2026`). Human-readable pair formatting remains in display fields such as
+(`USDCcNGN-SPOT`). Human-readable pair formatting remains in display fields such as
 `display_name` and `display_label`.
 
-- `contract_type=deliverable_fx_future`
-- `settlement_type=physical_delivery`
+- `contract_type=spot`
+- `settlement_type=spot`
 - `base_asset_symbol=USDC`
 - `quote_asset_symbol=cNGN`
 
@@ -259,7 +257,7 @@ PRIVATE_KEY=0x... \
 ./scripts/smoke_deposited_cross.sh
 ```
 
-The script submits namespaced order IDs (`smoke:jun:...`) so they stay separated from bot order
+The script submits namespaced order IDs (`smoke:spot:...`) so they stay separated from bot order
 namespaces and cancel sweeps, and then verifies terminal order state through `GET /v1/orders/{order_id}`.
 
 

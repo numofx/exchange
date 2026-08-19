@@ -54,12 +54,11 @@ func TestHandleBookAndTradesReturnEmptyArraysNotNull(t *testing.T) {
 	assetAddress := "0xfeed000000000000000000000000000000000777"
 
 	registry := instruments.DefaultRegistry(config.Config{
-		CNGNSep2026FutureAssetAddress: assetAddress,
-		CNGNSep2026FutureSubID:        "1789567201",
+		CNGNSpotAssetAddress: assetAddress,
 	})
 	server := NewServer(config.Config{}, pool, registry)
 
-	bookReq := httptest.NewRequest(http.MethodGet, "/v1/book?asset_address="+assetAddress+"&sub_id=1789567201", nil)
+	bookReq := httptest.NewRequest(http.MethodGet, "/v1/book?asset_address="+assetAddress+"&sub_id=0", nil)
 	bookRec := httptest.NewRecorder()
 	server.handleBook(bookRec, bookReq)
 
@@ -78,7 +77,7 @@ func TestHandleBookAndTradesReturnEmptyArraysNotNull(t *testing.T) {
 		t.Fatalf("expected null last_trade_timestamp in empty book response, got %v", *bookResp.MarketPresentation.LastTradeTimestamp)
 	}
 
-	tradesReq := httptest.NewRequest(http.MethodGet, "/v1/trades?asset_address="+assetAddress+"&sub_id=1789567201", nil)
+	tradesReq := httptest.NewRequest(http.MethodGet, "/v1/trades?asset_address="+assetAddress+"&sub_id=0", nil)
 	tradesRec := httptest.NewRecorder()
 	server.handleTrades(tradesRec, tradesReq)
 
@@ -98,13 +97,12 @@ func TestHandleBookAndTradesReturnEmptyArraysNotNull(t *testing.T) {
 	}
 }
 
-func TestHandleMarketDiagnosticsReportsRegisteredEmptyFuture(t *testing.T) {
+func TestHandleMarketDiagnosticsReportsRegisteredEmptyMarket(t *testing.T) {
 	pool := openTestPool(t)
 	assetAddress := "0xfeed000000000000000000000000000000000776"
 
 	registry := instruments.DefaultRegistry(config.Config{
-		CNGNSep2026FutureAssetAddress: assetAddress,
-		CNGNSep2026FutureSubID:        "1789567201",
+		CNGNSpotAssetAddress: assetAddress,
 	})
 	server := NewServer(config.Config{}, pool, registry)
 
@@ -121,25 +119,25 @@ func TestHandleMarketDiagnosticsReportsRegisteredEmptyFuture(t *testing.T) {
 		t.Fatalf("unmarshal diagnostics: %v", err)
 	}
 
-	var future *marketDiagnosticsResponse
+	var market *marketDiagnosticsResponse
 	for i := range diagnostics {
-		if diagnostics[i].Market == instruments.CNGNSep2026Symbol {
-			future = &diagnostics[i]
+		if diagnostics[i].Market == instruments.CNGNSpotSymbol {
+			market = &diagnostics[i]
 			break
 		}
 	}
 
-	if future == nil {
-		t.Fatal("future market missing from diagnostics response")
+	if market == nil {
+		t.Fatal("market market missing from diagnostics response")
 	}
-	if !future.LoadedInMatcher {
-		t.Fatal("expected future to be marked loaded in matcher")
+	if !market.LoadedInMatcher {
+		t.Fatal("expected market to be marked loaded in matcher")
 	}
-	if future.OpenBidCount != 0 || future.OpenAskCount != 0 || future.TradeCount != 0 {
-		t.Fatalf("unexpected diagnostics %+v", *future)
+	if market.OpenBidCount != 0 || market.OpenAskCount != 0 || market.TradeCount != 0 {
+		t.Fatalf("unexpected diagnostics %+v", *market)
 	}
-	if future.LastTradeTimestamp != nil {
-		t.Fatalf("expected nil last trade timestamp, got %+v", *future)
+	if market.LastTradeTimestamp != nil {
+		t.Fatalf("expected nil last trade timestamp, got %+v", *market)
 	}
 }
 
@@ -148,8 +146,7 @@ func TestHandleCreateOrderRejectsUndepositedSubaccount(t *testing.T) {
 	assetAddress := "0xfeed000000000000000000000000000000000777"
 
 	cfg := config.Config{
-		CNGNSep2026FutureAssetAddress: assetAddress,
-		CNGNSep2026FutureSubID:        "1789567201",
+		CNGNSpotAssetAddress: assetAddress,
 	}
 	registry := instruments.DefaultRegistry(cfg)
 	server := NewServer(cfg, pool, registry)
@@ -164,8 +161,8 @@ func TestHandleCreateOrderRejectsUndepositedSubaccount(t *testing.T) {
 		"nonce":          "1",
 		"side":           "buy",
 		"asset_address":  assetAddress,
-		"sub_id":         "1789567201",
-		"desired_amount": "0.001",
+		"sub_id":         "0",
+		"desired_amount": "1",
 		"filled_amount":  "0",
 		"limit_price":    "1391",
 		"worst_fee":      "0",
@@ -191,12 +188,12 @@ func TestHandleCreateOrderRejectsUndepositedSubaccount(t *testing.T) {
 	}
 }
 
-func TestJUNDepositedCrossPathEndToEnd(t *testing.T) {
+func TestDepositedCrossPathEndToEnd(t *testing.T) {
 	pool := openTestPool(t)
 	ctx := context.Background()
-	suffix := fmt.Sprintf("jun-deposited-%d", time.Now().UnixNano())
+	suffix := fmt.Sprintf("spot-deposited-%d", time.Now().UnixNano())
 	assetAddress := "0xfeed000000000000000000000000000000000776"
-	subID := "1789567201"
+	subID := "0"
 
 	t.Cleanup(func() {
 		_, _ = pool.Exec(ctx, "delete from trade_fills where taker_order_id like $1 or maker_order_id like $1", suffix+"%")
@@ -204,8 +201,7 @@ func TestJUNDepositedCrossPathEndToEnd(t *testing.T) {
 	})
 
 	cfg := config.Config{
-		CNGNSep2026FutureAssetAddress: assetAddress,
-		CNGNSep2026FutureSubID:        subID,
+		CNGNSpotAssetAddress: assetAddress,
 	}
 	registry := instruments.DefaultRegistry(cfg)
 	server := NewServer(cfg, pool, registry)
@@ -224,7 +220,7 @@ func TestJUNDepositedCrossPathEndToEnd(t *testing.T) {
 			"side":           side,
 			"asset_address":  assetAddress,
 			"sub_id":         subID,
-			"desired_amount": "0.001",
+			"desired_amount": "1",
 			"filled_amount":  "0",
 			"limit_price":    price,
 			"worst_fee":      "0",
@@ -269,7 +265,7 @@ func TestJUNDepositedCrossPathEndToEnd(t *testing.T) {
 		t.Fatal("expected match candidate")
 	}
 
-	// desired_amount "0.001" is one lot (MinSize "0.001"), so a full fill is 1
+	// desired_amount "1" is one whole unit (amount step "1"), so a full fill is 1
 	// atomic unit — not a raw 1e6-scaled value.
 	if err := repo.FinalizeMatchWithPrice(ctx, candidate.Taker.OrderID, candidate.Maker.OrderID, "1390", "1"); err != nil {
 		t.Fatalf("finalize match: %v", err)
@@ -314,15 +310,14 @@ insert into active_orders (
 `
 	assetAddress := "0xce2846771074e20fec739cf97a60e6075d1e464b"
 	expiry := time.Now().Add(time.Hour).Unix()
-	if _, err := pool.Exec(ctx, insertOrder, orderID, owner, owner, nonce, assetAddress, "1789567201", expiry); err != nil {
+	if _, err := pool.Exec(ctx, insertOrder, orderID, owner, owner, nonce, assetAddress, "0", expiry); err != nil {
 		t.Fatalf("insert order: %v", err)
 	}
 
 	server := NewServer(config.Config{
 		CancelProtectedOrderPrefixes: []string{"smoke:"},
 	}, pool, instruments.DefaultRegistry(config.Config{
-		CNGNSep2026FutureAssetAddress: assetAddress,
-		CNGNSep2026FutureSubID:        "1789567201",
+		CNGNSpotAssetAddress: assetAddress,
 	}))
 
 	serviceReq := httptest.NewRequest(http.MethodPost, "/v1/orders/cancel", strings.NewReader(`{"owner_address":"0xowner","nonce":"777001","service":"market-maker","reason":"refresh"}`))
@@ -381,13 +376,12 @@ insert into active_orders (
 ) values ($1, $2, $2, 6, 6, $3, 'sell', $4, $5, '1', '0', '1390', '1390', '0', $6, '{}'::jsonb, '0xsig', 'active')
 `
 	expiry := time.Now().Add(time.Hour).Unix()
-	if _, err := pool.Exec(ctx, insertOrder, orderID, owner, nonce, assetAddress, "1789567201", expiry); err != nil {
+	if _, err := pool.Exec(ctx, insertOrder, orderID, owner, nonce, assetAddress, "0", expiry); err != nil {
 		t.Fatalf("insert order: %v", err)
 	}
 
 	cfg := config.Config{
-		CNGNSep2026FutureAssetAddress: assetAddress,
-		CNGNSep2026FutureSubID:        "1789567201",
+		CNGNSpotAssetAddress: assetAddress,
 	}
 	server := NewServer(cfg, pool, instruments.DefaultRegistry(cfg))
 
@@ -471,14 +465,13 @@ insert into active_orders (
 ) values ($1, $2, $2, 6, 6, $3, 'sell', $4, $5, '1', '0', '1390', '1390', '0', $6, '{}'::jsonb, '0xsig', 'active')
 `
 	expiry := time.Now().Add(time.Hour).Unix()
-	if _, err := pool.Exec(ctx, insertOrder, orderID, owner, nonce, assetAddress, "1789567201", expiry); err != nil {
+	if _, err := pool.Exec(ctx, insertOrder, orderID, owner, nonce, assetAddress, "0", expiry); err != nil {
 		t.Fatalf("insert order: %v", err)
 	}
 
 	cfg := config.Config{
-		EnforceCancelSignatures:       true,
-		CNGNSep2026FutureAssetAddress: assetAddress,
-		CNGNSep2026FutureSubID:        "1789567201",
+		EnforceCancelSignatures: true,
+		CNGNSpotAssetAddress:    assetAddress,
 	}
 	server := NewServer(cfg, pool, instruments.DefaultRegistry(cfg))
 	// NewServer builds no verifier without a chain configured; inject a stub so enforcement has
@@ -539,13 +532,12 @@ insert into active_orders (
 ) values ($1, $2, $3, 6, 6, $4, 'buy', $5, $6, '10', '3', '1391', '1391', '0', $7, '{}'::jsonb, '0xsig', 'active')
 `
 	expiry := time.Now().Add(time.Hour).Unix()
-	if _, err := pool.Exec(ctx, insertOrder, orderID, "0xowner", "0xowner", "12345", assetAddress, "1789567201", expiry); err != nil {
+	if _, err := pool.Exec(ctx, insertOrder, orderID, "0xowner", "0xowner", "12345", assetAddress, "0", expiry); err != nil {
 		t.Fatalf("insert order: %v", err)
 	}
 
 	cfg := config.Config{
-		CNGNSep2026FutureAssetAddress: assetAddress,
-		CNGNSep2026FutureSubID:        "1789567201",
+		CNGNSpotAssetAddress: assetAddress,
 	}
 	server := NewServer(cfg, pool, instruments.DefaultRegistry(cfg))
 	req := httptest.NewRequest(http.MethodGet, "/v1/orders/"+orderID, nil)
