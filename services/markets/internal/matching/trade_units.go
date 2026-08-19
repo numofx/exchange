@@ -110,7 +110,7 @@ func computeExecutionUnits(instrument instruments.Metadata, candidate orders.Mat
 		return executionUnits{}, err
 	}
 
-	// Futures and perps rely on on-chain signed order units. Spot order entry is translated
+	// On-chain signed order units are authoritative. Spot order entry is translated
 	// before persistence, so this path remains consistent by deriving units directly from signatures.
 	_ = instrument
 

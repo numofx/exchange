@@ -10,9 +10,9 @@ import (
 	"github.com/numofx/matching-backend/internal/orders"
 )
 
-func TestComputeExecutionUnitsJUNUsesSignedPriceAndAmountScale(t *testing.T) {
+func TestComputeExecutionUnitsUsesSignedPriceAndAmountScale(t *testing.T) {
 	candidate := orders.MatchCandidate{
-		Taker: junSignedOrder(
+		Taker: signedOrder(
 			orders.SideBuy,
 			"0xCE2846771074E20fEc739CF97a60E6075D1E464b",
 			"1789567201",
@@ -21,7 +21,7 @@ func TestComputeExecutionUnitsJUNUsesSignedPriceAndAmountScale(t *testing.T) {
 			"0",
 			tradeDataHex("0xCE2846771074E20fEc739CF97a60E6075D1E464b", "1789567201", "1391000000000000000000", "1000000000000000", true),
 		),
-		Maker: junSignedOrder(
+		Maker: signedOrder(
 			orders.SideSell,
 			"0xCE2846771074E20fEc739CF97a60E6075D1E464b",
 			"1789567201",
@@ -33,7 +33,7 @@ func TestComputeExecutionUnitsJUNUsesSignedPriceAndAmountScale(t *testing.T) {
 	}
 
 	got, err := computeExecutionUnits(
-		instruments.Metadata{Symbol: instruments.CNGNSep2026Symbol},
+		instruments.Metadata{Symbol: instruments.CNGNSpotSymbol},
 		candidate,
 		"1390",
 		"1",
@@ -51,7 +51,7 @@ func TestComputeExecutionUnitsJUNUsesSignedPriceAndAmountScale(t *testing.T) {
 
 func TestComputeExecutionUnitsRejectsFillAmountAboveRemainingDesired(t *testing.T) {
 	candidate := orders.MatchCandidate{
-		Taker: junSignedOrder(
+		Taker: signedOrder(
 			orders.SideBuy,
 			"0xCE2846771074E20fEc739CF97a60E6075D1E464b",
 			"1789567201",
@@ -60,7 +60,7 @@ func TestComputeExecutionUnitsRejectsFillAmountAboveRemainingDesired(t *testing.
 			"1",
 			tradeDataHex("0xCE2846771074E20fEc739CF97a60E6075D1E464b", "1789567201", "1391000000000000000000", "2000000000000000", true),
 		),
-		Maker: junSignedOrder(
+		Maker: signedOrder(
 			orders.SideSell,
 			"0xCE2846771074E20fEc739CF97a60E6075D1E464b",
 			"1789567201",
@@ -72,7 +72,7 @@ func TestComputeExecutionUnitsRejectsFillAmountAboveRemainingDesired(t *testing.
 	}
 
 	_, err := computeExecutionUnits(
-		instruments.Metadata{Symbol: instruments.CNGNSep2026Symbol},
+		instruments.Metadata{Symbol: instruments.CNGNSpotSymbol},
 		candidate,
 		"1390",
 		"2",
@@ -82,7 +82,7 @@ func TestComputeExecutionUnitsRejectsFillAmountAboveRemainingDesired(t *testing.
 	}
 }
 
-func junSignedOrder(side orders.Side, asset string, subID string, limitTicks string, desired string, filled string, tradeData string) orders.Order {
+func signedOrder(side orders.Side, asset string, subID string, limitTicks string, desired string, filled string, tradeData string) orders.Order {
 	action, _ := json.Marshal(map[string]any{
 		"subaccount_id": "7",
 		"nonce":         "1",
