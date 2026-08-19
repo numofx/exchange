@@ -1,5 +1,5 @@
 package pricing
- 
+
 import (
 	"testing"
 
@@ -8,7 +8,7 @@ import (
 
 func TestParsePreservesIntegerInstrument(t *testing.T) {
 	converter, err := NewConverter(instruments.Metadata{
-		Symbol:         "USDCcNGN-SEP16-2026",
+		Symbol:         "TEST-MARKET",
 		TickSize:       "1",
 		QuotePrecision: 6,
 	})
@@ -27,7 +27,7 @@ func TestParsePreservesIntegerInstrument(t *testing.T) {
 
 func TestParseRejectsOffTickPrice(t *testing.T) {
 	converter, err := NewConverter(instruments.Metadata{
-		Symbol:         "USDCcNGN-SEP16-2026",
+		Symbol:         "TEST-MARKET",
 		TickSize:       "0.01",
 		QuotePrecision: 18,
 	})

@@ -25,7 +25,7 @@ func TestHandleCandlesReturnsRealBucketsAndValidatesParams(t *testing.T) {
 	// aggregated into this run's buckets. Lowercase: asset addresses are stored
 	// and queried lowercased.
 	asset := fmt.Sprintf("0x%040x", stamp)
-	subID := "1789567201"
+	subID := "0"
 
 	t.Cleanup(func() {
 		if _, err := pool.Exec(ctx, "delete from trade_fills where taker_order_id like $1", suffix+"%"); err != nil {
@@ -34,8 +34,7 @@ func TestHandleCandlesReturnsRealBucketsAndValidatesParams(t *testing.T) {
 	})
 
 	cfg := config.Config{
-		CNGNSep2026FutureAssetAddress: asset,
-		CNGNSep2026FutureSubID:        subID,
+		CNGNSpotAssetAddress: asset,
 	}
 	server := NewServer(cfg, pool, instruments.DefaultRegistry(cfg))
 

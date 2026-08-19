@@ -183,7 +183,7 @@ async function main() {
     asset_address: assetAddress,
     sub_id: assetSubId,
     // The order body carries the HUMAN-DECIMAL contract amount AND the HUMAN price; markets-service
-    // normalizes the amount to atomic units (÷ MinSize for futures) and the price to matcher ticks
+    // normalizes the amount to atomic units (÷ the market's amount step) and the price to matcher ticks
     // (÷ tick size). The SIGNED action (action_json.data) keeps the raw on-chain wei values. So the
     // body must be the human values while the signed action stays wei — otherwise the body sits at a
     // tick/atomic level the resting book (e.g. the market-maker at price 1377, not 1377e18) never

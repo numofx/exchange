@@ -31,7 +31,7 @@ func TestBuildExecutorRequest(t *testing.T) {
 		},
 	}
 
-	req, err := buildExecutorRequest("USDCcNGN-SEP16-2026", candidate, "0xfeed", "75", "3")
+	req, err := buildExecutorRequest("USDCcNGN-SPOT", candidate, "0xfeed", "75", "3")
 	if err != nil {
 		t.Fatalf("buildExecutorRequest returned error: %v", err)
 	}
@@ -59,9 +59,7 @@ func TestBuildExecutorRequest(t *testing.T) {
 	}
 }
 
-
-
-func TestBuildExecutorRequestForFutureMarket(t *testing.T) {
+func TestBuildExecutorRequestForSpotMarket(t *testing.T) {
 	candidate := orders.MatchCandidate{
 		Taker: orders.Order{
 			OrderID:       "taker-future",
@@ -84,12 +82,12 @@ func TestBuildExecutorRequestForFutureMarket(t *testing.T) {
 		},
 	}
 
-	req, err := buildExecutorRequest("USDCcNGN-SEP16-2026", candidate, "0x", "1602", "3000000")
+	req, err := buildExecutorRequest("USDCcNGN-SPOT", candidate, "0x", "1602", "3000000")
 	if err != nil {
 		t.Fatalf("buildExecutorRequest returned error: %v", err)
 	}
 
-	if req.Market != "USDCcNGN-SEP16-2026" {
+	if req.Market != "USDCcNGN-SPOT" {
 		t.Fatalf("market = %s", req.Market)
 	}
 	if req.AssetAddress != "0x3333333333333333333333333333333333333333" {
@@ -99,8 +97,6 @@ func TestBuildExecutorRequestForFutureMarket(t *testing.T) {
 		t.Fatalf("unexpected fill details %+v", req.OrderData.FillDetails[0])
 	}
 }
-
-
 
 func TestBuildExecutorRequestRejectsActionOwnerMismatch(t *testing.T) {
 	candidate := orders.MatchCandidate{
@@ -125,7 +121,7 @@ func TestBuildExecutorRequestRejectsActionOwnerMismatch(t *testing.T) {
 		},
 	}
 
-	_, err := buildExecutorRequest("USDCcNGN-SEP16-2026", candidate, "0x", "75", "3")
+	_, err := buildExecutorRequest("USDCcNGN-SPOT", candidate, "0x", "75", "3")
 	if err == nil || err.Error() != "parse taker action_json: owner mismatch" {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -154,7 +150,7 @@ func TestBuildExecutorRequestDefaultsEmptyManagerData(t *testing.T) {
 		},
 	}
 
-	req, err := buildExecutorRequest("USDCcNGN-SEP16-2026", candidate, "", "75", "3")
+	req, err := buildExecutorRequest("USDCcNGN-SPOT", candidate, "", "75", "3")
 	if err != nil {
 		t.Fatalf("buildExecutorRequest returned error: %v", err)
 	}
@@ -186,7 +182,7 @@ func TestBuildExecutorRequestRejectsNonAddressActionOwner(t *testing.T) {
 		},
 	}
 
-	_, err := buildExecutorRequest("USDCcNGN-SEP16-2026", candidate, "0x", "75", "3")
+	_, err := buildExecutorRequest("USDCcNGN-SPOT", candidate, "0x", "75", "3")
 	if err == nil || err.Error() != "parse taker action_json: owner must be a 20-byte 0x address" {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -215,7 +211,7 @@ func TestBuildExecutorRequestRejectsMismatchedActionModules(t *testing.T) {
 		},
 	}
 
-	_, err := buildExecutorRequest("USDCcNGN-SEP16-2026", candidate, "0x", "75", "3")
+	_, err := buildExecutorRequest("USDCcNGN-SPOT", candidate, "0x", "75", "3")
 	if err == nil || err.Error() != "maker module address mismatch: taker=0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa maker=0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
 		t.Fatalf("unexpected error: %v", err)
 	}

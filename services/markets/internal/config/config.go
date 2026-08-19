@@ -37,15 +37,9 @@ type Config struct {
 	DeribitBaseURL          string
 	DeribitWSURL            string
 
-	CNGNSpotAssetAddress          string
-	CNGNSep2026FutureAssetAddress string
-	CNGNSep2026FutureSubID        string
-	CNGNNov2026FutureAssetAddress string
-	CNGNNov2026FutureSubID        string
-	CNGNMay2027FutureAssetAddress string
-	CNGNMay2027FutureSubID        string
-	EnforceActionDataInvariants   bool
-	CancelProtectedOrderPrefixes  []string
+	CNGNSpotAssetAddress         string
+	EnforceActionDataInvariants  bool
+	CancelProtectedOrderPrefixes []string
 
 	// Real-time event pipeline (internal/events). See docs/realtime-api-design.md.
 	EventsPruneHorizon      time.Duration // max age of a market_events row (= max reconnect-replay window)
@@ -85,15 +79,9 @@ func Load() (Config, error) {
 		DeribitBaseURL:          getenvDefault("DERIBIT_BASE_URL", "https://test.deribit.com/api/v2"),
 		DeribitWSURL:            getenvDefault("DERIBIT_WS_URL", "wss://test.deribit.com/ws/api/v2"),
 
-		CNGNSpotAssetAddress:          strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_SPOT_ASSET_ADDRESS"))),
-		CNGNSep2026FutureAssetAddress: strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_SEP16_2026_FUTURE_ASSET_ADDRESS"))),
-		CNGNSep2026FutureSubID:        strings.TrimSpace(os.Getenv("CNGN_SEP16_2026_FUTURE_SUB_ID")),
-		CNGNNov2026FutureAssetAddress: strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_NOV30_2026_FUTURE_ASSET_ADDRESS"))),
-		CNGNNov2026FutureSubID:        strings.TrimSpace(os.Getenv("CNGN_NOV30_2026_FUTURE_SUB_ID")),
-		CNGNMay2027FutureAssetAddress: strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_MAY31_2027_FUTURE_ASSET_ADDRESS"))),
-		CNGNMay2027FutureSubID:        strings.TrimSpace(os.Getenv("CNGN_MAY31_2027_FUTURE_SUB_ID")),
-		EnforceActionDataInvariants:   getenvBool("ENFORCE_ACTION_DATA_INVARIANTS", true),
-		CancelProtectedOrderPrefixes:  getenvCSV("CANCEL_PROTECTED_ORDER_ID_PREFIXES", "validation:,smoke:,manual:"),
+		CNGNSpotAssetAddress:         strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_SPOT_ASSET_ADDRESS"))),
+		EnforceActionDataInvariants:  getenvBool("ENFORCE_ACTION_DATA_INVARIANTS", true),
+		CancelProtectedOrderPrefixes: getenvCSV("CANCEL_PROTECTED_ORDER_ID_PREFIXES", "validation:,smoke:,manual:"),
 	}
 
 	managerData, err := loadExecutorManagerData()
