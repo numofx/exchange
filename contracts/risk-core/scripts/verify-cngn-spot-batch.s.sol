@@ -9,6 +9,7 @@ import {StandardManager} from "../src/risk-managers/StandardManager.sol";
 import {Deployment} from "./types.sol";
 import {Utils} from "./utils.sol";
 import {CNGNSpotBatch} from "./cngn-spot-batch.sol";
+import {VmSafe} from "forge-std/Vm.sol";
 
 /**
  * @dev Verifies what will actually be signed.
@@ -86,6 +87,11 @@ contract VerifyCNGNSpotBatch is Utils {
   ///      and says where to pick up.
   function _reportProgress(CNGNSpotBatch.Ctx memory ctx, address[] memory to, bytes[] memory data) internal view {
     CNGNSpotBatch.Status[] memory raw = CNGNSpotBatch.statuses(ctx);
+
+    // action 5 can be settled from logs; action 6 cannot -- see _marginParamsLogged
+    bool loggedFive = _marginParamsLogged(ctx);
+    if (loggedFive && raw[5] == CNGNSpotBatch.Status.Ambiguous) raw[5] = CNGNSpotBatch.Status.Done;
+
     CNGNSpotBatch.Status[] memory st = CNGNSpotBatch.resolve(raw);
     (,, string[] memory descriptions) = CNGNSpotBatch.build(ctx);
 
@@ -113,6 +119,44 @@ contract VerifyCNGNSpotBatch is Utils {
     console2.log("RESUME AT ACTION %s. Actions 0..%s are done.", firstPending, firstPending - 1);
     if (firstPending < 10) {
       console2.log("The venue is NOT live: the enabling switch is action 10 and it has not run.");
+    }
+  }
+
+  /// @dev Settle action 5 from logs instead of inference. `BaseMarginParamsSet(uint marketId, uint
+  ///      baseAssetMarginFactor, uint baseAssetIMScale)` carries the market id, so a matching event
+  ///      is direct evidence the call landed.
+  ///
+  ///      Action 6 gets no such treatment: `OracleContingencySet(uint prepThreshold, uint
+  ///      optionThreshold, uint baseThreshold, uint OCFactor)` omits the market id entirely, so a
+  ///      log cannot be attributed to a market. It stays on nonce inference, which is why the
+  ///      runbook requires the vault to send nothing else until action 10 confirms.
+  ///
+  ///      A miss NEVER downgrades a status. Public RPCs cap eth_getLogs ranges, so "no event in the
+  ///      window" means "not found here", not "did not happen". Logs can only raise confidence.
+  function _marginParamsLogged(CNGNSpotBatch.Ctx memory ctx) internal view returns (bool) {
+    uint window = vm.envOr("LOG_SCAN_BLOCKS", uint(50_000));
+    if (window == 0) return false;
+
+    uint toBlock = block.number;
+    uint fromBlock = vm.envOr("LOG_SCAN_FROM_BLOCK", uint(0));
+    if (fromBlock == 0) fromBlock = toBlock > window ? toBlock - window : 0;
+
+    bytes32[] memory topics = new bytes32[](1);
+    topics[0] = keccak256("BaseMarginParamsSet(uint256,uint256,uint256)");
+
+    try vm.eth_getLogs(fromBlock, toBlock, ctx.srm, topics) returns (VmSafe.EthGetLogs[] memory logs) {
+      for (uint i = 0; i < logs.length; ++i) {
+        (uint marketId, uint marginFactor, uint imScale) = abi.decode(logs[i].data, (uint, uint, uint));
+        if (marketId == ctx.marketId && marginFactor == 0 && imScale == 0) {
+          console2.log("  action 5 confirmed by BaseMarginParamsSet in block %s", logs[i].blockNumber);
+          return true;
+        }
+      }
+      console2.log("  no BaseMarginParamsSet for market %s in blocks %s..%s", ctx.marketId, fromBlock, toBlock);
+      return false;
+    } catch {
+      console2.log("  eth_getLogs unavailable or range rejected - falling back to nonce inference");
+      return false;
     }
   }
 

@@ -193,6 +193,63 @@ contract FORK_TestCNGNSpotResume is Test {
     assertEq(subAccounts.getBalance(acc, cngnAsset, 0), 1_000e18);
   }
 
+  /// @dev The verifier settles action 5 from a BaseMarginParamsSet log rather than inference. The
+  ///      eth_getLogs path itself is not fork-testable -- that cheatcode queries the RPC, so logs
+  ///      emitted inside a test are not visible to it -- but the two things the scan depends on are:
+  ///      the topic it filters on, and the data layout it decodes. Both are pinned here, so a change
+  ///      to the event signature breaks this rather than silently making the scan match nothing.
+  function testFork_MarginParamsEventShapeMatchesWhatTheScannerExpects() public {
+    _executePrefix(5); // market created, action 5 not yet run
+
+    vm.recordLogs();
+    (address[] memory to, bytes[] memory data,) = CNGNSpotBatch.build(_ctx());
+    vm.prank(vault);
+    (bool ok,) = to[5].call(data[5]);
+    assertTrue(ok);
+
+    Vm.Log[] memory logs = vm.getRecordedLogs();
+
+    bytes32 expectedTopic = keccak256("BaseMarginParamsSet(uint256,uint256,uint256)");
+    bool found;
+    for (uint i = 0; i < logs.length; ++i) {
+      if (logs[i].emitter != address(srm) || logs[i].topics[0] != expectedTopic) continue;
+
+      // the scanner decodes all three as unindexed words and matches on marketId
+      (uint loggedMarketId, uint marginFactor, uint imScale) = abi.decode(logs[i].data, (uint, uint, uint));
+      assertEq(loggedMarketId, marketId, "marketId must be recoverable from the log");
+      assertEq(marginFactor, 0);
+      assertEq(imScale, 0);
+      found = true;
+    }
+    assertTrue(found, "setBaseAssetMarginFactor must emit a decodable BaseMarginParamsSet");
+  }
+
+  /// @dev Action 6 gets no such treatment, and this documents why rather than leaving it to be
+  ///      rediscovered: OracleContingencySet omits the market id, so a log cannot be attributed to a
+  ///      market. Action 6 stays on nonce inference, which is the assumption the runbook protects.
+  function testFork_ContingencyEventCannotBeAttributedToAMarket() public {
+    _executePrefix(6);
+
+    vm.recordLogs();
+    (address[] memory to, bytes[] memory data,) = CNGNSpotBatch.build(_ctx());
+    vm.prank(vault);
+    (bool ok,) = to[6].call(data[6]);
+    assertTrue(ok);
+
+    Vm.Log[] memory logs = vm.getRecordedLogs();
+    bytes32 topic = keccak256("OracleContingencySet(uint256,uint256,uint256,uint256)");
+
+    for (uint i = 0; i < logs.length; ++i) {
+      if (logs[i].emitter != address(srm) || logs[i].topics[0] != topic) continue;
+
+      // only the four thresholds -- no market id in topics or data
+      assertEq(logs[i].topics.length, 1, "no indexed fields");
+      assertEq(logs[i].data.length, 4 * 32, "exactly four words, none of them a marketId");
+      return;
+    }
+    revert("expected an OracleContingencySet log");
+  }
+
   /// @dev custody is secured by the first two actions, so no prefix leaves a feed on the deployer key
   function testFork_CustodyIsSecuredByTheFirstTwoActions() public {
     _executePrefix(2);
