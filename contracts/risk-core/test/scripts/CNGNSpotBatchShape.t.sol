@@ -30,7 +30,7 @@ contract TestCNGNSpotBatchShape is Test {
   uint internal constant MARKET_ID = 2;
   uint internal constant BASE_CAP = 204_853_778e18;
 
-  bytes32 internal constant GOLDEN_BATCH_HASH = 0xe7051770304a8cb7298322fad2975adb89ffb17b416beedc90b1cc9c08735c51;
+  bytes32 internal constant GOLDEN_BATCH_HASH = 0x1efd2b127a8a85eb95996e95b959c6f349ede04ee5b799384fc8be4496665079;
 
   function _ctx() internal pure returns (CNGNSpotBatch.Ctx memory) {
     return CNGNSpotBatch.Ctx({
@@ -84,6 +84,28 @@ contract TestCNGNSpotBatchShape is Test {
   }
 
   /// @dev the hash must be sensitive to every field a signer cares about
+  /// @dev per-action digests are what a signer compares against their MPC console: the vault is an
+  ///      EOA, so each action is its own transaction rather than one MultiSend payload
+  function testPerActionDigestsAreDistinctAndOrderIndependent() public {
+    (address[] memory to, bytes[] memory data,) = CNGNSpotBatch.build(_ctx());
+
+    for (uint i = 0; i < to.length; ++i) {
+      bytes32 di = CNGNSpotBatch.actionHash(to[i], data[i]);
+      assertTrue(di != bytes32(0), "action digest must be non-zero");
+      for (uint j = i + 1; j < to.length; ++j) {
+        assertTrue(di != CNGNSpotBatch.actionHash(to[j], data[j]), "two actions must never share a digest");
+      }
+    }
+
+    // an action's digest must depend on the target, not just the calldata: actions 8 and 9 are the
+    // same acceptOwnership() calldata to different feeds
+    assertEq(data[8], data[9], "8 and 9 are the same call");
+    assertTrue(
+      CNGNSpotBatch.actionHash(to[8], data[8]) != CNGNSpotBatch.actionHash(to[9], data[9]),
+      "identical calldata to different targets must not collide"
+    );
+  }
+
   function testHashMovesWithEveryContextField() public {
     bytes32 base = CNGNSpotBatch.hash(_ctx());
 
