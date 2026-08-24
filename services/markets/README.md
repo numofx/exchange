@@ -59,8 +59,15 @@ Important values:
 - `TRADE_MODULE_ADDRESS`
 - `CNGN_SPOT_ASSET_ADDRESS`
 - `CASH_ASSET_ADDRESS` — CashAsset contract, for the pre-trade funding check
-- `ENFORCE_FUNDING_CHECK` — default `true`; the check no-ops unless `CASH_ASSET_ADDRESS`,
-  `MATCHING_ADDRESS` and `CHAIN_RPC_URL` are all set
+- `ENFORCE_FUNDING_CHECK` — default `true`
+
+The pre-trade funding check needs `CASH_ASSET_ADDRESS`, `MATCHING_ADDRESS` and `CHAIN_RPC_URL`.
+**With `ENFORCE_FUNDING_CHECK=true` and any of them missing, the service refuses to start in
+production** — an inert guard is invisible from the outside, and a missing variable must not be the
+difference between it running and not. Any `APP_ENV` other than `dev`/`development`/`local`/`test`/
+`ci` counts as production, so a typo fails safe. To run without the check, set
+`ENFORCE_FUNDING_CHECK=false` deliberately. Outside production it logs `funding_check_inert` and
+continues.
 - optionally `EXPECTED_ORDER_OWNER`
 - optionally `EXPECTED_ORDER_SIGNER`
 
