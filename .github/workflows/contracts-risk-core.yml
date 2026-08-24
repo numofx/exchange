@@ -27,6 +27,9 @@ jobs:
       # offline: covers keccak, the setOracleContingencyParams selector, and the provenance checks
       # (log.address / tx.to == SRM, tx.from == vault) that gate action-6 confirmation
       - run: python3 scripts/ops/resolve_cngn_action6.py --self-test
+      # offline: the 10 selectors propose_cngn_spot_batch.py hardcodes. Its skip check swallows
+      # errors into "not landed", so a wrong selector degrades silently rather than crashing.
+      - run: python3 scripts/ops/propose_cngn_spot_batch.py --self-test
       - run: forge test -vvv
         env:
           BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}   # fork tests (DeliverableFXManagerBaseFork, CNGNSpotSRMBaseFork) need it

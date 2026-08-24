@@ -218,13 +218,65 @@ def print_sheet(actions: list[dict]) -> None:
   print()
 
 
+# Every selector this script hardcodes, with the signature it is meant to be. Also pinned against
+# the LIVE deployed contracts by test/scripts/ProposerSelectors.t.sol, which is the stronger check:
+# several of these are public state variables, so a signature string only proves I typed it twice.
+SELECTORS = {
+  # writes: dispatched on, taken from the artifact's calldata
+  "acceptOwnership()": "0x79ba5097",
+  "setStableFeed(address)": "0xbafb798d",
+  "setBorrowingEnabled(bool)": "0xf1514a1a",
+  "createMarket(string)": "0x54888f55",
+  "setWhitelistManager(address,bool)": "0xe64cc9da",
+  # reads: the postcondition each branch checks
+  "owner()": "0x8da5cb5b",
+  "stableFeed()": "0xf4d0508a",
+  "borrowingEnabled()": "0xa35d1300",
+  "lastMarketId()": "0x565eb87c",
+  "whitelistedManager(address)": "0x97d51c04",
+}
+
+
+def self_test() -> int:
+  """Offline check that the hardcoded selectors are what their signatures hash to.
+
+  action_landed() swallows errors into "not landed", so a wrong selector degrades silently to
+  re-proposing rather than crashing. That is safe but invisible, which is exactly why it needs a
+  test: two of these were wrong when first written from memory.
+  """
+  sys.path.insert(0, str(Path(__file__).resolve().parent))
+  from resolve_cngn_action6 import keccak  # same zero-dependency keccak, already vector-checked
+
+  assert keccak(b"").hex() == "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470", "keccak broken"
+
+  for signature, expected in SELECTORS.items():
+    actual = "0x" + keccak(signature.encode()).hex()[:8]
+    assert actual == expected, f"{signature}: hardcoded {expected}, actual {actual}"
+
+  # the source of every hardcoded literal in action_landed, so a stale one cannot hide
+  body = Path(__file__).read_text()
+  start = body.index("def action_landed(")
+  end = body.index("def confirm_on_chain(")
+  used = {m for m in SELECTORS.values() if m in body[start:end]}
+  missing = set(SELECTORS.values()) - used
+  assert not missing, f"selectors declared but not used in action_landed: {sorted(missing)}"
+
+  print(f"self-test ok: all {len(SELECTORS)} selectors match their signatures and are all in use")
+  return 0
+
+
 def main() -> int:
   ap = argparse.ArgumentParser(description="Propose the cNGN spot vault batch to MPCVault")
   ap.add_argument("--propose", action="store_true", help="actually create signing requests")
   ap.add_argument("--all", action="store_true",
                   help="queue all eleven at once instead of one at a time (you own the ordering)")
   ap.add_argument("--start-at", type=int, default=0, help="resume from this action index")
+  ap.add_argument("--self-test", action="store_true",
+                  help="check the hardcoded selectors offline; no network, proposes nothing")
   args = ap.parse_args()
+
+  if args.self_test:
+    return self_test()
 
   load_env_file(Path.home() / ".numo-mark-keeper.env")
   rpc_url = os.environ.get("RPC_URL") or os.environ.get("BASE_RPC_URL", "")
