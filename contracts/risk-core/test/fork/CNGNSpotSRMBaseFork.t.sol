@@ -16,13 +16,9 @@ import "../../src/assets/utils/ManagerWhitelist.sol";
 import "../../src/assets/utils/PositionTracking.sol";
 import "../../src/feeds/static/LyraStaticSpotFeed.sol";
 import "../../src/risk-managers/StandardManager.sol";
+import {CNGNSpotBatch} from "../../scripts/cngn-spot-batch.sol";
 
 import "openzeppelin/token/ERC20/extensions/IERC20Metadata.sol";
-
-interface IOwnable2StepLike {
-  function acceptOwnership() external;
-  function pendingOwner() external view returns (address);
-}
 
 /**
  * @dev Builds the USDCcNGN-SPOT vault batch exactly as scripts/register-cngn-spot-srm.s.sol does,
@@ -306,47 +302,28 @@ contract FORK_TestCNGNSpotOnSRMBase is Test {
     staticStableFeed.transferOwnership(vault);
   }
 
-  /// @dev mirrors scripts/register-cngn-spot-srm.s.sol _buildActions, in order, as the vault
+  /// @dev executes CNGNSpotBatch.build() -- the same library scripts/register-cngn-spot-srm.s.sol
+  ///      serialises into the artifact the vault signs. Nothing is re-declared here, so the batch
+  ///      proven by this suite and the batch signed cannot drift apart.
   function _executeVaultActions() internal {
-    IStandardManager.OracleContingencyParams memory ocParams =
-      IStandardManager.OracleContingencyParams({perpThreshold: 0, optionThreshold: 0, baseThreshold: 0, OCFactor: 0});
-
-    address[] memory to = new address[](11);
-    bytes[] memory data = new bytes[](11);
-
-    to[0] = address(srm);
-    data[0] = abi.encodeCall(StandardManager.createMarket, ("CNGN"));
-    to[1] = address(cngnAsset);
-    data[1] = abi.encodeCall(ManagerWhitelist.setWhitelistManager, (address(srm), true));
-    to[2] = address(cngnAsset);
-    data[2] = abi.encodeCall(PositionTracking.setTotalPositionCap, (IManager(address(srm)), baseCap));
-    to[3] = address(srm);
-    data[3] = abi.encodeCall(
-      StandardManager.whitelistAsset, (IAsset(address(cngnAsset)), marketId, IStandardManager.AssetType.Base)
-    );
-    to[4] = address(srm);
-    data[4] = abi.encodeCall(
-      StandardManager.setOraclesForMarket,
-      (marketId, ISpotFeed(address(staticCngnFeed)), IForwardFeed(address(0)), IVolFeed(address(0)))
-    );
-    to[5] = address(srm);
-    data[5] = abi.encodeCall(StandardManager.setOracleContingencyParams, (marketId, ocParams));
-    to[6] = address(srm);
-    data[6] = abi.encodeCall(StandardManager.setBaseAssetMarginFactor, (marketId, 0, 0));
-    to[7] = address(srm);
-    data[7] = abi.encodeCall(StandardManager.setBorrowingEnabled, (false));
-    to[8] = address(staticCngnFeed);
-    data[8] = abi.encodeCall(IOwnable2StepLike.acceptOwnership, ());
-    to[9] = address(staticStableFeed);
-    data[9] = abi.encodeCall(IOwnable2StepLike.acceptOwnership, ());
-    to[10] = address(srm);
-    data[10] = abi.encodeCall(StandardManager.setStableFeed, (ISpotFeed(address(staticStableFeed))));
+    (address[] memory to, bytes[] memory data,) = CNGNSpotBatch.build(_batchCtx());
 
     for (uint i = 0; i < to.length; ++i) {
       vm.prank(vault);
       (bool ok,) = to[i].call(data[i]);
       assertTrue(ok, string.concat("vault action failed at index ", vm.toString(i)));
     }
+  }
+
+  function _batchCtx() internal view returns (CNGNSpotBatch.Ctx memory) {
+    return CNGNSpotBatch.Ctx({
+      srm: address(srm),
+      wrappedCngn: address(cngnAsset),
+      cngnFeed: address(staticCngnFeed),
+      stableFeed: address(staticStableFeed),
+      marketId: marketId,
+      baseCap: baseCap
+    });
   }
 
   function _fundCash(uint accountId, uint underlyingUsdc) internal {

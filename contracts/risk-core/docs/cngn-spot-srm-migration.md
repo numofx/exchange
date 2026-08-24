@@ -118,6 +118,9 @@ threshold.
 
 ## LAUNCH BLOCKER: matcher must reserve notional + fee
 
+Tracked as **[numofx/exchange#12](https://github.com/numofx/exchange/issues/12)**. Do not launch
+`USDCcNGN-SPOT` on the SRM until it is closed.
+
 `TradeModule._addAssetTransfers` appends the fee as a **third quote-asset transfer in the same
 batch** (`:151` taker, `:255` maker). `submitTransfers` applies the batch and then runs one
 `handleAdjustment` per account, so the SRM sees one **net** cash delta.
@@ -131,8 +134,8 @@ This overlaps the open reserve-before-cross issue. Pinned by
 `testFork_BuyerFundedToNotionalPlusFeeSettles`, and `testFork_CashFreeSellerSettlesOnNetDelta`
 (which also covers the boundary where a fee exceeding proceeds is refused).
 
-**Do not launch before this is fixed** — the failure mode is silent rejection of exactly-funded
-orders.
+The failure mode is silent: the order is accepted, crossed, and the settlement transaction reverts,
+so the user sees a rejection with no obvious cause after the book has already moved.
 
 ## Off-chain impact
 
@@ -159,7 +162,15 @@ NEW_OWNER=<vault> PRIVATE_KEY=<deployer> \
 forge script scripts/register-cngn-spot-srm.s.sol --rpc-url $BASE_RPC_URL
 ```
 
-Step 2 writes `deployments/8453/CNGN_SPOT_SRM_VAULT_ACTIONS.json` — 11 calls, executed **in order**:
+Step 2 writes `deployments/8453/CNGN_SPOT_SRM_VAULT_ACTIONS.json` and logs a **batch hash**. The
+action list has exactly one definition, `scripts/cngn-spot-batch.sol`: the script serialises it and
+`test/fork/CNGNSpotSRMBaseFork.t.sol` executes it, so the batch under test and the batch signed are
+the same bytes by construction. `test/scripts/CNGNSpotBatchShape.t.sol` pins the shape against a
+committed hash, so editing the list fails a test until the constant is updated in the same commit.
+
+Before signing, re-run step 2 and confirm the logged hash matches the artifact in front of you.
+
+The 11 calls, executed **in order**:
 
 1. `srm.createMarket("CNGN")`
 2. `wrappedCngn.setWhitelistManager(srm, true)` — additive; DFXM stays whitelisted

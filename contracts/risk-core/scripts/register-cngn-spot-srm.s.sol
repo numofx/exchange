@@ -16,6 +16,7 @@ import {StandardManager} from "../src/risk-managers/StandardManager.sol";
 import {WrappedERC20Asset} from "../src/assets/WrappedERC20Asset.sol";
 import {Deployment} from "./types.sol";
 import {Utils, IOwnable2Step} from "./utils.sol";
+import {CNGNSpotBatch} from "./cngn-spot-batch.sol";
 
 /**
  * @dev Registers the existing wrapped cNGN asset as a base-only market on the already-deployed SRM,
@@ -74,16 +75,16 @@ contract RegisterCNGNSpotOnSRM is Utils {
 
     uint baseCap = _resolveCap(cngnToken);
 
-    string memory json = _buildActions(
-      Ctx({
-        srm: address(deployment.srm),
-        wrappedCngn: wrappedCngn,
-        cngnFeed: staticCngnFeed,
-        stableFeed: staticStableFeed,
-        marketId: marketId,
-        baseCap: baseCap
-      })
-    );
+    CNGNSpotBatch.Ctx memory ctx = CNGNSpotBatch.Ctx({
+      srm: address(deployment.srm),
+      wrappedCngn: wrappedCngn,
+      cngnFeed: staticCngnFeed,
+      stableFeed: staticStableFeed,
+      marketId: marketId,
+      baseCap: baseCap
+    });
+
+    string memory json = _serialiseActions(ctx);
 
     _writeToDeployments(ARTIFACT_NAME, json);
 
@@ -122,87 +123,20 @@ contract RegisterCNGNSpotOnSRM is Utils {
     console2.log("  alert threshold at 80%% of cap:", baseCap * 80 / 100);
   }
 
-  struct Ctx {
-    address srm;
-    address wrappedCngn;
-    address cngnFeed;
-    address stableFeed;
-    uint marketId;
-    uint baseCap;
-  }
+  /// @dev serialises CNGNSpotBatch.build(). The action list itself lives in the library so the
+  ///      batch this writes and the batch test/fork/CNGNSpotSRMBaseFork.t.sol executes are the same
+  ///      bytes by construction. batchHash lets a signer regenerate and compare.
+  function _serialiseActions(CNGNSpotBatch.Ctx memory ctx) internal view returns (string memory) {
+    (address[] memory to, bytes[] memory data, string[] memory descriptions) = CNGNSpotBatch.build(ctx);
 
-  function _buildActions(Ctx memory ctx) internal pure returns (string memory) {
-    // no oracle contingency: at marginFactor 0 the base margin is 0, and _getBaseMarginAndMtM
-    // returns before the contingency penalty, so a non-zero threshold here would be inert config.
-    // This is also why the static feeds' confidence value is never read on this path.
-    IStandardManager.OracleContingencyParams memory ocParams =
-      IStandardManager.OracleContingencyParams({perpThreshold: 0, optionThreshold: 0, baseThreshold: 0, OCFactor: 0});
-
-    string[] memory actions = new string[](ACTION_COUNT);
-
-    actions[0] =
-      _vaultAction("srm.createMarket(CNGN)", ctx.srm, abi.encodeCall(StandardManager.createMarket, (MARKET_NAME)));
-    actions[1] = _vaultAction(
-      "wrappedCngn.setWhitelistManager(srm) [additive: DFXM stays whitelisted]",
-      ctx.wrappedCngn,
-      abi.encodeCall(WrappedERC20Asset(ctx.wrappedCngn).setWhitelistManager, (ctx.srm, true))
-    );
-    actions[2] = _vaultAction(
-      "wrappedCngn.setTotalPositionCap(srm) [blocks deposits at cap, not trading]",
-      ctx.wrappedCngn,
-      abi.encodeCall(WrappedERC20Asset(ctx.wrappedCngn).setTotalPositionCap, (IManager(ctx.srm), ctx.baseCap))
-    );
-    actions[3] = _vaultAction(
-      "srm.whitelistAsset(wrappedCngn, Base)",
-      ctx.srm,
-      abi.encodeCall(
-        StandardManager.whitelistAsset, (IAsset(ctx.wrappedCngn), ctx.marketId, IStandardManager.AssetType.Base)
-      )
-    );
-    actions[4] = _vaultAction(
-      "srm.setOraclesForMarket(staticCngnFeed) [USDC-per-cNGN: SRM Base convention]",
-      ctx.srm,
-      abi.encodeCall(
-        StandardManager.setOraclesForMarket,
-        (ctx.marketId, ISpotFeed(ctx.cngnFeed), IForwardFeed(address(0)), IVolFeed(address(0)))
-      )
-    );
-    actions[5] = _vaultAction(
-      "srm.setOracleContingencyParams(zeroed)",
-      ctx.srm,
-      abi.encodeCall(StandardManager.setOracleContingencyParams, (ctx.marketId, ocParams))
-    );
-    actions[6] = _vaultAction(
-      "srm.setBaseAssetMarginFactor(0) [cNGN gives zero margin credit]",
-      ctx.srm,
-      abi.encodeCall(StandardManager.setBaseAssetMarginFactor, (ctx.marketId, 0, 0))
-    );
-    actions[7] = _vaultAction(
-      "srm.setBorrowingEnabled(false) [GLOBAL to the SRM, not per-market]",
-      ctx.srm,
-      abi.encodeCall(StandardManager.setBorrowingEnabled, (false))
-    );
-    actions[8] = _vaultAction(
-      "staticCngnFeed.acceptOwnership() [must be the vault]",
-      ctx.cngnFeed,
-      abi.encodeCall(IOwnable2Step.acceptOwnership, ())
-    );
-    actions[9] = _vaultAction(
-      "staticStableFeed.acceptOwnership() [must be the vault]",
-      ctx.stableFeed,
-      abi.encodeCall(IOwnable2Step.acceptOwnership, ())
-    );
-    actions[10] = _vaultAction(
-      "srm.setStableFeed(staticStableFeed) [GLOBAL: also affects market 1]",
-      ctx.srm,
-      abi.encodeCall(StandardManager.setStableFeed, (ISpotFeed(ctx.stableFeed)))
-    );
+    bytes32 batchHash = CNGNSpotBatch.hash(ctx);
+    console2.log("batch hash (regenerate to verify the artifact):", vm.toString(batchHash));
 
     string memory json = "[";
-    for (uint i = 0; i < actions.length; ++i) {
-      json = string.concat(json, i == 0 ? "" : ",", actions[i]);
+    for (uint i = 0; i < to.length; ++i) {
+      json = string.concat(json, i == 0 ? "" : ",", _vaultAction(descriptions[i], to[i], data[i]));
     }
-    return string.concat(json, "]");
+    return string.concat(json, ']');
   }
 
   function _vaultAction(string memory description, address to, bytes memory data)
