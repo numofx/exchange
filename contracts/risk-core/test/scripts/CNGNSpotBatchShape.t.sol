@@ -30,7 +30,7 @@ contract TestCNGNSpotBatchShape is Test {
   uint internal constant MARKET_ID = 2;
   uint internal constant BASE_CAP = 204_853_778e18;
 
-  bytes32 internal constant GOLDEN_BATCH_HASH = 0x1efd2b127a8a85eb95996e95b959c6f349ede04ee5b799384fc8be4496665079;
+  bytes32 internal constant GOLDEN_BATCH_HASH = 0x1fba974f6e4e688fe4c70a7e0fee43c02eda1bc21af67a4574330ef1ff48aec2;
 
   function _ctx() internal pure returns (CNGNSpotBatch.Ctx memory) {
     return CNGNSpotBatch.Ctx({
@@ -59,31 +59,72 @@ contract TestCNGNSpotBatchShape is Test {
     assertEq(data.length, 11);
     assertEq(descriptions.length, 11);
 
-    // the two acceptOwnership calls must target the feeds, not the SRM: they are the reason the
-    // batch has to execute as the vault rather than a deployer
-    assertEq(to[8], CNGN_FEED, "action 8 must accept ownership of the cngn feed");
-    assertEq(to[9], STABLE_FEED, "action 9 must accept ownership of the stable feed");
-    assertEq(data[8], abi.encodeWithSignature("acceptOwnership()"));
-    assertEq(data[9], abi.encodeWithSignature("acceptOwnership()"));
+    // 0-1: custody first. The old ordering left these until action 8-9, so abandoning the batch
+    // early stranded both feeds on the deployer key -- the lost-key mode this repo records once.
+    assertEq(to[0], CNGN_FEED, "action 0 must accept ownership of the cngn feed");
+    assertEq(to[1], STABLE_FEED, "action 1 must accept ownership of the stable feed");
+    assertEq(data[0], abi.encodeWithSignature("acceptOwnership()"));
+    assertEq(data[1], abi.encodeWithSignature("acceptOwnership()"));
 
-    // createMarket must be first: every later action references the id it assigns
-    assertEq(to[0], SRM);
-    assertEq(data[0], abi.encodeWithSignature("createMarket(string)", "CNGN"));
+    // 2: the old stable feed and its 3600s staleness halt must be gone before anything else
+    assertEq(to[2], SRM);
+    assertEq(data[2], abi.encodeWithSignature("setStableFeed(address)", STABLE_FEED));
 
-    // the spot feed wired in must be the static one, never the live DFXM feed (wrong orientation)
-    assertEq(to[4], SRM);
+    // 3: tightening globals precedes creating anything
+    assertEq(data[3], abi.encodeWithSignature("setBorrowingEnabled(bool)", false));
+
+    // 4: the market cannot exist before the four calls that require it
+    assertEq(data[4], abi.encodeWithSignature("createMarket(string)", "CNGN"));
+
+    // 5: marginFactor 0 is the single thing containing the frozen price, and it is pinned before
+    // the asset is reachable rather than after
+    assertEq(data[5], abi.encodeWithSignature("setBaseAssetMarginFactor(uint256,uint256,uint256)", MARKET_ID, 0, 0));
+
+    // 7: the spot feed wired in must be the static one, never the live DFXM feed (wrong orientation)
     assertEq(
-      data[4],
+      data[7],
       abi.encodeWithSignature(
         "setOraclesForMarket(uint256,address,address,address)", MARKET_ID, CNGN_FEED, address(0), address(0)
       )
     );
 
-    // marginFactor 0 is the single thing containing the frozen price; assert it explicitly
-    assertEq(data[6], abi.encodeWithSignature("setBaseAssetMarginFactor(uint256,uint256,uint256)", MARKET_ID, 0, 0));
+    // 10: the enabling switch is last. Until the SRM is whitelisted on the asset, _checkManager
+    // rejects every adjustment, so every earlier prefix is a venue that cannot be used.
+    assertEq(to[10], WRAPPED_CNGN, "the last action must open the asset side");
+    assertEq(data[10], abi.encodeWithSignature("setWhitelistManager(address,bool)", SRM, true));
   }
 
-  /// @dev the hash must be sensitive to every field a signer cares about
+  /// @dev the property the ordering exists for: no prefix can be traded against. Both gates --
+  ///      whitelistAsset on the SRM and setWhitelistManager on the asset -- are required for an
+  ///      adjustment, and the second is the final action.
+  function testNoPrefixBeforeTheLastActionCanBeTraded() public {
+    (address[] memory to, bytes[] memory data,) = CNGNSpotBatch.build(_ctx());
+
+    bytes memory enabling = abi.encodeWithSignature("setWhitelistManager(address,bool)", SRM, true);
+    for (uint i = 0; i < to.length - 1; ++i) {
+      assertTrue(
+        !(to[i] == WRAPPED_CNGN && keccak256(data[i]) == keccak256(enabling)),
+        "the asset side must not open before the final action"
+      );
+    }
+    assertEq(keccak256(data[10]), keccak256(enabling));
+  }
+
+  /// @dev custody is secured before anything functional changes
+  function testOwnershipIsAcceptedBeforeAnyConfiguration() public {
+    (address[] memory to, bytes[] memory data,) = CNGNSpotBatch.build(_ctx());
+
+    bytes memory accept = abi.encodeWithSignature("acceptOwnership()");
+    assertEq(keccak256(data[0]), keccak256(accept));
+    assertEq(keccak256(data[1]), keccak256(accept));
+
+    // and neither feed is left out
+    assertTrue(
+      (to[0] == CNGN_FEED && to[1] == STABLE_FEED) || (to[0] == STABLE_FEED && to[1] == CNGN_FEED),
+      "both feeds must have ownership accepted in the first two actions"
+    );
+  }
+
   /// @dev per-action digests are what a signer compares against their MPC console: the vault is an
   ///      EOA, so each action is its own transaction rather than one MultiSend payload
   function testPerActionDigestsAreDistinctAndOrderIndependent() public {
@@ -97,11 +138,11 @@ contract TestCNGNSpotBatchShape is Test {
       }
     }
 
-    // an action's digest must depend on the target, not just the calldata: actions 8 and 9 are the
+    // an action's digest must depend on the target, not just the calldata: actions 0 and 1 are the
     // same acceptOwnership() calldata to different feeds
-    assertEq(data[8], data[9], "8 and 9 are the same call");
+    assertEq(data[0], data[1], "0 and 1 are the same call");
     assertTrue(
-      CNGNSpotBatch.actionHash(to[8], data[8]) != CNGNSpotBatch.actionHash(to[9], data[9]),
+      CNGNSpotBatch.actionHash(to[0], data[0]) != CNGNSpotBatch.actionHash(to[1], data[1]),
       "identical calldata to different targets must not collide"
     );
   }

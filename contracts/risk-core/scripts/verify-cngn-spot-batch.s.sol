@@ -32,7 +32,8 @@ import {CNGNSpotBatch} from "./cngn-spot-batch.sol";
  *      digest. Check 2 is the one with teeth, and it is why this reads the chain.
  *
  * Usage:
- *   MODE unset          verify the committed artifact end to end
+ *   (default)              verify the committed artifact end to end
+ *   RESUME=1               read postconditions from chain: done / pending / diverged per action
  *   ACTION_TO/ACTION_DATA  identify a single pending transaction before approving it
  *
  *   forge script scripts/verify-cngn-spot-batch.s.sol --rpc-url $BASE_RPC_URL
@@ -44,6 +45,11 @@ contract VerifyCNGNSpotBatch is Utils {
   function run() external view {
     CNGNSpotBatch.Ctx memory ctx = _liveCtx();
     (address[] memory to, bytes[] memory data,) = CNGNSpotBatch.build(ctx);
+
+    if (vm.envOr("RESUME", uint(0)) == 1) {
+      _reportProgress(ctx, to, data);
+      return;
+    }
 
     bytes memory single = vm.envOr("ACTION_DATA", bytes(""));
     if (single.length > 0) {
@@ -73,6 +79,53 @@ contract VerifyCNGNSpotBatch is Utils {
     }
 
     revert("NO MATCH - this transaction is not in the batch. Do not sign it.");
+  }
+
+  /// @dev Resume a partially-executed batch. The vault is an EOA, so the batch is 11 transactions
+  ///      and a stop leaves real partial state; this reads each action's postcondition from chain
+  ///      and says where to pick up.
+  function _reportProgress(CNGNSpotBatch.Ctx memory ctx, address[] memory to, bytes[] memory data) internal view {
+    CNGNSpotBatch.Status[] memory raw = CNGNSpotBatch.statuses(ctx);
+    CNGNSpotBatch.Status[] memory st = CNGNSpotBatch.resolve(raw);
+    (,, string[] memory descriptions) = CNGNSpotBatch.build(ctx);
+
+    uint firstPending = type(uint).max;
+    uint diverged;
+
+    for (uint i = 0; i < st.length; ++i) {
+      console2.log("  [%s] %s  %s", i, _label(st[i], raw[i]), descriptions[i]);
+      console2.log("        digest %s", vm.toString(CNGNSpotBatch.actionHash(to[i], data[i])));
+
+      if (st[i] == CNGNSpotBatch.Status.Diverged) diverged++;
+      if (st[i] == CNGNSpotBatch.Status.Pending && i < firstPending) firstPending = i;
+    }
+
+    console2.log("");
+    if (diverged > 0) {
+      console2.log("DIVERGED: %s action(s) disagree with chain state.", diverged);
+      revert("chain state diverges from the batch - do not resume, investigate first");
+    }
+    if (firstPending == type(uint).max) {
+      console2.log("COMPLETE: all 11 actions are done.");
+      return;
+    }
+
+    console2.log("RESUME AT ACTION %s. Actions 0..%s are done.", firstPending, firstPending - 1);
+    if (firstPending < 10) {
+      console2.log("The venue is NOT live: the enabling switch is action 10 and it has not run.");
+    }
+  }
+
+  /// @dev AMBIGUOUS is reported honestly rather than rounded to done. Actions 5 and 6 write
+  ///      all-zeros, which is what an untouched market already reads, so state alone cannot tell
+  ///      them apart. resolve() clears them only when a later action proves the batch got past them.
+  function _label(CNGNSpotBatch.Status resolved, CNGNSpotBatch.Status raw) internal pure returns (string memory) {
+    if (resolved == CNGNSpotBatch.Status.Diverged) return "DIVERGED";
+    if (resolved == CNGNSpotBatch.Status.Done) {
+      return raw == CNGNSpotBatch.Status.Ambiguous ? "done*   " : "done    ";
+    }
+    if (resolved == CNGNSpotBatch.Status.Ambiguous) return "unknown ";
+    return "pending ";
   }
 
   function _verifyArtifact(address[] memory to, bytes[] memory data) internal view {
