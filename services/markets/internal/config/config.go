@@ -120,7 +120,69 @@ func Load() (Config, error) {
 	cfg.WSAuthMaxTTL = getenvDurationDefault("WS_AUTH_MAX_TTL", 5*time.Minute)
 	cfg.WSAllowedOrigins = getenvCSV("WS_ALLOWED_ORIGINS", "")
 
+	if err := cfg.validateFundingCheck(); err != nil {
+		return Config{}, err
+	}
+
 	return cfg, nil
+}
+
+// IsProduction reports whether this process is running against real funds. Anything that is not
+// explicitly a development or test environment is treated as production, so a typo'd APP_ENV
+// fails safe rather than quietly disabling guards.
+func (c Config) IsProduction() bool {
+	switch strings.ToLower(strings.TrimSpace(c.AppEnv)) {
+	case "", "dev", "development", "local", "test", "ci":
+		return false
+	default:
+		return true
+	}
+}
+
+// validateFundingCheck refuses to start in production with the funding check silently inert.
+//
+// The check reads the buyer's cash and requires it to cover notional + fee before a pair is
+// crossed. Without CASH_ASSET_ADDRESS it no-ops: matching still works, but underfunded buys are
+// discovered only when the settlement transaction reverts, after the book has moved. That is the
+// behaviour the check exists to remove, and it is invisible from the outside -- nothing errors,
+// nothing is logged per-match, trades simply fail on chain. A missing variable must not be the
+// difference between the guard running and not.
+//
+// Set ENFORCE_FUNDING_CHECK=false to run without it deliberately. That is a decision someone makes,
+// not a default they fall into.
+func (c Config) validateFundingCheck() error {
+	if !c.EnforceFundingCheck || !c.IsProduction() {
+		return nil
+	}
+
+	var missing []string
+	if !isConfiguredAddress(c.CashAssetAddress) {
+		missing = append(missing, "CASH_ASSET_ADDRESS")
+	}
+	if !isConfiguredAddress(c.MatchingAddress) {
+		missing = append(missing, "MATCHING_ADDRESS")
+	}
+	if strings.TrimSpace(c.ChainRPCURL) == "" {
+		missing = append(missing, "CHAIN_RPC_URL")
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+
+	return fmt.Errorf(
+		"APP_ENV=%s requires %s for the pre-trade funding check; "+
+			"without them a buyer short of notional + fee is only caught when the trade reverts on chain. "+
+			"Set them, or set ENFORCE_FUNDING_CHECK=false to run without the check deliberately",
+		c.AppEnv, strings.Join(missing, ", "),
+	)
+}
+
+func isConfiguredAddress(value string) bool {
+	trimmed := strings.TrimSpace(strings.ToLower(value))
+	if !strings.HasPrefix(trimmed, "0x") || len(trimmed) != 42 {
+		return false
+	}
+	return trimmed != "0x0000000000000000000000000000000000000000"
 }
 
 func getenvDurationDefault(key string, fallback time.Duration) time.Duration {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"strings"
@@ -163,11 +164,32 @@ type cachedBalance struct {
 // become a permanent halt on matching.
 func newFundingChecker(cfg config.Config) fundingChecker {
 	if !cfg.EnforceFundingCheck {
+		slog.Warn(
+			"funding_check_disabled",
+			"reason", "ENFORCE_FUNDING_CHECK=false",
+			"effect", "underfunded buys are only caught when the settlement transaction reverts",
+		)
 		return nil
 	}
 	if strings.TrimSpace(cfg.ChainRPCURL) == "" || !isHexAddress(cfg.CashAssetAddress) || !isHexAddress(cfg.MatchingAddress) {
+		// config.Load refuses to start in production for exactly this, so reaching here means a
+		// dev or test environment. Say so anyway: a silently inert guard is the failure mode this
+		// whole path exists to avoid.
+		slog.Warn(
+			"funding_check_inert",
+			"reason", "CASH_ASSET_ADDRESS, MATCHING_ADDRESS or CHAIN_RPC_URL is unset",
+			"cash_asset_set", isHexAddress(cfg.CashAssetAddress),
+			"matching_address_set", isHexAddress(cfg.MatchingAddress),
+			"chain_rpc_set", strings.TrimSpace(cfg.ChainRPCURL) != "",
+			"app_env", cfg.AppEnv,
+			"effect", "matching proceeds without a pre-trade funding check",
+		)
 		return nil
 	}
+	slog.Info(
+		"funding_check_enabled",
+		"cash_asset", strings.ToLower(strings.TrimSpace(cfg.CashAssetAddress)),
+	)
 	return &chainFundingChecker{
 		rpcURL:          strings.TrimSpace(cfg.ChainRPCURL),
 		matchingAddress: strings.ToLower(strings.TrimSpace(cfg.MatchingAddress)),
