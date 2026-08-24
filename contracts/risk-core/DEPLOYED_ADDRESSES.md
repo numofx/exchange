@@ -45,11 +45,21 @@ is pending vault signature. See [docs/cngn-spot-srm-migration.md](docs/cngn-spot
 Spot moves off `DeliverableFXManager` (which credits cNGN at 100% of oracle value) onto the SRM as
 a base-only market at `marginFactor = 0`, where the margin check reduces to `cash >= 0`.
 
+Feeds deployed 2026-08-24 (block 50405256). **Vault batch not yet executed** — the SRM still has no
+cNGN market and spot still runs on `DeliverableFXManager` until all 11 actions land.
+
 - `manager`: the shared `srm` above, `0x3195Bd7e02d93982bCF8b34DF5B941fFCaE1E49b`
 - `baseAsset` (wrapped cNGN): `0x9D806fD040a719D27a8E5E77dc5aE0ED1e089493` — **unchanged**, shared with the deliverable stack
-- `spotFeed`: a new `LyraStaticSpotFeed` — address recorded on execution
-- `stableFeed`: a new `LyraStaticSpotFeed` — address recorded on execution
-- Cap: 10% of live cNGN `totalSupply()` at generation time. Gates deposits, not trading. **Alert at 80%.**
+- `spotFeed` (LyraStaticSpotFeed): `0xec4ad7B2679f54eB3e971B10120cB56cF1c061A4` — `0.000743376685636834` USDC per cNGN, confidence `1e18`
+- `stableFeed` (LyraStaticSpotFeed): `0x507D645682737C6640dc73b5aC858654BcB9854f` — `1e18`, confidence `1e18`
+- Market id: **2** (`createMarket` is action 4; `lastMarketId` was 1)
+- Cap: `204853778399937200000000000` — 10% of live cNGN supply at generation. Gates deposits, not trading. **Alert at 80%**: `163883022719949760000000000`
+- Batch hash: `0x7b7013f5689e88df5e39ef388226c642177b5da52fb6a08a41f7c7bf20b1edd4`
+
+Both feeds were deployed by `0xdA1976E83D54B76D0c794B35262228960a1a918f` — the **feed signer key**, which
+is a live operational hot key rather than a throwaway deployer. It is `pendingOwner` → vault on both
+feeds, so it holds `setSpot` rights only until actions 0 and 1 land. Re-read both `getSpot()` values
+immediately before signing rather than trusting the deployment log.
 
 #### COUPLED SETTINGS — do not change one alone
 
