@@ -32,6 +32,11 @@ import {Utils} from "./utils.sol";
  *      DEPLOYED_ADDRESSES.md before changing any of: marginFactor, borrowingEnabled, either spot
  *      feed, or oracleContingencyParams.
  *
+ * @dev Running WITHOUT --broadcast still writes the artifact, with simulated addresses that do
+ *      not exist on chain. Delete it after a dry run; register-cngn-spot-srm.s.sol reads those
+ *      addresses and would otherwise generate a batch pointing at nothing. The preconditions catch
+ *      it (`PRE: cngn static feed has no code`), but do not rely on that as the only guard.
+ *
  * Usage: NEW_OWNER=<vault> PRIVATE_KEY=<deployer> \
  *          forge script scripts/deploy-cngn-spot-static-feeds.s.sol --rpc-url $BASE_RPC_URL --broadcast
  */
@@ -89,6 +94,6 @@ contract DeployCNGNSpotStaticFeeds is Utils {
     console2.log("static stable feed (USDC per USD):", address(stableFeed), STABLE_PRICE);
     console2.log("");
     console2.log("Ownership transfer initiated - the vault must acceptOwnership() on BOTH feeds.");
-    console2.log("Those two calls are actions 9 and 10 of the register-cngn-spot-srm batch.");
+    console2.log("Those two calls are actions 0 and 1 of the register-cngn-spot-srm batch.");
   }
 }
