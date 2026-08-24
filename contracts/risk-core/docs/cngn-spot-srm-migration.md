@@ -254,9 +254,30 @@ override with `LOG_SCAN_BLOCKS` or `LOG_SCAN_FROM_BLOCK` if you are resuming aft
 note that public RPCs cap `eth_getLogs` ranges. A miss never downgrades a status — "no event in the
 window" means "not found here", not "did not happen".
 
-**Action 6 cannot be settled from logs.** `OracleContingencySet(uint prepThreshold, uint
-optionThreshold, uint baseThreshold, uint OCFactor)` omits the market id entirely, so no log can be
-attributed to a market. It stays on nonce inference and prints `done*`.
+**Action 6 cannot be settled from logs alone, but can be settled from the transaction.**
+`OracleContingencySet(uint prepThreshold, uint optionThreshold, uint baseThreshold, uint OCFactor)`
+omits the market id, so no log can be attributed to a market. The *transaction* that emitted it
+carries it, though: the call is
+`setOracleContingencyParams(uint256,(uint256,uint256,uint256,uint256))` and the market id is the
+first calldata word after the selector.
+
+```sh
+python3 scripts/ops/resolve_cngn_action6.py --from-block <n> --market-id <id>
+```
+
+It scans for zero-valued `OracleContingencySet` logs, fetches the transaction behind each, decodes
+the market id, and exits 0 on a match — a positive read that does not rest on nonce ordering. Exit 1
+means "not found in this range", which is **not** proof it did not happen: widen `--from-block`
+first. `--self-test` checks the selector and decode with no network.
+
+This lives in `scripts/ops/` rather than the Solidity verifier because `vm.rpc` returns the
+transaction object ABI-encoded in alphabetical key order — a layout that differs between providers
+and between transaction types — and because enabling `ffi` repo-wide so one check could shell out
+would be a bad trade. The two assumptions it makes (selector, and marketId being the first word) are
+pinned by `testActionSixCalldataShapeMatchesTheOpsResolver`, so a signature change breaks a test
+rather than silently making the resolver match nothing.
+
+Until you run it, action 6 prints `done*` and rests on nonce inference:
 
 > ### The vault EOA must send nothing else until action 10 confirms
 >

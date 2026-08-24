@@ -125,6 +125,34 @@ contract TestCNGNSpotBatchShape is Test {
     );
   }
 
+  /// @dev scripts/ops/resolve_cngn_action6.py turns action 6's `done*` into a positive read by
+  ///      decoding the market id out of the transaction's calldata -- the OracleContingencySet event
+  ///      itself carries no market id. That resolver hardcodes the selector and assumes marketId is
+  ///      the first word after it. Both assumptions are pinned here, so a signature change breaks a
+  ///      test instead of silently making the resolver match nothing.
+  function testActionSixCalldataShapeMatchesTheOpsResolver() public {
+    (, bytes[] memory data,) = CNGNSpotBatch.build(_ctx());
+    bytes memory raw = data[6];
+
+    bytes4 selector;
+    uint firstWord;
+    assembly {
+      selector := mload(add(raw, 0x20))
+      firstWord := mload(add(raw, 0x24))
+    }
+
+    assertEq(
+      selector,
+      bytes4(keccak256("setOracleContingencyParams(uint256,(uint256,uint256,uint256,uint256))")),
+      "resolver selector would no longer match"
+    );
+    assertEq(firstWord, MARKET_ID, "resolver assumes marketId is the first word after the selector");
+
+    // four static words, so nothing after marketId is a pointer the resolver would have to
+    // follow. 4 + 32 + 4*32 = 164.
+    assertEq(raw.length, 164, "contingency params must stay a static four-word struct");
+  }
+
   /// @dev per-action digests are what a signer compares against their MPC console: the vault is an
   ///      EOA, so each action is its own transaction rather than one MultiSend payload
   function testPerActionDigestsAreDistinctAndOrderIndependent() public {
