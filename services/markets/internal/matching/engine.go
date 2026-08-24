@@ -20,6 +20,7 @@ type Engine struct {
 	executor *ExecutorClient
 	registry *instruments.Registry
 	backoff  *matchBackoff
+	funding  fundingChecker
 }
 
 const reconciliationTimeout = 5 * time.Second
@@ -31,6 +32,7 @@ func NewEngine(cfg config.Config, pool *pgxpool.Pool) *Engine {
 		executor: NewExecutorClient(cfg.ExecutorURL, cfg.ExecutorManagerData),
 		registry: instruments.DefaultRegistry(cfg),
 		backoff:  newMatchBackoff(),
+		funding:  newFundingChecker(cfg),
 	}
 }
 
@@ -158,6 +160,38 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 		reconcileCtx, cancel := detachedContext(ctx, reconciliationTimeout)
 		defer cancel()
 		_ = e.orders.MarkMatchFailed(reconcileCtx, []string{candidate.Taker.OrderID, candidate.Maker.OrderID}, err.Error())
+		return
+	}
+
+	// The buyer must fund notional + fee, not notional: TradeModule appends the fee as a third
+	// quote-asset transfer in the same batch, and the SRM checks cash >= 0 on the NET delta.
+	// Crossing without this emits matches that revert after the book has already moved.
+	if funded, required, available, fundErr := buyerCanFund(
+		ctx, e.funding, *candidate, executionFill.FillPrice, executionFill.FillAmount, takerFillFee,
+	); fundErr != nil {
+		// Fail open. The chain is the real enforcement; an RPC outage must degrade this to the
+		// behaviour we had before the check existed, not halt the venue.
+		slog.Warn(
+			"funding_check_unavailable",
+			"market", instrument.Symbol,
+			"taker_order_id", candidate.Taker.OrderID,
+			"maker_order_id", candidate.Maker.OrderID,
+			"error", fundErr,
+		)
+	} else if !funded {
+		e.noteMatchFailure(instrument.Symbol, *candidate, "buyer_underfunded")
+		slog.Warn(
+			"match_trace_buyer_underfunded",
+			"market", instrument.Symbol,
+			"asset_address", strings.ToLower(instrument.AssetAddress),
+			"sub_id", instrument.SubID,
+			"taker_order_id", candidate.Taker.OrderID,
+			"maker_order_id", candidate.Maker.OrderID,
+			"required_quote_with_fee", required.String(),
+			"available_cash", available.String(),
+			"shortfall", new(big.Int).Sub(required, available).String(),
+			"taker_fee", takerFillFee,
+		)
 		return
 	}
 
