@@ -85,7 +85,7 @@ library CNGNSpotBatch {
     require(ctx.cngnFeed.code.length > 0, "PRE: cngn static feed has no code");
     require(ctx.stableFeed.code.length > 0, "PRE: stable static feed has no code");
 
-    // actions 8 and 9 are acceptOwnership(); they revert unless the vault is already pending owner
+    // actions 0 and 1 are acceptOwnership(); they revert unless the vault is already pending owner
     require(IOwned(ctx.cngnFeed).pendingOwner() == vault, "PRE: vault is not pending owner of cngn feed");
     require(IOwned(ctx.stableFeed).pendingOwner() == vault, "PRE: vault is not pending owner of stable feed");
 
