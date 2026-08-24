@@ -43,6 +43,13 @@ interface IERC20Supply {
 library CNGNSpotBatch {
   uint internal constant ACTION_COUNT = 11;
 
+  /// @dev The vault recorded in DEPLOYED_ADDRESSES.md, Base mainnet. This is an ANCHOR, not a
+  ///      lookup: `srm.owner()` is read from chain and compared against it, never adopted as the
+  ///      new truth. Deriving the vault from the chain would mean an ownership change is silently
+  ///      accepted -- exactly the event this whole batch should refuse to proceed through. Moving
+  ///      it requires editing this line, which shows up in a diff a reviewer reads.
+  address internal constant EXPECTED_VAULT = 0x1dcA42ab54Bd3862853A821F84B29BF65245F435;
+
   struct Ctx {
     address srm;
     address wrappedCngn;
@@ -63,6 +70,8 @@ library CNGNSpotBatch {
   {
     address vault = IOwned(ctx.srm).owner();
     require(vault != address(0), "PRE: srm owner is zero");
+    // hard stop rather than adopting whoever owns it now
+    require(vault == EXPECTED_VAULT, "PRE: srm owner is not the recorded vault - ownership changed");
     require(IOwned(ctx.wrappedCngn).owner() == vault, "PRE: srm and wrappedCngn have different owners");
 
     // createMarket assigns ++lastMarketId. If a market was created since this id was resolved, every
@@ -118,7 +127,11 @@ library CNGNSpotBatch {
 
   function statuses(Ctx memory ctx) internal view returns (Status[] memory out) {
     out = new Status[](ACTION_COUNT);
+
+    // resuming against an SRM whose owner has moved is not a thing to report -- it is a thing to
+    // stop for. Reading the owner and using it would quietly re-anchor every ownership check below.
     address vault = IOwned(ctx.srm).owner();
+    require(vault == EXPECTED_VAULT, "srm owner is not the recorded vault - ownership changed");
 
     out[0] = _ownedBy(ctx.cngnFeed, vault);
     out[1] = _ownedBy(ctx.stableFeed, vault);

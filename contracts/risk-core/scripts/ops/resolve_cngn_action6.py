@@ -42,10 +42,19 @@ to exit 1, which this script already treats as inconclusive ("widen the range") 
 than as proof of absence. The direction of failure is what makes it acceptable on a
 signing path; `--self-test` and the cross-check against `cast keccak` cover it anyway.
 
+The vault address is an ANCHOR, not a lookup. EXPECTED_VAULT below is the address
+recorded in DEPLOYED_ADDRESSES.md; `srm.owner()` is read from chain and compared against
+it. They must agree. Deriving the vault from `srm.owner()` would mean an ownership change
+is silently adopted as the new truth -- and "who owns the SRM" is precisely the thing a
+confirmation is supposed to be anchored to. A mismatch is a hard exit, not a warning.
+
+If ownership genuinely moved, pass the new address with --vault explicitly. That keeps
+adoption a deliberate act by a human who typed the address, rather than a default.
+
 Env:
   RPC_URL         Base mainnet RPC (or pass --rpc)
   SRM_ADDRESS     defaults to the address in deployments/8453/core.json
-  VAULT_ADDRESS   defaults to srm.owner() read on-chain
+  VAULT_ADDRESS   overrides the recorded EXPECTED_VAULT anchor
   CNGN_MARKET_ID  defaults to srm.lastMarketId()
 
 Usage:
@@ -57,6 +66,8 @@ Exit codes:
   1  no such transaction found in the scanned range (NOT proof it did not happen --
      widen the range before concluding anything)
   2  usage or RPC error
+  3  srm.owner() does not match the recorded vault -- ownership changed. Nothing is
+     confirmed and nothing further should be signed until that is understood.
 """
 
 from __future__ import annotations
@@ -75,6 +86,10 @@ ORACLE_CONTINGENCY_SET_TOPIC = "0x" + "".rjust(64, "0")  # filled in at runtime
 
 # selector of setOracleContingencyParams(uint256,(uint256,uint256,uint256,uint256))
 SET_CONTINGENCY_SELECTOR = ""  # filled in at runtime
+
+# Recorded in DEPLOYED_ADDRESSES.md (Base mainnet). Compared against srm.owner(), never
+# replaced by it. See the module docstring.
+EXPECTED_VAULT = "0x1dcA42ab54Bd3862853A821F84B29BF65245F435"
 
 RPC_ID = [0]
 
@@ -202,7 +217,8 @@ def _self_test_provenance(selector: str, topic: str) -> None:
   def calldata(market: int) -> str:
     return selector + "".join(w.rjust(64, "0") for w in [hex(market)[2:], "0", "0", "0", "0"])
 
-  def scenario(log_address=SRM, tx_to=SRM, tx_from=VAULT, market=MARKET, data_words=("0",) * 4):
+  def scenario(log_address=SRM, tx_to=SRM, tx_from=VAULT, market=MARKET, data_words=("0",) * 4,
+               chain_owner=VAULT, vault_arg=VAULT):
     log = {
       "address": log_address,
       "transactionHash": TXH,
@@ -212,6 +228,8 @@ def _self_test_provenance(selector: str, topic: str) -> None:
     tx = {"to": tx_to, "from": tx_from, "input": calldata(market)}
 
     def fake_rpc(url, method, params):
+      if method == "eth_call":
+        return "0x" + chain_owner[2:].rjust(64, "0")
       if method == "eth_getLogs":
         return [log]
       if method == "eth_getTransactionByHash":
@@ -221,7 +239,8 @@ def _self_test_provenance(selector: str, topic: str) -> None:
     real_rpc, real_parse = globals()["rpc"], _argparse.ArgumentParser.parse_args
     globals()["rpc"] = fake_rpc
     _argparse.ArgumentParser.parse_args = lambda self, *a, **k: _argparse.Namespace(
-      rpc="stub", srm=SRM, vault=VAULT, market_id=MARKET, from_block=0, to_block="latest", self_test=False
+      rpc="stub", srm=SRM, vault=vault_arg, market_id=MARKET, from_block=0, to_block="latest",
+      self_test=False
     )
     try:
       import io, contextlib
@@ -255,13 +274,27 @@ def _self_test_provenance(selector: str, topic: str) -> None:
   code, _ = scenario(data_words=("0", "0", "0", "1"))
   assert code == 1, "a non-zero contingency log is not our action"
 
+  # the anchor: an SRM owned by someone else must hard-exit, never silently re-anchor
+  import io as _io, contextlib as _ctx
+  err = _io.StringIO()
+  with _ctx.redirect_stderr(err):
+    code, out = scenario(chain_owner=STRANGER, tx_from=STRANGER)
+  assert code == 3, f"an ownership change must exit 3, got {code}"
+  assert "OWNERSHIP MISMATCH" in err.getvalue()
+  assert "ACTION 6 CONFIRMED" not in out, "must not confirm against an unexpected owner"
+
+  # and the deliberate-adoption path still works when a human names the new address
+  code, out = scenario(chain_owner=STRANGER, tx_from=STRANGER, vault_arg=STRANGER)
+  assert code == 0, "an explicit --vault override must be honoured"
+  assert "ACTION 6 CONFIRMED" in out
+
 
 def main() -> int:
   ap = argparse.ArgumentParser(description="Resolve action 6 of the cNGN spot vault batch")
   ap.add_argument("--rpc", default=os.environ.get("RPC_URL", "https://mainnet.base.org"))
   ap.add_argument("--srm", default=os.environ.get("SRM_ADDRESS"))
   ap.add_argument("--vault", default=os.environ.get("VAULT_ADDRESS"),
-                  help="expected tx sender; defaults to srm.owner() read on-chain")
+                  help="override the recorded EXPECTED_VAULT anchor (deliberate adoption only)")
   ap.add_argument("--market-id", type=int, default=int(os.environ.get("CNGN_MARKET_ID", "0")) or None)
   ap.add_argument("--from-block", type=int, help="start of the scan range")
   ap.add_argument("--self-test", action="store_true",
@@ -281,11 +314,23 @@ def main() -> int:
 
   srm = args.srm or load_srm()
 
-  vault = args.vault
-  if vault is None:
-    owner = rpc(args.rpc, "eth_call", [{"to": srm, "data": "0x" + keccak(b"owner()").hex()[:8]}, "latest"])
-    vault = "0x" + owner[-40:]
-    print(f"vault not given; using srm.owner() = {vault}")
+  vault = args.vault or EXPECTED_VAULT
+  owner_raw = rpc(args.rpc, "eth_call", [{"to": srm, "data": "0x" + keccak(b"owner()").hex()[:8]}, "latest"])
+  owner = "0x" + owner_raw[-40:]
+
+  if owner.lower() != vault.lower():
+    print("OWNERSHIP MISMATCH -- refusing to continue.", file=sys.stderr)
+    print(f"  expected vault : {vault}"
+          f"{' (recorded anchor)' if args.vault is None else ' (--vault override)'}", file=sys.stderr)
+    print(f"  srm.owner()    : {owner}", file=sys.stderr)
+    print("", file=sys.stderr)
+    print("The SRM is not owned by the address this check is anchored to, so a 'confirmed'", file=sys.stderr)
+    print("result here would mean nothing. Nothing is confirmed. Do not sign anything further", file=sys.stderr)
+    print("until this is understood. If ownership moved deliberately, re-run with --vault", file=sys.stderr)
+    print(f"{owner} and update DEPLOYED_ADDRESSES.md and EXPECTED_VAULT.", file=sys.stderr)
+    return 3
+
+  print(f"vault anchor ok: srm.owner() == {vault}")
 
   market_id = args.market_id
   if market_id is None:
