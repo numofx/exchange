@@ -146,8 +146,34 @@ contract Utils is Script {
     return vm.readFile(string.concat(deploymentDir, chainDir, file));
   }
 
-  /// @dev use this function to write deployed contract address to deployments folder
+  /// @dev Write deployed contract addresses to the deployments folder.
+  ///
+  ///      Only writes when something was actually broadcast. A dry run (`forge script` with no
+  ///      --broadcast) still executes the whole script body, so without this gate a simulation
+  ///      leaves an artifact full of addresses that exist nowhere -- and nothing downstream can
+  ///      tell them from real ones. Scripts read each other's artifacts: register-cngn-spot-srm
+  ///      reads CNGN_SPOT_STATIC_FEEDS.json and would happily generate a vault batch pointing at
+  ///      simulated contracts.
+  ///
+  ///      For a script that produces an artifact WITHOUT broadcasting by design -- a calldata
+  ///      generator, say -- use _writeGeneratedArtifact instead, and say why at the call site.
   function _writeToDeployments(string memory filename, string memory content) internal {
+    if (!vm.isContext(VmSafe.ForgeContext.ScriptBroadcast) && !vm.isContext(VmSafe.ForgeContext.ScriptResume)) {
+      console2.log("DRY RUN: not writing %s.json", _deploymentArtifactName(filename));
+      console2.log("  Addresses above are simulated. Re-run with --broadcast to deploy and record them.");
+      return;
+    }
+    _writeArtifact(filename, content);
+  }
+
+  /// @dev Write an artifact from a script that deploys nothing. There is no dry-run/broadcast
+  ///      distinction to protect here: the output is derived from live chain state and is the
+  ///      point of running the script, not a side effect of deploying.
+  function _writeGeneratedArtifact(string memory filename, string memory content) internal {
+    _writeArtifact(filename, content);
+  }
+
+  function _writeArtifact(string memory filename, string memory content) private {
     string memory deploymentDir = string.concat(vm.projectRoot(), "/deployments/");
     string memory chainDir = string.concat(vm.toString(block.chainid), "/");
     string memory file = string.concat(_deploymentArtifactName(filename), ".json");
