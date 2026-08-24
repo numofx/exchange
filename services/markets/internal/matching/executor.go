@@ -22,6 +22,15 @@ import (
 // reaches the chain).
 const makerFillFeeZero = "0"
 
+// takerFillFee is the fee charged on every taker fill, and the SINGLE source of truth for it.
+// It is both submitted to execution-service and reserved against the buyer's cash by
+// buyerCanFund, because the two must agree: TradeModule appends the fee as a third quote-asset
+// transfer in the same batch, so a buyer funded to notional-only reverts SRM_NoNegativeCash.
+//
+// Raising this above "0" is therefore not a one-line change to the request builder -- it is a
+// change to what the matcher must reserve before crossing. Keep them reading the same constant.
+const takerFillFee = "0"
+
 type ExecutorClient struct {
 	url         string
 	managerData string
@@ -72,8 +81,6 @@ func NewExecutorClient(url string, managerData string) *ExecutorClient {
 		},
 	}
 }
-
-
 
 func (c *ExecutorClient) SubmitMatchForMarket(ctx context.Context, market string, candidate orders.MatchCandidate, price string, amount string) (ExecutorResponse, error) {
 	if c.url == "" {
@@ -174,7 +181,7 @@ func buildExecutorRequest(market string, candidate orders.MatchCandidate, manage
 		Signatures:    []string{candidate.Taker.Signature, candidate.Maker.Signature},
 		OrderData: TradeOrderData{
 			TakerAccount: candidate.Taker.SubaccountID,
-			TakerFee:     "0",
+			TakerFee:     takerFillFee,
 			FillDetails: []TradeFillDetail{
 				{
 					FilledAccount: candidate.Maker.SubaccountID,
