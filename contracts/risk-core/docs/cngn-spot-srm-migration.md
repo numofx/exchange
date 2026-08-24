@@ -168,7 +168,45 @@ action list has exactly one definition, `scripts/cngn-spot-batch.sol`: the scrip
 the same bytes by construction. `test/scripts/CNGNSpotBatchShape.t.sol` pins the shape against a
 committed hash, so editing the list fails a test until the constant is updated in the same commit.
 
-Before signing, re-run step 2 and confirm the logged hash matches the artifact in front of you.
+### Verifying what you sign
+
+**The vault is an EOA** (`0x1dcA42…F435`, codesize 0) — an MPC-signed address, not a Safe. There is
+no MultiSend and no single proposed payload: this is **eleven separate transactions**, each approved
+on its own. So the unit you can actually verify is one `(to, data)` pair, which is what your signer
+displays. Step 2 prints a digest per action for exactly that comparison.
+
+```sh
+# check the artifact against live chain state
+forge script scripts/verify-cngn-spot-batch.s.sol --rpc-url $BASE_RPC_URL
+
+# identify a single pending transaction before approving it
+ACTION_TO=0x… ACTION_DATA=0x… \
+  forge script scripts/verify-cngn-spot-batch.s.sol --rpc-url $BASE_RPC_URL
+```
+
+The verifier does two independent things. It recomputes each entry's digest from that entry's own
+`to`/`data` (catches a hand-edited JSON), and it rebuilds the batch from `CNGNSpotBatch` against
+**live chain state** and compares byte-for-byte (catches a JSON that is internally consistent but
+was generated against a different world). Only the second has real teeth — anyone who edits `data`
+can recompute a digest.
+
+**Because the batch is not atomic**, a mid-batch failure leaves partial state. No intermediate state
+is unsafe — `baseMarginParams` defaults to `(0, 0)`, so cNGN never gets credit it should not have —
+but two are incomplete and matter: stopping before action 11 leaves the old `stableFeed` and its
+3600s staleness halt in place, and stopping before actions 9–10 leaves the static feeds owned by the
+deployer key, which is the lost-key failure this repo already records once.
+
+### Preconditions
+
+Step 2 refuses to emit calldata for a world that has moved. `CNGNSpotBatch.checkPreconditions`
+asserts, against live chain state: one owner across the SRM and the wrapped asset; the market id is
+still `lastMarketId + 1` and unclaimed; both feeds have code and have the vault as **pending owner**
+(actions 9–10 revert otherwise); the stable feed reads exactly `1e18`; the cNGN feed reads **below
+`1e18`** — the orientation guard, which is what catches the live DFXM feed being substituted in; the
+static price is within `CNGN_SPOT_DRIFT_TOLERANCE_PCT` (default 5%) of the inverted live rate; and
+supply and cap are non-zero.
+
+Each of these is proven to fire by `test/fork/CNGNSpotPreconditionsFork.t.sol`, against live Base.
 
 The 11 calls, executed **in order**:
 

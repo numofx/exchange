@@ -15,6 +15,15 @@ interface IOwnable2StepAccept {
   function acceptOwnership() external;
 }
 
+interface IOwned {
+  function owner() external view returns (address);
+  function pendingOwner() external view returns (address);
+}
+
+interface IERC20Supply {
+  function totalSupply() external view returns (uint);
+}
+
 /**
  * @title CNGNSpotBatch
  * @notice THE single definition of the USDCcNGN-SPOT vault batch.
@@ -41,6 +50,56 @@ library CNGNSpotBatch {
     address stableFeed;
     uint marketId;
     uint baseCap;
+  }
+
+  /// @dev Refuse to emit calldata for a world that has moved. Lives here rather than in the script
+  ///      so it can be tested directly against a fork. Every check is either something that would
+  ///      revert mid-batch -- and the batch is 11 separate EOA transactions, so a mid-batch revert
+  ///      is real partial state, not an atomic rollback -- or something that would silently succeed
+  ///      while doing the wrong thing.
+  function checkPreconditions(Ctx memory ctx, address cngnToken, address liveCngnFeed, uint tolerancePct)
+    internal
+    view
+  {
+    address vault = IOwned(ctx.srm).owner();
+    require(vault != address(0), "PRE: srm owner is zero");
+    require(IOwned(ctx.wrappedCngn).owner() == vault, "PRE: srm and wrappedCngn have different owners");
+
+    // createMarket assigns ++lastMarketId. If a market was created since this id was resolved, every
+    // later action in the batch targets the wrong market.
+    require(ctx.marketId == StandardManager(ctx.srm).lastMarketId() + 1, "PRE: marketId is stale - re-run");
+    require(
+      address(StandardManager(ctx.srm).assetMap(ctx.marketId, IStandardManager.AssetType.Base)) == address(0),
+      "PRE: market already has a base asset"
+    );
+
+    require(ctx.cngnFeed.code.length > 0, "PRE: cngn static feed has no code");
+    require(ctx.stableFeed.code.length > 0, "PRE: stable static feed has no code");
+
+    // actions 8 and 9 are acceptOwnership(); they revert unless the vault is already pending owner
+    require(IOwned(ctx.cngnFeed).pendingOwner() == vault, "PRE: vault is not pending owner of cngn feed");
+    require(IOwned(ctx.stableFeed).pendingOwner() == vault, "PRE: vault is not pending owner of stable feed");
+
+    (uint stablePrice,) = ISpotFeed(ctx.stableFeed).getSpot();
+    require(stablePrice == 1e18, "PRE: stable static feed is not 1e18");
+
+    // ORIENTATION. The SRM's Base convention is USD-per-base, so this must be USDC-per-cNGN, far
+    // below 1e18. The live DFXM feed is cNGN-per-USDC (~1345e18); wiring it in inflates
+    // mark-to-market by spot^2. This is the check that catches that substitution.
+    (uint usdcPerCngn,) = ISpotFeed(ctx.cngnFeed).getSpot();
+    require(usdcPerCngn > 0, "PRE: cngn static feed is 0");
+    require(usdcPerCngn < 1e18, "PRE: cngn static feed looks inverted - expected USDC-per-cNGN");
+
+    // DRIFT. The static price is frozen at deploy time; if cNGN has moved materially since, the
+    // venue would launch marking against a rate nobody chose.
+    (uint cngnPerUsdc,) = ISpotFeed(liveCngnFeed).getSpot();
+    require(cngnPerUsdc > 0, "PRE: live cNGN feed returned 0");
+    uint expected = 1e36 / cngnPerUsdc;
+    uint diff = usdcPerCngn > expected ? usdcPerCngn - expected : expected - usdcPerCngn;
+    require(diff * 100 <= expected * tolerancePct, "PRE: static feed has drifted from live - redeploy feeds");
+
+    require(IERC20Supply(cngnToken).totalSupply() > 0, "PRE: cNGN totalSupply is 0");
+    require(ctx.baseCap > 0, "PRE: cap is 0");
   }
 
   function build(Ctx memory ctx)
@@ -115,8 +174,17 @@ library CNGNSpotBatch {
 
     bytes memory acc;
     for (uint i = 0; i < ACTION_COUNT; ++i) {
-      acc = abi.encodePacked(acc, to[i], keccak256(data[i]));
+      acc = abi.encodePacked(acc, actionHash(to[i], data[i]));
     }
     return keccak256(acc);
+  }
+
+  /// @dev The vault is an EOA (codesize 0), not a Safe: there is no MultiSend and no single proposed
+  ///      payload. Each action is signed as its own transaction, so the unit a signer can actually
+  ///      compare against what their MPC console displays is one (to, data) pair. This is that
+  ///      digest. `value` is omitted because every action in this batch is value 0 and the verifier
+  ///      asserts that separately.
+  function actionHash(address to, bytes memory data) internal pure returns (bytes32) {
+    return keccak256(abi.encodePacked(to, keccak256(data)));
   }
 }
