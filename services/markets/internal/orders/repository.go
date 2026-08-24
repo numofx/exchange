@@ -401,21 +401,21 @@ func (r *Repository) AcquireMatchCandidate(
 		return nil, err
 	}
 
-	bid, err := lockBestBySide(ctx, tx, strings.ToLower(assetAddress), subID, SideBuy)
+	bids, err := lockTopBySide(ctx, tx, strings.ToLower(assetAddress), subID, SideBuy, matchScanDepth)
 	if err != nil {
 		return nil, err
 	}
-	ask, err := lockBestBySide(ctx, tx, strings.ToLower(assetAddress), subID, SideSell)
+	asks, err := lockTopBySide(ctx, tx, strings.ToLower(assetAddress), subID, SideSell, matchScanDepth)
 	if err != nil {
 		return nil, err
 	}
-	if bid == nil || ask == nil {
+	if len(bids) == 0 || len(asks) == 0 {
 		slog.Debug(
 			"acquire_match_candidate_no_pair",
 			"asset_address", strings.ToLower(assetAddress),
 			"sub_id", subID,
-			"has_bid", bid != nil,
-			"has_ask", ask != nil,
+			"bid_depth", len(bids),
+			"ask_depth", len(asks),
 		)
 		if err := tx.Commit(ctx); err != nil {
 			return nil, err
@@ -423,24 +423,22 @@ func (r *Repository) AcquireMatchCandidate(
 		return nil, nil
 	}
 
-	taker, maker := chooseTakerMaker(*bid, *ask)
-
-	// Only reserve a pair that will actually trade. The book is uncrossed on the
-	// vast majority of ticks, and reserving there churns both rows through
-	// 'matching' -> 'active' for nothing.
-	crossed, err := Crosses(taker, maker)
+	// Walk past pairs that cross but are gated, rather than ending the tick on the first one.
+	// Only reserve a pair that will actually trade: the book is uncrossed on the vast majority of
+	// ticks, and reserving there churns both rows through 'matching' -> 'active' for nothing.
+	selectedTaker, selectedMaker, err := selectMatchPair(bids, asks, gate)
 	if err != nil {
 		return nil, err
 	}
-	if !crossed {
+	if selectedTaker == nil {
 		slog.Debug(
-			"acquire_match_candidate_not_crossed",
+			"acquire_match_candidate_no_tradeable_pair",
 			"asset_address", strings.ToLower(assetAddress),
 			"sub_id", subID,
-			"taker_order_id", taker.OrderID,
-			"taker_price_ticks", taker.LimitPriceTicks,
-			"maker_order_id", maker.OrderID,
-			"maker_price_ticks", maker.LimitPriceTicks,
+			"bid_depth", len(bids),
+			"ask_depth", len(asks),
+			"best_bid_ticks", bids[0].LimitPriceTicks,
+			"best_ask_ticks", asks[0].LimitPriceTicks,
 		)
 		// Commit anyway: expireOrders above may have marked orders expired.
 		if err := tx.Commit(ctx); err != nil {
@@ -448,21 +446,7 @@ func (r *Repository) AcquireMatchCandidate(
 		}
 		return nil, nil
 	}
-
-	if gate != nil && gate(taker, maker) {
-		slog.Debug(
-			"acquire_match_candidate_gated",
-			"asset_address", strings.ToLower(assetAddress),
-			"sub_id", subID,
-			"taker_order_id", taker.OrderID,
-			"maker_order_id", maker.OrderID,
-		)
-		// Commit anyway: expireOrders above may have marked orders expired.
-		if err := tx.Commit(ctx); err != nil {
-			return nil, err
-		}
-		return nil, nil
-	}
+	taker, maker := *selectedTaker, *selectedMaker
 
 	if err := reserveOrders(ctx, tx, []string{taker.OrderID, maker.OrderID}); err != nil {
 		return nil, err
@@ -502,7 +486,15 @@ where order_id = any($1) and status = 'matching'
 	return mapPGError(err)
 }
 
-func (r *Repository) MarkMatchFailed(ctx context.Context, orderIDs []string, reason string) error {
+// ReleaseMatchAfterFailure puts a failed pair back on the book. It is ReleaseMatch under a name
+// that says why it is being called, and it records nothing: matching failures are non-destructive
+// here by design (see matching/backoff.go), so an order that cannot settle is retried on a growing
+// backoff until it expires rather than being cancelled.
+//
+// It was previously called MarkMatchFailed and took a `reason` it discarded, which read as though
+// the failure were being recorded somewhere. It is not. Callers log the reason themselves, with
+// the market and order ids attached, which is the only place it exists.
+func (r *Repository) ReleaseMatchAfterFailure(ctx context.Context, orderIDs ...string) error {
 	return r.ReleaseMatch(ctx, orderIDs...)
 }
 
@@ -724,14 +716,23 @@ func (r *Repository) bestBySide(ctx context.Context, assetAddress string, subID 
 	return &orders[0], nil
 }
 
-func lockBestBySide(ctx context.Context, tx pgx.Tx, assetAddress string, subID string, side Side) (*Order, error) {
-	slog.Debug(
-		"lock_best_by_side_start",
-		"asset_address", strings.ToLower(assetAddress),
-		"sub_id", subID,
-		"side", side,
-	)
+// matchScanDepth bounds how far past the top of book AcquireMatchCandidate will look for a pair
+// that can actually trade. Scanning only the single best order on each side means one order that
+// cannot settle -- an underfunded bid, say -- holds up everything behind it for the whole of its
+// backoff window, because the gate rejects that pair and the tick ends without trying any other.
+// See selectMatchPair.
+const matchScanDepth = 10
 
+// lockTopBySide returns the first `limit` orders on one side in price-time priority, locked
+// for the life of the transaction.
+func lockTopBySide(
+	ctx context.Context,
+	tx pgx.Tx,
+	assetAddress string,
+	subID string,
+	side Side,
+	limit int,
+) ([]Order, error) {
 	orderBy := "limit_price_ticks::numeric desc, created_at asc"
 	if side == SideSell {
 		orderBy = "limit_price_ticks::numeric asc, created_at asc"
@@ -743,36 +744,59 @@ select order_id, owner_address, signer_address, subaccount_id, recipient_id, non
 from active_orders
 where asset_address = $1 and sub_id = $2 and side = $3 and status = 'active'
 order by %s
-limit 1
+limit $4
 for update skip locked
 `, orderBy)
 
-	order, err := scanOrder(tx.QueryRow(ctx, query, assetAddress, subID, side))
+	rows, err := tx.Query(ctx, query, assetAddress, subID, side, limit)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			slog.Debug(
-				"lock_best_by_side_empty",
-				"asset_address", strings.ToLower(assetAddress),
-				"sub_id", subID,
-				"side", side,
-			)
-			return nil, nil
-		}
-		return nil, err
+		return nil, mapPGError(err)
 	}
+	defer rows.Close()
 
-	slog.Debug(
-		"lock_best_by_side_hit",
-		"asset_address", strings.ToLower(assetAddress),
-		"sub_id", subID,
-		"side", side,
-		"order_id", order.OrderID,
-		"order_status", order.Status,
-		"price_ticks", order.LimitPriceTicks,
-		"desired_amount", order.DesiredAmount,
-		"filled_amount", order.FilledAmount,
-	)
-	return &order, nil
+	var out []Order
+	for rows.Next() {
+		order, err := scanOrder(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, order)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, mapPGError(err)
+	}
+	return out, nil
+}
+
+// selectMatchPair returns the first pair that both crosses and survives the gate, walking bids in
+// priority order and, for each, asks in priority order.
+//
+// The walk is what stops one un-settleable order from blocking the book. A gated pair is skipped
+// rather than ending the tick, so a bid behind an underfunded best bid still trades. Bid priority
+// is preserved: a lower bid only trades once every better bid has been tried against every ask.
+//
+// Returns nil when nothing crosses or everything that crosses is gated.
+func selectMatchPair(bids []Order, asks []Order, gate MatchGate) (*Order, *Order, error) {
+	for i := range bids {
+		for j := range asks {
+			taker, maker := chooseTakerMaker(bids[i], asks[j])
+
+			crossed, err := Crosses(taker, maker)
+			if err != nil {
+				return nil, nil, err
+			}
+			if !crossed {
+				// asks are ordered best-first, so if this bid does not reach this ask it will
+				// not reach any later one either
+				break
+			}
+			if gate != nil && gate(taker, maker) {
+				continue
+			}
+			return &taker, &maker, nil
+		}
+	}
+	return nil, nil, nil
 }
 
 func reserveOrders(ctx context.Context, tx pgx.Tx, orderIDs []string) error {
