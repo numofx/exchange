@@ -271,9 +271,18 @@ means "not found in this range", which is **not** proof it did not happen: widen
 first.
 
 **Provenance is checked, not assumed.** A log only counts when the log was emitted by the SRM, the
-transaction went *to* the SRM, it was sent *from* the vault (`srm.owner()`, read on-chain unless
-`--vault` is given), the selector is `setOracleContingencyParams`, and the decoded market id is
-ours. A calldata match from a non-vault sender is reported loudly and **not** counted — these
+transaction went *to* the SRM, it was sent *from* the vault, the selector is
+`setOracleContingencyParams`, and the decoded market id is ours.
+
+**The vault is an anchor, not a lookup.** It is a recorded constant — `EXPECTED_VAULT` in both
+`scripts/cngn-spot-batch.sol` and `scripts/ops/resolve_cngn_action6.py` — and `srm.owner()` is read
+from chain and *compared* against it. A mismatch is a hard stop: exit 3 from the resolver, a revert
+from `checkPreconditions` and `statuses`. Deriving the vault from `srm.owner()` would mean an
+ownership change is silently adopted as the new truth, and "who owns the SRM" is precisely what a
+confirmation is anchored to. `testFork_RecordedVaultMatchesLiveOwner` is the tripwire.
+
+If ownership moved deliberately, pass `--vault <new>` and update `DEPLOYED_ADDRESSES.md`,
+`EXPECTED_VAULT` in both files, together. Adoption stays an act a human performs, not a default. A calldata match from a non-vault sender is reported loudly and **not** counted — these
 setters are `onlyOwner`, so a different sender means ownership moved, which is a bigger question
 than this script answers.
 

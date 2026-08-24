@@ -90,6 +90,20 @@ contract FORK_TestCNGNSpotPreconditions is Test {
     harness.check(ctx, cngnToken, address(liveCngnFeed), TOLERANCE_PCT);
   }
 
+  /// @dev The anchor itself. EXPECTED_VAULT is a constant rather than a read of srm.owner(),
+  ///      because deriving it from chain would silently adopt whoever owns the SRM now. This test is
+  ///      the tripwire: if ownership ever moves, it fails here rather than every downstream check
+  ///      quietly re-anchoring to the new owner.
+  function testFork_RecordedVaultMatchesLiveOwner() public view {
+    assertEq(
+      CNGNSpotBatch.EXPECTED_VAULT,
+      srm.owner(),
+      "srm.owner() has moved away from the recorded vault - update DEPLOYED_ADDRESSES.md, EXPECTED_VAULT "
+      "and scripts/ops/resolve_cngn_action6.py together, deliberately"
+    );
+    assertEq(cngnAsset.owner(), CNGNSpotBatch.EXPECTED_VAULT, "wrapped cNGN must share the recorded vault");
+  }
+
   /// @dev the happy path must pass, or every negative test below is vacuous
   function testFork_PreconditionsPassAgainstLiveState() public view {
     _check(_ctx());
