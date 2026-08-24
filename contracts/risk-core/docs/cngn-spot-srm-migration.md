@@ -268,7 +268,17 @@ python3 scripts/ops/resolve_cngn_action6.py --from-block <n> --market-id <id>
 It scans for zero-valued `OracleContingencySet` logs, fetches the transaction behind each, decodes
 the market id, and exits 0 on a match — a positive read that does not rest on nonce ordering. Exit 1
 means "not found in this range", which is **not** proof it did not happen: widen `--from-block`
-first. `--self-test` checks the selector and decode with no network.
+first.
+
+**Provenance is checked, not assumed.** A log only counts when the log was emitted by the SRM, the
+transaction went *to* the SRM, it was sent *from* the vault (`srm.owner()`, read on-chain unless
+`--vault` is given), the selector is `setOracleContingencyParams`, and the decoded market id is
+ours. A calldata match from a non-vault sender is reported loudly and **not** counted — these
+setters are `onlyOwner`, so a different sender means ownership moved, which is a bigger question
+than this script answers.
+
+`--self-test` runs offline and covers keccak, the selector, the topic, the decode, and each
+provenance check against a stubbed RPC. It is wired into CI.
 
 This lives in `scripts/ops/` rather than the Solidity verifier because `vm.rpc` returns the
 transaction object ABI-encoded in alphabetical key order — a layout that differs between providers
