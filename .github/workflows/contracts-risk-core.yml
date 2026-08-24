@@ -26,4 +26,4 @@ jobs:
       - run: forge build scripts/*.s.sol   # scripts/ sits outside foundry's default `script` path, so forge test never compiles it
       - run: forge test -vvv
         env:
-          BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}   # fork test (DeliverableFXManagerBaseFork) needs it
+          BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}   # fork tests (DeliverableFXManagerBaseFork, CNGNSpotSRMBaseFork) need it
