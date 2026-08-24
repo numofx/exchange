@@ -106,6 +106,14 @@ contract VerifyCNGNSpotBatch is Utils {
       if (st[i] == CNGNSpotBatch.Status.Pending && i < firstPending) firstPending = i;
     }
 
+    if (st[6] == CNGNSpotBatch.Status.Done && raw[6] == CNGNSpotBatch.Status.Ambiguous) {
+      console2.log("");
+      console2.log("Action 6 is inferred from nonce ordering (done*). OracleContingencySet carries no");
+      console2.log("market id, so state and logs alone cannot settle it. For a positive read, decode");
+      console2.log("the market id from the emitting transaction's calldata:");
+      console2.log("  python3 scripts/ops/resolve_cngn_action6.py --from-block <n> --market-id %s", ctx.marketId);
+    }
+
     console2.log("");
     if (diverged > 0) {
       console2.log("DIVERGED: %s action(s) disagree with chain state.", diverged);
