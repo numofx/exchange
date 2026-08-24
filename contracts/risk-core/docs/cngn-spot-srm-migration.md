@@ -208,19 +208,47 @@ supply and cap are non-zero.
 
 Each of these is proven to fire by `test/fork/CNGNSpotPreconditionsFork.t.sol`, against live Base.
 
-The 11 calls, executed **in order**:
+The 11 calls, executed **in order**. The ordering is deliberate — secure custody, tighten globals,
+configure an inert market, enable last — so that **every prefix is safe to abandon**:
 
-1. `srm.createMarket("CNGN")`
-2. `wrappedCngn.setWhitelistManager(srm, true)` — additive; DFXM stays whitelisted
-3. `wrappedCngn.setTotalPositionCap(srm, cap)`
-4. `srm.whitelistAsset(wrappedCngn, marketId, Base)`
-5. `srm.setOraclesForMarket(marketId, staticCngnFeed, 0, 0)`
-6. `srm.setOracleContingencyParams(marketId, zeroed)`
-7. `srm.setBaseAssetMarginFactor(marketId, 0, 0)`
-8. `srm.setBorrowingEnabled(false)` — **global to the SRM, not per-market**
-9. `staticCngnFeed.acceptOwnership()`
-10. `staticStableFeed.acceptOwnership()`
-11. `srm.setStableFeed(staticStableFeed)` — **global; also affects market 1**
+| # | call | why here |
+| --- | --- | --- |
+| 0 | `staticCngnFeed.acceptOwnership()` | custody first; no functional change |
+| 1 | `staticStableFeed.acceptOwnership()` | custody first |
+| 2 | `srm.setStableFeed(staticStableFeed)` | clears the 3600s staleness halt. **Global** |
+| 3 | `srm.setBorrowingEnabled(false)` | strictly tightening. **Global** |
+| 4 | `srm.createMarket("CNGN")` | market exists, nothing wired |
+| 5 | `srm.setBaseAssetMarginFactor(id, 0, 0)` | pinned before the asset is reachable |
+| 6 | `srm.setOracleContingencyParams(id, zeroed)` | |
+| 7 | `srm.setOraclesForMarket(id, staticCngnFeed, 0, 0)` | |
+| 8 | `srm.whitelistAsset(wrappedCngn, id, Base)` | SRM side of the gate; asset side still shut |
+| 9 | `wrappedCngn.setTotalPositionCap(srm, cap)` | cap in place before deposits are possible |
+| 10 | `wrappedCngn.setWhitelistManager(srm, true)` | **the enabling switch** |
+
+A deposit needs *both* gates: `whitelistAsset` on the SRM and `setWhitelistManager` on the asset.
+The second is the last action, so no earlier prefix is tradeable —
+`testFork_NoPrefixBeforeTheLastActionPermitsADeposit` executes all eleven prefixes and asserts a
+deposit reverts on each.
+
+This ordering replaced one that left `acceptOwnership` at 8–9 and `setStableFeed` at 10, where
+abandoning the batch stranded both feeds on the deployer key and kept the old staleness halt.
+
+### Resuming a partially-executed batch
+
+```sh
+RESUME=1 forge script scripts/verify-cngn-spot-batch.s.sol --rpc-url $BASE_RPC_URL
+```
+
+Reads each action's postcondition from chain and reports `done` / `pending` / `DIVERGED`, then names
+the action to resume at. It **reverts** on divergence rather than suggesting a resume point — a
+target configured to something other than what the batch specifies means someone else acted, and
+that needs a human before anything further is signed.
+
+Actions 5 and 6 write all-zeros, which is exactly what an untouched market reads, so state alone
+cannot distinguish "we set it" from "nobody touched it". Those are reported `unknown` rather than
+rounded up to `done`. They resolve only when a later action reads `done`: EOA transactions land in
+nonce order, so a later success proves the earlier ones landed. Resolved-by-inference entries print
+as `done*`.
 
 **The batch must execute as the vault.** Actions 9 and 10 are `acceptOwnership()`, callable only by
 the pending owner; a deployer EOA cannot stand in. A static feed left on a deployer key is the same
