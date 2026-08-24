@@ -18,6 +18,7 @@ import {Deployment} from "./types.sol";
 import {Utils, IOwnable2Step} from "./utils.sol";
 import {CNGNSpotBatch} from "./cngn-spot-batch.sol";
 
+
 /**
  * @dev Registers the existing wrapped cNGN asset as a base-only market on the already-deployed SRM,
  *      so USDCcNGN-SPOT runs under a manager where cNGN gives zero margin credit instead of
@@ -84,6 +85,8 @@ contract RegisterCNGNSpotOnSRM is Utils {
       baseCap: baseCap
     });
 
+    _assertPreconditions(ctx, cngnToken);
+
     string memory json = _serialiseActions(ctx);
 
     _writeToDeployments(ARTIFACT_NAME, json);
@@ -123,6 +126,13 @@ contract RegisterCNGNSpotOnSRM is Utils {
     console2.log("  alert threshold at 80%% of cap:", baseCap * 80 / 100);
   }
 
+  function _assertPreconditions(CNGNSpotBatch.Ctx memory ctx, address cngnToken) internal view {
+    address liveFeed = vm.parseJsonAddress(_readDeploymentFile("CNGN"), ".spotFeed");
+    uint tolerancePct = vm.envOr("CNGN_SPOT_DRIFT_TOLERANCE_PCT", uint(5));
+    CNGNSpotBatch.checkPreconditions(ctx, cngnToken, liveFeed, tolerancePct);
+    console2.log("preconditions ok against live chain state");
+  }
+
   /// @dev serialises CNGNSpotBatch.build(). The action list itself lives in the library so the
   ///      batch this writes and the batch test/fork/CNGNSpotSRMBaseFork.t.sol executes are the same
   ///      bytes by construction. batchHash lets a signer regenerate and compare.
@@ -130,13 +140,21 @@ contract RegisterCNGNSpotOnSRM is Utils {
     (address[] memory to, bytes[] memory data, string[] memory descriptions) = CNGNSpotBatch.build(ctx);
 
     bytes32 batchHash = CNGNSpotBatch.hash(ctx);
-    console2.log("batch hash (regenerate to verify the artifact):", vm.toString(batchHash));
+
+    console2.log("");
+    console2.log("batch hash:", vm.toString(batchHash));
+    console2.log("The vault is an EOA: these are 11 separate transactions, not one payload. Compare");
+    console2.log("each action's digest against what your signer displays before approving it.");
+    console2.log("");
 
     string memory json = "[";
     for (uint i = 0; i < to.length; ++i) {
+      console2.log("  [%s] %s", i, descriptions[i]);
+      console2.log("      to     %s", vm.toString(to[i]));
+      console2.log("      digest %s", vm.toString(CNGNSpotBatch.actionHash(to[i], data[i])));
       json = string.concat(json, i == 0 ? "" : ",", _vaultAction(descriptions[i], to[i], data[i]));
     }
-    return string.concat(json, ']');
+    return string.concat(json, "]");
   }
 
   function _vaultAction(string memory description, address to, bytes memory data)
@@ -145,7 +163,15 @@ contract RegisterCNGNSpotOnSRM is Utils {
     returns (string memory)
   {
     return string.concat(
-      '{"description":"', description, '","to":"', vm.toString(to), '","value":"0","data":"', vm.toString(data), '"}'
+      '{"description":"',
+      description,
+      '","to":"',
+      vm.toString(to),
+      '","value":"0","data":"',
+      vm.toString(data),
+      '","digest":"',
+      vm.toString(CNGNSpotBatch.actionHash(to, data)),
+      '"}'
     );
   }
 }
