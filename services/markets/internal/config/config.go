@@ -37,7 +37,12 @@ type Config struct {
 	DeribitBaseURL          string
 	DeribitWSURL            string
 
-	CNGNSpotAssetAddress         string
+	CNGNSpotAssetAddress string
+	// CashAssetAddress is the CashAsset contract. Required to check that a buyer can fund
+	// notional + fee before a pair is crossed; with marginFactor 0 and borrowing disabled the
+	// SRM enforces cash >= 0 on the NET adjustment, so an underfunded buy reverts on chain.
+	CashAssetAddress             string
+	EnforceFundingCheck          bool
 	EnforceActionDataInvariants  bool
 	CancelProtectedOrderPrefixes []string
 
@@ -80,6 +85,8 @@ func Load() (Config, error) {
 		DeribitWSURL:            getenvDefault("DERIBIT_WS_URL", "wss://test.deribit.com/ws/api/v2"),
 
 		CNGNSpotAssetAddress:         strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_SPOT_ASSET_ADDRESS"))),
+		CashAssetAddress:             strings.ToLower(strings.TrimSpace(os.Getenv("CASH_ASSET_ADDRESS"))),
+		EnforceFundingCheck:          getenvBool("ENFORCE_FUNDING_CHECK", true),
 		EnforceActionDataInvariants:  getenvBool("ENFORCE_ACTION_DATA_INVARIANTS", true),
 		CancelProtectedOrderPrefixes: getenvCSV("CANCEL_PROTECTED_ORDER_ID_PREFIXES", "validation:,smoke:,manual:"),
 	}

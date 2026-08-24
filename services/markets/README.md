@@ -58,6 +58,9 @@ Important values:
 - `MATCHING_ADDRESS`
 - `TRADE_MODULE_ADDRESS`
 - `CNGN_SPOT_ASSET_ADDRESS`
+- `CASH_ASSET_ADDRESS` — CashAsset contract, for the pre-trade funding check
+- `ENFORCE_FUNDING_CHECK` — default `true`; the check no-ops unless `CASH_ASSET_ADDRESS`,
+  `MATCHING_ADDRESS` and `CHAIN_RPC_URL` are all set
 - optionally `EXPECTED_ORDER_OWNER`
 - optionally `EXPECTED_ORDER_SIGNER`
 
