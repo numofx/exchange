@@ -245,10 +245,33 @@ target configured to something other than what the batch specifies means someone
 that needs a human before anything further is signed.
 
 Actions 5 and 6 write all-zeros, which is exactly what an untouched market reads, so state alone
-cannot distinguish "we set it" from "nobody touched it". Those are reported `unknown` rather than
-rounded up to `done`. They resolve only when a later action reads `done`: EOA transactions land in
-nonce order, so a later success proves the earlier ones landed. Resolved-by-inference entries print
-as `done*`.
+cannot distinguish "we set it" from "nobody touched it".
+
+**Action 5 is settled from logs.** `BaseMarginParamsSet(uint marketId, uint baseAssetMarginFactor,
+uint baseAssetIMScale)` carries the market id, so a matching event is direct evidence the call
+landed and the action reports plain `done`. The scan window defaults to the last 50,000 blocks;
+override with `LOG_SCAN_BLOCKS` or `LOG_SCAN_FROM_BLOCK` if you are resuming after a long gap, and
+note that public RPCs cap `eth_getLogs` ranges. A miss never downgrades a status — "no event in the
+window" means "not found here", not "did not happen".
+
+**Action 6 cannot be settled from logs.** `OracleContingencySet(uint prepThreshold, uint
+optionThreshold, uint baseThreshold, uint OCFactor)` omits the market id entirely, so no log can be
+attributed to a market. It stays on nonce inference and prints `done*`.
+
+> ### The vault EOA must send nothing else until action 10 confirms
+>
+> Action 6's status rests on one assumption: **transactions from the vault land in nonce order**, so
+> a later action reading `done` proves the earlier ones landed. That inference is only sound if the
+> vault's nonce sequence over this window contains nothing but these eleven transactions.
+>
+> While the batch is in flight — from action 0 until action 10 is confirmed — **do not send any
+> other transaction from `0x1dcA42…F435`**, on any chain config that shares this nonce sequence, and
+> do not run a second batch concurrently. An interleaved transaction, a replacement/speed-up that
+> reorders, or a dropped-and-refilled nonce breaks the ordering premise, and `done*` becomes a guess
+> rather than an inference.
+>
+> If that discipline is broken, do not trust `done*`. Confirm action 6 from the transaction receipt
+> directly before resuming.
 
 **The batch must execute as the vault.** Actions 9 and 10 are `acceptOwnership()`, callable only by
 the pending owner; a deployer EOA cannot stand in. A static feed left on a deployer key is the same
