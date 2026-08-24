@@ -25,9 +25,27 @@ providers and between transaction types (a Base deposit tx carries extra fields)
 because ffi is not enabled in foundry.toml -- enabling it repo-wide so one check can
 shell out would be a bad trade.
 
+Provenance is checked, not assumed. A log only counts as confirmation when all of these
+hold: the log was emitted by the SRM, the transaction went *to* the SRM, it was sent
+*from* the vault, its selector is setOracleContingencyParams, and the market id decoded
+from its calldata is ours. A calldata match from any other sender is reported loudly
+rather than skipped quietly -- these setters are onlyOwner, so a non-vault sender means
+ownership moved, which is a bigger question than this script answers.
+
+On the hand-rolled keccak: it is safe here because **every way it can be wrong produces a
+miss, never a false "done"**. It is used in exactly three places -- the log topic filter,
+the function selector comparison, and the `owner()`/`lastMarketId()` call selectors. A
+wrong digest makes the filter match nothing, or the selector comparison fail, or an
+eth_call revert. None of those can manufacture a confirmation: the market id itself is
+read from calldata byte offsets, never from a hash. So an implementation error degrades
+to exit 1, which this script already treats as inconclusive ("widen the range") rather
+than as proof of absence. The direction of failure is what makes it acceptable on a
+signing path; `--self-test` and the cross-check against `cast keccak` cover it anyway.
+
 Env:
   RPC_URL         Base mainnet RPC (or pass --rpc)
   SRM_ADDRESS     defaults to the address in deployments/8453/core.json
+  VAULT_ADDRESS   defaults to srm.owner() read on-chain
   CNGN_MARKET_ID  defaults to srm.lastMarketId()
 
 Usage:
@@ -161,14 +179,89 @@ def self_test() -> int:
   assert int(calldata[10:74], 16) == 2, "marketId decode broken"
   assert len(calldata) == 2 + 8 + 5 * 64, "calldata length changed - struct may no longer be static"
 
-  print("self-test ok: keccak, selector, topic and marketId decode all match")
+  _self_test_provenance(selector, topic)
+
+  print("self-test ok: keccak, selector, topic, marketId decode and provenance checks all match")
   return 0
+
+
+def _self_test_provenance(selector: str, topic: str) -> None:
+  """Exercise the provenance checks offline against a stubbed RPC.
+
+  Each scenario differs from the happy path in exactly one field, so a check that stops
+  working shows up as that scenario starting to pass.
+  """
+  import argparse as _argparse
+
+  SRM = "0x3195Bd7e02d93982bCF8b34DF5B941fFCaE1E49b"
+  VAULT = "0x1dcA42ab54Bd3862853A821F84B29BF65245F435"
+  STRANGER = "0x00000000000000000000000000000000deadbeef"
+  TXH = "0x" + "ab" * 32
+  MARKET = 2
+
+  def calldata(market: int) -> str:
+    return selector + "".join(w.rjust(64, "0") for w in [hex(market)[2:], "0", "0", "0", "0"])
+
+  def scenario(log_address=SRM, tx_to=SRM, tx_from=VAULT, market=MARKET, data_words=("0",) * 4):
+    log = {
+      "address": log_address,
+      "transactionHash": TXH,
+      "blockNumber": "0x1",
+      "data": "0x" + "".join(w.rjust(64, "0") for w in data_words),
+    }
+    tx = {"to": tx_to, "from": tx_from, "input": calldata(market)}
+
+    def fake_rpc(url, method, params):
+      if method == "eth_getLogs":
+        return [log]
+      if method == "eth_getTransactionByHash":
+        return tx
+      raise AssertionError(f"unexpected rpc call {method}")
+
+    real_rpc, real_parse = globals()["rpc"], _argparse.ArgumentParser.parse_args
+    globals()["rpc"] = fake_rpc
+    _argparse.ArgumentParser.parse_args = lambda self, *a, **k: _argparse.Namespace(
+      rpc="stub", srm=SRM, vault=VAULT, market_id=MARKET, from_block=0, to_block="latest", self_test=False
+    )
+    try:
+      import io, contextlib
+      buf = io.StringIO()
+      with contextlib.redirect_stdout(buf):
+        code = main()
+      return code, buf.getvalue()
+    finally:
+      globals()["rpc"] = real_rpc
+      _argparse.ArgumentParser.parse_args = real_parse
+
+  code, out = scenario()
+  assert code == 0, f"happy path must confirm, got {code}\n{out}"
+  assert "ACTION 6 CONFIRMED" in out
+
+  code, out = scenario(tx_from=STRANGER)
+  assert code == 1, "a non-vault sender must not confirm"
+  assert "IS NOT THE VAULT" in out, out
+
+  code, out = scenario(log_address=STRANGER)
+  assert code == 1, "a log from another address must not confirm"
+  assert "not the SRM" in out, out
+
+  code, out = scenario(tx_to=STRANGER)
+  assert code == 1, "a tx to another address must not confirm"
+  assert "not the SRM" in out, out
+
+  code, _ = scenario(market=MARKET + 1)
+  assert code == 1, "another market must not confirm"
+
+  code, _ = scenario(data_words=("0", "0", "0", "1"))
+  assert code == 1, "a non-zero contingency log is not our action"
 
 
 def main() -> int:
   ap = argparse.ArgumentParser(description="Resolve action 6 of the cNGN spot vault batch")
   ap.add_argument("--rpc", default=os.environ.get("RPC_URL", "https://mainnet.base.org"))
   ap.add_argument("--srm", default=os.environ.get("SRM_ADDRESS"))
+  ap.add_argument("--vault", default=os.environ.get("VAULT_ADDRESS"),
+                  help="expected tx sender; defaults to srm.owner() read on-chain")
   ap.add_argument("--market-id", type=int, default=int(os.environ.get("CNGN_MARKET_ID", "0")) or None)
   ap.add_argument("--from-block", type=int, help="start of the scan range")
   ap.add_argument("--self-test", action="store_true",
@@ -188,6 +281,12 @@ def main() -> int:
 
   srm = args.srm or load_srm()
 
+  vault = args.vault
+  if vault is None:
+    owner = rpc(args.rpc, "eth_call", [{"to": srm, "data": "0x" + keccak(b"owner()").hex()[:8]}, "latest"])
+    vault = "0x" + owner[-40:]
+    print(f"vault not given; using srm.owner() = {vault}")
+
   market_id = args.market_id
   if market_id is None:
     last = rpc(args.rpc, "eth_call", [{"to": srm, "data": "0x" + keccak(b"lastMarketId()").hex()[:8]}, "latest"])
@@ -205,8 +304,19 @@ def main() -> int:
   print(f"scanning {srm} blocks {args.from_block}..{args.to_block}")
   print(f"found {len(logs)} OracleContingencySet log(s)")
 
+  print(f"requiring: log.address == {srm}")
+  print(f"           tx.to      == {srm}")
+  print(f"           tx.from    == {vault}")
+  print()
+
   candidates = 0
   for log in logs:
+    # the eth_getLogs filter already constrains this, but a provider that ignores or
+    # loosens the filter must not be able to widen what counts as confirmation
+    if log["address"].lower() != srm.lower():
+      print(f"  {log['transactionHash']}  emitted by {log['address']}, not the SRM -- skipped")
+      continue
+
     data = log["data"][2:]
     words = [data[i:i + 64] for i in range(0, len(data), 64)]
     # our action zeroes all four thresholds; anything else is not the call we are looking for
@@ -215,6 +325,13 @@ def main() -> int:
     candidates += 1
 
     tx = rpc(args.rpc, "eth_getTransactionByHash", [log["transactionHash"]])
+
+    tx_to = (tx.get("to") or "").lower()
+    if tx_to != srm.lower():
+      print(f"  {log['transactionHash']}  tx.to is {tx_to or 'contract creation'}, not the SRM -- "
+            f"the event came from an inner call; not a direct action-6 transaction")
+      continue
+
     calldata = tx["input"]
     if not calldata.startswith(selector):
       print(f"  {log['transactionHash']}  emitted the event but is not a direct "
@@ -224,16 +341,32 @@ def main() -> int:
     # setOracleContingencyParams(uint256 marketId, OracleContingencyParams params)
     # the struct is static (four uints), so marketId is simply the first word after the selector
     logged_market = int(calldata[10:74], 16)
-    mark = "MATCH" if logged_market == market_id else "other market"
-    print(f"  {log['transactionHash']}  block {int(log['blockNumber'], 16)}  "
-          f"marketId={logged_market}  [{mark}]")
+    tx_from = tx["from"].lower()
+    from_vault = tx_from == vault.lower()
 
-    if logged_market == market_id:
-      print()
-      print(f"ACTION 6 CONFIRMED for market {market_id}: contingency params were explicitly zeroed by")
-      print(f"  {log['transactionHash']}")
-      print("This is a positive read -- it does not rest on nonce ordering.")
-      return 0
+    if logged_market != market_id:
+      print(f"  {log['transactionHash']}  block {int(log['blockNumber'], 16)}  "
+            f"marketId={logged_market}  [other market]")
+      continue
+
+    if not from_vault:
+      # setOracleContingencyParams is onlyOwner, so this means ownership is not where we
+      # think it is. Report it; do not let it satisfy the check.
+      print(f"  {log['transactionHash']}  block {int(log['blockNumber'], 16)}  "
+            f"marketId={logged_market}  [!! SENDER {tx_from} IS NOT THE VAULT !!]")
+      print("     This setter is onlyOwner. A non-vault sender means the owner is not the vault.")
+      print("     Not counted as confirmation -- investigate before signing anything further.")
+      continue
+
+    print(f"  {log['transactionHash']}  block {int(log['blockNumber'], 16)}  "
+          f"marketId={logged_market}  from={tx_from}  [MATCH]")
+
+    print()
+    print(f"ACTION 6 CONFIRMED for market {market_id}: contingency params were explicitly zeroed by")
+    print(f"  {log['transactionHash']}")
+    print(f"  emitted by {srm}, sent from the vault {vault}")
+    print("This is a positive read -- it does not rest on nonce ordering.")
+    return 0
 
   print()
   if candidates == 0:

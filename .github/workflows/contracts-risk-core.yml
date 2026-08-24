@@ -24,6 +24,9 @@ jobs:
           version: "1.7.1"  # exact pin — `stable` differs across machines (local foundryup vs GH). Run `foundryup --install 1.7.1` locally.
       - run: forge fmt --check   # requires foundry.toml [fmt] keys to be valid — see PLAN note
       - run: forge build scripts/*.s.sol   # scripts/ sits outside foundry's default `script` path, so forge test never compiles it
+      # offline: covers keccak, the setOracleContingencyParams selector, and the provenance checks
+      # (log.address / tx.to == SRM, tx.from == vault) that gate action-6 confirmation
+      - run: python3 scripts/ops/resolve_cngn_action6.py --self-test
       - run: forge test -vvv
         env:
           BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}   # fork tests (DeliverableFXManagerBaseFork, CNGNSpotSRMBaseFork) need it
