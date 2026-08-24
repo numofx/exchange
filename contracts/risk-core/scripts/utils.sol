@@ -6,6 +6,7 @@ import "./types.sol";
 
 interface IOwnable2Step {
   function transferOwnership(address newOwner) external;
+  function acceptOwnership() external;
   function pendingOwner() external view returns (address);
 }
 

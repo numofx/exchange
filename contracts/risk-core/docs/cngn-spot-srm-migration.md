@@ -1,115 +1,200 @@
 # Moving USDCcNGN-SPOT from DeliverableFXManager to the SRM
 
+The venue serves `USDCcNGN-SPOT` only. This moves it off `DeliverableFXManager` (DFXM) and lists it
+on the already-deployed `StandardManager` (SRM) as a base-only market with `marginFactor = 0`.
+
 ## Why
 
-The venue serves `USDCcNGN-SPOT` only. Under `DeliverableFXManager` a spot-only portfolio is margined as
+Under DFXM a spot-only portfolio margins as `cash + baseBalance + quoteBalance / spotPrice >= 0`.
+cNGN gets **100% credit at oracle price** — no haircut, no depeg handling, no contingency — and
+cash may go negative. A trader can hold cNGN against ~zero equity. DFXM has no knob to tune this
+and is not upgradeable.
 
-```
-margin = cash + baseBalance + quoteBalance / spotPrice   >= 0
-```
-
-(`DeliverableFXManager.sol:404-432`). Wrapped cNGN gets 100% credit at the oracle price — no haircut, no
-depeg penalty, no oracle-confidence contingency — and cash may go negative, so an account can hold cNGN
-with near-zero equity. `marginParams.normalIM/MM` cannot fix this: they only multiply *future* notional
-(`:439-441`), and with no dated series listed they do nothing. The manager is not upgradeable, so tuning
-it costs a redeploy either way.
-
-The SRM is already deployed (`0x3195Bd7e02d93982bCF8b34DF5B941fFCaE1E49b`) and already carries a base-asset
-path with real knobs. Registering wrapped cNGN there as a base-only market with `marginFactor = 0` gives
-fully-funded spot with no new contract code.
+On the SRM at `marginFactor = 0`, cNGN contributes nothing to margin while still marking to market,
+so every buy must be funded by cash on hand.
 
 ## What `marginFactor = 0` buys
 
-`_getBaseMarginAndMtM` returns `notional * marginFactor * IMScale`, so at 0 the cNGN leg contributes
-nothing to margin while still being marked to market. Both directions are pinned down by tests:
+For a spot-only portfolio the margin check collapses to `cash >= 0`. Every other term is
+structurally zero:
 
-| behaviour | test |
+| term | value | why |
+| --- | --- | --- |
+| `netPerpMargin` | 0 | no perps |
+| `netFutureMargin` | 0 | `futureMarginRequirements` unset → early return |
+| `netOptionMargin` | 0 | no options |
+| `baseMargin` | 0 | `notional * marginFactor * IMScale` |
+| depeg penalty | 0 | `depegPenaltyPos` accumulates only from perps, futures and short options — never Base (`SRMPortfolioViewer.sol:120,124,184`) |
+| `unrealizedPerpPNL` | 0 | no perps |
+
+`markToMarket` is computed and then discarded by `_assessRisk` (`(int postIM,)`). With
+`borrowingEnabled = false` the same constraint is enforced a second time, earlier, as
+`SRM_NoNegativeCash`.
+
+Behaviours pinned by `test/fork/CNGNSpotSRMBaseFork.t.sol` and
+`test/integration-tests/standard-manager/spot-trade.sol`:
+
+| behaviour | result |
 | --- | --- |
-| buy funded by cash on hand settles | `testFork_FundedSpotBuySettles` |
-| buy beyond cash on hand reverts | `testFork_UnfundedSpotBuyReverts` |
-| cannot short cNGN (`WERC_CannotBeNegative`) | `testFork_CannotSellMoreCNGNThanHeld` |
-| cash-free account can still sell cNGN | `testFork_SellingCNGNFromCashFreeAccountSettles` |
-| cash-free account can still withdraw cNGN | `testFork_CanWithdrawCNGNWithNoCash` |
-| zero factor blocks the borrow that `0.5e18` allows | `testZeroMarginFactorBlocksBorrowAgainstBase` |
+| buy funded by cash on hand | settles |
+| buy beyond cash on hand | reverts `SRM_PortfolioBelowMargin` (borrowing on) / `SRM_NoNegativeCash` (off) |
+| sell more cNGN than held | reverts `WERC_CannotBeNegative` — no short side exists |
+| cash-free account sells cNGN | settles — zero credit is not a lock-up |
+| cash-free account withdraws cNGN | settles |
+| same setup at `marginFactor = 0.5e18` | borrow succeeds — confirms the knob does the work |
 
-`test/integration-tests/standard-manager/spot-trade.sol` covers the mechanism on a local deployment;
-`test/fork/CNGNSpotSRMBaseFork.t.sol` replays the vault calldata against live Base state and trades on top
-of it.
+## The feeds: orientation and liveness
 
-`setBorrowingEnabled(false)` is the second, independent guard — `_assessRisk` rejects negative cash before
-the margin maths runs (`StandardManager.sol:382`). It is **global to the SRM**, not per market. SRM market 1
-is wrapped USDC (`0x364058…`) at `marginFactor 0.98`; disabling borrowing removes leverage there too. That
-is safe today — that asset holds 0 USDC on Base — but it is a real constraint if a leveraged market is ever
-listed on the same SRM. `marginFactor = 0` is the per-market lever and is sufficient on its own; the flag is
-belt-and-braces.
+Two separate problems, one fix.
+
+**Orientation.** The SRM's `Base` convention is USD-per-base (`notional = position * spot`). The
+live cNGN feed is quoted **cNGN-per-USDC** (~1345) because DFXM *divides* by it (`_quoteToCash`).
+Reusing that feed in the SRM's Base slot inflates reported mark-to-market by `spot^2` — measured on
+a fork, 1.5m cNGN truly worth 1,000 USDC marked at **2.25 billion**. Solvency is unaffected because
+`baseMargin = notional * 0`, so the whole error is annihilated by a single multiplication by zero.
+The moment `marginFactor` goes non-zero, cNGN is credited at ~2.25 million times its value.
+
+**Liveness.** Both the market spot feed and the SRM's global `stableFeed` are read on every spot
+adjustment (`_getMarketMargin`, `_getBaseMarginAndMtM:609`, `_getDepegMultiplier:427`) and both
+revert when stale. Live heartbeats on Base are **180s** and **3600s**. A keeper gap therefore halts
+a fully-funded orderbook whose solvency does not depend on either price.
+
+**Fix:** deploy two `LyraStaticSpotFeed`s — one holding the inverted cNGN price, one holding
+`1e18` for the stable feed. `LyraStaticSpotFeed.getSpot()` has no staleness check and cannot revert.
+`testFork_TradesWithNoLiveOracleAfterHeartbeatsWouldHaveExpired` warps 30 days, shows the old feed
+reverting, and settles a trade anyway.
+
+Note `LyraStaticSpotFeed` does **not** hardcode confidence — it is whatever `setSpot` is given, and
+defaults to 0. Nothing on the spot path reads it: all three `spotConf` consumers are unreachable
+(`_getNetPerpMargin` returns at `position == 0`, `_getNetOptionMarginAndMtM`'s body is loop-only
+over empty `expiryHoldings`, `_getBaseMarginAndMtM` returns at the `baseMargin == 0` short-circuit
+before the contingency block). The deploy script sets `1e18` anyway.
+
+## COUPLED SETTINGS — do not change one alone
+
+These five are only safe **as a set**. The static prices are inert *because* margin is zero; make
+margin non-zero and the venue credits cNGN against a rate frozen at deploy time.
+
+1. `srm.baseMarginParams(cngnMarketId).marginFactor == 0`
+2. `srm.borrowingEnabled == false`
+3. market spot feed is the **static, inverted** feed (USDC-per-cNGN)
+4. `srm.stableFeed` is the **static** feed
+5. `srm.oracleContingencyParams(cngnMarketId)` all zero
+
+Raising `marginFactor` requires replacing **both** feeds with live, correctly-oriented ones first.
+This block is duplicated in `DEPLOYED_ADDRESSES.md` next to the addresses.
 
 ## Blocker: existing subaccounts cannot be migrated
 
-`SubAccounts` writes `manager[accountId]` only in `_createAccount` (`src/SubAccounts.sol:97`). There is no
-`changeManager` — the interface still declares an `AccountManagerChanged` event (`ISubAccounts.sol:226`) but
-nothing emits it, and `SubAccounts` is not upgradeable. **An account created under `DeliverableFXManager`
-stays under it forever.**
+`SubAccounts` writes `manager[accountId]` only in `_createAccount` (`src/SubAccounts.sol:97`). There
+is no `changeManager` — the interface still declares an `AccountManagerChanged` event
+(`ISubAccounts.sol:226`) that nothing emits — and `SubAccounts` is not upgradeable. **An account
+created under DFXM can never move to the SRM.** This is inherited from upstream Derive verbatim, so
+redeploying upstream does not fix it.
 
-So this is not an in-place migration. It is:
+Migration is therefore: register the market → clients pass the SRM address to
+`SubAccountsManager.createSubAccount(IManager)` (a call argument, so no contract change) → existing
+holders withdraw and re-deposit into new accounts.
 
-1. Register the market on the SRM (below).
-2. Point `SubAccountsManager.createSubAccount` at the SRM for new accounts.
-3. Existing holders withdraw from their DFXM accounts and re-deposit into new SRM accounts.
+**Currently free.** On Base mainnet wrapped cNGN holds 0 cNGN, wrapped USDC holds 0 USDC, and cash
+holds 1 unit of USDC. Nothing to migrate. This becomes a user-facing step only if mainnet is funded
+before this ships.
 
-Step 3 is currently free: on Base the wrapped cNGN asset holds 0 cNGN, the wrapped USDC deliverable asset
-holds 0 USDC, and the cash asset holds 1 unit of USDC (checked 2026-08-22). There is nothing to move. If the
-venue funds mainnet before this ships, the cost is a user-facing migration.
+## The cap
 
-Withdrawals out of DFXM accounts are not blocked — a spot-only DFXM portfolio has no delivery obligations,
-so `_getDeliveryReadiness` reports `inDeliveryPhase = false` and the account can be emptied.
+`wrappedCngn.setTotalPositionCap(srm, X)` limits total cNGN the venue can custody. The script
+derives it as a percentage (default **10%**) of **live `totalSupply()`**, read at generation time —
+not a constant. cNGN supply moves, and a stale denominator is how a cap ends up being most of the
+float. (An earlier hardcoded `1.5e9` was 73% of total supply.)
+
+The cap gates **deposits, not trading**: `_checkAssetCap` reverts only on
+`preTradePos < postTradePos && postTradePos > cap`, and an account-to-account transfer of a
+non-negative asset leaves `totalPosition` unchanged. Hitting it is a degraded state, not an outage —
+new inventory cannot enter, the book keeps matching. Pinned by
+`testFork_CapIsShareOfLiveSupplyAndBlocksDepositsOnly`.
+
+**Alert at 80% of cap** so the raise happens before users are rejected. The script logs the
+threshold.
+
+## LAUNCH BLOCKER: matcher must reserve notional + fee
+
+`TradeModule._addAssetTransfers` appends the fee as a **third quote-asset transfer in the same
+batch** (`:151` taker, `:255` maker). `submitTransfers` applies the batch and then runs one
+`handleAdjustment` per account, so the SRM sees one **net** cash delta.
+
+- **Buyer**: `-(notional + fee)`. An order funded to exactly the notional fails `SRM_NoNegativeCash`.
+- **Seller**: `+notional - fee`. Safe while `notional > fee`; the gross fee never needs pre-funding.
+
+The matcher must reserve `notional + fee` on the buy side or it will emit orders that cannot settle.
+This overlaps the open reserve-before-cross issue. Pinned by
+`testFork_BuyerFundedToExactlyNotionalIsRejectedByFee`,
+`testFork_BuyerFundedToNotionalPlusFeeSettles`, and `testFork_CashFreeSellerSettlesOnNetDelta`
+(which also covers the boundary where a fee exceeding proceeds is refused).
+
+**Do not launch before this is fixed** — the failure mode is silent rejection of exactly-funded
+orders.
 
 ## Off-chain impact
 
-None to the markets service config. The wrapped cNGN asset and the cNGN spot feed are reused as-is, so
-`CNGN_SPOT_ASSET_ADDRESS` does not change. What changes is which manager new subaccounts are created under.
+None to the markets config. The wrapped cNGN **asset** is reused, so `CNGN_SPOT_ASSET_ADDRESS` does
+not change. The **feed** is not reused — the live one stays wired to DFXM in its current
+orientation, so a dated series can still be relisted.
 
-The feed dependency is unchanged and still hard: `_getMarketMargin` fetches the market spot unconditionally,
-and `_getBaseMarginAndMtM` reads `stableFeed`, so both the cNGN feed and the stable feed must be fresh for
-any spot fill to clear. `srm.setWhitelistedCallee(cngnSpotFeed)` is in the batch so the matcher can push a
-price in the same transaction via `managerData`.
+Nothing in `services/` or `packages/` reads `markToMarket` or `getMarginAndMarkToMarket`, and
+`packages/abis` does not export the selector. If a frontend later shows PnL or equity, it must
+source marks from the orderbook (last trade / mid), **not** from the manager — the static feed makes
+the manager's MtM a frozen number.
 
 ## Running it
 
-```
-BASE_RPC_URL=... forge script scripts/register-cngn-spot-srm.s.sol --rpc-url $BASE_RPC_URL
+Two steps, in order. The vault-actions artifact is not committed: two of its eleven calls target
+feeds that do not exist until step 1 has run.
+
+```sh
+# 1. deploy the static feeds, hand them to the vault (broadcasts)
+NEW_OWNER=<vault> PRIVATE_KEY=<deployer> \
+  forge script scripts/deploy-cngn-spot-static-feeds.s.sol --rpc-url $BASE_RPC_URL --broadcast
+
+# 2. generate the vault batch (broadcasts nothing; reads live marketId, supply, feed addresses)
+forge script scripts/register-cngn-spot-srm.s.sol --rpc-url $BASE_RPC_URL
 ```
 
-The script deploys and broadcasts nothing. Every call is `onlyOwner` on a contract owned by the admin vault
-`0x1dcA42ab54Bd3862853A821F84B29BF65245F435`, so it writes the calldata to
-`deployments/8453/CNGN_SPOT_SRM_VAULT_ACTIONS.json` for the vault to execute **in order**:
+Step 2 writes `deployments/8453/CNGN_SPOT_SRM_VAULT_ACTIONS.json` — 11 calls, executed **in order**:
 
 1. `srm.createMarket("CNGN")`
-2. `wrappedCngn.setWhitelistManager(srm, true)` — additive; DFXM stays whitelisted so a dated series can be relisted
+2. `wrappedCngn.setWhitelistManager(srm, true)` — additive; DFXM stays whitelisted
 3. `wrappedCngn.setTotalPositionCap(srm, cap)`
 4. `srm.whitelistAsset(wrappedCngn, marketId, Base)`
-5. `srm.setOraclesForMarket(marketId, cngnSpotFeed, 0, 0)`
-6. `srm.setOracleContingencyParams(marketId, zeroed)` — inert at `marginFactor 0`; zeroed rather than left implying a live contingency
+5. `srm.setOraclesForMarket(marketId, staticCngnFeed, 0, 0)`
+6. `srm.setOracleContingencyParams(marketId, zeroed)`
 7. `srm.setBaseAssetMarginFactor(marketId, 0, 0)`
-8. `srm.setBorrowingEnabled(false)`
-9. `srm.setWhitelistedCallee(cngnSpotFeed, true)`
+8. `srm.setBorrowingEnabled(false)` — **global to the SRM, not per-market**
+9. `staticCngnFeed.acceptOwnership()`
+10. `staticStableFeed.acceptOwnership()`
+11. `srm.setStableFeed(staticStableFeed)` — **global; also affects market 1**
 
-`marketId` is resolved from live state as `lastMarketId + 1` (2 as of 2026-08-22). `createMarket` assigns
-`++lastMarketId`, so if anything else creates a market between generating and signing the batch, the ids
-diverge — regenerate. Override with `CNGN_MARKET_ID` if signing offline.
+**The batch must execute as the vault.** Actions 9 and 10 are `acceptOwnership()`, callable only by
+the pending owner; a deployer EOA cannot stand in. A static feed left on a deployer key is the same
+failure already recorded under "ABANDONED deployment" in `DEPLOYED_ADDRESSES.md`.
 
-### The one number to confirm before signing
-
-`CNGN_SPOT_BASE_CAP` defaults to `1_500_000_000e18` cNGN (~$1m at 1,500 cNGN/USDC). Do not use
-`Config.getSRMCaps("CNGN")` here: it returns `3_000_000e18`, which is ~$2k of spot inventory — it was sized
-for a deliverable leg, not for a spot book. This is the venue's total cNGN inventory limit; pick it
-deliberately.
+Actions 1–7 and 9–10 are inert until a client creates a subaccount under the SRM. Actions 8 and 11
+take effect immediately across the whole SRM. Both are safe today — market 1 (wrapped USDC,
+`marginFactor 0.98`) holds zero — but both must be revisited before any leveraged market lists here.
 
 ## After the vault executes
 
-Re-run the fork test — it reads the artifact and asserts the resulting on-chain config:
-
+```sh
+cast call $SRM 'lastMarketId()(uint256)'                    # must have incremented
+cast call $SRM 'assetMap(uint256,uint8)(address)' $MKT 3    # must be wrappedCngn
+cast call $SRM 'baseMarginParams(uint256)(uint256,uint256)' $MKT   # (0, 0)
+cast call $SRM 'borrowingEnabled()(bool)'                   # false
+cast call $SRM 'stableFeed()(address)'                      # the static feed
+cast call $WCNGN 'whitelistedManager(address)(bool)' $SRM   # true
 ```
-BASE_RPC_URL=... forge test --match-path test/fork/CNGNSpotSRMBaseFork.t.sol
-```
 
-Then update `DEPLOYED_ADDRESSES.md` with the new market id and the cap that was actually signed.
+`baseMarginParams` reading `(0, 0)` is **not** sufficient evidence the batch landed — an unset
+mapping slot for a market that does not exist reads identically. Check `lastMarketId` and the asset
+map.
+
+Then update `DEPLOYED_ADDRESSES.md`: the SRM as the spot manager, the two static feed addresses, and
+the coupled-settings block above.
