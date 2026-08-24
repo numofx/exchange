@@ -89,7 +89,9 @@ contract RegisterCNGNSpotOnSRM is Utils {
 
     string memory json = _serialiseActions(ctx);
 
-    _writeToDeployments(ARTIFACT_NAME, json);
+    // deploys nothing: the batch is derived from live chain state, so there is no
+    // dry-run/broadcast distinction to guard here
+    _writeGeneratedArtifact(ARTIFACT_NAME, json);
 
     console2.log("SRM:", address(deployment.srm));
     console2.log("wrapped cNGN (unchanged, still CNGN_SPOT_ASSET_ADDRESS):", wrappedCngn);
