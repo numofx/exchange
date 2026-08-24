@@ -159,7 +159,7 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 
 		reconcileCtx, cancel := detachedContext(ctx, reconciliationTimeout)
 		defer cancel()
-		_ = e.orders.MarkMatchFailed(reconcileCtx, []string{candidate.Taker.OrderID, candidate.Maker.OrderID}, err.Error())
+		_ = e.orders.ReleaseMatchAfterFailure(reconcileCtx, candidate.Taker.OrderID, candidate.Maker.OrderID)
 		return
 	}
 
@@ -241,7 +241,7 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 
 		e.noteMatchFailure(instrument.Symbol, *candidate, "executor_error")
 		slog.Error("submit match", "market", instrument.Symbol, "taker_order_id", candidate.Taker.OrderID, "maker_order_id", candidate.Maker.OrderID, "error", err)
-		_ = e.orders.MarkMatchFailed(reconcileCtx, []string{candidate.Taker.OrderID, candidate.Maker.OrderID}, err.Error())
+		_ = e.orders.ReleaseMatchAfterFailure(reconcileCtx, candidate.Taker.OrderID, candidate.Maker.OrderID)
 		return
 	}
 
