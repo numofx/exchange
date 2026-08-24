@@ -33,6 +33,15 @@ import (
 // The seller side needs no check while notional > fee, because the proceeds arrive in the same
 // adjustment the fee is taken from -- the gross fee never has to be pre-funded.
 //
+// DUST CASE: that inequality is an assumption, not an invariant. If a fill is small enough that
+// notional <= fee, the seller's net delta goes negative too and a cash-free seller reverts
+// exactly like an underfunded buyer. It cannot happen today -- takerFillFee and makerFillFeeZero
+// are both "0", so a seller's net delta is always +notional -- and it stays impossible for any
+// proportional fee, where fee = notional * rate < notional for rate < 1. It becomes reachable the
+// moment a FLAT or minimum fee is introduced, because a dust fill can then owe more than it
+// earns. If that happens, gate the sell side here too; do not assume the buy check covers it.
+// The on-chain boundary is pinned by risk-core's testFork_CashFreeSellerSettlesOnNetDelta.
+//
 // This is a pre-trade check, not a safety boundary. The chain is the enforcement; this exists
 // so the venue does not reject exactly-funded orders after crossing them.
 
