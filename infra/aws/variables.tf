@@ -141,3 +141,31 @@ variable "desired_count_execution" {
     error_message = "The executor EOA has one nonce sequence; only one sender may run."
   }
 }
+
+variable "image_market_maker" {
+  description = "Fully qualified mm-bot image, tagged by git SHA. Built from numofx/market-maker."
+  type        = string
+}
+
+variable "subaccounts_address" {
+  description = "SubAccounts contract. The market maker resolves it from a sibling repo if unset, so it is set explicitly."
+  type        = string
+  default     = "0x7019244E25FA416e6Ca2ed2F3cA25277aef72843"
+}
+
+variable "desired_count_market_maker" {
+  description = "Replicas for the market maker. One or zero — two would double-quote the same subaccount."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.desired_count_market_maker <= 1
+    error_message = "Two market makers would quote the same subaccount against each other."
+  }
+}
+
+variable "mm_address" {
+  description = "Market maker owner and signer address (subaccount 10). Must match the key in /numo/exchange/mm_private_key — preflight.sh asserts it."
+  type        = string
+  default     = "0x3448ac0A3283951A2AFD5B3A582329ECA43CB47B"
+}

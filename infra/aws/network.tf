@@ -198,6 +198,19 @@ resource "aws_security_group_rule" "app_internal" {
   description       = "matcher to execution-service"
 }
 
+# The market maker reaches markets-service by its Cloud Map name rather than going
+# out through the ALB, so the app tier needs an 8080 self-rule as well as the
+# ALB-sourced one above.
+resource "aws_security_group_rule" "app_internal_api" {
+  type              = "ingress"
+  from_port         = 8080
+  to_port           = 8080
+  protocol          = "tcp"
+  security_group_id = aws_security_group.app.id
+  self              = true
+  description       = "market-maker to markets-service"
+}
+
 resource "aws_security_group" "db" {
   name        = "${var.name}-db"
   description = "RDS PostgreSQL"
