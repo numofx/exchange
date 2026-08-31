@@ -1,5 +1,8 @@
 locals {
-  repos = ["markets", "execution"]
+  # market-maker is built from the separate numofx/market-maker repo, so
+  # build-and-push.sh in THIS repo cannot produce its image — but the repository
+  # is created here so the registry is one object with one lifecycle policy.
+  repos = ["markets", "execution", "market-maker"]
 }
 
 resource "aws_ecr_repository" "app" {
