@@ -23,21 +23,24 @@ resource "aws_ssm_parameter" "database_url" {
   tier  = "Standard"
 }
 
-# The executor private key is deliberately not defined in Terraform — putting it in
-# a variable puts it in state. Create it once by hand, then let this data source
-# fail loudly if it is missing:
+# The executor private key and the RPC URL (which carries an Alchemy API key) are
+# placed out of band and referenced by ARN only:
 #
 #   aws ssm put-parameter --name /numo/exchange/executor_private_key \
 #     --type SecureString --value 0x... --profile numo
 #
-data "aws_ssm_parameter" "executor_key" {
-  count = local.use_ssm ? 1 : 0
-  name  = "/numo/exchange/executor_private_key"
-}
+# Their ARNs are CONSTRUCTED here rather than resolved through a
+# `data "aws_ssm_parameter"` block, and that distinction is the whole point: a data
+# source fetches the decrypted value and Terraform persists every attribute it
+# fetched into terraform.tfstate. Reading the parameter to obtain its ARN would put
+# the key in state just as surely as declaring it in a variable would.
+#
+# The cost is that a missing parameter is no longer caught at plan time; it surfaces
+# when ECS cannot start the task. preflight.sh checks for both before a cutover.
+data "aws_caller_identity" "current" {}
 
-data "aws_ssm_parameter" "rpc_url" {
-  count = local.use_ssm ? 1 : 0
-  name  = "/numo/exchange/rpc_url"
+locals {
+  ssm_arn_prefix = "arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter"
 }
 
 # -------------------------------------------------------- Secrets Manager backend
@@ -69,7 +72,7 @@ data "aws_secretsmanager_secret" "rpc_url" {
 locals {
   secret_arns = {
     database_url = local.use_ssm ? aws_ssm_parameter.database_url[0].arn : aws_secretsmanager_secret.database_url[0].arn
-    executor_key = local.use_ssm ? data.aws_ssm_parameter.executor_key[0].arn : data.aws_secretsmanager_secret.executor_key[0].arn
-    rpc_url      = local.use_ssm ? data.aws_ssm_parameter.rpc_url[0].arn : data.aws_secretsmanager_secret.rpc_url[0].arn
+    executor_key = local.use_ssm ? "${local.ssm_arn_prefix}/numo/exchange/executor_private_key" : data.aws_secretsmanager_secret.executor_key[0].arn
+    rpc_url      = local.use_ssm ? "${local.ssm_arn_prefix}/numo/exchange/rpc_url" : data.aws_secretsmanager_secret.rpc_url[0].arn
   }
 }
