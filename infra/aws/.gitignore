@@ -1,0 +1,10 @@
+# Provider binaries: hundreds of MB, re-fetched by `terraform init`.
+# The lock file next to this one IS committed, so init is reproducible.
+.terraform/
+
+# State and any variable file that might carry a secret.
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+crash.log
