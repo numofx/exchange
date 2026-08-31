@@ -13,6 +13,12 @@ import (
 )
 
 func main() {
+	// Probe mode runs before anything else: it must not need config, a database, or
+	// the instrument registry. See healthcheck.go.
+	if isHealthcheckArg(os.Args) {
+		os.Exit(runHealthcheck())
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("load config", "error", err)
