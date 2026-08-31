@@ -10,12 +10,14 @@ set -euo pipefail
 
 PROFILE="${PROFILE:-numo}"
 REGION="${REGION:-us-east-1}"
+MM_ADDRESS="${MM_ADDRESS:-0x3448ac0A3283951A2AFD5B3A582329ECA43CB47B}"
 MATCHING="${MATCHING:-0x9E90A9cD13d859Bd6a08168082FB1F6F7405F191}"
 
 fail=0
 note() { printf '%-8s %s\n' "$1" "$2"; }
 
-for name in /numo/exchange/executor_private_key /numo/exchange/rpc_url; do
+for name in /numo/exchange/executor_private_key /numo/exchange/rpc_url \
+            /numo/exchange/mm_private_key /numo/exchange/mm_rpc_url; do
   if aws ssm get-parameter --profile "$PROFILE" --region "$REGION" --name "$name" >/dev/null 2>&1; then
     note "ok" "$name exists"
   else
@@ -44,6 +46,16 @@ if [ "$fail" -eq 0 ]; then
     note "WARN" "gas balance is $bal ETH — top up before unpause"
   else
     note "ok" "gas balance $bal ETH"
+  fi
+
+  # The market maker signs as itself, not through the executor, so its key is checked
+  # against the address the task definition advertises rather than against the chain.
+  mm=$(cast wallet address "$(aws ssm get-parameter --profile "$PROFILE" --region "$REGION" \
+       --name /numo/exchange/mm_private_key --with-decryption --query Parameter.Value --output text)")
+  if [ "$(echo "$mm" | tr 'A-Z' 'a-z')" = "$(echo "$MM_ADDRESS" | tr 'A-Z' 'a-z')" ]; then
+    note "ok" "market-maker key derives to $mm"
+  else
+    note "FAIL" "market-maker key derives to $mm, expected $MM_ADDRESS"; fail=1
   fi
 fi
 

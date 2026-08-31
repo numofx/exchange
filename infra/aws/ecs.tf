@@ -8,7 +8,7 @@ resource "aws_ecs_cluster" "main" {
 }
 
 resource "aws_cloudwatch_log_group" "tasks" {
-  for_each          = toset(["markets-service", "matcher", "execution-service", "migrate"])
+  for_each          = toset(["markets-service", "matcher", "execution-service", "migrate", "market-maker"])
   name              = "/ecs/${var.name}/${each.key}"
   retention_in_days = 30
 }
@@ -198,6 +198,99 @@ resource "aws_ecs_task_definition" "execution" {
   }])
 }
 
+# The market maker is the fifth service and the reason the DNS flip is not the whole
+# cutover: MM_API_BASE_URL pointed at Railway's own hostname, never api.numofx.com,
+# so nothing about a CNAME change would have moved it. It also holds a direct
+# database connection, and RDS is publicly_accessible = false in an isolated subnet
+# tier — which is what settles the question of migrating it rather than repointing it.
+resource "aws_ecs_task_definition" "market_maker" {
+  family                   = "${var.name}-market-maker"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 256
+  memory                   = 512
+  execution_role_arn       = aws_iam_role.execution.arn
+  task_role_arn            = aws_iam_role.task.arn
+
+  container_definitions = jsonencode([{
+    name      = "market-maker"
+    image     = var.image_market_maker
+    essential = true
+
+    environment = [
+      # Contract addresses are set explicitly so the bot never falls back to
+      # resolving them from sibling repo checkouts, which do not exist in the image.
+      { name = "MM_CHAIN_ID", value = var.chain_id },
+      { name = "MM_MATCHING_ADDRESS", value = var.matching_address },
+      { name = "MM_TRADE_MODULE_ADDRESS", value = var.trade_module_address },
+      { name = "MM_SUBACCOUNTS_ADDRESS", value = var.subaccounts_address },
+
+      # Cloud Map, not the ALB: this call never needs to leave the app tier.
+      { name = "MM_API_BASE_URL", value = "http://markets-service.${var.internal_namespace}:8080" },
+
+      # Arrives paused, exactly as it runs on Railway today. Unpausing is the last
+      # step of the cutover and a deliberate one, never a side effect of deploying.
+      { name = "MM_OPERATOR_MODE", value = "pause" },
+      { name = "MM_DRY_RUN", value = "false" },
+
+      { name = "MM_MARKET_SYMBOL", value = "USDCcNGN-SPOT" },
+      { name = "MM_OWNER_ADDRESS", value = var.mm_address },
+      { name = "MM_SIGNER_ADDRESS", value = var.mm_address },
+      { name = "MM_SUBACCOUNT_ID", value = "10" },
+      { name = "MM_RECIPIENT_ID", value = "10" },
+
+      { name = "MM_QUOTE_LEVELS", value = "5" },
+      { name = "MM_ORDER_SIZE", value = "1.2" },
+      { name = "MM_HALF_SPREAD_BPS", value = "10" },
+      { name = "MM_LEVEL_SPREAD_STEP_BPS", value = "15" },
+      { name = "MM_LEVEL_SIZE_MULT", value = "1.2" },
+      { name = "MM_MAX_NET_INVENTORY", value = "60" },
+      { name = "MM_MAX_NOTIONAL_PER_SIDE", value = "15000" },
+      { name = "MM_MAX_ANCHOR_DEVIATION_BPS", value = "150" },
+      { name = "MM_PROTECTED_ORDER_ID_PREFIXES", value = "validation:,smoke:,manual:,test:" },
+
+      { name = "MM_ANCHOR_SOURCE_TYPE", value = "none" },
+      { name = "MM_USDCCNGN_SPOT_EXTERNAL_ANCHOR_ENABLED", value = "true" },
+      { name = "MM_USDCCNGN_SPOT_EXTERNAL_ANCHOR_PROVIDER", value = "cngn-price-oracle" },
+      { name = "MM_USDCCNGN_SPOT_EXTERNAL_ANCHOR_CHAIN_ID", value = "8453" },
+      { name = "MM_USDCCNGN_SPOT_EXTERNAL_ANCHOR_BOOTSTRAP_ONLY", value = "true" },
+      { name = "MM_USDCCNGN_SPOT_EXTERNAL_ANCHOR_MAX_AGE_SECONDS", value = "8000" },
+      { name = "MM_USDCCNGN_SPOT_EXTERNAL_ANCHOR_MAX_DEVIATION_BPS", value = "100" },
+      { name = "MM_USDCCNGN_SPOT_EXTERNAL_ANCHOR_TIMEOUT_MS", value = "1200" },
+      { name = "MM_STALE_ANCHOR_TIMEOUT_SECONDS", value = "14400" },
+
+      { name = "MM_METRICS_ADDR", value = ":8080" },
+      { name = "MM_READINESS_MISSING_QUOTE_TIMEOUT_SECONDS", value = "120" },
+      { name = "MM_SOAK_LOG_INTERVAL_SECONDS", value = "60" },
+      { name = "MM_LOG_LEVEL", value = "INFO" },
+
+      # /tmp is writable and ephemeral on Fargate. The bot rebuilds this from the
+      # book on startup, so it costs a cycle to lose, not correctness — no volume.
+      { name = "MM_STATE_FILE", value = "/tmp/.mm-bot-state.json" },
+    ]
+
+    # Owner and signer are the same key today; both names are set so that staying
+    # true remains a choice rather than an assumption baked into the definition.
+    secrets = [
+      { name = "MM_OWNER_PRIVATE_KEY", valueFrom = local.secret_arns.mm_private_key },
+      { name = "MM_SIGNER_PRIVATE_KEY", valueFrom = local.secret_arns.mm_private_key },
+      { name = "MM_RPC_URL", valueFrom = local.secret_arns.mm_rpc_url },
+      { name = "MM_USDCCNGN_SPOT_EXTERNAL_ANCHOR_RPC_URL", valueFrom = local.secret_arns.mm_rpc_url },
+      { name = "MM_DATABASE_URL", valueFrom = local.secret_arns.database_url },
+    ]
+
+    healthCheck = {
+      command     = ["CMD", "/app/mm-bot", "-healthcheck"]
+      interval    = 15
+      timeout     = 5
+      retries     = 3
+      startPeriod = 20
+    }
+
+    logConfiguration = local.log_options["market-maker"]
+  }])
+}
+
 # Run once, by hand, before the data load: aws ecs run-task --task-definition <this>
 resource "aws_ecs_task_definition" "migrate" {
   family                   = "${var.name}-migrate"
@@ -281,5 +374,21 @@ resource "aws_ecs_service" "execution" {
 
   service_registries {
     registry_arn = aws_service_discovery_service.execution.arn
+  }
+}
+
+# No load balancer and no Cloud Map registration: nothing calls into the market
+# maker. It only makes outbound calls, to the API, to RDS, and to Base.
+resource "aws_ecs_service" "market_maker" {
+  name            = "market-maker-spot"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.market_maker.arn
+  desired_count   = var.desired_count_market_maker
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = aws_subnet.app[*].id
+    security_groups  = [aws_security_group.app.id]
+    assign_public_ip = false
   }
 }

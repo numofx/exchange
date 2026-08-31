@@ -67,6 +67,16 @@ data "aws_secretsmanager_secret" "rpc_url" {
   name  = "${var.name}/rpc_url"
 }
 
+data "aws_secretsmanager_secret" "mm_private_key" {
+  count = local.use_ssm ? 0 : 1
+  name  = "${var.name}/mm_private_key"
+}
+
+data "aws_secretsmanager_secret" "mm_rpc_url" {
+  count = local.use_ssm ? 0 : 1
+  name  = "${var.name}/mm_rpc_url"
+}
+
 # ------------------------------------------------------------------- resolved ARNs
 
 locals {
@@ -74,5 +84,11 @@ locals {
     database_url = local.use_ssm ? aws_ssm_parameter.database_url[0].arn : aws_secretsmanager_secret.database_url[0].arn
     executor_key = local.use_ssm ? "${local.ssm_arn_prefix}/numo/exchange/executor_private_key" : data.aws_secretsmanager_secret.executor_key[0].arn
     rpc_url      = local.use_ssm ? "${local.ssm_arn_prefix}/numo/exchange/rpc_url" : data.aws_secretsmanager_secret.rpc_url[0].arn
+
+    # The market maker signs as 0x3448ac0A…CB47B — a different key from the executor,
+    # and it reaches a different RPC endpoint. Reusing rpc_url here would silently
+    # repoint it at the executor's provider.
+    mm_private_key = local.use_ssm ? "${local.ssm_arn_prefix}/numo/exchange/mm_private_key" : data.aws_secretsmanager_secret.mm_private_key[0].arn
+    mm_rpc_url     = local.use_ssm ? "${local.ssm_arn_prefix}/numo/exchange/mm_rpc_url" : data.aws_secretsmanager_secret.mm_rpc_url[0].arn
   }
 }
