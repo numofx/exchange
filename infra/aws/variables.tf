@@ -104,3 +104,40 @@ variable "matcher_poll_interval" {
   type    = string
   default = "250ms"
 }
+
+# Every service starts at zero replicas on purpose.
+#
+# The Railway cluster is still live during provisioning, and the executor EOA is
+# shared between the two deployments — one nonce sequence, two senders. A task that
+# comes up on its own would race Railway for that nonce. The matcher is the same
+# hazard one level up: two matchers over two copies of the same book.
+#
+# So the counts are a deliberate, separate act after Railway is frozen, not a
+# side effect of `apply`.
+variable "desired_count_markets" {
+  description = "Replicas for the markets API. Raise only after Railway is frozen."
+  type        = number
+  default     = 0
+}
+
+variable "desired_count_matcher" {
+  description = "Replicas for the matcher. MUST stay 1 or 0 — never above 1."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.desired_count_matcher <= 1
+    error_message = "Two matchers would reserve the same book concurrently."
+  }
+}
+
+variable "desired_count_execution" {
+  description = "Replicas for the execution service. Raise only after Railway is frozen."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.desired_count_execution <= 1
+    error_message = "The executor EOA has one nonce sequence; only one sender may run."
+  }
+}
