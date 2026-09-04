@@ -175,9 +175,23 @@ resource "aws_ecs_task_definition" "execution" {
     environment = concat(local.chain_env, [
       { name = "PORT", value = "8081" },
       { name = "HOST", value = "0.0.0.0" },
-      # Both were unset on Railway and defaulted. Stated explicitly here so the
+      # WAIT_FOR_RECEIPT must stay false until the matcher can survive the wait.
+      # With it on, execution blocks in waitForTransactionReceipt (viem default:
+      # 180s, confirmations 1) while the matcher's executor client gives up after
+      # 5s (matching/executor.go:79). The timeout is not TM_FillLimitCrossed, so
+      # shouldFinalizeAfterExecutorError is false and the pair is released and
+      # retried 2s later (matching/backoff.go). That retry simulates against a
+      # state where filled[owner][nonce] has not moved yet, because the first tx
+      # is still pending -- so it passes, and a second verifyAndMatch goes out on
+      # the next nonce for a fill already in flight.
+      #
+      # Turning this on requires, in order: an executor-client timeout longer
+      # than the receipt wait, and an actual check of receipt.status (today a
+      # reverted receipt still returns accepted: true, and the Go response struct
+      # drops receipt_status entirely).
+      { name = "WAIT_FOR_RECEIPT", value = "false" },
+      # DRY_RUN was unset on Railway and defaulted. Stated explicitly here so the
       # value is a decision rather than a default nobody chose.
-      { name = "WAIT_FOR_RECEIPT", value = "true" },
       { name = "DRY_RUN", value = "false" },
     ])
 
