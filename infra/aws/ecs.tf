@@ -83,9 +83,12 @@ locals {
   } }
 }
 
-# SERVICE_MODE is baked into each definition rather than defaulted at runtime. Paired
-# with the boot guard, a definition that loses it fails to start instead of quietly
-# booting a second API server with no matcher behind it.
+# SERVICE_MODE is baked into each definition rather than defaulted at runtime. Nothing
+# reads it yet: the binary that runs is chosen by the entryPoint override alone, so
+# today this is documentation. It becomes load-bearing when the boot guard lands and
+# can assert that the declared mode and the entrypoint agree, which is what would stop
+# a mislabelled definition from quietly booting a second API server with no matcher
+# behind it.
 
 resource "aws_ecs_task_definition" "markets" {
   family                   = "${var.name}-markets-service"
