@@ -1,0 +1,7 @@
+{
+  "cngnPerUsdcAtDeploy": "1345213025000000061440",
+  "cngnStaticSpotFeed": "0xec4ad7B2679f54eB3e971B10120cB56cF1c061A4",
+  "invertedFrom": "0x41512C6a2af5AcD219EbCcfaF34f7088A2999ABC",
+  "stableStaticSpotFeed": "0x507D645682737C6640dc73b5aC858654BcB9854f",
+  "usdcPerCngn": 743376685636834
+}
