@@ -29,7 +29,7 @@ func NewEngine(cfg config.Config, pool *pgxpool.Pool) *Engine {
 	return &Engine{
 		cfg:      cfg,
 		orders:   orders.NewRepository(pool),
-		executor: NewExecutorClient(cfg.ExecutorURL, cfg.ExecutorManagerData),
+		executor: NewExecutorClient(cfg.ExecutorURL, cfg.ExecutorManagerData, cfg.ExecutorTimeout),
 		registry: instruments.DefaultRegistry(cfg),
 		backoff:  newMatchBackoff(),
 		funding:  newFundingChecker(cfg),
@@ -252,7 +252,28 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 		"maker_order_id", candidate.Maker.OrderID,
 		"accepted", executorResp.Accepted,
 		"tx_hash", executorResp.TxHash,
+		"receipt_status", executorResp.ReceiptStatus,
+		"block_number", executorResp.BlockNumber,
 	)
+
+	// SubmitMatchForMarket turns every non-acceptance into an error, so reaching here
+	// with Accepted false should be impossible. Checked anyway: the cost of the branch
+	// is nothing and the cost of being wrong is a fill recorded against a reverted
+	// transaction, which the book cannot detect on its own afterwards.
+	if !executorResp.Accepted {
+		e.noteMatchFailure(instrument.Symbol, *candidate, "executor_not_accepted")
+		slog.Error("executor did not accept match",
+			"market", instrument.Symbol,
+			"taker_order_id", candidate.Taker.OrderID,
+			"maker_order_id", candidate.Maker.OrderID,
+			"tx_hash", executorResp.TxHash,
+			"receipt_status", executorResp.ReceiptStatus,
+		)
+		releaseCtx, releaseCancel := detachedContext(ctx, reconciliationTimeout)
+		defer releaseCancel()
+		_ = e.orders.ReleaseMatchAfterFailure(releaseCtx, candidate.Taker.OrderID, candidate.Maker.OrderID)
+		return
+	}
 
 	reconcileCtx, cancel := detachedContext(ctx, reconciliationTimeout)
 	defer cancel()

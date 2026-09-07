@@ -68,16 +68,27 @@ type ExecutorResponse struct {
 	Accepted bool   `json:"accepted"`
 	TxHash   string `json:"tx_hash"`
 	Error    string `json:"error"`
+	// Present only when execution-service waited for a receipt. Previously absent
+	// from this struct, so json.Unmarshal discarded them and a reverted transaction
+	// was indistinguishable from a settled one.
+	ReceiptStatus string `json:"receipt_status"`
+	BlockNumber   string `json:"block_number"`
 }
 
 var evmAddressPattern = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
 
-func NewExecutorClient(url string, managerData string) *ExecutorClient {
+// NewExecutorClient builds the client. timeout bounds the entire request/response
+// exchange, receipt wait included; see config.Config.ExecutorTimeout for why it must
+// outlast execution-service's own receipt timeout.
+func NewExecutorClient(url string, managerData string, timeout time.Duration) *ExecutorClient {
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
 	return &ExecutorClient{
 		url:         strings.TrimSpace(url),
 		managerData: strings.TrimSpace(managerData),
 		httpClient: &http.Client{
-			Timeout: 5 * time.Second,
+			Timeout: timeout,
 		},
 	}
 }
@@ -143,7 +154,20 @@ func (c *ExecutorClient) SubmitMatchForMarket(ctx context.Context, market string
 		return ExecutorResponse{}, fmt.Errorf("executor rejected match: %s", executorResp.Error)
 	}
 	if !executorResp.Accepted && executorResp.TxHash == "" {
+		// Legacy shim: an older execution-service replied {} to mean "submitted".
+		// Absent a tx hash there is nothing on chain to disagree with.
 		executorResp.Accepted = true
+	}
+	if !executorResp.Accepted {
+		// A mined-and-reverted transaction lands here. Returning it as an error keeps
+		// every non-acceptance on the one path that backs off and releases the pair,
+		// so no caller can reach FinalizeMatchWithPrice with an unsettled fill.
+		return executorResp, &matcherError{message: fmt.Sprintf(
+			"executor did not accept match: tx %s receipt_status=%s block=%s",
+			executorResp.TxHash,
+			defaultIfEmpty(executorResp.ReceiptStatus, "unknown"),
+			defaultIfEmpty(executorResp.BlockNumber, "unknown"),
+		)}
 	}
 	return executorResp, nil
 }
@@ -268,4 +292,11 @@ func extractModuleAddress(raw json.RawMessage) string {
 
 func isEVMAddress(value string) bool {
 	return evmAddressPattern.MatchString(strings.TrimSpace(value))
+}
+
+func defaultIfEmpty(value string, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }

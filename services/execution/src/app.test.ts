@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { buildApp } from './app.js';
 import type { AppConfig } from './config.js';
-import { assertPayloadConsistency } from './executor.js';
+import { assertPayloadConsistency, buildReceiptResponse } from './executor.js';
 import type { ExecuteMatchRequest, ExecuteMatchResponse } from './types.js';
 
 const config: AppConfig = {
@@ -17,6 +17,7 @@ const config: AppConfig = {
   expectedActionSigner: undefined,
   dryRun: true,
   waitForReceipt: false,
+  receiptTimeoutMs: 60_000,
 };
 
 const requestPayload: ExecuteMatchRequest = {
@@ -161,4 +162,29 @@ test('POST /execute forwards valid payload to executor', async () => {
   assert.deepEqual(received, requestPayload);
 
   await app.close();
+});
+
+test('a reverted receipt is not an accepted fill', () => {
+  const response = buildReceiptResponse('0xabc' as `0x${string}`, {
+    status: 'reverted',
+    blockNumber: 42n,
+  });
+
+  // The matcher finalizes on accepted. A revert moved no funds on chain, so
+  // recording it as a fill would put the book out of sync with settlement.
+  assert.equal(response.accepted, false);
+  assert.equal(response.receipt_status, 'reverted');
+  assert.equal(response.block_number, '42');
+  assert.equal(response.tx_hash, '0xabc');
+});
+
+test('a successful receipt is an accepted fill', () => {
+  const response = buildReceiptResponse('0xdef' as `0x${string}`, {
+    status: 'success',
+    blockNumber: 43n,
+  });
+
+  assert.equal(response.accepted, true);
+  assert.equal(response.receipt_status, 'success');
+  assert.equal(response.block_number, '43');
 });
