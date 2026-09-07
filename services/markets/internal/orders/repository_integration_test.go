@@ -462,3 +462,90 @@ insert into active_orders (
 		t.Fatal("open gate should have produced a candidate")
 	}
 }
+
+// A matcher killed between reserveOrders and its deferred release leaves both
+// orders in 'matching', where nothing recovers them: the book reads 'active', the
+// expiry sweep only touches 'active', and cancel requires 'active' too -- so the
+// owner cannot even withdraw the order whose nonce is now consumed.
+func TestReleaseStaleMatchesRecoversStrandedOrders(t *testing.T) {
+	pool := openTestPool(t)
+	repo := NewRepository(pool)
+	ctx := context.Background()
+	suffix := fmt.Sprintf("it-stale-%d", time.Now().UnixNano())
+
+	strandedID := suffix + "-stranded"
+	activeID := suffix + "-active"
+	filledID := suffix + "-filled"
+	assetAddress := "0xfeed000000000000000000000000000000000002"
+	subID := "1789567202"
+
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "delete from active_orders where order_id = any($1)", []string{strandedID, activeID, filledID})
+	})
+
+	insertOrder := `
+insert into active_orders (
+  order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
+  desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status
+) values ($1, $2, $3, 1, 1, $4, $5, $6, $7, '100', '0', $8, $9, '0', $10, '{}'::jsonb, '0xsig', $11)
+`
+	expiry := time.Now().Add(time.Hour).Unix()
+	for _, row := range []struct{ id, nonce, status string }{
+		{strandedID, "101", "matching"},
+		{activeID, "102", "active"},
+		{filledID, "103", "filled"},
+	} {
+		if _, err := pool.Exec(ctx, insertOrder, row.id, "0xowner", "0xsigner", row.nonce, SideBuy,
+			assetAddress, subID, "1605.25", "1605250000000000000000", expiry, row.status); err != nil {
+			t.Fatalf("insert %s: %v", row.id, err)
+		}
+	}
+
+	released, err := repo.ReleaseStaleMatches(ctx)
+	if err != nil {
+		t.Fatalf("release stale matches: %v", err)
+	}
+	if released < 1 {
+		t.Fatalf("expected at least the stranded order to be released, got %d", released)
+	}
+
+	statuses := map[string]string{}
+	rows, err := pool.Query(ctx, "select order_id, status from active_orders where order_id = any($1)",
+		[]string{strandedID, activeID, filledID})
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, status string
+		if err := rows.Scan(&id, &status); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		statuses[id] = status
+	}
+
+	if statuses[strandedID] != "active" {
+		t.Fatalf("stranded order status = %q, want active", statuses[strandedID])
+	}
+	// Terminal states must be untouched: releasing a filled order back to the book
+	// would re-offer size that has already settled on chain.
+	if statuses[filledID] != "filled" {
+		t.Fatalf("filled order status = %q, want filled (must not be swept)", statuses[filledID])
+	}
+	if statuses[activeID] != "active" {
+		t.Fatalf("active order status = %q, want active", statuses[activeID])
+	}
+
+	// Idempotent: a second boot with nothing stranded must move nothing.
+	if _, err := pool.Exec(ctx, "delete from active_orders where order_id = any($1)",
+		[]string{strandedID, activeID, filledID}); err != nil {
+		t.Fatalf("cleanup before idempotency check: %v", err)
+	}
+	again, err := repo.ReleaseStaleMatches(ctx)
+	if err != nil {
+		t.Fatalf("second release: %v", err)
+	}
+	if again != 0 {
+		t.Fatalf("second release moved %d rows, want 0", again)
+	}
+}
