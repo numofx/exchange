@@ -388,3 +388,43 @@ func TestRevertIsADefiniteRefusalNotAnUnknownOutcome(t *testing.T) {
 		t.Fatal("a mined revert is a definite outcome, not an unknown one")
 	}
 }
+
+// The collision is a property of the classifier, not of one error type: every
+// structured outcome quotes a transaction hash, and any hash may begin with the
+// selector's digits. Table-driven so a new structured outcome that forgets the
+// classifiedOutcome marker fails here rather than in production.
+func TestNoClassifiedOutcomeIsEverTextMatched(t *testing.T) {
+	const collidingHash = "0xfea8fa6fcafebabe0123456789012345678901234567890123456789012345"
+
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{
+			name: "mined revert",
+			body: `{"accepted":false,"tx_hash":"` + collidingHash + `","receipt_status":"reverted","block_number":"9"}`,
+		},
+		{
+			name: "receipt wait timed out, transaction still pending",
+			body: `{"accepted":false,"tx_hash":"` + collidingHash + `","receipt_status":"timeout"}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := submitAgainstBody(t, tc.body)
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if !strings.Contains(err.Error(), "0xfea8fa6f") {
+				t.Fatal("test is not exercising the collision")
+			}
+
+			var classified classifiedOutcome
+			if !errors.As(err, &classified) {
+				t.Fatalf("%T does not implement classifiedOutcome, so it will be text-matched", err)
+			}
+			if shouldFinalizeAfterExecutorError(err) {
+				t.Fatal("classified outcome was finalized as a completed fill")
+			}
+		})
+	}
+}

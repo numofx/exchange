@@ -403,12 +403,11 @@ func shouldFinalizeAfterExecutorError(err error) bool {
 		return false
 	}
 
-	// A refusal is a definite non-fill, and it is typed precisely so that the
-	// substring match below can never see it. Those substrings are looked for in
-	// free-form revert text from the RPC, where a 32-byte transaction hash may
-	// legitimately start with the same eight hex digits as the selector.
-	var notAccepted *notAcceptedError
-	if errors.As(err, &notAccepted) {
+	// Anything already classified is exempt from text matching. See classifiedOutcome
+	// -- these messages quote transaction hashes, and a hash can begin with the same
+	// eight hex digits as the selector below.
+	var classified classifiedOutcome
+	if errors.As(err, &classified) {
 		return false
 	}
 
