@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/numofx/matching-backend/internal/config"
 	"github.com/numofx/matching-backend/internal/db"
@@ -19,7 +22,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	ctx := context.Background()
+	// SIGTERM is how ECS and Railway both ask a task to stop. Without this the
+	// process is killed outright, and a kill between reserveOrders and the deferred
+	// release in tickInstrument strands both orders in 'matching' permanently.
+	// Cancelling the context instead lets the current tick unwind and run that
+	// release, which uses a detached context precisely so it survives shutdown.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	pool, err := db.NewPool(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -35,8 +44,25 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Belt to the shutdown handling's braces: a SIGKILL, an OOM or a crashed node
+	// leaves no chance to unwind, so recover anything a previous process stranded.
+	// See orders.ReleaseStaleMatches for why this is safe to run unconditionally.
+	released, err := ordersRepo.ReleaseStaleMatches(ctx)
+	if err != nil {
+		slog.Error("release stale matches", "error", err)
+		os.Exit(1)
+	}
+	if released > 0 {
+		slog.Warn("released orders stranded in matching by a previous process", "count", released)
+	}
+
 	engine := matching.NewEngine(cfg, pool)
 	if err := engine.Run(ctx); err != nil {
+		// A cancelled context is this process being asked to stop, not a failure.
+		if errors.Is(err, context.Canceled) {
+			slog.Info("matcher stopped")
+			return
+		}
 		slog.Error("run matcher", "error", err)
 		os.Exit(1)
 	}
