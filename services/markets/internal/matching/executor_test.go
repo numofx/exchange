@@ -1,9 +1,14 @@
 package matching
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/numofx/matching-backend/internal/orders"
 )
@@ -221,4 +226,98 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+// testCandidate is a minimal well-formed pair: enough for buildExecutorRequest to
+// succeed so the tests below exercise response handling rather than validation.
+func testCandidate() orders.MatchCandidate {
+	return orders.MatchCandidate{
+		Taker: orders.Order{
+			OrderID:       "taker-1",
+			OwnerAddress:  "0x1111111111111111111111111111111111111111",
+			SignerAddress: "0x3333333333333333333333333333333333333333",
+			AssetAddress:  "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			SubaccountID:  "10",
+			ActionJSON:    json.RawMessage(`{"subaccount_id":"10","nonce":"1","module":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","data":"0xaaa","expiry":"100","owner":"0x1111111111111111111111111111111111111111","signer":"0x3333333333333333333333333333333333333333"}`),
+			Signature:     "0x01",
+			Nonce:         "1",
+		},
+		Maker: orders.Order{
+			OrderID:       "maker-1",
+			OwnerAddress:  "0x2222222222222222222222222222222222222222",
+			SignerAddress: "0x4444444444444444444444444444444444444444",
+			SubaccountID:  "11",
+			ActionJSON:    json.RawMessage(`{"subaccount_id":"11","nonce":"2","module":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","data":"0xbbb","expiry":"100","owner":"0x2222222222222222222222222222222222222222","signer":"0x4444444444444444444444444444444444444444"}`),
+			Signature:     "0x02",
+			Nonce:         "2",
+		},
+	}
+}
+
+func submitAgainstBody(t *testing.T, body string) (ExecutorResponse, error) {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewExecutorClient(server.URL, "0xfeed", 5*time.Second)
+	return client.SubmitMatchForMarket(context.Background(), "USDCcNGN-SPOT", testCandidate(), "75", "3")
+}
+
+// A transaction that mined and reverted moved nothing on chain. It must not reach
+// the caller as a success, or the matcher records a fill that settlement never made.
+func TestSubmitMatchRejectsRevertedReceipt(t *testing.T) {
+	resp, err := submitAgainstBody(t, `{"accepted":false,"tx_hash":"0xdead","receipt_status":"reverted","block_number":"42"}`)
+	if err == nil {
+		t.Fatalf("expected an error for a reverted receipt, got response %+v", resp)
+	}
+	if !strings.Contains(err.Error(), "reverted") {
+		t.Fatalf("error should name the receipt status, got %q", err)
+	}
+	if !strings.Contains(err.Error(), "0xdead") {
+		t.Fatalf("error should name the transaction, got %q", err)
+	}
+
+	// The reconciliation path finalizes only for TM_FillLimitCrossed, which means an
+	// already-settled fill. A revert is the opposite and must not take that branch.
+	if shouldFinalizeAfterExecutorError(err) {
+		t.Fatal("a reverted transaction must not be reconciled as a completed fill")
+	}
+}
+
+func TestSubmitMatchAcceptsSuccessfulReceipt(t *testing.T) {
+	resp, err := submitAgainstBody(t, `{"accepted":true,"tx_hash":"0xbeef","receipt_status":"success","block_number":"43"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resp.Accepted {
+		t.Fatal("accepted should be true")
+	}
+	if resp.ReceiptStatus != "success" || resp.BlockNumber != "43" {
+		t.Fatalf("receipt fields dropped: %+v", resp)
+	}
+}
+
+// The older execution-service replied {} to mean "submitted, not waiting". With no
+// transaction hash there is nothing on chain to contradict, so this stays accepted.
+func TestSubmitMatchKeepsLegacyEmptyAcceptance(t *testing.T) {
+	resp, err := submitAgainstBody(t, `{}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resp.Accepted {
+		t.Fatal("an empty response should still count as accepted")
+	}
+}
+
+func TestNewExecutorClientTimeout(t *testing.T) {
+	if got := NewExecutorClient("http://x", "0x", 90*time.Second).httpClient.Timeout; got != 90*time.Second {
+		t.Fatalf("timeout = %v, want 90s", got)
+	}
+	if got := NewExecutorClient("http://x", "0x", 0).httpClient.Timeout; got != 5*time.Second {
+		t.Fatalf("zero timeout should fall back to 5s, got %v", got)
+	}
 }
