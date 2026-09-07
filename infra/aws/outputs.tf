@@ -14,7 +14,7 @@ output "rds_endpoint" {
 
 output "rds_internal_hostname" {
   description = "What DATABASE_URL actually resolves through — unchanged from Railway."
-  value       = aws_route53_record.postgres_internal.name
+  value       = "${aws_service_discovery_service.postgres.name}.${var.internal_namespace}"
 }
 
 output "ecs_cluster" {
