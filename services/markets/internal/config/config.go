@@ -32,10 +32,16 @@ type Config struct {
 	TradeModuleAddress      string
 	ExecutorURL             string
 	ExecutorManagerData     string
-	ExpectedOrderOwner      string
-	ExpectedOrderSigner     string
-	DeribitBaseURL          string
-	DeribitWSURL            string
+	// ExecutorTimeout bounds the whole HTTP exchange with execution-service. It must
+	// exceed that service's RECEIPT_TIMEOUT_MS whenever WAIT_FOR_RECEIPT is on: if the
+	// matcher gives up first, the transaction is still in flight, the pair is released,
+	// and the retry simulates against a nonce whose fill has not landed yet -- so it
+	// passes, and a second verifyAndMatch goes out for a fill already broadcast.
+	ExecutorTimeout     time.Duration
+	ExpectedOrderOwner  string
+	ExpectedOrderSigner string
+	DeribitBaseURL      string
+	DeribitWSURL        string
 
 	CNGNSpotAssetAddress string
 	// CashAssetAddress is the CashAsset contract. Required to check that a buyer can fund
@@ -106,6 +112,8 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("parse MATCHER_POLL_INTERVAL: %w", err)
 	}
 	cfg.MatcherPollInterval = pollInterval
+
+	cfg.ExecutorTimeout = getenvDurationDefault("EXECUTOR_TIMEOUT", 5*time.Second)
 
 	cfg.EventsPruneHorizon = getenvDurationDefault("EVENTS_PRUNE_HORIZON", 2*time.Hour)
 	cfg.EventsPruneInterval = getenvDurationDefault("EVENTS_PRUNE_INTERVAL", 5*time.Minute)

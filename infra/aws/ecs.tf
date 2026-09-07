@@ -147,6 +147,8 @@ resource "aws_ecs_task_definition" "matcher" {
       { name = "SERVICE_MODE", value = "matcher" },
       { name = "CNGN_SPOT_ASSET_ADDRESS", value = var.cngn_spot_asset_address },
       { name = "MATCHER_POLL_INTERVAL", value = var.matcher_poll_interval },
+      # Must exceed execution-service's RECEIPT_TIMEOUT_MS (60s). See that setting.
+      { name = "EXECUTOR_TIMEOUT", value = "90s" },
       # Hostname preserved from Railway — see internal_namespace.
       { name = "EXECUTOR_URL", value = "http://execution-service.${var.internal_namespace}:8081/execute" },
     ])
@@ -178,20 +180,23 @@ resource "aws_ecs_task_definition" "execution" {
     environment = concat(local.chain_env, [
       { name = "PORT", value = "8081" },
       { name = "HOST", value = "0.0.0.0" },
-      # WAIT_FOR_RECEIPT must stay false until the matcher can survive the wait.
-      # With it on, execution blocks in waitForTransactionReceipt (viem default:
-      # 180s, confirmations 1) while the matcher's executor client gives up after
-      # 5s (matching/executor.go:79). The timeout is not TM_FillLimitCrossed, so
-      # shouldFinalizeAfterExecutorError is false and the pair is released and
-      # retried 2s later (matching/backoff.go). That retry simulates against a
-      # state where filled[owner][nonce] has not moved yet, because the first tx
-      # is still pending -- so it passes, and a second verifyAndMatch goes out on
-      # the next nonce for a fill already in flight.
+      # The receipt wait is bounded here rather than left at viem's 180s default,
+      # because EXECUTOR_TIMEOUT on the matcher (90s, below) must outlast it. If the
+      # matcher gave up first, the transaction would still be in flight, the pair
+      # would be released, and the retry would simulate against a nonce whose fill
+      # had not landed -- passing, and broadcasting a second verifyAndMatch for a
+      # fill already on the wire. 60s < 90s keeps that window closed.
+      { name = "RECEIPT_TIMEOUT_MS", value = "60000" },
+      # Still false. The two hazards that made it dangerous are closed: a reverted
+      # receipt now comes back as accepted: false rather than a recorded fill, and a
+      # receipt-wait timeout comes back as an UNKNOWN outcome, on which the matcher
+      # declines to release the pair rather than retrying a transaction that may
+      # still mine.
       #
-      # Turning this on requires, in order: an executor-client timeout longer
-      # than the receipt wait, and an actual check of receipt.status (today a
-      # reverted receipt still returns accepted: true, and the Go response struct
-      # drops receipt_status entirely).
+      # The remaining cost of turning it on is operational, not correctness: an
+      # unknown outcome strands both orders in `matching` until someone resolves
+      # them against the chain, and there is no tooling for that yet. No tx_hash is
+      # persisted on the fill row either, so the resolution is manual.
       { name = "WAIT_FOR_RECEIPT", value = "false" },
       # DRY_RUN was unset on Railway and defaulted. Stated explicitly here so the
       # value is a decision rather than a default nobody chose.

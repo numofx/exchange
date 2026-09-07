@@ -87,8 +87,12 @@ export const executeMatchRequestSchema = z
 export type ExecuteMatchRequest = z.infer<typeof executeMatchRequestSchema>;
 
 export type ExecuteMatchResponse = {
-  accepted: true;
+  // False when the transaction was mined and reverted. The matcher must not
+  // record a fill for one of these, so it is not a `true` literal any more.
+  accepted: boolean;
   tx_hash: `0x${string}` | 'dry-run';
-  receipt_status?: 'success' | 'reverted';
+  // 'timeout' means the outcome is UNKNOWN, not failed: the transaction was
+  // broadcast and may still mine. It is not safe to retry the match on this.
+  receipt_status?: 'success' | 'reverted' | 'timeout';
   block_number?: string;
 };
