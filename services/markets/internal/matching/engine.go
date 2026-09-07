@@ -2,6 +2,7 @@ package matching
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"math/big"
 	"strings"
@@ -239,6 +240,24 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 			return
 		}
 
+		// An unknown outcome is deliberately NOT released. Releasing would return both
+		// orders to the book and let the pair re-cross while the first transaction is
+		// still pending, broadcasting a second fill for the same cross. Leaving them
+		// reserved strands the pair until an operator resolves it against the chain,
+		// which is the lesser failure: recoverable by hand, rather than a duplicate
+		// settlement that nothing downstream can detect.
+		var unknown *outcomeUnknownError
+		if errors.As(err, &unknown) {
+			release = false
+			slog.Error("match outcome unknown, orders left reserved for manual resolution",
+				"market", instrument.Symbol,
+				"taker_order_id", candidate.Taker.OrderID,
+				"maker_order_id", candidate.Maker.OrderID,
+				"error", err,
+			)
+			return
+		}
+
 		e.noteMatchFailure(instrument.Symbol, *candidate, "executor_error")
 		slog.Error("submit match", "market", instrument.Symbol, "taker_order_id", candidate.Taker.OrderID, "maker_order_id", candidate.Maker.OrderID, "error", err)
 		_ = e.orders.ReleaseMatchAfterFailure(reconcileCtx, candidate.Taker.OrderID, candidate.Maker.OrderID)
@@ -381,6 +400,15 @@ func detachedContext(parent context.Context, timeout time.Duration) (context.Con
 
 func shouldFinalizeAfterExecutorError(err error) bool {
 	if err == nil {
+		return false
+	}
+
+	// A refusal is a definite non-fill, and it is typed precisely so that the
+	// substring match below can never see it. Those substrings are looked for in
+	// free-form revert text from the RPC, where a 32-byte transaction hash may
+	// legitimately start with the same eight hex digits as the selector.
+	var notAccepted *notAcceptedError
+	if errors.As(err, &notAccepted) {
 		return false
 	}
 

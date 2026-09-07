@@ -187,11 +187,16 @@ resource "aws_ecs_task_definition" "execution" {
       # had not landed -- passing, and broadcasting a second verifyAndMatch for a
       # fill already on the wire. 60s < 90s keeps that window closed.
       { name = "RECEIPT_TIMEOUT_MS", value = "60000" },
-      # Still false, but no longer unsafe to change: execution-service now returns
-      # accepted: false on a reverted receipt, and the matcher turns any
-      # non-acceptance into a backoff-and-release instead of a recorded fill.
-      # Flipping it is a production decision, not a blocked one. What it does NOT
-      # yet buy is traceability -- no tx_hash is persisted on the fill row.
+      # Still false. The two hazards that made it dangerous are closed: a reverted
+      # receipt now comes back as accepted: false rather than a recorded fill, and a
+      # receipt-wait timeout comes back as an UNKNOWN outcome, on which the matcher
+      # declines to release the pair rather than retrying a transaction that may
+      # still mine.
+      #
+      # The remaining cost of turning it on is operational, not correctness: an
+      # unknown outcome strands both orders in `matching` until someone resolves
+      # them against the chain, and there is no tooling for that yet. No tx_hash is
+      # persisted on the fill row either, so the resolution is manual.
       { name = "WAIT_FOR_RECEIPT", value = "false" },
       # DRY_RUN was unset on Railway and defaulted. Stated explicitly here so the
       # value is a decision rather than a default nobody chose.

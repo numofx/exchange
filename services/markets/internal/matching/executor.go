@@ -158,11 +158,20 @@ func (c *ExecutorClient) SubmitMatchForMarket(ctx context.Context, market string
 		// Absent a tx hash there is nothing on chain to disagree with.
 		executorResp.Accepted = true
 	}
+	if !executorResp.Accepted && strings.EqualFold(executorResp.ReceiptStatus, "timeout") {
+		// The transaction was broadcast and may still mine. Retrying would simulate
+		// against a nonce whose fill has not landed, pass, and put a second
+		// verifyAndMatch on the wire for a fill already in flight.
+		return executorResp, &outcomeUnknownError{message: fmt.Sprintf(
+			"executor outcome unknown: tx %s still pending after receipt wait",
+			defaultIfEmpty(executorResp.TxHash, "unknown"),
+		)}
+	}
 	if !executorResp.Accepted {
 		// A mined-and-reverted transaction lands here. Returning it as an error keeps
 		// every non-acceptance on the one path that backs off and releases the pair,
 		// so no caller can reach FinalizeMatchWithPrice with an unsettled fill.
-		return executorResp, &matcherError{message: fmt.Sprintf(
+		return executorResp, &notAcceptedError{message: fmt.Sprintf(
 			"executor did not accept match: tx %s receipt_status=%s block=%s",
 			executorResp.TxHash,
 			defaultIfEmpty(executorResp.ReceiptStatus, "unknown"),
@@ -299,4 +308,29 @@ func defaultIfEmpty(value string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+// notAcceptedError marks a response execution-service explicitly refused -- today,
+// a transaction that mined and reverted. It is a distinct type rather than a
+// message so that classification never depends on the message text: a transaction
+// hash can begin with the TM_FillLimitCrossed selector's digits by chance, and
+// substring-matching one would read a revert as an already-settled fill.
+type notAcceptedError struct {
+	message string
+}
+
+func (e *notAcceptedError) Error() string {
+	return e.message
+}
+
+// outcomeUnknownError marks a match whose on-chain result could not be determined:
+// the transaction is broadcast and may yet mine. Distinct from notAcceptedError,
+// which means it definitely did not settle. The two demand opposite responses --
+// a refusal is safe to retry, an unknown outcome is not.
+type outcomeUnknownError struct {
+	message string
+}
+
+func (e *outcomeUnknownError) Error() string {
+	return e.message
 }

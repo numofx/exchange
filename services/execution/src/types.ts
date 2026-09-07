@@ -91,6 +91,8 @@ export type ExecuteMatchResponse = {
   // record a fill for one of these, so it is not a `true` literal any more.
   accepted: boolean;
   tx_hash: `0x${string}` | 'dry-run';
-  receipt_status?: 'success' | 'reverted';
+  // 'timeout' means the outcome is UNKNOWN, not failed: the transaction was
+  // broadcast and may still mine. It is not safe to retry the match on this.
+  receipt_status?: 'success' | 'reverted' | 'timeout';
   block_number?: string;
 };
