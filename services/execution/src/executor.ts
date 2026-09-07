@@ -1,4 +1,5 @@
 import {
+  WaitForTransactionReceiptTimeoutError,
   createPublicClient,
   createWalletClient,
   defineChain,
@@ -75,12 +76,22 @@ export class MatchExecutor {
       return { accepted: true, tx_hash: txHash };
     }
 
-    const receipt = await this.publicClient.waitForTransactionReceipt({
-      hash: txHash,
-      timeout: this.config.receiptTimeoutMs,
-    });
-
-    return buildReceiptResponse(txHash, receipt);
+    try {
+      const receipt = await this.publicClient.waitForTransactionReceipt({
+        hash: txHash,
+        timeout: this.config.receiptTimeoutMs,
+      });
+      return buildReceiptResponse(txHash, receipt);
+    } catch (error) {
+      if (error instanceof WaitForTransactionReceiptTimeoutError) {
+        // Report the unknown outcome rather than throwing. A thrown error reaches
+        // the matcher as a plain failure, and the matcher retries plain failures --
+        // which would broadcast a second verifyAndMatch for a transaction that is
+        // still pending. Naming the outcome lets the matcher decline to retry.
+        return { accepted: false, tx_hash: txHash, receipt_status: 'timeout' };
+      }
+      throw error;
+    }
   }
 }
 

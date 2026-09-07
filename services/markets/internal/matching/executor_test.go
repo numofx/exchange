@@ -3,6 +3,7 @@ package matching
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -319,5 +320,71 @@ func TestNewExecutorClientTimeout(t *testing.T) {
 	}
 	if got := NewExecutorClient("http://x", "0x", 0).httpClient.Timeout; got != 5*time.Second {
 		t.Fatalf("zero timeout should fall back to 5s, got %v", got)
+	}
+}
+
+// A transaction hash is 32 bytes of hex, so one can begin with the same eight
+// digits as the TM_FillLimitCrossed selector. If refusals were classified by
+// message text, such a hash would make a revert read as an already-settled fill
+// and the engine would finalize it -- the exact outcome this path exists to stop.
+func TestRevertIsNotConfusedWithTheFillLimitSelector(t *testing.T) {
+	resp, err := submitAgainstBody(t, `{"accepted":false,"tx_hash":"0xfea8fa6f1234567890123456789012345678901234567890123456789012ab","receipt_status":"reverted","block_number":"42"}`)
+	if err == nil {
+		t.Fatalf("expected an error, got %+v", resp)
+	}
+	if !strings.Contains(err.Error(), "0xfea8fa6f") {
+		t.Fatal("test is not exercising the collision: the hash should appear in the message")
+	}
+	if shouldFinalizeAfterExecutorError(err) {
+		t.Fatal("a reverted transaction was misread as an already-settled fill")
+	}
+}
+
+// The reconciliation path must still fire for a genuine already-filled revert.
+func TestFillLimitCrossedStillReconciles(t *testing.T) {
+	_, err := submitAgainstBody(t, `{"error":"execution reverted: TM_FillLimitCrossed"}`)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !shouldFinalizeAfterExecutorError(err) {
+		t.Fatalf("TM_FillLimitCrossed should still reconcile, got %q", err)
+	}
+}
+
+// A receipt-wait timeout is not a failure: the transaction is broadcast and may
+// still mine. It must be distinguishable from a revert, because a revert is safe
+// to retry and this is not.
+func TestReceiptTimeoutIsAnUnknownOutcome(t *testing.T) {
+	_, err := submitAgainstBody(t, `{"accepted":false,"tx_hash":"0xpending","receipt_status":"timeout"}`)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+
+	var unknown *outcomeUnknownError
+	if !errors.As(err, &unknown) {
+		t.Fatalf("timeout should be an unknown outcome, got %T: %v", err, err)
+	}
+
+	// It must not be classed as a definite refusal, which the engine releases
+	// and retries, nor reconciled as an already-settled fill.
+	var notAccepted *notAcceptedError
+	if errors.As(err, &notAccepted) {
+		t.Fatal("an unknown outcome must not be treated as a definite refusal")
+	}
+	if shouldFinalizeAfterExecutorError(err) {
+		t.Fatal("an unknown outcome must not be finalized as a fill")
+	}
+}
+
+// A revert stays retryable: nothing settled, so returning the orders to the book
+// is correct.
+func TestRevertIsADefiniteRefusalNotAnUnknownOutcome(t *testing.T) {
+	_, err := submitAgainstBody(t, `{"accepted":false,"tx_hash":"0xdead","receipt_status":"reverted","block_number":"7"}`)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	var unknown *outcomeUnknownError
+	if errors.As(err, &unknown) {
+		t.Fatal("a mined revert is a definite outcome, not an unknown one")
 	}
 }
