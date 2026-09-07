@@ -310,6 +310,21 @@ func defaultIfEmpty(value string, fallback string) string {
 	return value
 }
 
+// classifiedOutcome is implemented by every error that already carries a decided
+// classification, so shouldFinalizeAfterExecutorError can reject the whole class
+// before it text-matches anything. That guard has to be structural: these messages
+// quote transaction hashes, a hash is 32 bytes of hex, and one can begin with the
+// same eight digits as the TM_FillLimitCrossed selector. Matching such a message
+// reads a revert -- or worse, a still-pending transaction -- as a settled fill.
+//
+// Adding a new structured error means implementing this marker. Anything that does
+// not is treated as free-form RPC text and matched, which is the safe default only
+// for errors that genuinely are free-form RPC text.
+type classifiedOutcome interface {
+	error
+	alreadyClassified()
+}
+
 // notAcceptedError marks a response execution-service explicitly refused -- today,
 // a transaction that mined and reverted. It is a distinct type rather than a
 // message so that classification never depends on the message text: a transaction
@@ -334,3 +349,13 @@ type outcomeUnknownError struct {
 func (e *outcomeUnknownError) Error() string {
 	return e.message
 }
+
+func (e *notAcceptedError) alreadyClassified() {}
+
+func (e *outcomeUnknownError) alreadyClassified() {}
+
+// Compile-time proof that both structured outcomes are exempt from text matching.
+var (
+	_ classifiedOutcome = (*notAcceptedError)(nil)
+	_ classifiedOutcome = (*outcomeUnknownError)(nil)
+)
