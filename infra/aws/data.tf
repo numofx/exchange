@@ -13,9 +13,13 @@ resource "aws_db_parameter_group" "pg18" {
   # Production runs Etc/UTC. A restored copy on any other timezone renders
   # timestamptz differently — the stored values are identical, but every log line,
   # API response and CSV export shifts by the offset.
+  # timezone is a static parameter: RDS classifies it pending-reboot and rejects an
+  # immediate apply. Terraform defaults apply_method to "immediate", so leaving it
+  # unset makes every plan show a permanent diff against what RDS actually stored.
   parameter {
-    name  = "timezone"
-    value = "UTC"
+    name         = "timezone"
+    value        = "UTC"
+    apply_method = "pending-reboot"
   }
 
   lifecycle {
@@ -110,10 +114,35 @@ resource "aws_service_discovery_service" "execution" {
 }
 
 # postgres.railway.internal -> RDS, so DATABASE_URL keeps the hostname it had.
-resource "aws_route53_record" "postgres_internal" {
-  zone_id = aws_service_discovery_private_dns_namespace.internal.hosted_zone
-  name    = "postgres.${var.internal_namespace}"
-  type    = "CNAME"
-  ttl     = 60
-  records = [aws_db_instance.main.address]
+#
+# This has to go through Cloud Map rather than a plain aws_route53_record. The
+# namespace above creates a hosted zone that Cloud Map owns, and Route 53 refuses
+# writes to it:
+#
+#   AccessDenied: The resource hostedzone/... can only be managed through AWS Cloud Map
+#
+# The supported equivalent is a service whose instance carries AWS_INSTANCE_CNAME.
+# Cloud Map only allows CNAME records under the WEIGHTED routing policy, and a
+# CNAME service takes no health_check_custom_config -- RDS is not an ECS task
+# registering and deregistering itself, it is one fixed endpoint.
+resource "aws_service_discovery_service" "postgres" {
+  name = "postgres"
+
+  dns_config {
+    namespace_id = aws_service_discovery_private_dns_namespace.internal.id
+    dns_records {
+      ttl  = 60
+      type = "CNAME"
+    }
+    routing_policy = "WEIGHTED"
+  }
+}
+
+resource "aws_service_discovery_instance" "postgres" {
+  instance_id = "postgres"
+  service_id  = aws_service_discovery_service.postgres.id
+
+  attributes = {
+    AWS_INSTANCE_CNAME = aws_db_instance.main.address
+  }
 }
