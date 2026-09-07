@@ -1,9 +1,15 @@
 package matching
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/numofx/matching-backend/internal/orders"
 )
@@ -221,4 +227,204 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+// testCandidate is a minimal well-formed pair: enough for buildExecutorRequest to
+// succeed so the tests below exercise response handling rather than validation.
+func testCandidate() orders.MatchCandidate {
+	return orders.MatchCandidate{
+		Taker: orders.Order{
+			OrderID:       "taker-1",
+			OwnerAddress:  "0x1111111111111111111111111111111111111111",
+			SignerAddress: "0x3333333333333333333333333333333333333333",
+			AssetAddress:  "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			SubaccountID:  "10",
+			ActionJSON:    json.RawMessage(`{"subaccount_id":"10","nonce":"1","module":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","data":"0xaaa","expiry":"100","owner":"0x1111111111111111111111111111111111111111","signer":"0x3333333333333333333333333333333333333333"}`),
+			Signature:     "0x01",
+			Nonce:         "1",
+		},
+		Maker: orders.Order{
+			OrderID:       "maker-1",
+			OwnerAddress:  "0x2222222222222222222222222222222222222222",
+			SignerAddress: "0x4444444444444444444444444444444444444444",
+			SubaccountID:  "11",
+			ActionJSON:    json.RawMessage(`{"subaccount_id":"11","nonce":"2","module":"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","data":"0xbbb","expiry":"100","owner":"0x2222222222222222222222222222222222222222","signer":"0x4444444444444444444444444444444444444444"}`),
+			Signature:     "0x02",
+			Nonce:         "2",
+		},
+	}
+}
+
+func submitAgainstBody(t *testing.T, body string) (ExecutorResponse, error) {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewExecutorClient(server.URL, "0xfeed", 5*time.Second)
+	return client.SubmitMatchForMarket(context.Background(), "USDCcNGN-SPOT", testCandidate(), "75", "3")
+}
+
+// A transaction that mined and reverted moved nothing on chain. It must not reach
+// the caller as a success, or the matcher records a fill that settlement never made.
+func TestSubmitMatchRejectsRevertedReceipt(t *testing.T) {
+	resp, err := submitAgainstBody(t, `{"accepted":false,"tx_hash":"0xdead","receipt_status":"reverted","block_number":"42"}`)
+	if err == nil {
+		t.Fatalf("expected an error for a reverted receipt, got response %+v", resp)
+	}
+	if !strings.Contains(err.Error(), "reverted") {
+		t.Fatalf("error should name the receipt status, got %q", err)
+	}
+	if !strings.Contains(err.Error(), "0xdead") {
+		t.Fatalf("error should name the transaction, got %q", err)
+	}
+
+	// The reconciliation path finalizes only for TM_FillLimitCrossed, which means an
+	// already-settled fill. A revert is the opposite and must not take that branch.
+	if shouldFinalizeAfterExecutorError(err) {
+		t.Fatal("a reverted transaction must not be reconciled as a completed fill")
+	}
+}
+
+func TestSubmitMatchAcceptsSuccessfulReceipt(t *testing.T) {
+	resp, err := submitAgainstBody(t, `{"accepted":true,"tx_hash":"0xbeef","receipt_status":"success","block_number":"43"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resp.Accepted {
+		t.Fatal("accepted should be true")
+	}
+	if resp.ReceiptStatus != "success" || resp.BlockNumber != "43" {
+		t.Fatalf("receipt fields dropped: %+v", resp)
+	}
+}
+
+// The older execution-service replied {} to mean "submitted, not waiting". With no
+// transaction hash there is nothing on chain to contradict, so this stays accepted.
+func TestSubmitMatchKeepsLegacyEmptyAcceptance(t *testing.T) {
+	resp, err := submitAgainstBody(t, `{}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resp.Accepted {
+		t.Fatal("an empty response should still count as accepted")
+	}
+}
+
+func TestNewExecutorClientTimeout(t *testing.T) {
+	if got := NewExecutorClient("http://x", "0x", 90*time.Second).httpClient.Timeout; got != 90*time.Second {
+		t.Fatalf("timeout = %v, want 90s", got)
+	}
+	if got := NewExecutorClient("http://x", "0x", 0).httpClient.Timeout; got != 5*time.Second {
+		t.Fatalf("zero timeout should fall back to 5s, got %v", got)
+	}
+}
+
+// A transaction hash is 32 bytes of hex, so one can begin with the same eight
+// digits as the TM_FillLimitCrossed selector. If refusals were classified by
+// message text, such a hash would make a revert read as an already-settled fill
+// and the engine would finalize it -- the exact outcome this path exists to stop.
+func TestRevertIsNotConfusedWithTheFillLimitSelector(t *testing.T) {
+	resp, err := submitAgainstBody(t, `{"accepted":false,"tx_hash":"0xfea8fa6f1234567890123456789012345678901234567890123456789012ab","receipt_status":"reverted","block_number":"42"}`)
+	if err == nil {
+		t.Fatalf("expected an error, got %+v", resp)
+	}
+	if !strings.Contains(err.Error(), "0xfea8fa6f") {
+		t.Fatal("test is not exercising the collision: the hash should appear in the message")
+	}
+	if shouldFinalizeAfterExecutorError(err) {
+		t.Fatal("a reverted transaction was misread as an already-settled fill")
+	}
+}
+
+// The reconciliation path must still fire for a genuine already-filled revert.
+func TestFillLimitCrossedStillReconciles(t *testing.T) {
+	_, err := submitAgainstBody(t, `{"error":"execution reverted: TM_FillLimitCrossed"}`)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !shouldFinalizeAfterExecutorError(err) {
+		t.Fatalf("TM_FillLimitCrossed should still reconcile, got %q", err)
+	}
+}
+
+// A receipt-wait timeout is not a failure: the transaction is broadcast and may
+// still mine. It must be distinguishable from a revert, because a revert is safe
+// to retry and this is not.
+func TestReceiptTimeoutIsAnUnknownOutcome(t *testing.T) {
+	_, err := submitAgainstBody(t, `{"accepted":false,"tx_hash":"0xpending","receipt_status":"timeout"}`)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+
+	var unknown *outcomeUnknownError
+	if !errors.As(err, &unknown) {
+		t.Fatalf("timeout should be an unknown outcome, got %T: %v", err, err)
+	}
+
+	// It must not be classed as a definite refusal, which the engine releases
+	// and retries, nor reconciled as an already-settled fill.
+	var notAccepted *notAcceptedError
+	if errors.As(err, &notAccepted) {
+		t.Fatal("an unknown outcome must not be treated as a definite refusal")
+	}
+	if shouldFinalizeAfterExecutorError(err) {
+		t.Fatal("an unknown outcome must not be finalized as a fill")
+	}
+}
+
+// A revert stays retryable: nothing settled, so returning the orders to the book
+// is correct.
+func TestRevertIsADefiniteRefusalNotAnUnknownOutcome(t *testing.T) {
+	_, err := submitAgainstBody(t, `{"accepted":false,"tx_hash":"0xdead","receipt_status":"reverted","block_number":"7"}`)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	var unknown *outcomeUnknownError
+	if errors.As(err, &unknown) {
+		t.Fatal("a mined revert is a definite outcome, not an unknown one")
+	}
+}
+
+// The collision is a property of the classifier, not of one error type: every
+// structured outcome quotes a transaction hash, and any hash may begin with the
+// selector's digits. Table-driven so a new structured outcome that forgets the
+// classifiedOutcome marker fails here rather than in production.
+func TestNoClassifiedOutcomeIsEverTextMatched(t *testing.T) {
+	const collidingHash = "0xfea8fa6fcafebabe0123456789012345678901234567890123456789012345"
+
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{
+			name: "mined revert",
+			body: `{"accepted":false,"tx_hash":"` + collidingHash + `","receipt_status":"reverted","block_number":"9"}`,
+		},
+		{
+			name: "receipt wait timed out, transaction still pending",
+			body: `{"accepted":false,"tx_hash":"` + collidingHash + `","receipt_status":"timeout"}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := submitAgainstBody(t, tc.body)
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if !strings.Contains(err.Error(), "0xfea8fa6f") {
+				t.Fatal("test is not exercising the collision")
+			}
+
+			var classified classifiedOutcome
+			if !errors.As(err, &classified) {
+				t.Fatalf("%T does not implement classifiedOutcome, so it will be text-matched", err)
+			}
+			if shouldFinalizeAfterExecutorError(err) {
+				t.Fatal("classified outcome was finalized as a completed fill")
+			}
+		})
+	}
 }

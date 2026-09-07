@@ -68,16 +68,27 @@ type ExecutorResponse struct {
 	Accepted bool   `json:"accepted"`
 	TxHash   string `json:"tx_hash"`
 	Error    string `json:"error"`
+	// Present only when execution-service waited for a receipt. Previously absent
+	// from this struct, so json.Unmarshal discarded them and a reverted transaction
+	// was indistinguishable from a settled one.
+	ReceiptStatus string `json:"receipt_status"`
+	BlockNumber   string `json:"block_number"`
 }
 
 var evmAddressPattern = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
 
-func NewExecutorClient(url string, managerData string) *ExecutorClient {
+// NewExecutorClient builds the client. timeout bounds the entire request/response
+// exchange, receipt wait included; see config.Config.ExecutorTimeout for why it must
+// outlast execution-service's own receipt timeout.
+func NewExecutorClient(url string, managerData string, timeout time.Duration) *ExecutorClient {
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
 	return &ExecutorClient{
 		url:         strings.TrimSpace(url),
 		managerData: strings.TrimSpace(managerData),
 		httpClient: &http.Client{
-			Timeout: 5 * time.Second,
+			Timeout: timeout,
 		},
 	}
 }
@@ -143,7 +154,29 @@ func (c *ExecutorClient) SubmitMatchForMarket(ctx context.Context, market string
 		return ExecutorResponse{}, fmt.Errorf("executor rejected match: %s", executorResp.Error)
 	}
 	if !executorResp.Accepted && executorResp.TxHash == "" {
+		// Legacy shim: an older execution-service replied {} to mean "submitted".
+		// Absent a tx hash there is nothing on chain to disagree with.
 		executorResp.Accepted = true
+	}
+	if !executorResp.Accepted && strings.EqualFold(executorResp.ReceiptStatus, "timeout") {
+		// The transaction was broadcast and may still mine. Retrying would simulate
+		// against a nonce whose fill has not landed, pass, and put a second
+		// verifyAndMatch on the wire for a fill already in flight.
+		return executorResp, &outcomeUnknownError{message: fmt.Sprintf(
+			"executor outcome unknown: tx %s still pending after receipt wait",
+			defaultIfEmpty(executorResp.TxHash, "unknown"),
+		)}
+	}
+	if !executorResp.Accepted {
+		// A mined-and-reverted transaction lands here. Returning it as an error keeps
+		// every non-acceptance on the one path that backs off and releases the pair,
+		// so no caller can reach FinalizeMatchWithPrice with an unsettled fill.
+		return executorResp, &notAcceptedError{message: fmt.Sprintf(
+			"executor did not accept match: tx %s receipt_status=%s block=%s",
+			executorResp.TxHash,
+			defaultIfEmpty(executorResp.ReceiptStatus, "unknown"),
+			defaultIfEmpty(executorResp.BlockNumber, "unknown"),
+		)}
 	}
 	return executorResp, nil
 }
@@ -269,3 +302,60 @@ func extractModuleAddress(raw json.RawMessage) string {
 func isEVMAddress(value string) bool {
 	return evmAddressPattern.MatchString(strings.TrimSpace(value))
 }
+
+func defaultIfEmpty(value string, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
+}
+
+// classifiedOutcome is implemented by every error that already carries a decided
+// classification, so shouldFinalizeAfterExecutorError can reject the whole class
+// before it text-matches anything. That guard has to be structural: these messages
+// quote transaction hashes, a hash is 32 bytes of hex, and one can begin with the
+// same eight digits as the TM_FillLimitCrossed selector. Matching such a message
+// reads a revert -- or worse, a still-pending transaction -- as a settled fill.
+//
+// Adding a new structured error means implementing this marker. Anything that does
+// not is treated as free-form RPC text and matched, which is the safe default only
+// for errors that genuinely are free-form RPC text.
+type classifiedOutcome interface {
+	error
+	alreadyClassified()
+}
+
+// notAcceptedError marks a response execution-service explicitly refused -- today,
+// a transaction that mined and reverted. It is a distinct type rather than a
+// message so that classification never depends on the message text: a transaction
+// hash can begin with the TM_FillLimitCrossed selector's digits by chance, and
+// substring-matching one would read a revert as an already-settled fill.
+type notAcceptedError struct {
+	message string
+}
+
+func (e *notAcceptedError) Error() string {
+	return e.message
+}
+
+// outcomeUnknownError marks a match whose on-chain result could not be determined:
+// the transaction is broadcast and may yet mine. Distinct from notAcceptedError,
+// which means it definitely did not settle. The two demand opposite responses --
+// a refusal is safe to retry, an unknown outcome is not.
+type outcomeUnknownError struct {
+	message string
+}
+
+func (e *outcomeUnknownError) Error() string {
+	return e.message
+}
+
+func (e *notAcceptedError) alreadyClassified() {}
+
+func (e *outcomeUnknownError) alreadyClassified() {}
+
+// Compile-time proof that both structured outcomes are exempt from text matching.
+var (
+	_ classifiedOutcome = (*notAcceptedError)(nil)
+	_ classifiedOutcome = (*outcomeUnknownError)(nil)
+)

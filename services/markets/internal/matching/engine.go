@@ -2,6 +2,7 @@ package matching
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"math/big"
 	"strings"
@@ -29,7 +30,7 @@ func NewEngine(cfg config.Config, pool *pgxpool.Pool) *Engine {
 	return &Engine{
 		cfg:      cfg,
 		orders:   orders.NewRepository(pool),
-		executor: NewExecutorClient(cfg.ExecutorURL, cfg.ExecutorManagerData),
+		executor: NewExecutorClient(cfg.ExecutorURL, cfg.ExecutorManagerData, cfg.ExecutorTimeout),
 		registry: instruments.DefaultRegistry(cfg),
 		backoff:  newMatchBackoff(),
 		funding:  newFundingChecker(cfg),
@@ -239,6 +240,24 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 			return
 		}
 
+		// An unknown outcome is deliberately NOT released. Releasing would return both
+		// orders to the book and let the pair re-cross while the first transaction is
+		// still pending, broadcasting a second fill for the same cross. Leaving them
+		// reserved strands the pair until an operator resolves it against the chain,
+		// which is the lesser failure: recoverable by hand, rather than a duplicate
+		// settlement that nothing downstream can detect.
+		var unknown *outcomeUnknownError
+		if errors.As(err, &unknown) {
+			release = false
+			slog.Error("match outcome unknown, orders left reserved for manual resolution",
+				"market", instrument.Symbol,
+				"taker_order_id", candidate.Taker.OrderID,
+				"maker_order_id", candidate.Maker.OrderID,
+				"error", err,
+			)
+			return
+		}
+
 		e.noteMatchFailure(instrument.Symbol, *candidate, "executor_error")
 		slog.Error("submit match", "market", instrument.Symbol, "taker_order_id", candidate.Taker.OrderID, "maker_order_id", candidate.Maker.OrderID, "error", err)
 		_ = e.orders.ReleaseMatchAfterFailure(reconcileCtx, candidate.Taker.OrderID, candidate.Maker.OrderID)
@@ -252,7 +271,28 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 		"maker_order_id", candidate.Maker.OrderID,
 		"accepted", executorResp.Accepted,
 		"tx_hash", executorResp.TxHash,
+		"receipt_status", executorResp.ReceiptStatus,
+		"block_number", executorResp.BlockNumber,
 	)
+
+	// SubmitMatchForMarket turns every non-acceptance into an error, so reaching here
+	// with Accepted false should be impossible. Checked anyway: the cost of the branch
+	// is nothing and the cost of being wrong is a fill recorded against a reverted
+	// transaction, which the book cannot detect on its own afterwards.
+	if !executorResp.Accepted {
+		e.noteMatchFailure(instrument.Symbol, *candidate, "executor_not_accepted")
+		slog.Error("executor did not accept match",
+			"market", instrument.Symbol,
+			"taker_order_id", candidate.Taker.OrderID,
+			"maker_order_id", candidate.Maker.OrderID,
+			"tx_hash", executorResp.TxHash,
+			"receipt_status", executorResp.ReceiptStatus,
+		)
+		releaseCtx, releaseCancel := detachedContext(ctx, reconciliationTimeout)
+		defer releaseCancel()
+		_ = e.orders.ReleaseMatchAfterFailure(releaseCtx, candidate.Taker.OrderID, candidate.Maker.OrderID)
+		return
+	}
 
 	reconcileCtx, cancel := detachedContext(ctx, reconciliationTimeout)
 	defer cancel()
@@ -360,6 +400,14 @@ func detachedContext(parent context.Context, timeout time.Duration) (context.Con
 
 func shouldFinalizeAfterExecutorError(err error) bool {
 	if err == nil {
+		return false
+	}
+
+	// Anything already classified is exempt from text matching. See classifiedOutcome
+	// -- these messages quote transaction hashes, and a hash can begin with the same
+	// eight hex digits as the selector below.
+	var classified classifiedOutcome
+	if errors.As(err, &classified) {
 		return false
 	}
 

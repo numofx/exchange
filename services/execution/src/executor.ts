@@ -1,4 +1,5 @@
 import {
+  WaitForTransactionReceiptTimeoutError,
   createPublicClient,
   createWalletClient,
   defineChain,
@@ -75,14 +76,38 @@ export class MatchExecutor {
       return { accepted: true, tx_hash: txHash };
     }
 
-    const receipt = await this.publicClient.waitForTransactionReceipt({ hash: txHash });
-    return {
-      accepted: true,
-      tx_hash: txHash,
-      receipt_status: receipt.status,
-      block_number: receipt.blockNumber.toString(),
-    };
+    try {
+      const receipt = await this.publicClient.waitForTransactionReceipt({
+        hash: txHash,
+        timeout: this.config.receiptTimeoutMs,
+      });
+      return buildReceiptResponse(txHash, receipt);
+    } catch (error) {
+      if (error instanceof WaitForTransactionReceiptTimeoutError) {
+        // Report the unknown outcome rather than throwing. A thrown error reaches
+        // the matcher as a plain failure, and the matcher retries plain failures --
+        // which would broadcast a second verifyAndMatch for a transaction that is
+        // still pending. Naming the outcome lets the matcher decline to retry.
+        return { accepted: false, tx_hash: txHash, receipt_status: 'timeout' };
+      }
+      throw error;
+    }
   }
+}
+
+// viem resolves normally on a reverted receipt -- `status` is a field on the result,
+// not a thrown error. Reporting it without acting on it is how an on-chain revert
+// became an accepted fill in the matcher's database.
+export function buildReceiptResponse(
+  txHash: `0x${string}`,
+  receipt: { status: 'success' | 'reverted'; blockNumber: bigint },
+): ExecuteMatchResponse {
+  return {
+    accepted: receipt.status === 'success',
+    tx_hash: txHash,
+    receipt_status: receipt.status,
+    block_number: receipt.blockNumber.toString(),
+  };
 }
 
 export function buildVerifyAndMatchArgs(request: ExecuteMatchRequest) {
