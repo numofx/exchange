@@ -471,6 +471,34 @@ func (r *Repository) AcquireMatchCandidate(
 	return &MatchCandidate{Taker: taker, Maker: maker}, nil
 }
 
+// ReleaseStaleMatches returns every order left in 'matching' to 'active' and
+// reports how many it moved.
+//
+// Safe to run unconditionally at matcher startup, and only there. 'matching' is
+// written in exactly one place -- reserveOrders, on the matcher's own crossing
+// path -- and desired_count_matcher is validated <= 1, so a second matcher cannot
+// hold a reservation this one would be stealing. Any row still in 'matching' when
+// a matcher boots was stranded by a previous process that died between reserving
+// the pair and running its deferred release.
+//
+// Stranded rows do not recover on their own: the book skips them (it reads
+// status='active'), expireOrders skips them, and the owner cannot cancel one
+// because cancel also requires 'active' -- so the order sits invisible while its
+// nonce stays consumed by the unique (owner_address, nonce) index.
+func (r *Repository) ReleaseStaleMatches(ctx context.Context) (int64, error) {
+	const query = `
+update active_orders
+set status = 'active'
+where status = 'matching'
+`
+
+	tag, err := r.pool.Exec(ctx, query)
+	if err != nil {
+		return 0, mapPGError(err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 func (r *Repository) ReleaseMatch(ctx context.Context, orderIDs ...string) error {
 	if len(orderIDs) == 0 {
 		return nil
