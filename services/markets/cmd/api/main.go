@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/numofx/matching-backend/internal/api"
 	"github.com/numofx/matching-backend/internal/config"
@@ -25,7 +27,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	ctx := context.Background()
+	// SIGTERM is how ECS asks a task to stop. Handling it lets Run drain in-flight
+	// requests instead of dropping them mid-response.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	pool, err := db.NewPool(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -42,7 +47,7 @@ func main() {
 	}
 
 	server := api.NewServer(cfg, pool, registry)
-	if err := server.Run(); err != nil {
+	if err := server.Run(ctx); err != nil {
 		slog.Error("run api server", "error", err)
 		os.Exit(1)
 	}

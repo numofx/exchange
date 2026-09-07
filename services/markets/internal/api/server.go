@@ -193,7 +193,11 @@ func NewServer(cfg config.Config, pool *pgxpool.Pool, registry *instruments.Regi
 	}
 }
 
-func (s *Server) Run() error {
+// Run serves until ctx is cancelled, then drains in-flight requests before
+// returning. The drain matters on every deploy: the ALB stops sending new
+// requests after deregistration, but a process that exits the instant it sees
+// SIGTERM kills the requests already in its hands.
+func (s *Server) Run(ctx context.Context) error {
 	router := chi.NewRouter()
 	router.Get("/healthz", s.handleHealth)
 	router.Get("/v1/markets", s.handleMarkets)
@@ -241,8 +245,39 @@ func (s *Server) Run() error {
 		"chain_rpc_configured", strings.TrimSpace(s.cfg.ChainRPCURL) != "",
 	)
 	slog.Info("api listening", "addr", s.cfg.APIAddr)
-	return http.ListenAndServe(s.cfg.APIAddr, router)
+
+	server := &http.Server{Addr: s.cfg.APIAddr, Handler: router}
+
+	serveErr := make(chan error, 1)
+	go func() {
+		err := server.ListenAndServe()
+		if errors.Is(err, http.ErrServerClosed) {
+			err = nil
+		}
+		serveErr <- err
+	}()
+
+	select {
+	case err := <-serveErr:
+		return err
+	case <-ctx.Done():
+	}
+
+	// Bounded so a wedged handler cannot hold the task past ECS's stop timeout,
+	// which would turn a graceful stop back into a SIGKILL.
+	slog.Info("api shutting down, draining in-flight requests")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), apiShutdownGrace)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		return err
+	}
+	slog.Info("api stopped")
+	return <-serveErr
 }
+
+// apiShutdownGrace is shorter than the ALB's 30s deregistration delay, so the
+// drain finishes while the load balancer is still holding new requests back.
+const apiShutdownGrace = 20 * time.Second
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
