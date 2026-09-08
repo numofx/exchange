@@ -93,6 +93,18 @@ variable "trade_module_address" {
   default = "0x44813aD30b2fFC1bB2871Eed9b19F63c8196eD1c"
 }
 
+variable "ws_allowed_origins" {
+  description = "Origins allowed to open /v1/ws. Empty means same-origin only, which breaks the browser app."
+  type        = string
+  default     = "trade.numofx.com,app.numofx.com"
+}
+
+variable "cancel_protected_order_id_prefixes" {
+  description = "Order id prefixes that cannot be cancelled through the API."
+  type        = string
+  default     = "validation:,smoke:,manual:"
+}
+
 variable "cngn_spot_asset_address" {
   # Losing this silently disables the only market. The boot guard turns that into a
   # crash; keeping it in Terraform keeps it from being lost in the first place.

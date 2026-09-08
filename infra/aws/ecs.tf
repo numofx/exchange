@@ -109,6 +109,23 @@ resource "aws_ecs_task_definition" "markets" {
       { name = "SERVICE_MODE", value = "api" },
       { name = "API_ADDR", value = ":8080" },
       { name = "CNGN_SPOT_ASSET_ADDRESS", value = var.cngn_spot_asset_address },
+
+      # Every one of these was set on Railway and every one has a code default that
+      # differs from it or is empty. Omitting them silently relaxed the service:
+      # ENFORCE_ORDER_SIGNATURES and ENFORCE_CANCEL_SIGNATURES default to false, so
+      # an order with an unverifiable signature would rest on the book as depth that
+      # can never settle, and a cancel would be honoured without proving ownership.
+      # They are stated here rather than left to defaults so a missing variable can
+      # never quietly weaken enforcement again.
+      { name = "ENFORCE_ORDER_SIGNATURES", value = "true" },
+      { name = "ENFORCE_CANCEL_SIGNATURES", value = "true" },
+      { name = "ENFORCE_MATCHING_CUSTODY", value = "true" },
+      { name = "ENFORCE_ACTION_DATA_INVARIANTS", value = "true" },
+      { name = "CANCEL_PROTECTED_ORDER_ID_PREFIXES", value = var.cancel_protected_order_id_prefixes },
+
+      # Empty means same-origin only, which rejects the browser app's websocket and
+      # takes the live order book down without any error the API would surface.
+      { name = "WS_ALLOWED_ORIGINS", value = var.ws_allowed_origins },
     ])
 
     secrets = [
