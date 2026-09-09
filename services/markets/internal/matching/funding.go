@@ -50,8 +50,8 @@ import (
 // price.multiplyDecimal(amountFilled), i.e. price * amount / 1e18, with both operands in 18dp.
 var quoteScale = new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
 
-// requiredQuote returns the cash a buyer must hold to settle this fill: the notional plus the
-// fee they will be charged in the same batch.
+// requiredQuote returns the quote asset a buyer must hold to settle this fill: the notional plus
+// the fee they will be charged in the same batch.
 func requiredQuote(fillPrice string, fillAmount string, takerFee string) (*big.Int, error) {
 	price, err := parsePositiveInt(fillPrice, "fill_price")
 	if err != nil {
@@ -74,9 +74,15 @@ func requiredQuote(fillPrice string, fillAmount string, takerFee string) (*big.I
 	return notional.Add(notional, fee), nil
 }
 
-// fundingChecker reports the cash balance of a subaccount, in 18dp quote units.
+// fundingChecker reports a subaccount's balance of the TRADE MODULE'S QUOTE ASSET, in 18dp.
+//
+// Which contract that is depends on the module: the cash-quoted module settles in the CashAsset,
+// a wrapped-quote module settles in a WrappedERC20Asset. Both are read the same way --
+// SubAccounts.getBalance(account, asset, 0), which normalises to 18dp regardless of the
+// underlying token's decimals -- so only the address changes. Reading the wrong one is worse than
+// reading none: every buyer is then judged against a ledger the trade never touches.
 type fundingChecker interface {
-	CashBalance(ctx context.Context, subaccountID string) (*big.Int, error)
+	QuoteBalance(ctx context.Context, subaccountID string) (*big.Int, error)
 }
 
 // buyerCanFund reports whether the buy side of a prospective fill can settle. It returns the
@@ -112,7 +118,7 @@ func buyerCanFund(
 		return false, nil, nil, err
 	}
 
-	available, err = checker.CashBalance(ctx, buyer.SubaccountID)
+	available, err = checker.QuoteBalance(ctx, buyer.SubaccountID)
 	if err != nil {
 		return false, required, nil, err
 	}
@@ -144,7 +150,7 @@ const (
 type chainFundingChecker struct {
 	rpcURL          string
 	matchingAddress string
-	cashAsset       string
+	quoteAsset      string
 	httpClient      *http.Client
 	ttl             time.Duration
 	now             func() time.Time
@@ -171,14 +177,14 @@ func newFundingChecker(cfg config.Config) fundingChecker {
 		)
 		return nil
 	}
-	if strings.TrimSpace(cfg.ChainRPCURL) == "" || !isHexAddress(cfg.CashAssetAddress) || !isHexAddress(cfg.MatchingAddress) {
+	if strings.TrimSpace(cfg.ChainRPCURL) == "" || !isHexAddress(cfg.QuoteAsset()) || !isHexAddress(cfg.MatchingAddress) {
 		// config.Load refuses to start in production for exactly this, so reaching here means a
 		// dev or test environment. Say so anyway: a silently inert guard is the failure mode this
 		// whole path exists to avoid.
 		slog.Warn(
 			"funding_check_inert",
-			"reason", "CASH_ASSET_ADDRESS, MATCHING_ADDRESS or CHAIN_RPC_URL is unset",
-			"cash_asset_set", isHexAddress(cfg.CashAssetAddress),
+			"reason", "QUOTE_ASSET_ADDRESS (or CASH_ASSET_ADDRESS), MATCHING_ADDRESS or CHAIN_RPC_URL is unset",
+			"quote_asset_set", isHexAddress(cfg.QuoteAsset()),
 			"matching_address_set", isHexAddress(cfg.MatchingAddress),
 			"chain_rpc_set", strings.TrimSpace(cfg.ChainRPCURL) != "",
 			"app_env", cfg.AppEnv,
@@ -188,12 +194,13 @@ func newFundingChecker(cfg config.Config) fundingChecker {
 	}
 	slog.Info(
 		"funding_check_enabled",
-		"cash_asset", strings.ToLower(strings.TrimSpace(cfg.CashAssetAddress)),
+		"quote_asset", strings.ToLower(strings.TrimSpace(cfg.QuoteAsset())),
+		"is_cash_asset", strings.EqualFold(cfg.QuoteAsset(), cfg.CashAssetAddress),
 	)
 	return &chainFundingChecker{
 		rpcURL:          strings.TrimSpace(cfg.ChainRPCURL),
 		matchingAddress: strings.ToLower(strings.TrimSpace(cfg.MatchingAddress)),
-		cashAsset:       strings.ToLower(strings.TrimSpace(cfg.CashAssetAddress)),
+		quoteAsset:      strings.ToLower(strings.TrimSpace(cfg.QuoteAsset())),
 		httpClient:      &http.Client{Timeout: 5 * time.Second},
 		ttl:             2 * time.Second,
 		now:             time.Now,
@@ -201,7 +208,7 @@ func newFundingChecker(cfg config.Config) fundingChecker {
 	}
 }
 
-func (c *chainFundingChecker) CashBalance(ctx context.Context, subaccountID string) (*big.Int, error) {
+func (c *chainFundingChecker) QuoteBalance(ctx context.Context, subaccountID string) (*big.Int, error) {
 	subaccountID = strings.TrimSpace(subaccountID)
 	if subaccountID == "" {
 		return nil, errors.New("subaccount_id is required")
@@ -220,11 +227,11 @@ func (c *chainFundingChecker) CashBalance(ctx context.Context, subaccountID stri
 	if err != nil {
 		return nil, err
 	}
-	data := getBalanceSelector + accountWord + encodeAddressArg(c.cashAsset) + strings.Repeat("0", 64)
+	data := getBalanceSelector + accountWord + encodeAddressArg(c.quoteAsset) + strings.Repeat("0", 64)
 
 	raw, err := c.ethCall(ctx, subAccounts, data)
 	if err != nil {
-		return nil, fmt.Errorf("read cash balance: %w", err)
+		return nil, fmt.Errorf("read quote balance: %w", err)
 	}
 	balance, err := decodeInt256(raw)
 	if err != nil {

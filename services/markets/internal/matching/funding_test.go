@@ -113,7 +113,7 @@ type stubChecker struct {
 	lastID  string
 }
 
-func (s *stubChecker) CashBalance(_ context.Context, subaccountID string) (*big.Int, error) {
+func (s *stubChecker) QuoteBalance(_ context.Context, subaccountID string) (*big.Int, error) {
 	s.calls++
 	s.lastID = subaccountID
 	if s.err != nil {
@@ -278,7 +278,7 @@ func testCfg(rpcURL string) config.Config {
 	}
 }
 
-func TestChainFundingCheckerReadsCashBalance(t *testing.T) {
+func TestChainFundingCheckerReadsQuoteBalance(t *testing.T) {
 	var seen []string
 	srv := newStubRPC(t, "0x3333333333333333333333333333333333333333", word("de0b6b3a7640000"), func(data string) {
 		seen = append(seen, data)
@@ -290,9 +290,9 @@ func TestChainFundingCheckerReadsCashBalance(t *testing.T) {
 		t.Fatal("checker must be constructed when configured")
 	}
 
-	balance, err := checker.CashBalance(context.Background(), "42")
+	balance, err := checker.QuoteBalance(context.Background(), "42")
 	if err != nil {
-		t.Fatalf("CashBalance: %v", err)
+		t.Fatalf("QuoteBalance: %v", err)
 	}
 	if balance.Cmp(bigStr(t, oneE18)) != 0 {
 		t.Fatalf("balance = %s, want 1e18", balance)
@@ -317,9 +317,9 @@ func TestChainFundingCheckerDecodesNegativeCash(t *testing.T) {
 	srv := newStubRPC(t, "0x3333333333333333333333333333333333333333", negativeOne, nil)
 	defer srv.Close()
 
-	balance, err := newFundingChecker(testCfg(srv.URL)).CashBalance(context.Background(), "1")
+	balance, err := newFundingChecker(testCfg(srv.URL)).QuoteBalance(context.Background(), "1")
 	if err != nil {
-		t.Fatalf("CashBalance: %v", err)
+		t.Fatalf("QuoteBalance: %v", err)
 	}
 	if balance.Sign() >= 0 {
 		t.Fatalf("balance = %s, want negative", balance)
@@ -341,8 +341,8 @@ func TestChainFundingCheckerCachesWithinTTL(t *testing.T) {
 	checker.now = func() time.Time { return now }
 
 	for i := 0; i < 5; i++ {
-		if _, err := checker.CashBalance(context.Background(), "42"); err != nil {
-			t.Fatalf("CashBalance: %v", err)
+		if _, err := checker.QuoteBalance(context.Background(), "42"); err != nil {
+			t.Fatalf("QuoteBalance: %v", err)
 		}
 	}
 	// one subAccounts() resolve plus one getBalance; the rest come from cache
@@ -353,8 +353,8 @@ func TestChainFundingCheckerCachesWithinTTL(t *testing.T) {
 	// past the TTL the balance is re-read: a stale balance is how an underfunded account
 	// slips through after withdrawing
 	now = now.Add(3 * time.Second)
-	if _, err := checker.CashBalance(context.Background(), "42"); err != nil {
-		t.Fatalf("CashBalance: %v", err)
+	if _, err := checker.QuoteBalance(context.Background(), "42"); err != nil {
+		t.Fatalf("QuoteBalance: %v", err)
 	}
 	if calls != 3 {
 		t.Fatalf("made %d rpc calls, want a re-read after the TTL", calls)

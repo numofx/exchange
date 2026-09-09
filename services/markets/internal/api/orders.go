@@ -157,6 +157,9 @@ func (r createOrderRequest) toParams(cfg config.Config) (orders.CreateOrderParam
 	if err := validateActionJSON(r.ActionJSON, ownerAddress, signerAddress, r.SubaccountID, r.Nonce); err != nil {
 		return orders.CreateOrderParams{}, err
 	}
+	if err := validateActionModule(r.ActionJSON, cfg.TradeModuleAddress); err != nil {
+		return orders.CreateOrderParams{}, err
+	}
 	if cfg.EnforceActionDataInvariants {
 		if err := validateActionDataInvariants(r.ActionJSON, side, assetAddress, subID, limitPriceTicks, normalizedDesiredAmount, instrument); err != nil {
 			return orders.CreateOrderParams{}, err
@@ -440,6 +443,51 @@ func parsePositiveIntString(raw string, field string) (*big.Int, error) {
 		return nil, fmt.Errorf("%s must be positive", field)
 	}
 	return value, nil
+}
+
+// validateActionModule pins every resting order to the one TradeModule this venue settles on.
+//
+// Nothing else offchain does this. The matcher takes the module address from the order itself
+// (internal/matching/executor.go: extractModuleAddress) and only requires the taker and maker to
+// agree with EACH OTHER, so without this check the book will happily rest orders for any module
+// address a client cares to name. On chain that is safe -- `module` is a hashed field of the
+// EIP-712 Action struct, so a signature cannot be moved between modules, and Matching rejects a
+// batch whose actions disagree -- but "safe" here means the trade reverts, not that it never
+// crossed. The book has already moved by then.
+//
+// This matters during a quote-asset migration. Swapping the USDC leg from the CashAsset to the
+// wrapped USDC asset means a SECOND TradeModule, and for as long as both are allowlisted the book
+// can hold orders for both. A cross-module pair crosses in the matcher, is locked into 'matching',
+// and then fails: at execution-service on the module allowlist, or at Matching on
+// M_MismatchedModule. Rejecting at submit keeps the two books from ever mixing.
+//
+// Inert when TRADE_MODULE_ADDRESS is unset, so a dev or test environment is unaffected. In
+// production config.Load requires it -- see validateTradeModule.
+func validateActionModule(raw json.RawMessage, tradeModuleAddress string) error {
+	expected := strings.ToLower(strings.TrimSpace(tradeModuleAddress))
+	if expected == "" {
+		return nil
+	}
+
+	var action struct {
+		Module string `json:"module"`
+	}
+	if err := json.Unmarshal(raw, &action); err != nil {
+		return fmt.Errorf("parse action_json: %w", err)
+	}
+
+	got := strings.ToLower(strings.TrimSpace(action.Module))
+	if got == "" {
+		return fmt.Errorf("action_json.module is required")
+	}
+	if got != expected {
+		return fmt.Errorf(
+			"action_json.module %s is not this venue's trade module %s; "+
+				"an order signed for another module cannot settle here",
+			got, expected,
+		)
+	}
+	return nil
 }
 
 func validateActionJSON(raw json.RawMessage, ownerAddress string, signerAddress string, subaccountID string, nonce string) error {
