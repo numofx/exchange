@@ -8,6 +8,10 @@ import {ISubAccounts} from "v2-core/src/interfaces/ISubAccounts.sol";
 import {SubAccounts} from "v2-core/src/SubAccounts.sol";
 import {MockManager} from "v2-core/test/shared/mocks/MockManager.sol";
 
+import {Matching} from "../../src/Matching.sol";
+import {TradeModule} from "../../src/modules/TradeModule.sol";
+import {IMatching} from "../../src/interfaces/IMatching.sol";
+import {IAsset} from "v2-core/src/interfaces/IAsset.sol";
 import {DeployWrappedQuoteTradeModule} from "../../scripts/deploy-wrapped-quote-trade-module.s.sol";
 
 /// @dev Exposes the script's own precondition, so what runs here is the code that runs on Base and
@@ -20,6 +24,11 @@ contract DeployWrappedQuotePreconditionHarness is DeployWrappedQuoteTradeModule 
     view
   {
     _assertFeeRecipient(subAccounts, feeAccount, expectedOwner, expectedManager);
+  }
+
+  /// @dev Drives the script's own ownership postcondition, not a copy of it.
+  function checkOwnership(TradeModule module, address expectedVault, address expectedDeployer) external view {
+    _assertOwnershipOffered(module, expectedVault, expectedDeployer);
   }
 }
 
@@ -125,5 +134,54 @@ contract WrappedQuoteDeployPreconditionsTest is Test {
   function testZeroFeeRecipientIsRejected() public {
     vm.expectRevert(bytes("FEE_RECIPIENT_SUBACCOUNT must be set"));
     script.checkFeeRecipient(subAccounts, 0, vault, address(srm));
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // ownership
+  //
+  // BaseModule is Ownable2Step with Ownable(msg.sender), so a freshly deployed module is owned by
+  // the deployer EOA. onlyOwner on this module includes setDatedFutureAsset, and
+  // TradeModule._addAssetTransfers sets amtQuote = 0 for a dated future while _fillLimitOrder
+  // validates only fill.price against the signed limit. An owner who flags the base asset can
+  // therefore take the base leg of any resting order for zero payment, through the ordinary venue.
+  // The batch must hand custody over before it allowlists anything.
+  // -------------------------------------------------------------------------------------------
+
+  /// A real Matching, because BaseModule's constructor calls _matching.subAccounts().
+  function _freshModule() internal returns (TradeModule) {
+    Matching matching = new Matching(subAccounts);
+    return new TradeModule(IMatching(address(matching)), IAsset(address(0xcafe)), 1);
+  }
+
+  function testOwnershipOfferedToTheVaultIsAccepted() public {
+    TradeModule module = _freshModule();
+    module.transferOwnership(vault);
+    script.checkOwnership(module, vault, address(this));
+  }
+
+  /// The default path before the fix: MATCHING_OWNER unset meant no transfer at all, and the module
+  /// would have gone live still owned by the deployer.
+  function testModuleWithNoOwnershipOfferIsRejected() public {
+    TradeModule module = _freshModule();
+    vm.expectRevert(bytes("pendingOwner is not the vault - ownership was not offered"));
+    script.checkOwnership(module, vault, address(this));
+  }
+
+  function testOwnershipOfferedToTheWrongAddressIsRejected() public {
+    TradeModule module = _freshModule();
+    module.transferOwnership(address(0xdead));
+    vm.expectRevert(bytes("pendingOwner is not the vault - ownership was not offered"));
+    script.checkOwnership(module, vault, address(this));
+  }
+
+  /// Ownable2Step means the offer alone does not move owner(). If it already had, something else
+  /// accepted on the vault's behalf and the deployment is not in the state the batch assumes.
+  function testOwnershipAlreadyTransferredIsRejected() public {
+    TradeModule module = _freshModule();
+    module.transferOwnership(vault);
+    vm.prank(vault);
+    module.acceptOwnership();
+    vm.expectRevert(bytes("pendingOwner is not the vault - ownership was not offered"));
+    script.checkOwnership(module, vault, address(this));
   }
 }
