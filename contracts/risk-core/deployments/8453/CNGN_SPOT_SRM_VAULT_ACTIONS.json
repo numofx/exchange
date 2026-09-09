@@ -66,8 +66,8 @@
     "description": "wrappedCngn.setTotalPositionCap(srm) [cap in place before deposits are possible]",
     "to": "0x9D806fD040a719D27a8E5E77dc5aE0ED1e089493",
     "value": "0",
-    "data": "0x40a557bd0000000000000000000000003195bd7e02d93982bcf8b34df5b941ffcae1e49b000000000000000000000000000000000000000000a9737994436c697f7ee000",
-    "digest": "0xe4dfe64a6a48136019333c78f2f5781aabe8de3e2d2e76ee0e7122869410007c"
+    "data": "0x40a557bd0000000000000000000000003195bd7e02d93982bcf8b34df5b941ffcae1e49b000000000000000000000000000000000000000000f744730cec9aaacf765800",
+    "digest": "0x2037ce6f1076c2e1f48eda312d9ec7d8d7f93ce46ecd40ae0bdc7163f480a146"
   },
   {
     "description": "wrappedCngn.setWhitelistManager(srm) [THE ENABLING SWITCH - nothing can enter before this]",
