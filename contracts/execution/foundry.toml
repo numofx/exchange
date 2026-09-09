@@ -6,7 +6,9 @@ include_paths = ["../../exchange-core"]
 
 optimizer = true
 optimizer_runs = 50
-fs_permissions = [{access = "read-write", path = "./"}, {access = "read", path = "../../exchange-core"}]
+# ../risk-core is the v2-core subtree (also reachable as the ./v2-core symlink). Deploy scripts
+# that need core addresses read deployments/<chainId>/*.json from there.
+fs_permissions = [{access = "read-write", path = "./"}, {access = "read", path = "../../exchange-core"}, {access = "read", path = "../risk-core"}]
 
 solc_version="0.8.27"
 
