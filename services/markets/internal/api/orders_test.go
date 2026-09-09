@@ -270,3 +270,60 @@ func encodeSignedWord(value string) []byte {
 	copy(word[32-len(bytes):], bytes)
 	return word
 }
+
+// A second TradeModule exists the moment the USDC leg moves to a wrapped quote asset. An order
+// signed for the other module must be refused at submit time, not left to rest and cross and then
+// fail at execution-service, where a module mismatch is only a generic executor error and the pair
+// is retried until expiry.
+func TestValidateActionModule(t *testing.T) {
+	const wrappedQuote = "0x0000000000000000000000000000000000000AAA"
+	const cashQuote = "0x44813ad30b2ffc1bb2871eed9b19f63c8196ed1c"
+
+	action := func(module string) json.RawMessage {
+		return json.RawMessage(`{"subaccount_id":"10","nonce":"1","module":"` + module + `","owner":"0xabc","signer":"0xdef"}`)
+	}
+
+	if err := validateActionModule(action(wrappedQuote), wrappedQuote); err != nil {
+		t.Fatalf("matching module must be accepted: %v", err)
+	}
+	// case-insensitive: clients checksum-case their addresses
+	if err := validateActionModule(action(wrappedQuote), "0x0000000000000000000000000000000000000aaa"); err != nil {
+		t.Fatalf("module comparison must be case-insensitive: %v", err)
+	}
+	if err := validateActionModule(action(cashQuote), wrappedQuote); err == nil {
+		t.Fatal("an order signed for the legacy cash-quoted module must be rejected")
+	}
+	if err := validateActionModule(action(""), wrappedQuote); err == nil {
+		t.Fatal("a missing module must be rejected once a module is configured")
+	}
+	// unset config is how dev and test environments run; the check must not become a wall there
+	if err := validateActionModule(action(cashQuote), ""); err != nil {
+		t.Fatalf("check must be inert when TRADE_MODULE_ADDRESS is unset: %v", err)
+	}
+}
+
+func TestCreateOrderRequestToParamsRejectsForeignTradeModule(t *testing.T) {
+	req := createOrderRequest{
+		OrderID:       "order-1",
+		OwnerAddress:  "0xabc",
+		SignerAddress: "0xdef",
+		SubaccountID:  "10",
+		RecipientID:   "10",
+		Nonce:         "1",
+		Side:          "buy",
+		AssetAddress:  "0xasset",
+		SubID:         "0",
+		DesiredAmount: "100",
+		FilledAmount:  "0",
+		LimitPrice:    "75",
+		WorstFee:      "1",
+		Expiry:        time.Now().Add(time.Hour).Unix(),
+		ActionJSON:    json.RawMessage(`{"subaccount_id":"10","nonce":"1","module":"0xdeadbeef00000000000000000000000000000000","data":"0xaaa","expiry":"100","owner":"0xabc","signer":"0xdef"}`),
+		Signature:     "0xsig",
+	}
+
+	_, err := req.toParams(config.Config{TradeModuleAddress: "0x0000000000000000000000000000000000000aaa"})
+	if err == nil {
+		t.Fatal("an order for a foreign trade module must not reach the book")
+	}
+}

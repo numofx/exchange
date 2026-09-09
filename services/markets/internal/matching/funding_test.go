@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -113,7 +114,7 @@ type stubChecker struct {
 	lastID  string
 }
 
-func (s *stubChecker) CashBalance(_ context.Context, subaccountID string) (*big.Int, error) {
+func (s *stubChecker) QuoteBalance(_ context.Context, subaccountID string) (*big.Int, error) {
 	s.calls++
 	s.lastID = subaccountID
 	if s.err != nil {
@@ -278,7 +279,53 @@ func testCfg(rpcURL string) config.Config {
 	}
 }
 
-func TestChainFundingCheckerReadsCashBalance(t *testing.T) {
+// A wrapped-quote TradeModule settles the quote leg in a WrappedERC20Asset, not on the cash
+// ledger. QUOTE_ASSET_ADDRESS must therefore steer the getBalance call; if it did not, the check
+// would read a cash balance the trade never moves and pass or fail for an unrelated reason.
+func TestChainFundingCheckerReadsConfiguredQuoteAsset(t *testing.T) {
+	var seen []string
+	srv := newStubRPC(t, "0x3333333333333333333333333333333333333333", word("de0b6b3a7640000"), func(data string) {
+		seen = append(seen, data)
+	})
+	defer srv.Close()
+
+	cfg := testCfg(srv.URL)
+	// the Base-mainnet WRAPPED_USDC_DELIVERABLE asset
+	cfg.QuoteAssetAddress = "0x364058aff6f36e01505fb2cc870f8b6bd4835e84"
+
+	checker := newFundingChecker(cfg)
+	if checker == nil {
+		t.Fatal("checker must be constructed when configured")
+	}
+	if _, err := checker.QuoteBalance(context.Background(), "42"); err != nil {
+		t.Fatalf("QuoteBalance: %v", err)
+	}
+
+	last := seen[len(seen)-1]
+	wantArgs := word("2a") + word("364058aff6f36e01505fb2cc870f8b6bd4835e84") + word("0")
+	if last[10:] != wantArgs {
+		t.Fatalf("args = %s\nwant   %s", last[10:], wantArgs)
+	}
+	// and it must NOT be the cash asset, which is still configured
+	if strings.Contains(last, "2222222222222222222222222222222222222222") {
+		t.Fatal("funding check read the cash asset despite QUOTE_ASSET_ADDRESS being set")
+	}
+}
+
+// An unset QUOTE_ASSET_ADDRESS must keep reading cash, so pointing at the wrapped-quote module is
+// an explicit act and existing deployments are unaffected.
+func TestQuoteAssetDefaultsToCash(t *testing.T) {
+	cfg := config.Config{CashAssetAddress: "0xabc"}
+	if got := cfg.QuoteAsset(); got != "0xabc" {
+		t.Fatalf("QuoteAsset() = %s, want the cash asset", got)
+	}
+	cfg.QuoteAssetAddress = "0xdef"
+	if got := cfg.QuoteAsset(); got != "0xdef" {
+		t.Fatalf("QuoteAsset() = %s, want the override", got)
+	}
+}
+
+func TestChainFundingCheckerReadsQuoteBalance(t *testing.T) {
 	var seen []string
 	srv := newStubRPC(t, "0x3333333333333333333333333333333333333333", word("de0b6b3a7640000"), func(data string) {
 		seen = append(seen, data)
@@ -290,15 +337,15 @@ func TestChainFundingCheckerReadsCashBalance(t *testing.T) {
 		t.Fatal("checker must be constructed when configured")
 	}
 
-	balance, err := checker.CashBalance(context.Background(), "42")
+	balance, err := checker.QuoteBalance(context.Background(), "42")
 	if err != nil {
-		t.Fatalf("CashBalance: %v", err)
+		t.Fatalf("QuoteBalance: %v", err)
 	}
 	if balance.Cmp(bigStr(t, oneE18)) != 0 {
 		t.Fatalf("balance = %s, want 1e18", balance)
 	}
 
-	// the balance call must be getBalance(accountId, cashAsset, 0) -- a wrong selector or a
+	// the balance call must be getBalance(accountId, quoteAsset, 0) -- a wrong selector or a
 	// wrong asset would read some other account's position and silently pass everything
 	last := seen[len(seen)-1]
 	if last[:10] != getBalanceSelector {
@@ -317,9 +364,9 @@ func TestChainFundingCheckerDecodesNegativeCash(t *testing.T) {
 	srv := newStubRPC(t, "0x3333333333333333333333333333333333333333", negativeOne, nil)
 	defer srv.Close()
 
-	balance, err := newFundingChecker(testCfg(srv.URL)).CashBalance(context.Background(), "1")
+	balance, err := newFundingChecker(testCfg(srv.URL)).QuoteBalance(context.Background(), "1")
 	if err != nil {
-		t.Fatalf("CashBalance: %v", err)
+		t.Fatalf("QuoteBalance: %v", err)
 	}
 	if balance.Sign() >= 0 {
 		t.Fatalf("balance = %s, want negative", balance)
@@ -341,8 +388,8 @@ func TestChainFundingCheckerCachesWithinTTL(t *testing.T) {
 	checker.now = func() time.Time { return now }
 
 	for i := 0; i < 5; i++ {
-		if _, err := checker.CashBalance(context.Background(), "42"); err != nil {
-			t.Fatalf("CashBalance: %v", err)
+		if _, err := checker.QuoteBalance(context.Background(), "42"); err != nil {
+			t.Fatalf("QuoteBalance: %v", err)
 		}
 	}
 	// one subAccounts() resolve plus one getBalance; the rest come from cache
@@ -353,8 +400,8 @@ func TestChainFundingCheckerCachesWithinTTL(t *testing.T) {
 	// past the TTL the balance is re-read: a stale balance is how an underfunded account
 	// slips through after withdrawing
 	now = now.Add(3 * time.Second)
-	if _, err := checker.CashBalance(context.Background(), "42"); err != nil {
-		t.Fatalf("CashBalance: %v", err)
+	if _, err := checker.QuoteBalance(context.Background(), "42"); err != nil {
+		t.Fatalf("QuoteBalance: %v", err)
 	}
 	if calls != 3 {
 		t.Fatalf("made %d rpc calls, want a re-read after the TTL", calls)

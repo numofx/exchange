@@ -31,7 +31,7 @@ func DefaultRegistry(cfg config.Config) *Registry {
 			DisplaySemantics:   DisplayPriceDirect,
 			DisplayLabel:       "cNGN per USDC",
 			DisplayName:        "USDC/cNGN Spot",
-			SettlementNote:     "Spot-style orderbook market on Base. Trades exchange WRAPPED_CNGN against internal USDC cash using the existing single quote-asset rail.",
+			SettlementNote:     spotSettlementNote(cfg),
 			OrderEntrySpec:     "usdc_cngn_spot_v1",
 			UIPriceUnit:        "cNGN per USDC",
 			UISizeUnit:         "USDC notional",
@@ -46,4 +46,18 @@ func DefaultRegistry(cfg config.Config) *Registry {
 	}
 
 	return NewRegistry(items)
+}
+
+// spotSettlementNote states which rail the quote leg actually settles on, because the two are
+// not equivalent: against cash the USDC side is a claim on the settlement ledger, against a
+// WrappedERC20Asset it is a 1:1 claim on USDC the wrapper holds. QUOTE_ASSET_ADDRESS is the
+// switch, and it must be set to the quoteAsset() of whichever TradeModule the venue is pointed
+// at -- the note is derived from it so the two cannot drift.
+func spotSettlementNote(cfg config.Config) string {
+	if strings.TrimSpace(cfg.QuoteAssetAddress) != "" {
+		return "Spot-style orderbook market on Base. Trades exchange WRAPPED_CNGN against wrapped USDC (" +
+			strings.TrimSpace(cfg.QuoteAssetAddress) +
+			"); both legs are wrapped-token transfers and the settlement ledger is out of the trade path."
+	}
+	return "Spot-style orderbook market on Base. Trades exchange WRAPPED_CNGN against internal USDC cash using the existing single quote-asset rail."
 }

@@ -105,6 +105,24 @@ variable "cancel_protected_order_id_prefixes" {
   default     = "validation:,smoke:,manual:"
 }
 
+variable "cash_asset_address" {
+  # risk-core deployments/8453/core.json "cash". Without it the pre-trade funding check is inert:
+  # newFundingChecker returns nil and an underfunded buy is discovered only when the settlement
+  # transaction reverts, after the book has already moved.
+  type    = string
+  default = "0x6B232A2155Bd0C9bf741dB4cf8E7e8A0176A6fc6"
+}
+
+variable "quote_asset_address" {
+  # The asset a fill's quote leg settles in: TradeModule.quoteAsset() for trade_module_address.
+  # Empty means the cash-quoted module, and the funding check falls back to cash_asset_address.
+  # Set it to WRAPPED_USDC_DELIVERABLE (0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84) in the SAME
+  # change as trade_module_address when cutting the spot book over to the wrapped-quote module:
+  # moving one without the other leaves the funding check reading a balance the trade never moves.
+  type    = string
+  default = ""
+}
+
 variable "cngn_spot_asset_address" {
   # Losing this silently disables the only market. The boot guard turns that into a
   # crash; keeping it in Terraform keeps it from being lost in the first place.

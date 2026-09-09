@@ -157,6 +157,9 @@ func (r createOrderRequest) toParams(cfg config.Config) (orders.CreateOrderParam
 	if err := validateActionJSON(r.ActionJSON, ownerAddress, signerAddress, r.SubaccountID, r.Nonce); err != nil {
 		return orders.CreateOrderParams{}, err
 	}
+	if err := validateActionModule(r.ActionJSON, cfg.TradeModuleAddress); err != nil {
+		return orders.CreateOrderParams{}, err
+	}
 	if cfg.EnforceActionDataInvariants {
 		if err := validateActionDataInvariants(r.ActionJSON, side, assetAddress, subID, limitPriceTicks, normalizedDesiredAmount, instrument); err != nil {
 			return orders.CreateOrderParams{}, err
@@ -440,6 +443,44 @@ func parsePositiveIntString(raw string, field string) (*big.Int, error) {
 		return nil, fmt.Errorf("%s must be positive", field)
 	}
 	return value, nil
+}
+
+// validateActionModule rejects an order signed against a TradeModule this venue does not serve.
+//
+// `module` is a field of the EIP-712 Action struct hash (ActionVerifier.ACTION_TYPEHASH), so a
+// signature is bound to exactly one module address and Matching.verifyAndMatch additionally
+// requires every action in a batch to name the same one. What neither of those protects is the
+// BOOK: without this check an order for a different module rests, crosses, and only fails at
+// execution-service, which compares module_address against its single configured module. That
+// path returns a generic executor error, so the pair is released and retried until expiry --
+// a silent retry loop instead of a submit-time rejection.
+//
+// This matters the moment a second TradeModule exists, which is exactly what a wrapped-quote
+// module is. Quote asset is immutable per module, so "which module" IS "which asset the quote
+// leg settles in".
+//
+// Skipped when TRADE_MODULE_ADDRESS is unset, which is how dev and test environments run.
+func validateActionModule(raw json.RawMessage, tradeModuleAddress string) error {
+	expected := strings.ToLower(strings.TrimSpace(tradeModuleAddress))
+	if expected == "" {
+		return nil
+	}
+
+	var action struct {
+		Module string `json:"module"`
+	}
+	if err := json.Unmarshal(raw, &action); err != nil {
+		return fmt.Errorf("parse action_json: %w", err)
+	}
+
+	got := strings.ToLower(strings.TrimSpace(action.Module))
+	if got == "" {
+		return fmt.Errorf("action_json.module is required")
+	}
+	if got != expected {
+		return fmt.Errorf("action_json.module must be the venue's trade module %s, got %s", expected, got)
+	}
+	return nil
 }
 
 func validateActionJSON(raw json.RawMessage, ownerAddress string, signerAddress string, subaccountID string, nonce string) error {

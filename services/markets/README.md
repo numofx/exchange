@@ -56,12 +56,21 @@ Important values:
 - `MATCHER_POLL_INTERVAL`
 - `CHAIN_ID`
 - `MATCHING_ADDRESS`
-- `TRADE_MODULE_ADDRESS`
+- `TRADE_MODULE_ADDRESS` — the one TradeModule this venue serves. Orders whose
+  `action_json.module` is a different module are rejected at submit time. Unset disables the
+  check, which is how dev runs.
 - `CNGN_SPOT_ASSET_ADDRESS`
 - `CASH_ASSET_ADDRESS` — CashAsset contract, for the pre-trade funding check
+- `QUOTE_ASSET_ADDRESS` — the asset a fill's quote leg actually settles in, i.e.
+  `TradeModule.quoteAsset()` for `TRADE_MODULE_ADDRESS`. Unset falls back to
+  `CASH_ASSET_ADDRESS`, which is correct for the cash-quoted module. It is **not** correct for a
+  TradeModule whose quote asset is a `WrappedERC20Asset`: that module settles both legs in
+  wrapped tokens and never touches the cash ledger, so the funding check would be reading a
+  balance the trade cannot move. Move this and `TRADE_MODULE_ADDRESS` in the same change.
 - `ENFORCE_FUNDING_CHECK` — default `true`
 
-The pre-trade funding check needs `CASH_ASSET_ADDRESS`, `MATCHING_ADDRESS` and `CHAIN_RPC_URL`.
+The pre-trade funding check needs `CASH_ASSET_ADDRESS` (or `QUOTE_ASSET_ADDRESS`),
+`MATCHING_ADDRESS` and `CHAIN_RPC_URL`.
 **With `ENFORCE_FUNDING_CHECK=true` and any of them missing, the service refuses to start in
 production** — an inert guard is invisible from the outside, and a missing variable must not be the
 difference between it running and not. Any `APP_ENV` other than `dev`/`development`/`local`/`test`/

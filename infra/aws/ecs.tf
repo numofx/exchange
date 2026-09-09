@@ -109,6 +109,8 @@ resource "aws_ecs_task_definition" "markets" {
       { name = "SERVICE_MODE", value = "api" },
       { name = "API_ADDR", value = ":8080" },
       { name = "CNGN_SPOT_ASSET_ADDRESS", value = var.cngn_spot_asset_address },
+      { name = "CASH_ASSET_ADDRESS", value = var.cash_asset_address },
+      { name = "QUOTE_ASSET_ADDRESS", value = var.quote_asset_address },
 
       # Every one of these was set on Railway and every one has a code default that
       # differs from it or is empty. Omitting them silently relaxed the service:
@@ -163,6 +165,11 @@ resource "aws_ecs_task_definition" "matcher" {
     environment = concat(local.chain_env, [
       { name = "SERVICE_MODE", value = "matcher" },
       { name = "CNGN_SPOT_ASSET_ADDRESS", value = var.cngn_spot_asset_address },
+      # The matcher is where the pre-trade funding check runs. Without CASH_ASSET_ADDRESS it
+      # silently no-ops; QUOTE_ASSET_ADDRESS must move in the same change as TRADE_MODULE_ADDRESS,
+      # or the check reads a cash balance a wrapped-quoted fill never touches.
+      { name = "CASH_ASSET_ADDRESS", value = var.cash_asset_address },
+      { name = "QUOTE_ASSET_ADDRESS", value = var.quote_asset_address },
       { name = "MATCHER_POLL_INTERVAL", value = var.matcher_poll_interval },
       # Must exceed execution-service's RECEIPT_TIMEOUT_MS (60s). See that setting.
       { name = "EXECUTOR_TIMEOUT", value = "90s" },
