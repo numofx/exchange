@@ -48,9 +48,20 @@ a subaccount the vault cannot grant an allowance on, and the only repair is rede
 Two rules, and the first one is what actually removes the race:
 
 - **Create the account inside the deploy script's broadcast and use the returned id.**
-  `_createAccount` returns `newId`; there is no window between the mint and its use.
-- **Assert `ownerOf(id) == vault` before the id reaches the constructor**, as a check on the
-  case where the id was supplied out of band.
+  `createAccount` returns `newId`, so the value is never guessed.
+
+  This narrows the window but does **not** close it. Under `forge script`, `createAccount`
+  and `new TradeModule(...)` are two separate broadcast transactions, and the constructor
+  argument is fixed during local *simulation* — so a stranger's `createAccount` landing
+  between the two still produces a module wired to an id the vault does not own. Closing it
+  completely needs either one atomic transaction (a throwaway deployer contract whose
+  constructor creates the account and deploys the module) or a post-broadcast postcondition
+  that re-reads `subAccounts.ownerOf(module.feeRecipient()) == vault` against real state.
+  The postcondition turns a burned deployment into a detected failure, at the cost of one
+  wasted `TradeModule` — cheap, since nothing is wired until the vault batch runs.
+- **Assert `ownerOf(id) == vault` before the id reaches the constructor.** Necessary in both
+  designs — it is the only check that catches an id supplied out of band, and per the point
+  above it is still the last line of defence when the script creates the account itself.
 
 The script on `feat/spot-wrapped-usdc-quote`
 (`contracts/execution/scripts/deploy-wrapped-quote-trade-module.s.sol`) currently takes `FEE_RECIPIENT_SUBACCOUNT` from
@@ -129,5 +140,9 @@ unreachable, so one grant is permanent in practice.
    (Done: `execution:641e6f2b8764`.) Add the new fee subaccount to
    `SETTLEMENT_CANARY_ACCOUNTS` once it holds a balance.
 2. Create the fee subaccount, vault-owned, SRM-managed — ideally inside the deploy script.
+   `subAccounts.balanceOf(vault)` is **0** today, so there is no existing subaccount for
+   `FEE_RECIPIENT_SUBACCOUNT` to point at; in-script creation removes a manual pre-step, not
+   only a race. `createAccount(owner, manager)` mints to an arbitrary owner, so the deployer
+   key can create it for the vault without a vault transaction.
 3. Deploy the module with `quoteAsset = wrapped USDC` and the returned fee subaccount id.
 4. Vault batch: `setAssetAllowances(feeAcct, module, +max/-0)`, then the cutover in §2.
