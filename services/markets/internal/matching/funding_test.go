@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -113,7 +114,7 @@ type stubChecker struct {
 	lastID  string
 }
 
-func (s *stubChecker) CashBalance(_ context.Context, subaccountID string) (*big.Int, error) {
+func (s *stubChecker) QuoteBalance(_ context.Context, subaccountID string) (*big.Int, error) {
 	s.calls++
 	s.lastID = subaccountID
 	if s.err != nil {
@@ -275,10 +276,13 @@ func testCfg(rpcURL string) config.Config {
 		ChainRPCURL:         rpcURL,
 		MatchingAddress:     "0x1111111111111111111111111111111111111111",
 		CashAssetAddress:    "0x2222222222222222222222222222222222222222",
+		// Config.QuoteAsset() falls back to CashAssetAddress, so this is redundant for the cash
+		// case -- set explicitly so the wrapped-quote test below is an obvious one-line override.
+		QuoteAssetAddress: "0x2222222222222222222222222222222222222222",
 	}
 }
 
-func TestChainFundingCheckerReadsCashBalance(t *testing.T) {
+func TestChainFundingCheckerReadsQuoteBalance(t *testing.T) {
 	var seen []string
 	srv := newStubRPC(t, "0x3333333333333333333333333333333333333333", word("de0b6b3a7640000"), func(data string) {
 		seen = append(seen, data)
@@ -290,9 +294,9 @@ func TestChainFundingCheckerReadsCashBalance(t *testing.T) {
 		t.Fatal("checker must be constructed when configured")
 	}
 
-	balance, err := checker.CashBalance(context.Background(), "42")
+	balance, err := checker.QuoteBalance(context.Background(), "42")
 	if err != nil {
-		t.Fatalf("CashBalance: %v", err)
+		t.Fatalf("QuoteBalance: %v", err)
 	}
 	if balance.Cmp(bigStr(t, oneE18)) != 0 {
 		t.Fatalf("balance = %s, want 1e18", balance)
@@ -317,9 +321,9 @@ func TestChainFundingCheckerDecodesNegativeCash(t *testing.T) {
 	srv := newStubRPC(t, "0x3333333333333333333333333333333333333333", negativeOne, nil)
 	defer srv.Close()
 
-	balance, err := newFundingChecker(testCfg(srv.URL)).CashBalance(context.Background(), "1")
+	balance, err := newFundingChecker(testCfg(srv.URL)).QuoteBalance(context.Background(), "1")
 	if err != nil {
-		t.Fatalf("CashBalance: %v", err)
+		t.Fatalf("QuoteBalance: %v", err)
 	}
 	if balance.Sign() >= 0 {
 		t.Fatalf("balance = %s, want negative", balance)
@@ -341,8 +345,8 @@ func TestChainFundingCheckerCachesWithinTTL(t *testing.T) {
 	checker.now = func() time.Time { return now }
 
 	for i := 0; i < 5; i++ {
-		if _, err := checker.CashBalance(context.Background(), "42"); err != nil {
-			t.Fatalf("CashBalance: %v", err)
+		if _, err := checker.QuoteBalance(context.Background(), "42"); err != nil {
+			t.Fatalf("QuoteBalance: %v", err)
 		}
 	}
 	// one subAccounts() resolve plus one getBalance; the rest come from cache
@@ -353,8 +357,8 @@ func TestChainFundingCheckerCachesWithinTTL(t *testing.T) {
 	// past the TTL the balance is re-read: a stale balance is how an underfunded account
 	// slips through after withdrawing
 	now = now.Add(3 * time.Second)
-	if _, err := checker.CashBalance(context.Background(), "42"); err != nil {
-		t.Fatalf("CashBalance: %v", err)
+	if _, err := checker.QuoteBalance(context.Background(), "42"); err != nil {
+		t.Fatalf("QuoteBalance: %v", err)
 	}
 	if calls != 3 {
 		t.Fatalf("made %d rpc calls, want a re-read after the TTL", calls)
@@ -363,11 +367,12 @@ func TestChainFundingCheckerCachesWithinTTL(t *testing.T) {
 
 func TestNewFundingCheckerIsNilWhenNotUsable(t *testing.T) {
 	cases := map[string]func(*config.Config){
-		"disabled":      func(c *config.Config) { c.EnforceFundingCheck = false },
-		"no rpc":        func(c *config.Config) { c.ChainRPCURL = "" },
-		"no cash asset": func(c *config.Config) { c.CashAssetAddress = "" },
-		"zero cash asset": func(c *config.Config) {
+		"disabled":       func(c *config.Config) { c.EnforceFundingCheck = false },
+		"no rpc":         func(c *config.Config) { c.ChainRPCURL = "" },
+		"no quote asset": func(c *config.Config) { c.CashAssetAddress = ""; c.QuoteAssetAddress = "" },
+		"zero quote asset": func(c *config.Config) {
 			c.CashAssetAddress = "0x0000000000000000000000000000000000000000"
+			c.QuoteAssetAddress = "0x0000000000000000000000000000000000000000"
 		},
 		"no matching address": func(c *config.Config) { c.MatchingAddress = "" },
 	}
@@ -394,5 +399,48 @@ func TestReservedFeeMatchesSubmittedFee(t *testing.T) {
 	}
 	if required.Cmp(bigStr(t, oneE18)) != 0 {
 		t.Fatalf("required = %s, want the bare notional while the taker fee is zero", required)
+	}
+}
+
+// TestChainFundingCheckerQueriesTheQuoteAssetNotCash is the offchain half of the 1:1-backed USDC
+// book. With a wrapped-quote TradeModule the fill debits the WrappedERC20Asset balance, so that is
+// the balance the pre-trade check must read. Reading cash instead would clear every buy -- the
+// check would still "pass", against a balance the trade never touches.
+func TestChainFundingCheckerQueriesTheQuoteAssetNotCash(t *testing.T) {
+	const wrappedUSDC = "0x364058aff6f36e01505fb2cc870f8b6bd4835e84"
+	const cashAsset = "0x6b232a2155bd0c9bf741db4cf8e7e8a0176a6fc6"
+
+	var seen []string
+	srv := newStubRPC(t, "0x3333333333333333333333333333333333333333", word("de0b6b3a7640000"), func(data string) {
+		seen = append(seen, data)
+	})
+	defer srv.Close()
+
+	cfg := testCfg(srv.URL)
+	cfg.CashAssetAddress = cashAsset
+	cfg.QuoteAssetAddress = wrappedUSDC
+
+	checker := newFundingChecker(cfg)
+	if checker == nil {
+		t.Fatal("checker must be constructed when configured")
+	}
+	if _, err := checker.QuoteBalance(context.Background(), "42"); err != nil {
+		t.Fatalf("QuoteBalance: %v", err)
+	}
+
+	var balanceCall string
+	for _, data := range seen {
+		if strings.HasPrefix(data, getBalanceSelector) {
+			balanceCall = data
+		}
+	}
+	if balanceCall == "" {
+		t.Fatal("no getBalance call was made")
+	}
+	if !strings.Contains(balanceCall, strings.TrimPrefix(wrappedUSDC, "0x")) {
+		t.Fatalf("getBalance did not target the quote asset: %s", balanceCall)
+	}
+	if strings.Contains(balanceCall, strings.TrimPrefix(cashAsset, "0x")) {
+		t.Fatal("getBalance targeted the CASH asset; a wrapped-quote fill never debits it")
 	}
 }

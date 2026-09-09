@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -269,4 +270,83 @@ func encodeSignedWord(value string) []byte {
 	bytes := n.Bytes()
 	copy(word[32-len(bytes):], bytes)
 	return word
+}
+
+// --- module identity: the cash-quoted and wrapped-quote TradeModules must not share a book ---
+//
+// TradeModule fixes its quoteAsset at construction, so two modules on the same pair are two
+// different settlement assets. The chain already refuses to cross them (the module address is
+// inside the EIP-712 action hash, so a signature for one does not verify against the other).
+// Without a check here, both sets of orders land in the SAME book for the same
+// (asset_address, sub_id) and the clash is only found in the matcher after a pair has been
+// reserved -- release, retry, repeat.
+
+const (
+	cashQuotedTradeModule    = "0x44813ad30b2ffc1bb2871eed9b19f63c8196ed1c"
+	wrappedQuotedTradeModule = "0x1111111111111111111111111111111111111111"
+)
+
+func moduleTestRequest(module string) createOrderRequest {
+	return createOrderRequest{
+		OrderID:       "order-1",
+		OwnerAddress:  "0xabc",
+		SignerAddress: "0xdef",
+		SubaccountID:  "10",
+		RecipientID:   "10",
+		Nonce:         "1",
+		Side:          "buy",
+		AssetAddress:  "0xasset",
+		SubID:         "0",
+		DesiredAmount: "100",
+		FilledAmount:  "0",
+		LimitPrice:    "75",
+		WorstFee:      "1",
+		Expiry:        time.Now().Add(time.Hour).Unix(),
+		ActionJSON: json.RawMessage(
+			`{"subaccount_id":"10","nonce":"1","module":"` + module +
+				`","data":"0xaaa","expiry":"100","owner":"0xabc","signer":"0xdef"}`,
+		),
+		Signature: "0xsig",
+	}
+}
+
+func TestCreateOrderRequestToParamsRejectsAnotherTradeModule(t *testing.T) {
+	req := moduleTestRequest(cashQuotedTradeModule)
+
+	_, err := req.toParams(config.Config{TradeModuleAddress: wrappedQuotedTradeModule})
+	if err == nil {
+		t.Fatal("an order signed for a different trade module must be rejected at submit")
+	}
+	if !strings.Contains(err.Error(), cashQuotedTradeModule) ||
+		!strings.Contains(err.Error(), wrappedQuotedTradeModule) {
+		t.Fatalf("the error must name both modules so the operator can see the mismatch: %v", err)
+	}
+}
+
+func TestCreateOrderRequestToParamsAcceptsTheConfiguredTradeModule(t *testing.T) {
+	// checked case-insensitively: clients send EIP-55 checksummed addresses
+	req := moduleTestRequest("0x1111111111111111111111111111111111111111")
+	if _, err := req.toParams(config.Config{TradeModuleAddress: wrappedQuotedTradeModule}); err != nil {
+		t.Fatalf("the configured module must be accepted: %v", err)
+	}
+}
+
+// Leaving TRADE_MODULE_ADDRESS unset keeps today's behaviour, so this lands without breaking dev
+// and test environments that never set it.
+func TestCreateOrderRequestToParamsSkipsModuleCheckWhenUnconfigured(t *testing.T) {
+	req := moduleTestRequest(cashQuotedTradeModule)
+	if _, err := req.toParams(config.Config{}); err != nil {
+		t.Fatalf("an unconfigured module address must not reject orders: %v", err)
+	}
+}
+
+func TestCreateOrderRequestToParamsRejectsMissingModule(t *testing.T) {
+	req := moduleTestRequest(cashQuotedTradeModule)
+	req.ActionJSON = json.RawMessage(
+		`{"subaccount_id":"10","nonce":"1","data":"0xaaa","expiry":"100","owner":"0xabc","signer":"0xdef"}`,
+	)
+	_, err := req.toParams(config.Config{TradeModuleAddress: wrappedQuotedTradeModule})
+	if err == nil || !strings.Contains(err.Error(), "action_json.module is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }

@@ -157,6 +157,9 @@ func (r createOrderRequest) toParams(cfg config.Config) (orders.CreateOrderParam
 	if err := validateActionJSON(r.ActionJSON, ownerAddress, signerAddress, r.SubaccountID, r.Nonce); err != nil {
 		return orders.CreateOrderParams{}, err
 	}
+	if err := validateActionModule(r.ActionJSON, cfg.TradeModuleAddress); err != nil {
+		return orders.CreateOrderParams{}, err
+	}
 	if cfg.EnforceActionDataInvariants {
 		if err := validateActionDataInvariants(r.ActionJSON, side, assetAddress, subID, limitPriceTicks, normalizedDesiredAmount, instrument); err != nil {
 			return orders.CreateOrderParams{}, err
@@ -440,6 +443,48 @@ func parsePositiveIntString(raw string, field string) (*big.Int, error) {
 		return nil, fmt.Errorf("%s must be positive", field)
 	}
 	return value, nil
+}
+
+// validateActionModule rejects an order signed for a TradeModule this venue does not run.
+//
+// The module address is part of the EIP-712 action hash (ActionVerifier.ACTION_TYPEHASH), so a
+// module is an identity, not a routing hint: TradeModule fixes `quoteAsset` at construction, and
+// two modules on the same pair are two different settlement assets. The chain already refuses to
+// cross them -- a signature made for one module does not verify against the other. The book does
+// not: without this check, orders signed for the cash-quoted module and orders signed for the
+// wrapped-quote module land in the same book for the same (asset_address, sub_id), and the
+// mismatch is only caught in the matcher AFTER a pair has been reserved (executor.go compares
+// taker and maker modules), which releases the pair and retries in a loop rather than rejecting
+// the order at submit.
+//
+// Empty TRADE_MODULE_ADDRESS leaves the check off, which is what dev and test environments do
+// today; production sets it.
+func validateActionModule(raw json.RawMessage, tradeModuleAddress string) error {
+	expected := strings.ToLower(strings.TrimSpace(tradeModuleAddress))
+	if expected == "" {
+		return nil
+	}
+
+	var action struct {
+		Module string `json:"module"`
+	}
+	if err := json.Unmarshal(raw, &action); err != nil {
+		return fmt.Errorf("parse action_json: %w", err)
+	}
+
+	got := strings.ToLower(strings.TrimSpace(action.Module))
+	if got == "" {
+		return fmt.Errorf("action_json.module is required")
+	}
+	if got != expected {
+		return fmt.Errorf(
+			"action_json.module %s is not this venue's trade module %s: "+
+				"a module fixes the settlement (quote) asset, so an order signed for another module "+
+				"cannot fill here",
+			got, expected,
+		)
+	}
+	return nil
 }
 
 func validateActionJSON(raw json.RawMessage, ownerAddress string, signerAddress string, subaccountID string, nonce string) error {

@@ -56,12 +56,24 @@ Important values:
 - `MATCHER_POLL_INTERVAL`
 - `CHAIN_ID`
 - `MATCHING_ADDRESS`
-- `TRADE_MODULE_ADDRESS`
+- `TRADE_MODULE_ADDRESS` — the TradeModule this venue runs. When set, an order whose
+  `action_json.module` is a different address is rejected at submit. A TradeModule fixes its
+  `quoteAsset` at construction, so two modules on one pair are two different settlement assets;
+  the chain will not cross them (the module address is inside the EIP-712 action hash), and this
+  keeps them out of the same book. Leave it unset to skip the check, as dev and test do.
 - `CNGN_SPOT_ASSET_ADDRESS`
 - `CASH_ASSET_ADDRESS` — CashAsset contract, for the pre-trade funding check
+- `QUOTE_ASSET_ADDRESS` — the asset `TRADE_MODULE_ADDRESS` settles the quote leg in, i.e. what
+  the funding check reads a balance of. Defaults to `CASH_ASSET_ADDRESS`, which is correct for the
+  cash-quoted module. Set it when the module's `quoteAsset()` is a `WrappedERC20Asset` (the
+  1:1-backed USDC book) — checking cash for a wrapped-quote module clears every buy, because the
+  cash balance is not the balance the fill debits. Read it off chain
+  (`cast call $TRADE_MODULE_ADDRESS "quoteAsset()(address)"`) rather than assuming it. Both assets
+  are 18dp inside `SubAccounts`, so the check's arithmetic is unchanged either way.
 - `ENFORCE_FUNDING_CHECK` — default `true`
 
-The pre-trade funding check needs `CASH_ASSET_ADDRESS`, `MATCHING_ADDRESS` and `CHAIN_RPC_URL`.
+The pre-trade funding check needs `CASH_ASSET_ADDRESS` (or `QUOTE_ASSET_ADDRESS`),
+`MATCHING_ADDRESS` and `CHAIN_RPC_URL`.
 **With `ENFORCE_FUNDING_CHECK=true` and any of them missing, the service refuses to start in
 production** — an inert guard is invisible from the outside, and a missing variable must not be the
 difference between it running and not. Any `APP_ENV` other than `dev`/`development`/`local`/`test`/

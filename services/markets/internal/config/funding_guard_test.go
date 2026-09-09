@@ -125,3 +125,34 @@ func TestFundingGuardNamesEveryMissingVariableAtOnce(t *testing.T) {
 		}
 	}
 }
+
+// The quote leg is what the funding check reads. It defaults to cash, because that is what the
+// module live since launch settles in -- so an existing deployment needs no new variable -- but a
+// TradeModule with a WrappedERC20Asset quote leg settles against a different balance and must be
+// able to say so.
+func TestQuoteAssetDefaultsToCashAndIsOverridable(t *testing.T) {
+	cfg := baseCfg()
+	if got := cfg.QuoteAsset(); got != cfg.CashAssetAddress {
+		t.Fatalf("QuoteAsset() = %s, want the cash asset when unset", got)
+	}
+
+	const wrappedUSDC = "0x364058aff6f36e01505fb2cc870f8b6bd4835e84"
+	cfg.QuoteAssetAddress = wrappedUSDC
+	if got := cfg.QuoteAsset(); got != wrappedUSDC {
+		t.Fatalf("QuoteAsset() = %s, want the configured wrapped quote asset", got)
+	}
+	if err := cfg.validateFundingCheck(); err != nil {
+		t.Fatalf("a wrapped quote asset must satisfy the guard on its own: %v", err)
+	}
+}
+
+// A wrapped-quote deployment may legitimately have no CashAsset configured at all: nothing in the
+// trade path touches it. The guard must be satisfied by QUOTE_ASSET_ADDRESS alone.
+func TestFundingGuardAcceptsQuoteAssetWithoutCashAsset(t *testing.T) {
+	cfg := baseCfg()
+	cfg.CashAssetAddress = ""
+	cfg.QuoteAssetAddress = "0x364058aff6f36e01505fb2cc870f8b6bd4835e84"
+	if err := cfg.validateFundingCheck(); err != nil {
+		t.Fatalf("QUOTE_ASSET_ADDRESS alone must satisfy the guard: %v", err)
+	}
+}

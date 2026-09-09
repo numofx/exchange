@@ -47,7 +47,21 @@ type Config struct {
 	// CashAssetAddress is the CashAsset contract. Required to check that a buyer can fund
 	// notional + fee before a pair is crossed; with marginFactor 0 and borrowing disabled the
 	// SRM enforces cash >= 0 on the NET adjustment, so an underfunded buy reverts on chain.
-	CashAssetAddress             string
+	CashAssetAddress string
+	// QuoteAssetAddress is the asset the configured TradeModule actually settles the quote leg
+	// in -- `TradeModule.quoteAsset()`, read from chain, not inferred. It is what the pre-trade
+	// funding check must query, because that is the balance the fill debits.
+	//
+	// It defaults to CashAssetAddress, which is correct for the cash-quoted module that has been
+	// live since launch. A module deployed with a WrappedERC20Asset quote leg (the 1:1-backed
+	// USDC book) settles against a DIFFERENT balance, and checking cash for it would clear buys
+	// that hold no wrapped USDC at all -- an order crossed against a balance it will never debit.
+	// Set QUOTE_ASSET_ADDRESS to the module's quoteAsset() whenever the two differ.
+	//
+	// Both balances are 18dp inside SubAccounts: WrappedERC20Asset.deposit normalises with
+	// to18Decimals regardless of the token's own decimals, so `quoteScale` in the funding check
+	// holds for either asset.
+	QuoteAssetAddress            string
 	EnforceFundingCheck          bool
 	EnforceActionDataInvariants  bool
 	CancelProtectedOrderPrefixes []string
@@ -92,6 +106,7 @@ func Load() (Config, error) {
 
 		CNGNSpotAssetAddress:         strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_SPOT_ASSET_ADDRESS"))),
 		CashAssetAddress:             strings.ToLower(strings.TrimSpace(os.Getenv("CASH_ASSET_ADDRESS"))),
+		QuoteAssetAddress:            strings.ToLower(strings.TrimSpace(os.Getenv("QUOTE_ASSET_ADDRESS"))),
 		EnforceFundingCheck:          getenvBool("ENFORCE_FUNDING_CHECK", true),
 		EnforceActionDataInvariants:  getenvBool("ENFORCE_ACTION_DATA_INVARIANTS", true),
 		CancelProtectedOrderPrefixes: getenvCSV("CANCEL_PROTECTED_ORDER_ID_PREFIXES", "validation:,smoke:,manual:"),
@@ -164,8 +179,10 @@ func (c Config) validateFundingCheck() error {
 	}
 
 	var missing []string
-	if !isConfiguredAddress(c.CashAssetAddress) {
-		missing = append(missing, "CASH_ASSET_ADDRESS")
+	if !isConfiguredAddress(c.QuoteAsset()) {
+		// QuoteAssetAddress falls back to CashAssetAddress, so an unset CASH_ASSET_ADDRESS with no
+		// explicit override lands here. Name both so the operator knows either will satisfy it.
+		missing = append(missing, "CASH_ASSET_ADDRESS (or QUOTE_ASSET_ADDRESS)")
 	}
 	if !isConfiguredAddress(c.MatchingAddress) {
 		missing = append(missing, "MATCHING_ADDRESS")
@@ -183,6 +200,19 @@ func (c Config) validateFundingCheck() error {
 			"Set them, or set ENFORCE_FUNDING_CHECK=false to run without the check deliberately",
 		c.AppEnv, strings.Join(missing, ", "),
 	)
+}
+
+// QuoteAsset is the asset the configured TradeModule settles the quote leg in, and the ONLY thing
+// the pre-trade funding check should read a balance of.
+//
+// It is an accessor rather than a field defaulted at load time so the fallback holds for a Config
+// built any way at all -- a test that sets only CashAssetAddress gets the same answer the service
+// does. Nothing should read QuoteAssetAddress directly.
+func (c Config) QuoteAsset() string {
+	if strings.TrimSpace(c.QuoteAssetAddress) != "" {
+		return c.QuoteAssetAddress
+	}
+	return c.CashAssetAddress
 }
 
 func isConfiguredAddress(value string) bool {

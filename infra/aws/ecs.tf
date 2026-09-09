@@ -71,6 +71,15 @@ locals {
     { name = "CHAIN_ID", value = var.chain_id },
     { name = "MATCHING_ADDRESS", value = var.matching_address },
     { name = "TRADE_MODULE_ADDRESS", value = var.trade_module_address },
+    # The pre-trade funding check reads a balance of the QUOTE asset -- the one the module above
+    # settles in. CASH_ASSET_ADDRESS was never set here, which left the check inert; the service
+    # only boot-fails on it when APP_ENV=production, which is also unset. Both are stated now.
+    #
+    # QUOTE_ASSET_ADDRESS is what the check actually queries; it falls back to CASH_ASSET_ADDRESS
+    # when empty. Set it whenever trade_module_address points at a module whose quoteAsset() is not
+    # the CashAsset, or the venue will clear buys against a balance the fill never debits.
+    { name = "CASH_ASSET_ADDRESS", value = var.cash_asset_address },
+    { name = "QUOTE_ASSET_ADDRESS", value = var.quote_asset_address },
   ]
 
   log_options = { for k, g in aws_cloudwatch_log_group.tasks : k => {

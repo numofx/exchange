@@ -105,6 +105,26 @@ variable "cancel_protected_order_id_prefixes" {
   default     = "validation:,smoke:,manual:"
 }
 
+variable "cash_asset_address" {
+  # The CashAsset (USDC settlement ledger). Required by markets-service and the matcher: with
+  # ENFORCE_FUNDING_CHECK on and APP_ENV=production the service refuses to boot without it, and
+  # without APP_ENV it silently runs with no funding check at all. It was never set here.
+  type    = string
+  default = "0x6B232A2155Bd0C9bf741dB4cf8E7e8A0176A6fc6"
+}
+
+variable "quote_asset_address" {
+  # The asset the configured trade_module_address settles the quote leg in -- read it off chain
+  # with `cast call $TRADE_MODULE "quoteAsset()(address)"`, do not assume it.
+  #
+  # Empty means "same as cash_asset_address", which is correct for the cash-quoted module live
+  # today. A TradeModule deployed with a WrappedERC20Asset quote leg (the 1:1-backed USDC book)
+  # debits a DIFFERENT balance, and a funding check still pointed at cash would clear every buy.
+  # This variable and trade_module_address move together; changing one alone is the bug.
+  type    = string
+  default = ""
+}
+
 variable "cngn_spot_asset_address" {
   # Losing this silently disables the only market. The boot guard turns that into a
   # crash; keeping it in Terraform keeps it from being lost in the first place.

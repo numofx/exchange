@@ -189,7 +189,7 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 			"taker_order_id", candidate.Taker.OrderID,
 			"maker_order_id", candidate.Maker.OrderID,
 			"required_quote_with_fee", required.String(),
-			"available_cash", available.String(),
+			"available_quote", available.String(),
 			"shortfall", new(big.Int).Sub(required, available).String(),
 			"taker_fee", takerFillFee,
 		)
