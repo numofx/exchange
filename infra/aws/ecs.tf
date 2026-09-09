@@ -67,10 +67,15 @@ resource "aws_iam_role" "task" {
 # ------------------------------------------------------------- task definitions
 
 locals {
+  # TRADE_MODULE_ADDRESS and QUOTE_ASSET_ADDRESS are a pair: the second is the first's
+  # quoteAsset(). They must move together, in one apply, or the funding check reads a ledger
+  # the trade does not touch. See variables.tf for the two valid combinations.
   chain_env = [
     { name = "CHAIN_ID", value = var.chain_id },
     { name = "MATCHING_ADDRESS", value = var.matching_address },
     { name = "TRADE_MODULE_ADDRESS", value = var.trade_module_address },
+    { name = "QUOTE_ASSET_ADDRESS", value = var.quote_asset_address },
+    { name = "CASH_ASSET_ADDRESS", value = var.cash_asset_address },
   ]
 
   log_options = { for k, g in aws_cloudwatch_log_group.tasks : k => {

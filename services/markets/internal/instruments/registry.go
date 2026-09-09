@@ -31,7 +31,7 @@ func DefaultRegistry(cfg config.Config) *Registry {
 			DisplaySemantics:   DisplayPriceDirect,
 			DisplayLabel:       "cNGN per USDC",
 			DisplayName:        "USDC/cNGN Spot",
-			SettlementNote:     "Spot-style orderbook market on Base. Trades exchange WRAPPED_CNGN against internal USDC cash using the existing single quote-asset rail.",
+			SettlementNote:     "Spot-style orderbook market on Base. Trades exchange WRAPPED_CNGN against the quote asset of the configured TradeModule (TRADE_MODULE_ADDRESS / QUOTE_ASSET_ADDRESS): the internal USDC cash ledger under the cash-quoted module, or the wrapped USDC asset under the wrapped-quote module, in which case both legs are 1:1 token-backed.",
 			OrderEntrySpec:     "usdc_cngn_spot_v1",
 			UIPriceUnit:        "cNGN per USDC",
 			UISizeUnit:         "USDC notional",

@@ -89,8 +89,34 @@ variable "matching_address" {
 }
 
 variable "trade_module_address" {
+  # The module the venue settles on. Every submitted order is now pinned to this address
+  # (markets: validateActionModule), so changing it is a hard cutover, not a rolling one:
+  # orders resting for the old module stop being matchable the moment this changes.
   type    = string
   default = "0x44813aD30b2fFC1bB2871Eed9b19F63c8196eD1c"
+}
+
+variable "quote_asset_address" {
+  # The asset `trade_module_address` settles the quote leg in, i.e. its quoteAsset(). The
+  # markets service reads a buyer's balance of THIS contract before crossing a pair, so it
+  # must be changed in the same commit as trade_module_address -- reading the wrong ledger
+  # judges every buyer against balances the trade does not touch.
+  #
+  #   cash-quoted module    0x44813aD3...  ->  CashAsset            0x6B232A2155Bd0C9bf741dB4cf8E7e8A0176A6fc6
+  #   wrapped-quote module  (to deploy)    ->  WRAPPED_USDC_DELIV.  0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84
+  #
+  # Empty by default because CASH_ASSET_ADDRESS is not set on these tasks either, which
+  # leaves the pre-trade funding check inert -- as it is today. Setting this turns the check
+  # on, so set it deliberately and watch for funding_check_enabled in the logs.
+  type    = string
+  default = ""
+}
+
+variable "cash_asset_address" {
+  # The settlement-ledger CashAsset. Only the legacy fallback source of QUOTE_ASSET_ADDRESS;
+  # prefer setting quote_asset_address explicitly.
+  type    = string
+  default = ""
 }
 
 variable "ws_allowed_origins" {
