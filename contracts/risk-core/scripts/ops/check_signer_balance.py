@@ -3,16 +3,18 @@
 
 The feed publisher signs each cNGN/stable acceptData tx from a hot EOA. If that
 wallet runs out of gas the feed stops publishing and getSpot() goes stale, which
-FREEZES all trading (this happened on 2026-07-21). The staleness alert only fires
-AFTER the feed has already died; this checks the balance and warns while there's
-still days of runway, so it's a proactive top-up reminder.
+FREEZES all trading. This has now happened three times: 2026-07-21, 2026-09-01
+(dead for 6.8 days, found by accident while debugging something else) and
+2026-09-09. The staleness alert only fires AFTER the feed has already died; this
+checks the balance and warns while there's still days of runway, so it's a
+proactive top-up reminder.
 
 Env (or ~/.numo-feeds.env):
   RPC_URL             Base mainnet RPC
   ALERT_WEBHOOK_URL   Slack/Discord-compatible webhook (optional; logs only if unset)
   SIGNER_ADDRESS      feed-signer EOA (default: the live 0xC9F1... wallet)
-  BURN_ETH_PER_DAY    estimated daily gas burn (default 0.0004 ETH ~ 1 cngn/min + stable/20min)
-  WARN_RUNWAY_DAYS    alert when runway drops below this many days (default 3)
+  BURN_ETH_PER_DAY    daily gas burn (default 0.0012 ETH, measured 2026-09-09)
+  WARN_RUNWAY_DAYS    alert when runway drops below this many days (default 7)
 
 Run every few hours via systemd timer (see numo-signer-balance-alert.timer).
 """
@@ -26,8 +28,19 @@ import urllib.request
 from pathlib import Path
 
 DEFAULT_SIGNER = "0xC9F1FfdEd29f7051538ad3a72729C3d07F920FDc"
-DEFAULT_BURN_PER_DAY = 0.0004
-DEFAULT_WARN_DAYS = 3.0
+
+# Measured, not estimated. Between 2026-09-08 17:50Z and 2026-09-09 13:20Z the signer
+# spent 0.000977 ETH over 1183 transactions (nonce 61552 -> 62735): 0.0012 ETH/day, or
+# 8.3e-7 per tx. The previous 0.0004 was 3x optimistic, which is why the "3-day" warning
+# actually fired with ~24 hours left and the wallet still emptied twice.
+#
+# Re-measure this if the publish cadence changes -- it is the denominator of the runway,
+# so an understated burn silently shortens every warning.
+DEFAULT_BURN_PER_DAY = 0.0012
+
+# A week, so an alert that lands on a Friday evening is still actionable on Monday.
+# At the measured burn this warns at ~0.0084 ETH.
+DEFAULT_WARN_DAYS = 7.0
 
 
 def load_env_file(path: Path) -> None:
