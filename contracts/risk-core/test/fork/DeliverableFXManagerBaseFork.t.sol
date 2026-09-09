@@ -17,10 +17,17 @@ import "openzeppelin/token/ERC20/extensions/IERC20Metadata.sol";
 contract FORK_TestDeliverableFXManagerBase is Test {
   uint internal constant ONE_INCREMENT = 0.001e18;
   uint internal constant TWO_INCREMENTS = 0.002e18;
-  // must stay within the 5% mark-deviation bound of the live series' birth mark (1379.64)
-  uint internal constant SETTLEMENT_PRICE = 1400e18;
   uint internal constant BASE_PER_INCREMENT_18 = 10e18;
-  uint internal constant QUOTE_PER_INCREMENT_18 = 14_000e18;
+
+  // Derived from the live series' CURRENT mark in setUp, not hardcoded. The asset
+  // rejects any mark more than maxMarkDeviation (5%) from the current one, and the
+  // live mark tracks NGN/USD -- so a fixed price expires as the rate drifts. The
+  // previous 1400e18 was chosen against a birth mark of 1379.64 and began reverting
+  // DFXF_MarkDeviationExceeded once the live mark reached 1322.01, which is where
+  // Chainlink's NGN/USD also puts it. Deriving keeps the test exercising the guard's
+  // behaviour at whatever the rate happens to be.
+  uint internal settlementPrice;
+  uint internal quotePerIncrement18;
   uint internal constant CASH_MARGIN_USDC = 1_000 * 1e6;
   uint internal constant MANAGER_CNGN_FUND = 56_000e18;
 
@@ -75,6 +82,13 @@ contract FORK_TestDeliverableFXManagerBase is Test {
     liveSeries = uint96(vm.parseJsonUint(futureJson, ".expiry"));
     liveExpiry = vm.parseJsonUint(futureJson, ".expiry");
     liveLastTradeTime = vm.parseJsonUint(futureJson, ".lastTradeTime");
+
+    // +1% of the live mark, rounded onto the series' tick, so it is comfortably
+    // inside the 5% bound however the market has moved since this was written.
+    IDeliverableFXFutureAsset.Series memory liveMark = future.getSeries(liveSeries);
+    uint tick = uint(liveMark.tickSize);
+    settlementPrice = ((uint(liveMark.markPrice) * 101 / 100) / tick) * tick;
+    quotePerIncrement18 = BASE_PER_INCREMENT_18 * settlementPrice / 1e18;
 
     aliceAcc = subAccounts.createAccountWithApproval(alice, address(this), manager);
     bobAcc = subAccounts.createAccountWithApproval(bob, address(this), manager);
@@ -135,13 +149,13 @@ contract FORK_TestDeliverableFXManagerAcceptance is FORK_TestDeliverableFXManage
 
     IDeliverableFXFutureAsset.Series memory preMark = future.getSeries(liveSeries);
     vm.prank(deployer);
-    future.setMarkPrice(liveSeries, uint64(block.timestamp), SETTLEMENT_PRICE);
+    future.setMarkPrice(liveSeries, uint64(block.timestamp), settlementPrice);
 
     _transferFuture(aliceAcc, bobAcc, liveSeries, -int(ONE_INCREMENT));
 
     // VM accrues in USDC: (deltaMark * contractSize / newMark) per contract, on the pre-reduction position
-    int vmPerContract = (int(SETTLEMENT_PRICE) - int(uint(preMark.markPrice))) * int(uint(preMark.contractSizeBase))
-      / int(SETTLEMENT_PRICE);
+    int vmPerContract = (int(settlementPrice) - int(uint(preMark.markPrice))) * int(uint(preMark.contractSizeBase))
+      / int(settlementPrice);
     int expectedVM = int(TWO_INCREMENTS) * vmPerContract / 1e18;
 
     assertEq(subAccounts.getBalance(bobAcc, future, liveSeries), int(ONE_INCREMENT));
@@ -150,7 +164,7 @@ contract FORK_TestDeliverableFXManagerAcceptance is FORK_TestDeliverableFXManage
     assertEq(subAccounts.getBalance(aliceAcc, cash, 0), int(1_000e18) - expectedVM);
 
     vm.prank(deployer);
-    future.setSettlementPrice(liveSeries, SETTLEMENT_PRICE);
+    future.setSettlementPrice(liveSeries, settlementPrice);
 
     vm.warp(liveLastTradeTime + 1);
 
@@ -160,7 +174,7 @@ contract FORK_TestDeliverableFXManagerAcceptance is FORK_TestDeliverableFXManage
     vm.expectRevert(IDeliverableFXFutureAsset.DFXF_TradingClosed.selector);
     subAccounts.submitTransfer(blocked, "");
 
-    _depositWrappedCNGN(charlieAcc, QUOTE_PER_INCREMENT_18);
+    _depositWrappedCNGN(charlieAcc, quotePerIncrement18);
 
     vm.prank(address(manager.liquidation()));
     manager.executeBid(bobAcc, charlieAcc, 1e18, 0, 0);
@@ -168,7 +182,7 @@ contract FORK_TestDeliverableFXManagerAcceptance is FORK_TestDeliverableFXManage
     assertEq(subAccounts.getBalance(bobAcc, future, liveSeries), 0);
     assertEq(subAccounts.getBalance(charlieAcc, future, liveSeries), int(ONE_INCREMENT));
     assertEq(manager.reservedBalance(bobAcc, IAsset(address(cngnAsset))), 0);
-    assertEq(manager.reservedBalance(charlieAcc, IAsset(address(cngnAsset))), QUOTE_PER_INCREMENT_18);
+    assertEq(manager.reservedBalance(charlieAcc, IAsset(address(cngnAsset))), quotePerIncrement18);
 
     _depositWrappedUSDC(aliceAcc, 10 * 1e6);
 
@@ -184,7 +198,7 @@ contract FORK_TestDeliverableFXManagerAcceptance is FORK_TestDeliverableFXManage
     assertEq(subAccounts.getBalance(aliceAcc, future, liveSeries), 0);
     assertEq(manager.reservedBalance(aliceAcc, IAsset(address(usdcDeliveryAsset))), 0);
     assertTrue(manager.accountSettled(aliceAcc, liveSeries));
-    assertEq(subAccounts.getBalance(aliceAcc, cngnAsset, 0), int(QUOTE_PER_INCREMENT_18));
+    assertEq(subAccounts.getBalance(aliceAcc, cngnAsset, 0), int(quotePerIncrement18));
 
     manager.settleDeliverableFuture(future, charlieAcc, liveSeries);
 
@@ -215,16 +229,16 @@ contract FORK_TestDeliverableFXManagerAcceptance is FORK_TestDeliverableFXManage
     _transferFuture(aliceAcc, bobAcc, secondSeries, int(ONE_INCREMENT));
 
     vm.prank(deployer);
-    future.setSettlementPrice(liveSeries, SETTLEMENT_PRICE);
+    future.setSettlementPrice(liveSeries, settlementPrice);
     vm.prank(deployer);
     future.setSettlementPrice(secondSeries, 1550e18);
 
-    _depositWrappedCNGN(bobAcc, QUOTE_PER_INCREMENT_18);
+    _depositWrappedCNGN(bobAcc, quotePerIncrement18);
 
     vm.warp(secondLastTrade + 1);
     manager.refreshDeliverableReservation(future, bobAcc, liveSeries);
 
-    uint expectedAggregate = QUOTE_PER_INCREMENT_18 + 15_500e18;
+    uint expectedAggregate = quotePerIncrement18 + 15_500e18;
     assertEq(manager.reservedBalance(bobAcc, IAsset(address(cngnAsset))), expectedAggregate);
     assertFalse(manager.canSettleDeliverableFuture(future, bobAcc, liveSeries));
 
