@@ -218,6 +218,26 @@ resource "aws_ecs_task_definition" "execution" {
       # DRY_RUN was unset on Railway and defaulted. Stated explicitly here so the
       # value is a decision rather than a default nobody chose.
       { name = "DRY_RUN", value = "false" },
+
+      # Settlement canary. Calls StandardManager.getMargin against a real subaccount on a
+      # timer and reports the result in /healthz. It exists because the 2026-09-01 feed
+      # outage was silent for 6.8 days: services healthy, orders matching, every on-chain
+      # settlement reverting.
+      #
+      # The account id matters. An empty subaccount has no market holding, so the manager
+      # reads no spot feed and the check passes while proving nothing. 15 is the SRM
+      # account holding wrapped cNGN (market 2) and is the only funded one today, so this
+      # leg exercises market 2 only. Deposit a little wrapped USDC into it to cover market
+      # 1 as well. Until then market 1 is still covered by the ops-side canary, which reads
+      # every market's feed directly rather than inferring it from what someone holds.
+      { name = "SETTLEMENT_CANARY_MANAGER", value = "0x3195Bd7e02d93982bCF8b34DF5B941fFCaE1E49b" },
+      { name = "SETTLEMENT_CANARY_ACCOUNTS", value = "15" },
+      { name = "SETTLEMENT_CANARY_INTERVAL_MS", value = "60000" },
+      # Reporting, not liveness. Restarting this container does not refresh a stale oracle,
+      # and failing the health check would pull the API out of the target group and flap
+      # tasks while the real fault sits off-box. The canary's job is to make the halt
+      # visible; the alerting on it is numo-settlement-canary.timer on the ops box.
+      { name = "SETTLEMENT_CANARY_FAILS_HEALTHCHECK", value = "false" },
     ])
 
     secrets = [
