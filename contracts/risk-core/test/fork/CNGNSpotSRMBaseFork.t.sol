@@ -131,19 +131,33 @@ contract FORK_TestCNGNSpotOnSRMBase is Test {
     assertEq(baseCap, supply18 * CAP_PCT / 100, "cap must be derived from live supply");
     assertEq(cngnAsset.totalPositionCap(IManager(address(srm))), baseCap);
 
-    // tighten the cap to a level this test can fill exactly, then prove the two behaviours apart
-    vm.prank(vault);
-    cngnAsset.setTotalPositionCap(IManager(address(srm)), 1_500_000e18);
+    // Tighten the cap to a level this test can fill exactly, then prove the two behaviours apart.
+    //
+    // The headroom is measured from whatever the venue already holds rather than from zero. It
+    // held nothing when this was written; it holds real deposits now, and an absolute cap of
+    // 1_500_000e18 started failing BM_AssetCapExceeded on the *setup* line -- a red test caused
+    // by the venue being used, not by the cap misbehaving.
+    uint existing = cngnAsset.totalPosition(IManager(address(srm)));
+    uint headroom = 1_500_000e18;
 
-    _fundCNGN(bobAcc, 1_500_000e18); // exactly at the cap
+    vm.prank(vault);
+    cngnAsset.setTotalPositionCap(IManager(address(srm)), existing + headroom);
+
+    _fundCNGN(bobAcc, headroom); // exactly at the cap
+    assertEq(
+      cngnAsset.totalPosition(IManager(address(srm))),
+      cngnAsset.totalPositionCap(IManager(address(srm))),
+      "the setup must actually reach the cap, or the next line proves nothing"
+    );
+
     vm.expectRevert(IBaseManager.BM_AssetCapExceeded.selector);
     _fundCNGN(aliceAcc, 1e18); // one more cNGN cannot enter
 
     // but the book keeps matching: an account-to-account transfer of a non-negative asset leaves
     // totalPosition unchanged, so _checkAssetCap's `preTradePos < postTradePos` is never true
     _fundCash(aliceAcc, 10_000 * 1e6);
-    _spotTrade(bobAcc, 1_500_000e18, aliceAcc, 1_000e18);
-    assertEq(_cngnBalance(aliceAcc), 1_500_000e18, "trading must continue at the cap");
+    _spotTrade(bobAcc, headroom, aliceAcc, 1_000e18);
+    assertEq(_cngnBalance(aliceAcc), int(headroom), "trading must continue at the cap");
   }
 
   // ---------------------------------------------------------------------------------------------

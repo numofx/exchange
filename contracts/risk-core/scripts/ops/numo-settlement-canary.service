@@ -1,0 +1,19 @@
+# Settlement canary. Asks the StandardManager to price a real subaccount, and reads every
+# spot feed it could consult, then alerts to Slack (ALERT_WEBHOOK_URL from SSM) if either
+# fails. This is the check that was missing on 2026-09-01, when a stale feed halted every
+# on-chain settlement for 6.8 days while every service stayed green.
+#
+# Runs on chain data only -- no dependency on the execution service being up -- so it still
+# reports when the venue itself is down. Paired with numo-settlement-canary.timer.
+[Unit]
+Description=Numo settlement canary (getMargin + spot feeds)
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/home/ec2-user/exchange/contracts/risk-core
+ExecStart=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-ssm.sh /usr/bin/python3 scripts/ops/check_settlement_canary.py
+Environment=AWS_REGION=us-east-1
+# Point this at subaccounts that actually hold positions. An empty account makes the manager
+# read no feed, so getMargin passes while proving nothing.
+Environment=CANARY_ACCOUNTS=15
