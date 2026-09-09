@@ -14,6 +14,8 @@ import {IWrappedERC20Asset} from "v2-core/src/interfaces/IWrappedERC20Asset.sol"
 import {StandardManager} from "v2-core/src/risk-managers/StandardManager.sol";
 import {WrappedERC20Asset} from "v2-core/src/assets/WrappedERC20Asset.sol";
 
+import {Ownable2Step} from "openzeppelin/access/Ownable2Step.sol";
+
 import {Matching} from "../src/Matching.sol";
 import {TradeModule} from "../src/modules/TradeModule.sol";
 import {IMatching} from "../src/interfaces/IMatching.sol";
@@ -93,6 +95,7 @@ contract DeployWrappedQuoteTradeModule is Utils {
   address internal quoteAsset;
   address internal staticStableFeed;
   address internal vault;
+  address internal deployer;
   uint internal quoteMarketId;
   uint internal feeRecipient;
 
@@ -101,12 +104,21 @@ contract DeployWrappedQuoteTradeModule is Utils {
     _assertPreconditions();
 
     uint deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+    deployer = vm.addr(deployerPrivateKey);
     vm.startBroadcast(deployerPrivateKey);
 
     TradeModule module = new TradeModule(IMatching(matchingAddr), IAsset(quoteAsset), feeRecipient);
 
-    address newOwner = vm.envOr("MATCHING_OWNER", address(0));
-    if (newOwner != address(0)) module.transferOwnership(newOwner);
+    // BaseModule is Ownable2Step and its constructor is Ownable(msg.sender), so the module is
+    // born owned by the deployer EOA. transferOwnership only sets pendingOwner; the vault must
+    // acceptOwnership, which is emitted as action 0 of the batch.
+    //
+    // This is not optional and must not be. onlyOwner on this module includes
+    // setDatedFutureAsset, and TradeModule._addAssetTransfers sets amtQuote = 0 for a dated
+    // future. _fillLimitOrder validates fill.price against the signed limit and never looks at
+    // amtQuote, so an owner who flags the base asset can take the base leg of any resting order
+    // for zero payment, through the ordinary venue, past the signed price guard.
+    module.transferOwnership(vault);
 
     vm.stopBroadcast();
 
@@ -246,6 +258,24 @@ contract DeployWrappedQuoteTradeModule is Utils {
     if (Matching(matchingAddr).allowedModules(address(module))) {
       revert("module is already allowlisted - it must be inert until the vault batch runs");
     }
+
+    _assertOwnershipOffered(module, vault, deployer);
+  }
+
+  /// @dev Ownership. The deployer still holds owner() at this point -- Ownable2Step hands over only
+  ///      on acceptOwnership -- but pendingOwner must already be the vault, or the batch's action 0
+  ///      cannot succeed and the module would go live under the deployer key. Parameterised so a
+  ///      test can drive this exact code rather than a restatement of it.
+  function _assertOwnershipOffered(TradeModule module, address expectedVault, address expectedDeployer)
+    internal
+    view
+  {
+    if (module.pendingOwner() != expectedVault) {
+      revert("pendingOwner is not the vault - ownership was not offered");
+    }
+    if (module.owner() != expectedDeployer) {
+      revert("owner is not the deployer - unexpected ownership state");
+    }
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -274,7 +304,7 @@ contract DeployWrappedQuoteTradeModule is Utils {
 
   function _serialiseVaultActions(TradeModule module) internal view returns (string memory) {
     bool skipOracle = vm.envOr("SKIP_ORACLE_ACTION", false);
-    uint count = skipOracle ? 2 : 3;
+    uint count = skipOracle ? 3 : 4;
 
     address[] memory to = new address[](count);
     bytes[] memory data = new bytes[](count);
@@ -282,6 +312,17 @@ contract DeployWrappedQuoteTradeModule is Utils {
     string[] memory descriptions = new string[](count);
 
     uint i;
+
+    // 0. CUSTODY, AND IT MUST BE FIRST. Until the vault accepts, owner() is the deployer EOA,
+    //    which can call setDatedFutureAsset and make every subsequent fill pay zero quote (see
+    //    the note in run()). Allowlisting a module the deployer still owns would open that
+    //    window on a live venue, so custody is settled before the enabling switch, not after.
+    to[i] = address(module);
+    data[i] = abi.encodeCall(Ownable2Step.acceptOwnership, ());
+    who[i] = "module pendingOwner (vault)";
+    descriptions[i] =
+      "tradeWrappedQuote.acceptOwnership() [CUSTODY - must land before the enabling switch below]";
+    i++;
 
     // 1. THE ENABLING SWITCH. Nothing can route to the module before this.
     to[i] = matchingAddr;
