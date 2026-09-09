@@ -42,8 +42,13 @@ import {Utils} from "./utils.sol";
  *         but never the fee recipient, so a non-zero fee has to spend an allowance the fee account
  *         granted in advance. The live module's feeRecipient is subaccount 1, whose ownerOf() and
  *         manager() are both the SRM contract — which exposes no call that reaches
- *         setAssetAllowances, so subaccount 1 can never grant one. This script therefore REFUSES a
- *         contract-owned fee recipient and emits the grant as action 3.
+ *         setAssetAllowances, so subaccount 1 can never grant one. This script therefore requires
+ *         the fee recipient to be owned by the vault itself, and emits the grant as action 3 —
+ *         which is then a call the same signer that runs actions 1 and 2 can make. It refuses a
+ *         contract-owned id and, separately, an id owned by any other EOA: subaccount ids are
+ *         sequential and permissionless, so the id you resolved off chain can be taken by someone
+ *         else's createAccount before your own transaction mines, and `quoteAsset`/`feeRecipient`
+ *         are immutable, so wiring the wrong one in burns the deployment.
  *
  *         Maker and taker fees are "0" today (services/markets/internal/matching/executor.go:23,32).
  *         That makes the defect latent, not absent: it surfaces on the first non-zero fee.
@@ -76,11 +81,18 @@ contract DeployWrappedQuoteTradeModule is Utils {
   string internal constant ARTIFACT_NAME = "WRAPPED_QUOTE_TRADE_MODULE";
   string internal constant VAULT_ACTIONS_NAME = "WRAPPED_QUOTE_TRADE_MODULE_VAULT_ACTIONS";
 
+  /// @dev The vault recorded in risk-core/DEPLOYED_ADDRESSES.md, Base mainnet. This is an ANCHOR,
+  ///      not a lookup, exactly as scripts/cngn-spot-batch.sol:51 uses it: the owner is read from
+  ///      chain and compared against this, never adopted as the new truth. Deriving the vault from
+  ///      whoever happens to own Matching would mean an ownership change is silently accepted.
+  address internal constant EXPECTED_VAULT = 0x1dcA42ab54Bd3862853A821F84B29BF65245F435;
+
   address internal matchingAddr;
   address internal subAccountsAddr;
   address internal srmAddr;
   address internal quoteAsset;
   address internal staticStableFeed;
+  address internal vault;
   uint internal quoteMarketId;
   uint internal feeRecipient;
 
@@ -127,6 +139,8 @@ contract DeployWrappedQuoteTradeModule is Utils {
 
     // No default. The live module's feeRecipient (subaccount 1) is SRM-owned and cannot grant the
     // allowance a wrapped quote needs, so silently inheriting it would ship the latent revert.
+    // It must name an account the VAULT already owns; see _assertFeeRecipient for why an id you
+    // only expect to own is not good enough.
     feeRecipient = vm.envUint("FEE_RECIPIENT_SUBACCOUNT");
   }
 
@@ -157,25 +171,72 @@ contract DeployWrappedQuoteTradeModule is Utils {
     (ISpotFeed spotFeed,,) = srm.getMarketFeeds(quoteMarketId);
     if (address(spotFeed) == address(0)) revert("quote market has no spot feed");
 
-    // THE FEE PRECONDITION. A contract-owned fee recipient can never grant the positive allowance
-    // that a wrapped quote asset requires on the credit side, so a non-zero fee would be
-    // permanently unfillable. Catch it here rather than on the first fee-bearing trade.
-    if (feeRecipient == 0) revert("FEE_RECIPIENT_SUBACCOUNT must be set");
-    address feeOwner = subAccounts.ownerOf(feeRecipient);
-    if (feeOwner.code.length != 0) {
-      console2.log("fee recipient subaccount:", feeRecipient);
-      console2.log("its owner:", feeOwner);
-      revert("fee recipient is contract-owned and can never grant an allowance - use an EOA-owned subaccount");
-    }
-    if (address(subAccounts.manager(feeRecipient)) != srmAddr) {
-      revert("fee recipient is not managed by the SRM");
-    }
+    // THE VAULT. Read from chain and pinned to the recorded address rather than adopted, so a
+    // change of ownership stops the deployment instead of being written into the vault batch. It
+    // is also the address every fee-recipient check below is made against.
+    vault = Matching(matchingAddr).owner();
+    if (vault == address(0)) revert("matching owner is zero");
+    if (vault != EXPECTED_VAULT) revert("matching owner is not the recorded vault - ownership changed");
+    if (srm.owner() != vault) revert("matching and the srm have different owners");
+
+    _assertFeeRecipient(subAccounts, feeRecipient, vault, srmAddr);
 
     console2.log("matching:      ", matchingAddr);
     console2.log("quote asset:   ", quoteAsset);
     console2.log("quote marketId:", quoteMarketId);
+    console2.log("vault:         ", vault);
     console2.log("fee recipient: ", feeRecipient);
-    console2.log("fee owner:     ", feeOwner);
+  }
+
+  /**
+   * @dev THE FEE PRECONDITION. `TradeModule.quoteAsset` and `feeRecipient` are both immutable
+   *      (TradeModule.sol:32,35), so a fee recipient that cannot grant the module a positive
+   *      allowance on the quote asset burns the deployment: the module has to be redeployed, and
+   *      the whole vault batch reissued.
+   *
+   * @dev Two distinct ways to get the wrong account, kept as two distinct messages because they
+   *      have different fixes:
+   *
+   *      1. CONTRACT-OWNED. Subaccount 1 -- the live module's feeRecipient -- is owned and managed
+   *         by the SRM, which exposes no call reaching setAssetAllowances. This is the one someone
+   *         actually hits, by passing the id the live module already uses.
+   *
+   *      2. OWNED BY THE WRONG EOA. `subAccounts.createAccount` is permissionless and ids are
+   *         sequential and global (SubAccounts.sol: ++lastAccountId), so between reading
+   *         `lastAccountId` off chain and mining the transaction that creates the intended fee
+   *         account, someone else's createAccount can take the id. A raced id passes
+   *         `code.length == 0`, and passes the manager check too if that account happens to sit
+   *         under the SRM -- so the old code-length test alone would have waved it through, and
+   *         action 3 of the vault batch would then be a call only a stranger can make. Requiring
+   *         the owner to BE the vault is what makes the emitted batch signable by the vault that
+   *         signs actions 1 and 2.
+   *
+   * @dev Parameterised rather than reading the contract's own fields, so
+   *      test/scripts/WrappedQuoteDeployPreconditions.t.sol can drive it against a real SubAccounts
+   *      without a fork.
+   */
+  function _assertFeeRecipient(
+    ISubAccounts subAccounts,
+    uint feeAccount,
+    address expectedOwner,
+    address expectedManager
+  ) internal view {
+    if (feeAccount == 0) revert("FEE_RECIPIENT_SUBACCOUNT must be set");
+
+    address feeOwner = subAccounts.ownerOf(feeAccount);
+    console2.log("fee recipient subaccount:", feeAccount);
+    console2.log("its owner:", feeOwner);
+
+    if (feeOwner.code.length != 0) {
+      revert("fee recipient is contract-owned and can never grant an allowance - use a vault-owned subaccount");
+    }
+    if (feeOwner != expectedOwner) {
+      console2.log("expected owner (vault):", expectedOwner);
+      revert("fee recipient is not owned by the vault - wrong id, or the id was raced by another createAccount");
+    }
+    if (address(subAccounts.manager(feeAccount)) != expectedManager) {
+      revert("fee recipient is not managed by the SRM");
+    }
   }
 
   function _assertPostconditions(TradeModule module) internal view {
@@ -250,7 +311,7 @@ contract DeployWrappedQuoteTradeModule is Utils {
 
     to[i] = subAccountsAddr;
     data[i] = abi.encodeCall(ISubAccounts.setAssetAllowances, (feeRecipient, address(module), grant));
-    who[i] = "fee recipient subaccount owner";
+    who[i] = "fee recipient subaccount owner (vault)";
     descriptions[i] =
       "subAccounts.setAssetAllowances(feeRecipient, tradeWrappedQuote, +max quote) [without this every non-zero-fee fill reverts]";
 
