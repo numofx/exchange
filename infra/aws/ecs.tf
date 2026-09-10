@@ -313,8 +313,17 @@ resource "aws_ecs_task_definition" "market_maker" {
       { name = "MM_MARKET_SYMBOL", value = "USDCcNGN-SPOT" },
       { name = "MM_OWNER_ADDRESS", value = var.mm_address },
       { name = "MM_SIGNER_ADDRESS", value = var.mm_address },
-      { name = "MM_SUBACCOUNT_ID", value = "10" },
-      { name = "MM_RECIPIENT_ID", value = "10" },
+      # Subaccount 15, not 10. Ten is DeliverableFXManager-managed, and the vault
+      # de-whitelisted DFXM on the CashAsset (block 51109818), so every cash adjustment
+      # on it now reverts MW_UnknownManager -- the market maker could quote but never
+      # settle. Fifteen is SRM-managed, held in Matching custody, and signed by the same
+      # MM key, and it holds the cNGN inventory (4999) the maker needs.
+      #
+      # RECIPIENT_ID must equal SUBACCOUNT_ID. Under a WrappedERC20Asset quote leg the
+      # credit side needs an allowance, so a recipient that is not the trading account
+      # reverts; keeping them equal is what the venue actually exercises and tests.
+      { name = "MM_SUBACCOUNT_ID", value = "15" },
+      { name = "MM_RECIPIENT_ID", value = "15" },
 
       { name = "MM_QUOTE_LEVELS", value = "5" },
       { name = "MM_ORDER_SIZE", value = "1.2" },
