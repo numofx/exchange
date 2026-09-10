@@ -38,4 +38,34 @@ jobs:
       - run: python3 scripts/ops/refresh_deployment_artifacts.py --self-test
       - run: forge test -vvv
         env:
-          BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}   # fork tests (DeliverableFXManagerBaseFork, CNGNSpotSRMBaseFork) need it
+          BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}   # every suite under test/fork/ needs it
+
+      # These fork suites are the only assertions this repo makes about chain state it does not
+      # control: the DFXM cash freeze, the market-1 inert batch, the unbacked-balance burn, the
+      # cNGN spot preconditions. Losing them is silent -- the summary line counts a suite that
+      # did not run as neither passed nor failed.
+      #
+      # Unlike contracts-execution, a MISSING secret is already loud here: these call
+      # vm.envString("BASE_RPC_URL"), which reverts, so setUp fails the suite rather than
+      # skipping it. Verified by running with the variable unset -- it reports
+      # [FAIL: vm.envString: environment variable "BASE_RPC_URL" not found] setUp().
+      #
+      # So this guards the case that is NOT loud: a suite that stops running at all. The expected
+      # count is derived from the files on disk rather than hardcoded, so adding a fork suite
+      # raises the bar automatically and deleting one has to be deliberate.
+      - name: every fork suite must run, and none may skip
+        env:
+          BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}
+        run: |
+          expected=$(ls test/fork/*.t.sol | wc -l | tr -d ' ')
+          echo "fork suites on disk: $expected"
+          out=$(forge test --match-path 'test/fork/*' -vv)
+          echo "$out"
+          grep -qE "Ran ${expected} test suites" <<<"$out" || {
+            echo "::error::expected ${expected} fork suites to run; see the summary line above"
+            exit 1
+          }
+          grep -qE '[1-9][0-9]* tests passed, 0 failed, 0 skipped' <<<"$out" || {
+            echo "::error::a fork test skipped, or none ran -- a skip reads as a pass in the summary"
+            exit 1
+          }
