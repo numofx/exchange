@@ -39,6 +39,12 @@ const envSchema = z.object({
   // Pinned, not required-zero. See canary.ts: the live value is settled cash that donateBalance
   // cannot retire, so the useful signal is movement, not presence. Unset disables the pin.
   SETTLEMENT_CANARY_EXPECTED_NET_SETTLED_CASH: z.string().regex(/^-?\d+$/).optional().or(z.literal('')),
+  // The wrapped-quote fee path. All four required together; the account does not exist before
+  // the cutover, and a check against an invented id would be worse than no check.
+  SETTLEMENT_CANARY_FEE_SUBACCOUNT: z.string().regex(/^\d+$/).optional().or(z.literal('')),
+  SETTLEMENT_CANARY_FEE_OWNER: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
+  SETTLEMENT_CANARY_FEE_MODULE: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
+  SETTLEMENT_CANARY_FEE_QUOTE_ASSET: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
 });
 
 export type AppConfig = {
@@ -63,6 +69,12 @@ export type AppConfig = {
     alertWebhookUrl?: string;
     alertRepeatAfterChecks: number;
     expectedNetSettledCash?: bigint;
+    feeRecipient?: {
+      accountId: bigint;
+      expectedOwner: `0x${string}`;
+      module: `0x${string}`;
+      quoteAsset: `0x${string}`;
+    };
   };
 };
 
@@ -95,8 +107,40 @@ export function loadConfig(): AppConfig {
           expectedNetSettledCash: parsed.SETTLEMENT_CANARY_EXPECTED_NET_SETTLED_CASH
             ? BigInt(parsed.SETTLEMENT_CANARY_EXPECTED_NET_SETTLED_CASH)
             : undefined,
+          feeRecipient: parseFeeRecipient(parsed),
         }
       : undefined,
+  };
+}
+
+/**
+ * All four or none. A partially configured fee check would look configured while checking
+ * nothing, which is the failure mode this whole file keeps guarding against.
+ */
+function parseFeeRecipient(p: {
+  SETTLEMENT_CANARY_FEE_SUBACCOUNT?: string;
+  SETTLEMENT_CANARY_FEE_OWNER?: string;
+  SETTLEMENT_CANARY_FEE_MODULE?: string;
+  SETTLEMENT_CANARY_FEE_QUOTE_ASSET?: string;
+}) {
+  const parts = [
+    p.SETTLEMENT_CANARY_FEE_SUBACCOUNT,
+    p.SETTLEMENT_CANARY_FEE_OWNER,
+    p.SETTLEMENT_CANARY_FEE_MODULE,
+    p.SETTLEMENT_CANARY_FEE_QUOTE_ASSET,
+  ].map((v) => (v ?? '').trim());
+
+  if (parts.every((v) => v === '')) return undefined;
+  if (parts.some((v) => v === '')) {
+    throw new Error(
+      'SETTLEMENT_CANARY_FEE_* must be set together: subaccount, owner, module and quote asset',
+    );
+  }
+  return {
+    accountId: BigInt(parts[0]!),
+    expectedOwner: getAddress(parts[1]!) as `0x${string}`,
+    module: getAddress(parts[2]!) as `0x${string}`,
+    quoteAsset: getAddress(parts[3]!) as `0x${string}`,
   };
 }
 

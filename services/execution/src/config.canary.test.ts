@@ -18,6 +18,10 @@ function withEnv<T>(extra: Record<string, string | undefined>, fn: () => T): T {
     'SETTLEMENT_CANARY_ACCOUNTS',
     'SETTLEMENT_CANARY_INTERVAL_MS',
     'SETTLEMENT_CANARY_FAILS_HEALTHCHECK',
+    'SETTLEMENT_CANARY_FEE_SUBACCOUNT',
+    'SETTLEMENT_CANARY_FEE_OWNER',
+    'SETTLEMENT_CANARY_FEE_MODULE',
+    'SETTLEMENT_CANARY_FEE_QUOTE_ASSET',
   ];
   const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
   Object.assign(process.env, BASE_ENV);
@@ -77,4 +81,28 @@ test('failsHealthcheck is opt-in', () => {
     loadConfig,
   );
   assert.equal(config.settlementCanary?.failsHealthcheck, true);
+});
+
+// All four or none: a partially configured fee check looks configured while checking nothing.
+test('fee recipient config requires all four values together', () => {
+  assert.throws(
+    () =>
+      withEnv(
+        {
+          SETTLEMENT_CANARY_MANAGER: MANAGER,
+          SETTLEMENT_CANARY_ACCOUNTS: '15',
+          SETTLEMENT_CANARY_FEE_SUBACCOUNT: '99',
+        },
+        loadConfig,
+      ),
+    /must be set together/,
+  );
+});
+
+test('no fee recipient config at all is fine', () => {
+  const config = withEnv(
+    { SETTLEMENT_CANARY_MANAGER: MANAGER, SETTLEMENT_CANARY_ACCOUNTS: '15' },
+    loadConfig,
+  );
+  assert.equal(config.settlementCanary?.feeRecipient, undefined);
 });
