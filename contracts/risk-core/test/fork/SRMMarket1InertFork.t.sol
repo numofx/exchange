@@ -64,8 +64,10 @@ contract SRMMarket1InertFork is Test {
   /// world the batch was written to fix.
   uint constant PRE_BATCH_BLOCK = 51097292;
 
-  // The exact calldata the vault sent, copied from the artifact. Kept so a hand edit to
-  // either file is caught by testTheArtifactReproducesWhatLanded.
+  // The exact calldata the vault sent. These are compared against the artifact itself by
+  // testTheRecordedCalldataMatchesTheArtifact -- an earlier version of this comment claimed
+  // that protection without implementing it, so the JSON could drift from these constants
+  // silently. Copying bytes into a test does not tie the test to the file they came from.
   bytes constant ACTION_0 =
     hex"675b0ebb0000000000000000000000000000000000000000000000000000000000000001000000000000000000000000507d645682737c6640dc73b5ac858654bcb9854f00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
   bytes constant ACTION_1 =
@@ -198,6 +200,31 @@ contract SRMMarket1InertFork is Test {
   /// Replays the artifact's bytes against the pre-batch world and checks the result equals
   /// the state the real transactions produced. This is what ties the recorded calldata to
   /// what the vault actually sent -- an edit to either file breaks it.
+  /// Ties the constants above to the artifact the proposer actually reads. Without this the
+  /// two can diverge and every other test in this file keeps passing against stale bytes.
+  function testTheRecordedCalldataMatchesTheArtifact() public view {
+    string memory json =
+      vm.readFile(string.concat(vm.projectRoot(), "/deployments/8453/MARKET1_INERT_VAULT_ACTIONS.json"));
+
+    assertEq(vm.parseJsonBytes(json, "[0].data"), ACTION_0, "artifact action 0 calldata drifted");
+    assertEq(vm.parseJsonBytes(json, "[1].data"), ACTION_1, "artifact action 1 calldata drifted");
+    assertEq(vm.parseJsonAddress(json, "[0].to"), SRM, "artifact action 0 target drifted");
+    assertEq(vm.parseJsonAddress(json, "[1].to"), SRM, "artifact action 1 target drifted");
+
+    // keccak256(abi.encodePacked(to, keccak256(data))) -- the same actionHash the forge
+    // scripts and the python proposer both use.
+    assertEq(
+      vm.parseJsonBytes32(json, "[0].digest"),
+      keccak256(abi.encodePacked(SRM, keccak256(ACTION_0))),
+      "artifact action 0 digest does not match its own calldata"
+    );
+    assertEq(
+      vm.parseJsonBytes32(json, "[1].digest"),
+      keccak256(abi.encodePacked(SRM, keccak256(ACTION_1))),
+      "artifact action 1 digest does not match its own calldata"
+    );
+  }
+
   function testTheArtifactReproducesWhatLanded() public {
     vm.createSelectFork(vm.envString("BASE_RPC_URL"), PRE_BATCH_BLOCK);
 

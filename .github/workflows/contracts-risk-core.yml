@@ -30,6 +30,12 @@ jobs:
       # offline: the 10 selectors propose_cngn_spot_batch.py hardcodes. Its skip check swallows
       # errors into "not landed", so a wrong selector degrades silently rather than crashing.
       - run: python3 scripts/ops/propose_cngn_spot_batch.py --self-test
+      # Added with the market-1 batch and the settlement canary. Each of these scripts hardcodes
+      # function selectors and hashes; every one of the three had a wrong selector when first
+      # written from memory, and the self-tests are what caught them. Unrun, they prove nothing.
+      - run: python3 scripts/ops/propose_market1_inert_batch.py --self-test
+      - run: python3 scripts/ops/check_settlement_canary.py --self-test
+      - run: python3 scripts/ops/refresh_deployment_artifacts.py --self-test
       - run: forge test -vvv
         env:
           BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}   # fork tests (DeliverableFXManagerBaseFork, CNGNSpotSRMBaseFork) need it

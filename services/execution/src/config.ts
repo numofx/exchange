@@ -32,6 +32,13 @@ const envSchema = z.object({
   // API out of the target group and flap tasks while the actual fault is off-box. Turn it on
   // only if you would rather the venue be visibly down than quietly unable to settle.
   SETTLEMENT_CANARY_FAILS_HEALTHCHECK: z.union([z.literal('true'), z.literal('false')]).default('false'),
+  // Without this the canary logs a line and reaches nobody. There is no CloudWatch alarm on the
+  // log group, so the webhook IS the alerting path, not a supplement to it.
+  ALERT_WEBHOOK_URL: z.string().url().optional().or(z.literal('')),
+  SETTLEMENT_CANARY_ALERT_REPEAT_CHECKS: z.coerce.number().int().nonnegative().default(30),
+  // Pinned, not required-zero. See canary.ts: the live value is settled cash that donateBalance
+  // cannot retire, so the useful signal is movement, not presence. Unset disables the pin.
+  SETTLEMENT_CANARY_EXPECTED_NET_SETTLED_CASH: z.string().regex(/^-?\d+$/).optional().or(z.literal('')),
 });
 
 export type AppConfig = {
@@ -53,6 +60,9 @@ export type AppConfig = {
     accountIds: number[];
     intervalMs: number;
     failsHealthcheck: boolean;
+    alertWebhookUrl?: string;
+    alertRepeatAfterChecks: number;
+    expectedNetSettledCash?: bigint;
   };
 };
 
@@ -80,6 +90,11 @@ export function loadConfig(): AppConfig {
           accountIds: parseAccountIds(parsed.SETTLEMENT_CANARY_ACCOUNTS),
           intervalMs: parsed.SETTLEMENT_CANARY_INTERVAL_MS,
           failsHealthcheck: parsed.SETTLEMENT_CANARY_FAILS_HEALTHCHECK === 'true',
+          alertWebhookUrl: parsed.ALERT_WEBHOOK_URL ? parsed.ALERT_WEBHOOK_URL : undefined,
+          alertRepeatAfterChecks: parsed.SETTLEMENT_CANARY_ALERT_REPEAT_CHECKS,
+          expectedNetSettledCash: parsed.SETTLEMENT_CANARY_EXPECTED_NET_SETTLED_CASH
+            ? BigInt(parsed.SETTLEMENT_CANARY_EXPECTED_NET_SETTLED_CASH)
+            : undefined,
         }
       : undefined,
   };
