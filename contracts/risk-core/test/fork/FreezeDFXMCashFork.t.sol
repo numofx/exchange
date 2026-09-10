@@ -55,8 +55,29 @@ contract FreezeDFXMCashFork is Test {
   bytes constant ACTION =
     hex"e64cc9da000000000000000000000000ce01f3d74400cae39bd7608cd2d286c2e3874d490000000000000000000000000000000000000000000000000000000000000000";
 
+  /// Last block before the freeze itself landed (tx 0x13e15eca..., block 51109818).
+  uint constant PRE_FREEZE_BLOCK = 51109817;
+
   function setUp() public {
+    // Pinned. These tests are about what the action DOES, which can only be observed from the
+    // world it acted on: at head DFXM is already de-whitelisted, so "without the freeze" has no
+    // meaning and applying it again is a no-op. testTheFreezeHasLandedOnChain below is the
+    // head-forked half, asserting the result rather than the transition.
+    vm.createSelectFork(vm.envString("BASE_RPC_URL"), PRE_FREEZE_BLOCK);
+  }
+
+  /// The post-state, at head. Pairs with the pinned tests above: they show what the action did,
+  /// this shows that it is in force. If someone re-whitelists DFXM, this goes red.
+  function testTheFreezeHasLandedOnChain() public {
     vm.createSelectFork(vm.envString("BASE_RPC_URL"));
+    assertFalse(ICashLike(CASH).whitelistedManager(DFXM), "DFXM must be de-whitelisted at head");
+    assertTrue(ICashLike(CASH).whitelistedManager(SRM), "SRM must remain whitelisted");
+
+    address owner = ISubAccountsLike(SUB_ACCOUNTS).ownerOf(ACCT);
+    deal(USDC, CASH, 5_000e6);
+    vm.prank(owner);
+    vm.expectRevert(); // MW_UnknownManager
+    ICashLike(CASH).withdraw(ACCT, 5_000e6, owner);
   }
 
   function _freeze() internal {
