@@ -62,8 +62,6 @@ contract DonateBurnUnbackedFork is Test {
     uint required = ICashLike(CASH).totalSupply() - ICashLike(CASH).totalBorrow();
     emit log_named_uint("USDC held (18dp)", held18);
     emit log_named_uint("totalSupply - totalBorrow", required);
-    emit log_named_string(
-      "held >= totalSupply - totalBorrow ?", held18 >= required ? "YES" : "NO"
-    );
+    emit log_named_string("held >= totalSupply - totalBorrow ?", held18 >= required ? "YES" : "NO");
   }
 }
