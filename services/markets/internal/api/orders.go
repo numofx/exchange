@@ -52,6 +52,26 @@ func (r createOrderRequest) toParams(cfg config.Config) (orders.CreateOrderParam
 	if r.RecipientID == "" {
 		return orders.CreateOrderParams{}, fmt.Errorf("recipient_id is required")
 	}
+	// A recipient that is not the trading account is rejected rather than accepted and left to
+	// revert on chain.
+	//
+	// TradeModule credits the quote leg to recipientId, but Matching transfers only
+	// action.subaccountId accounts to the module, so a different recipient is not module-owned.
+	// Under CashAsset that was survivable -- handleAdjustment returned needAllowance only when the
+	// amount was negative. Under a WrappedERC20Asset quote leg it is not: the CREDIT side needs an
+	// allowance too, so the ask side now reverts NotEnoughSubIdOrAssetAllowances where it used to
+	// work.
+	//
+	// Undetectable at submit until now, and the failure is expensive: the pair crosses, reserves
+	// both orders, reverts, backs off, and repeats until expiry. Nothing in the venue uses a split
+	// recipient, and every test in both wrapped-quote suites sets them equal.
+	if r.RecipientID != r.SubaccountID {
+		return orders.CreateOrderParams{}, fmt.Errorf(
+			"recipient_id must equal subaccount_id (got %s and %s): a recipient that is not the "+
+				"trading account cannot be credited by the trade module",
+			r.RecipientID, r.SubaccountID,
+		)
+	}
 	if r.Nonce == "" {
 		return orders.CreateOrderParams{}, fmt.Errorf("nonce is required")
 	}

@@ -76,8 +76,8 @@ import {Utils} from "./utils.sol";
  * Optional env:
  *   MATCHING_OWNER          hand the module to the vault (Ownable2Step: sets pendingOwner only)
  *   QUOTE_ASSET             override the wrapped quote asset (default: WRAPPED_USDC_DELIVERABLE)
- *   STABLE_STATIC_FEED      override the static feed for action 2 (default: from CNGN_SPOT_STATIC_FEEDS)
- *   SKIP_ORACLE_ACTION=true omit action 2 (only if market 1 already points at a static feed)
+ *   (no feed override, and no SKIP_ORACLE_ACTION: the static feed comes from
+ *    CNGN_SPOT_STATIC_FEEDS and the oracle action is emitted only when chain says it is needed)
  */
 contract DeployWrappedQuoteTradeModule is Utils {
   string internal constant ARTIFACT_NAME = "WRAPPED_QUOTE_TRADE_MODULE";
@@ -143,11 +143,16 @@ contract DeployWrappedQuoteTradeModule is Utils {
       quoteAsset = vm.parseJsonAddress(_readRiskCoreDeploymentFile("WRAPPED_USDC_DELIVERABLE"), ".base");
     }
 
-    staticStableFeed = vm.envOr("STABLE_STATIC_FEED", address(0));
-    if (staticStableFeed == address(0) && !vm.envOr("SKIP_ORACLE_ACTION", false)) {
-      staticStableFeed =
-        vm.parseJsonAddress(_readRiskCoreDeploymentFile("CNGN_SPOT_STATIC_FEEDS"), ".stableStaticSpotFeed");
-    }
+    // No override. STABLE_STATIC_FEED used to accept an arbitrary address with no code check, no
+    // getSpot() probe and no comparison against the recorded deployment -- while the same function
+    // carefully validates matchingAddr and quoteAsset. setOraclesForMarket(quoteMarketId, garbage)
+    // bricks the margin path for every account holding the quote asset, which after cutover is
+    // every account. The artifact is the only source.
+    staticStableFeed =
+      vm.parseJsonAddress(_readRiskCoreDeploymentFile("CNGN_SPOT_STATIC_FEEDS"), ".stableStaticSpotFeed");
+    if (staticStableFeed.code.length == 0) revert("static stable feed has no code");
+    (uint feedPrice,) = ISpotFeed(staticStableFeed).getSpot();
+    if (feedPrice == 0) revert("static stable feed returns a zero price");
 
     // No default. The live module's feeRecipient (subaccount 1) is SRM-owned and cannot grant the
     // allowance a wrapped quote needs, so silently inheriting it would ship the latent revert.
@@ -249,6 +254,15 @@ contract DeployWrappedQuoteTradeModule is Utils {
     if (address(subAccounts.manager(feeAccount)) != expectedManager) {
       revert("fee recipient is not managed by the SRM");
     }
+
+    // Fees are zero at cutover, and this still matters. TradeModule appends the fee transfer
+    // unconditionally (TradeModule.sol:147-154) and SubAccounts._transferAsset reverts
+    // AC_CannotTransferAssetToOneself when fromAcc == toAcc, so a fee recipient that is also a
+    // trading subaccount bricks every fill it takes part in -- at any fee, including 0. Cheap to
+    // assert here and impossible to fix later: feeRecipient is set in the constructor.
+    if (subAccounts.getAccountBalances(feeAccount).length != 0) {
+      revert("fee recipient already holds assets - use a dedicated account, not a trading one");
+    }
   }
 
   function _assertPostconditions(TradeModule module) internal view {
@@ -303,7 +317,13 @@ contract DeployWrappedQuoteTradeModule is Utils {
   }
 
   function _serialiseVaultActions(TradeModule module) internal view returns (string memory) {
-    bool skipOracle = vm.envOr("SKIP_ORACLE_ACTION", false);
+    // Derived from chain, not from SKIP_ORACLE_ACTION. The market-1 repoint already landed
+    // (blocks 51097293/51097344), so emitting it again produced an onlyOwner no-op carrying the
+    // description "removes the 3600s staleness halt" -- a statement untrue of the chain the signer
+    // signs against. Handing an MPC signer an action whose description misstates its effect trains
+    // the signer to skim, which is the opposite of what an irreversible batch needs.
+    (ISpotFeed currentSpot,,) = StandardManager(srmAddr).getMarketFeeds(quoteMarketId);
+    bool skipOracle = address(currentSpot) == staticStableFeed;
     uint count = skipOracle ? 3 : 4;
 
     address[] memory to = new address[](count);
@@ -324,15 +344,33 @@ contract DeployWrappedQuoteTradeModule is Utils {
       "tradeWrappedQuote.acceptOwnership() [CUSTODY - must land before the enabling switch below]";
     i++;
 
-    // 1. THE ENABLING SWITCH. Nothing can route to the module before this.
+    // 1. FEES, BEFORE THE SWITCH. The runbook ordering wins over the old emitted order, which put
+    //    this last. type(uint).max rather than a budget: allowances are decremented on every spend
+    //    (Allowances.sol:142-149), so a finite grant is a scheduled outage.
+    //
+    //    Harmless at today's zero fees, but the safe order costs nothing and the batch should not
+    //    contradict the runbook the same operator is following.
+    {
+      IAllowances.AssetAllowance[] memory grant = new IAllowances.AssetAllowance[](1);
+      grant[0] = IAllowances.AssetAllowance({asset: IAsset(quoteAsset), positive: type(uint).max, negative: 0});
+      to[i] = subAccountsAddr;
+      data[i] = abi.encodeCall(ISubAccounts.setAssetAllowances, (feeRecipient, address(module), grant));
+      who[i] = "fee recipient subaccount owner (vault)";
+      descriptions[i] =
+        "subAccounts.setAssetAllowances(feeRecipient, tradeWrappedQuote, +max quote) [before the switch: without it every non-zero-fee fill reverts]";
+      i++;
+    }
+
+    // 2. THE ENABLING SWITCH. Nothing can route to the module before this.
     to[i] = matchingAddr;
     data[i] = abi.encodeCall(Matching.setAllowedModule, (address(module), true));
     who[i] = "matching owner (vault)";
     descriptions[i] = "matching.setAllowedModule(tradeWrappedQuote, true) [THE ENABLING SWITCH]";
     i++;
 
-    // 2. Liveness. Without this a 3600s keeper gap on the live stable feed halts every fill,
-    //    because holding wrapped USDC now puts market 1 in every portfolio.
+    // 3. Liveness, and only when chain says it is still needed. Without it a keeper gap on a live
+    //    stable feed halts every fill, because holding the quote asset puts its market in every
+    //    portfolio.
     if (!skipOracle) {
       to[i] = srmAddr;
       data[i] = abi.encodeCall(
@@ -344,17 +382,6 @@ contract DeployWrappedQuoteTradeModule is Utils {
         "srm.setOraclesForMarket(quoteMarketId, staticStableFeed) [removes the 3600s staleness halt from the quote leg]";
       i++;
     }
-
-    // 3. Fees. type(uint).max rather than a budget: allowances are decremented on every spend
-    //    (Allowances.sol:142-149), so a finite grant is a scheduled outage.
-    IAllowances.AssetAllowance[] memory grant = new IAllowances.AssetAllowance[](1);
-    grant[0] = IAllowances.AssetAllowance({asset: IAsset(quoteAsset), positive: type(uint).max, negative: 0});
-
-    to[i] = subAccountsAddr;
-    data[i] = abi.encodeCall(ISubAccounts.setAssetAllowances, (feeRecipient, address(module), grant));
-    who[i] = "fee recipient subaccount owner (vault)";
-    descriptions[i] =
-      "subAccounts.setAssetAllowances(feeRecipient, tradeWrappedQuote, +max quote) [without this every non-zero-fee fill reverts]";
 
     string memory json = "[";
     for (uint j = 0; j < count; ++j) {
