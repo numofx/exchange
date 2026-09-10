@@ -34,6 +34,7 @@ Env (or ~/.numo-feeds.env):
   RPC_URL            Base mainnet RPC
   ALERT_WEBHOOK_URL  Slack/Discord-compatible webhook (optional; logs only if unset)
   SRM_ADDRESS        StandardManager (default: the live Base deployment)
+  EXPECTED_NET_SETTLED_CASH  pin for netSettledCash; alert if it moves (unset = not checked)
   CANARY_ACCOUNTS    comma-separated subaccount ids (default: 15)
 
 Run every few minutes via systemd timer (see numo-settlement-canary.timer).
@@ -66,6 +67,7 @@ SEL_NET_SETTLED = "0x73a46ad0"       # netSettledCash()
 SEL_TOTAL_POSITION = "0xa9578774"    # totalPosition(address)
 SEL_WRAPPED_ASSET = "0xd9a1836a"     # wrappedAsset()
 SEL_DECIMALS = "0x313ce567"          # decimals()
+SEL_SM_FEES = "0xcb5f01da"           # accruedSmFees()
 
 # AssetWhitelisted(address,uint256,uint8) -- used to discover which assets to check, so a new
 # market is covered without editing this file.
@@ -157,21 +159,40 @@ def check_cash_backing(url: str, srm: str, failures: list, checked: list) -> Non
   supply = uint(url, cash, SEL_TOTAL_SUPPLY)
   borrow = uint(url, cash, SEL_TOTAL_BORROW)
   settled = as_int256(call(url, cash, SEL_NET_SETTLED))
+  sm_fees = uint(url, cash, SEL_SM_FEES)
 
-  if held < supply:
+  # Backing as CashAsset itself defines it: _getTotalCash subtracts netSettledCash, because
+  # manager-settled cash is recorded there so the contract does not treat it as requiring
+  # backing. Comparing against raw totalSupply would be permanently red on any venue that has
+  # settled asymmetrically -- red for a reason nobody can act on.
+  total_cash = supply + sm_fees - borrow - settled
+  ok = True
+  if held < total_cash:
+    ok = False
     failures.append(
-      f"cash {cash} UNDER-BACKED: holds {held / 1e18:.6f} USDC against {supply / 1e18:.6f} "
-      f"of cash supply (short {(supply - held) / 1e18:.6f})"
+      f"cash {cash} UNDER-BACKED: holds {held / 1e18:.6f} USDC against {total_cash / 1e18:.6f} "
+      f"of backed cash (short {(total_cash - held) / 1e18:.6f})"
     )
   if borrow != 0:
+    ok = False
     failures.append(f"cash {cash} totalBorrow is {borrow / 1e18:.6f}, expected 0")
-  if settled != 0:
-    failures.append(
-      f"cash {cash} netSettledCash is {settled / 1e18:.6f}, expected 0 "
-      "-- that much cash was credited by a manager rather than deposited"
+
+  # Pinned, not required-zero. donateBalance burns against total_cash, which already excludes
+  # netSettledCash, so a max donate burns exactly 0 -- verified on a Base fork. Requiring zero
+  # would page forever about a value no available call can change. What matters is movement.
+  expected = os.environ.get("EXPECTED_NET_SETTLED_CASH")
+  if expected is not None and expected.strip() != "":
+    if settled != int(expected):
+      ok = False
+      failures.append(
+        f"cash {cash} netSettledCash MOVED: {settled / 1e18:.6f}, pinned at {int(expected) / 1e18:.6f} "
+        f"(delta {(settled - int(expected)) / 1e18:+.6f}) -- a manager printed or burned settled cash"
+      )
+  if ok:
+    checked.append(
+      f"cash {cash} backed ({held / 1e18:.6f} USDC against {total_cash / 1e18:.6f} required; "
+      f"netSettledCash {settled / 1e18:.6f})"
     )
-  if held >= supply and borrow == 0 and settled == 0:
-    checked.append(f"cash {cash} fully backed ({held / 1e18:.6f} USDC)")
 
 
 def check_wrapper_backing(url: str, srm: str, failures: list, checked: list) -> None:
@@ -241,6 +262,7 @@ def self_test() -> None:
     "totalPosition(address)": SEL_TOTAL_POSITION,
     "wrappedAsset()": SEL_WRAPPED_ASSET,
     "decimals()": SEL_DECIMALS,
+    "accruedSmFees()": SEL_SM_FEES,
   }.items():
     actual = "0x" + keccak(signature.encode()).hex()[:8]
     assert actual == expected, f"{signature}: hardcoded {expected}, actual {actual}"

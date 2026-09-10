@@ -38,6 +38,7 @@ function healthyInvariantRead(a: { address: string; functionName: string }): unk
     case 'totalSupply': return 5_000_000_000_000_000_000n;
     case 'totalBorrow': return 0n;
     case 'netSettledCash': return 0n;
+    case 'accruedSmFees': return 0n;
     case 'totalPosition': return 5_000_000_000_000_000_000_000n;
     default: throw new Error(`unexpected call ${a.functionName}`);
   }
@@ -70,6 +71,7 @@ function invariantCanary(overrides: Record<string, bigint> = {}, wrappers = [WRA
     cashSupply: 5_000_000_000_000_000_000n, // 5 cash at 18dp
     cashBorrow: 0n,
     cashSettled: 0n,
+    cashSmFees: 0n,
     wrapperHeld: 5_000_000_000n, // 5000 cNGN at 6dp
     wrapperCredited: 5_000_000_000_000_000_000_000n, // 5000 at 18dp
     ...overrides,
@@ -93,6 +95,7 @@ function invariantCanary(overrides: Record<string, bigint> = {}, wrappers = [WRA
           case 'totalSupply': return v.cashSupply;
           case 'totalBorrow': return v.cashBorrow;
           case 'netSettledCash': return v.cashSettled;
+          case 'accruedSmFees': return v.cashSmFees;
           case 'totalPosition': return v.wrapperCredited;
           default: throw new Error(`unexpected call ${a.functionName}`);
         }
@@ -329,11 +332,26 @@ test('cash held below cash supply is caught', async () => {
   assert.match(snapshot.invariant_failures.join(' '), /UNDER-BACKED/);
 });
 
-test('manager-printed cash is caught even when the balance looks fine', async () => {
-  // The exact live shape: netSettledCash non-zero means cash exists that no deposit put there.
-  const snapshot = await invariantCanary({ cashSettled: 1_000_000_000_000_000_000n }).check();
+// netSettledCash is SUBTRACTED by CashAsset's own _getTotalCash, so settled cash reduces what
+// must be backed. Checking `held >= totalSupply` instead would be permanently red on any venue
+// that has settled asymmetrically -- red for a reason nobody can act on.
+test('settled cash reduces the backing requirement rather than breaching it', async () => {
+  const snapshot = await invariantCanary({
+    cashSupply: 1_005_000_000_000_000_000_000n, // 1005 of supply
+    cashSettled: 1_000_000_000_000_000_000_000n, // 1000 of it settled
+    cashHeld: 5_000_000n, // 5 real USDC backs the remaining 5
+  }).check();
+  assert.equal(snapshot.ok, true, snapshot.invariant_failures.join(' '));
+});
+
+test('a real backing shortfall is still caught once settled cash is excluded', async () => {
+  const snapshot = await invariantCanary({
+    cashSupply: 1_005_000_000_000_000_000_000n,
+    cashSettled: 1_000_000_000_000_000_000_000n,
+    cashHeld: 1_000_000n, // only 1 real USDC against 5 of backed cash
+  }).check();
   assert.equal(snapshot.ok, false);
-  assert.match(snapshot.invariant_failures.join(' '), /netSettledCash/);
+  assert.match(snapshot.invariant_failures.join(' '), /UNDER-BACKED/);
 });
 
 test('borrowed cash is caught', async () => {
@@ -370,6 +388,29 @@ test('a backing failure alerts under its own headline, not the halt one', async 
   assert.equal(sent.length, 1);
   assert.match(sent[0]!, /COLLATERAL BACKING FAILURE/);
   assert.doesNotMatch(sent[0]!, /SETTLEMENT HALTED/);
+});
+
+// Pinned, not required-zero: donateBalance burns against totalCash, which already excludes
+// netSettledCash, so a max donate burns exactly 0 (verified on a Base fork). Requiring zero
+// would page forever about a value no available call can change.
+test('a pinned netSettledCash that has not moved is not a failure', async () => {
+  const canary = invariantCanary({ cashSettled: 1_000n });
+  (canary as unknown as { options: Record<string, unknown> }).options.expectedNetSettledCash = 1_000n;
+  const snapshot = await canary.check();
+  assert.equal(snapshot.ok, true, snapshot.invariant_failures.join(' '));
+});
+
+test('netSettledCash moving off its pin is caught', async () => {
+  const canary = invariantCanary({ cashSettled: 2_000n });
+  (canary as unknown as { options: Record<string, unknown> }).options.expectedNetSettledCash = 1_000n;
+  const snapshot = await canary.check();
+  assert.equal(snapshot.ok, false);
+  assert.match(snapshot.invariant_failures.join(' '), /netSettledCash MOVED/);
+});
+
+test('no pin configured means netSettledCash is not checked at all', async () => {
+  const snapshot = await invariantCanary({ cashSettled: 99_999n }).check();
+  assert.equal(snapshot.ok, true, snapshot.invariant_failures.join(' '));
 });
 
 test('/healthz reports the canary as disabled when none is wired', async () => {

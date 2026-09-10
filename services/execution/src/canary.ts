@@ -29,6 +29,7 @@ const INVARIANT_ABI = [
   { type: 'function', name: 'totalSupply', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
   { type: 'function', name: 'totalBorrow', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
   { type: 'function', name: 'netSettledCash', stateMutability: 'view', inputs: [], outputs: [{ type: 'int256' }] },
+  { type: 'function', name: 'accruedSmFees', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
   {
     type: 'function', name: 'totalPosition', stateMutability: 'view',
     inputs: [{ name: 'manager', type: 'address' }], outputs: [{ type: 'uint256' }],
@@ -118,6 +119,13 @@ export type CanaryOptions = {
   announceOnStart?: boolean;
   /** Injected in tests. */
   postAlert?: (url: string, text: string) => Promise<void>;
+  /**
+   * The value netSettledCash is expected to hold. Alerting on movement rather than on
+   * non-zero: the current balance is legitimate settled cash that no available call can
+   * retire, so requiring zero would page forever about something nobody can fix.
+   * Undefined disables the pin.
+   */
+  expectedNetSettledCash?: bigint;
   /** Injected in tests; defaults to a viem client over rpcUrl. */
   client?: Pick<PublicClient, 'readContract' | 'getLogs'>;
   log?: (level: 'info' | 'error', message: string, fields: Record<string, unknown>) => void;
@@ -254,18 +262,32 @@ export class SettlementCanary {
       const supply = await read<bigint>(cash, 'totalSupply');
       const borrow = await read<bigint>(cash, 'totalBorrow');
       const settled = await read<bigint>(cash, 'netSettledCash');
+      const smFees = await read<bigint>(cash, 'accruedSmFees');
 
-      if (held < supply) {
+      // Backing as CashAsset itself defines it. netSettledCash is SUBTRACTED here, the same way
+      // _getTotalCash does it: manager-settled cash is recorded there so the contract does not
+      // treat it as cash requiring backing. Comparing `held` against raw totalSupply instead
+      // would be permanently red on a venue that has ever settled asymmetrically, and would be
+      // red for a reason no operator can act on.
+      const totalCash = supply + smFees - borrow - settled;
+      if (held < totalCash) {
         out.push(
-          `cash ${cash} UNDER-BACKED: holds ${fmt(held)} against ${fmt(supply)} of cash supply ` +
-            `(short ${fmt(supply - held)})`,
+          `cash ${cash} UNDER-BACKED: holds ${fmt(held)} against ${fmt(totalCash)} of backed cash ` +
+            `(short ${fmt(totalCash - held)})`,
         );
       }
       if (borrow !== 0n) out.push(`cash ${cash} totalBorrow is ${fmt(borrow)}, expected 0`);
-      if (settled !== 0n) {
+
+      // netSettledCash is pinned rather than required to be zero. It is non-zero today and
+      // cannot be retired by donateBalance -- that burns against totalCash, which already
+      // excludes it, so a max donate burns exactly 0 (verified on a Base fork). What matters
+      // operationally is that it does not MOVE without someone knowing: a change means a manager
+      // printed or burned settled cash.
+      const expected = this.options.expectedNetSettledCash;
+      if (expected !== undefined && settled !== expected) {
         out.push(
-          `cash ${cash} netSettledCash is ${fmt(settled)}, expected 0 — that much cash was ` +
-            'credited by a manager rather than deposited',
+          `cash ${cash} netSettledCash MOVED: ${fmt(settled)}, pinned at ${fmt(expected)} ` +
+            `(delta ${fmt(settled - expected)}) — a manager printed or burned settled cash`,
         );
       }
     } catch (error) {
