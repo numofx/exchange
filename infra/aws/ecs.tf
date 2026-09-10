@@ -258,6 +258,18 @@ resource "aws_ecs_task_definition" "execution" {
       # vault-owned and deliberately NOT in Matching custody: setAssetAllowances keys the grant
       # by ownerOf(accountId), so a custodied account would key it to the Matching contract and
       # the vault could not grant one at all.
+      # STANDING EXCEPTION, 2026-09-10. The wrapped-USDC contract permanently holds 5.000000
+      # USDC more than it has credited, from tx 0xfcf33112414f44cc53c493e28da4ec57cde8d029ac
+      # 3920144aceab23dbe5656b (block 51125714): a plain ERC20 transfer sent through MPCVault's
+      # "Send USDC" flow during the cutover, where the intended deposit(15, 5000000) had nowhere
+      # to put its calldata. Unrecoverable -- WrappedERC20Asset exposes only deposit and
+      # withdraw, both strictly 1:1, has no rescue path, and is not behind a proxy.
+      #
+      # PINNED, not tolerated: healthy at exactly +5e18, red the moment it moves either way.
+      # Widening this to "over-backed is fine" would discard the property that caught the
+      # transfer within minutes of it happening.
+      { name = "SETTLEMENT_CANARY_WRAPPER_EXCEPTIONS", value = "0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84:5000000000000000000" },
+
       { name = "SETTLEMENT_CANARY_FEE_SUBACCOUNT", value = "17" },
       { name = "SETTLEMENT_CANARY_FEE_OWNER", value = "0x1dcA42ab54Bd3862853A821F84B29BF65245F435" },
       { name = "SETTLEMENT_CANARY_FEE_MODULE", value = "0x12423B366F6F07130961900bE00d05Ea63Acd071" },
