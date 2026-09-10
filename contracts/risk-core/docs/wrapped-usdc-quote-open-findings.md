@@ -20,7 +20,7 @@ calls), and it did not audit the liquidation path, `AtomicSigningExecutor`, or `
 
 ## Blocking-adjacent — decide before signing
 
-### 1. Action 2 of the emitted batch is already on chain, and its description is false
+### 1. ~~Action 2 is already on chain, and its description is false~~ — FIXED
 
 `srm.getMarketFeeds(1)` already returns the static stable feed and `baseMarginParams(1)` is
 `(0,0)` — both actions of `MARKET1_INERT_VAULT_ACTIONS.json` executed at blocks 51097293/51097344.
@@ -31,10 +31,11 @@ the same way.
 Handing an MPC signer an action whose description misstates its effect is the wrong way round for
 an irreversible batch — it trains the signer to skim.
 
-**Fix:** derive `skipOracle` from chain (`getMarketFeeds(quoteMarketId).spot == staticStableFeed`)
-rather than from `SKIP_ORACLE_ACTION`, and refresh the header.
+**Fixed:** `skipOracle` is now derived from chain (`getMarketFeeds(quoteMarketId).spot ==
+staticStableFeed`); `SKIP_ORACLE_ACTION` is gone. The action is emitted only when chain says it is
+still needed, so its description can no longer misstate its effect.
 
-### 2. `STABLE_STATIC_FEED` override is completely unvalidated
+### 2. ~~`STABLE_STATIC_FEED` override is unvalidated~~ — FIXED (override removed)
 
 The same function carefully `code.length`-checks `matchingAddr` and `quoteAsset`, then accepts an
 arbitrary `STABLE_STATIC_FEED` with no code check, no `getSpot()` probe, and no comparison against
@@ -75,7 +76,7 @@ wrapped-USDC balance is zero while its cash balance is not.
 
 ## Should fix
 
-### 5. `recipientId != subaccountId` is a new ask-side regression
+### 5. ~~`recipientId != subaccountId` ask-side regression~~ — FIXED
 
 The quote leg credits `recipientId`. Matching transfers only `subaccountId` accounts to the module,
 so a different recipient is not module-owned, and `WrappedERC20Asset` needs an allowance on the
@@ -90,7 +91,7 @@ undetectable at submit; manifests as a pair that crosses, reserves, reverts, bac
 **Fix:** validate `recipient_id == subaccount_id` at submit, or document the allowance requirement
 and add it to the preconditions.
 
-### 6. The batch's own ordering contradicts the runbook's
+### 6. ~~The batch's ordering contradicts the runbook's~~ — FIXED (runbook order wins)
 
 `wrapped-usdc-quote-cutover.md` §4 puts `setAssetAllowances` *before* the cutover; the script emits
 it as the last action, after the enabling switch, and prints "Run the batch IN ORDER". Harmless at
@@ -108,17 +109,20 @@ head-forked contrast test, and note `_repointQuoteOracle()` is now a no-op at he
 `testForkCashQuoteIsUnaffectedByTheStaleStableFeed` still passes but no longer proves anything —
 there is no live feed left in the path — so it needs pinning or re-scoping too.
 
-### 8. Two ways to brick or silently void the fee path
+### 8. Two ways to brick or silently void the fee path — PARTLY FIXED
 
 - The allowance is keyed by **owner** (`setAssetAllowances` passes `ownerOf(accountId)`), so
-  transferring the fee subaccount to a different owner silently voids the grant. Undocumented.
+  transferring the fee subaccount to a different owner silently voids the grant. **Still open** —
+  documented here, not enforced anywhere.
 - `TradeModule` appends the fee transfer even at fee 0, and `SubAccounts._transferAsset` reverts
   `AC_CannotTransferAssetToOneself` when `fromAcc == toAcc`. A fee recipient that is also a trading
-  subaccount bricks the venue. `_assertFeeRecipient` does not exclude it.
+  subaccount bricks the venue. **Fixed**: `_assertFeeRecipient` now rejects a fee recipient that
+  already holds any asset. Fees are zero at cutover and this still applies, because the transfer is
+  appended at any fee including 0.
 
 ## Noted
 
-- **`RESULT.md`** — 255 lines of evaluation write-up at the repo root. Delete or move under `docs/`.
+- ~~**`RESULT.md`**~~ — deleted.
 - **Canary blind spot.** Every feed its `getMargin` walk can reach is now static, so it cannot go
   red from feed staleness on this venue; it stays correct for a future market wired to a live feed.
   Alerting to Slack has since been added and proven by a live drill, but the coverage point stands:
