@@ -57,6 +57,16 @@ export type CanaryOptions = {
    * mean silence for the whole outage. 0 disables repeats.
    */
   alertRepeatAfterChecks?: number;
+  /**
+   * Send one notice on the first check after start-up, whatever the result.
+   *
+   * Found by drill, not by reasoning: an outage fixed by a redeploy produces NO recovery message,
+   * because recovery is a within-process transition and the fixed process starts with ok = null.
+   * The operator sees HALTED and then silence, which is the ambiguity the recovery message exists
+   * to remove. Since the usual repair for a halted venue IS a redeploy, that gap swallowed the
+   * common case. One line per deploy is the price of never having to wonder.
+   */
+  announceOnStart?: boolean;
   /** Injected in tests. */
   postAlert?: (url: string, text: string) => Promise<void>;
   /** Injected in tests; defaults to a viem client over rpcUrl. */
@@ -174,13 +184,18 @@ export class SettlementCanary {
     const brokeNow = !ok && (wasOk === true || wasOk === null);
     const stillBroken = !ok && repeatAfter > 0 && failures > 1 && failures % repeatAfter === 0;
     const recovered = ok && wasOk === false;
-    if (!brokeNow && !stillBroken && !recovered) return;
+    // A healthy first check. Only worth sending because the alternative is silence after a
+    // redeploy-shaped recovery -- see announceOnStart.
+    const announced = ok && wasOk === null && (this.options.announceOnStart ?? true);
+    if (!brokeNow && !stillBroken && !recovered && !announced) return;
 
     const detail = this.snapshotValue.failures
       .map((f) => `  - subaccount ${f.account_id}: ${f.error}`)
       .join('\n');
 
-    const text = recovered
+    const text = announced
+      ? `NUMO SETTLEMENT CANARY STARTED\ngetMargin succeeds on ${this.options.manager}. Watching subaccount(s) ${this.options.accountIds.join(', ')}.`
+      : recovered
       ? `NUMO SETTLEMENT CANARY RECOVERED\ngetMargin succeeds again on ${this.options.manager}.`
       : [
           'NUMO SETTLEMENT HALTED',
@@ -194,7 +209,7 @@ export class SettlementCanary {
 
     try {
       await this.postAlert(url, text);
-      this.log('info', 'settlement_canary_alert_sent', { recovered, consecutive_failures: failures });
+      this.log('info', 'settlement_canary_alert_sent', { recovered, announced, consecutive_failures: failures });
     } catch (error) {
       this.log('error', 'settlement_canary_alert_failed', { error: describe(error) });
     }
