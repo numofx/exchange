@@ -203,7 +203,8 @@ contract SRMMarket1InertFork is Test {
   /// Ties the constants above to the artifact the proposer actually reads. Without this the
   /// two can diverge and every other test in this file keeps passing against stale bytes.
   function testTheRecordedCalldataMatchesTheArtifact() public view {
-    string memory json = vm.readFile(string.concat(vm.projectRoot(), "/deployments/8453/MARKET1_INERT_VAULT_ACTIONS.json"));
+    string memory json =
+      vm.readFile(string.concat(vm.projectRoot(), "/deployments/8453/MARKET1_INERT_VAULT_ACTIONS.json"));
 
     assertEq(vm.parseJsonBytes(json, "[0].data"), ACTION_0, "artifact action 0 calldata drifted");
     assertEq(vm.parseJsonBytes(json, "[1].data"), ACTION_1, "artifact action 1 calldata drifted");
