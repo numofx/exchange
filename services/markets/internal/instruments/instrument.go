@@ -23,6 +23,12 @@ type Metadata struct {
 	LastTradeTimestamp int64         `json:"last_trade_timestamp,omitempty"`
 	TickSize           string        `json:"tick_size"`
 	MinSize            string        `json:"min_size"`
+	// TakerFeeBps and MakerFeeBps are THE fee schedule for this market, in basis points of the
+	// quote notional. Everything downstream reads them from here: the matcher charges them, the
+	// funding check reserves them, and /v1/markets serves them so the UI never carries its own
+	// copy. A fee that lives in two repos disagrees the first time one of them changes.
+	TakerFeeBps        int           `json:"taker_fee_bps"`
+	MakerFeeBps        int           `json:"maker_fee_bps"`
 	ContractMultiplier string        `json:"contract_multiplier"`
 	QuotePrecision     int           `json:"quote_precision"`
 	PricingModel       string        `json:"pricing_model,omitempty"`

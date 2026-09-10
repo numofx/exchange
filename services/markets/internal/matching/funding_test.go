@@ -385,10 +385,18 @@ func TestNewFundingCheckerIsNilWhenNotUsable(t *testing.T) {
 // The fee the matcher reserves and the fee it submits must be the same value, or the check is
 // reserving against a number the chain will not charge.
 func TestReservedFeeMatchesSubmittedFee(t *testing.T) {
-	if takerFillFee != "0" {
-		t.Fatalf("taker fee is now %q -- confirm buyerCanFund still reads the same constant", takerFillFee)
+	// The fee is no longer a constant: it comes from the market's schedule and is computed once
+	// per fill, then passed to BOTH buyerCanFund and the executor request. This asserts the
+	// property that mattered about the old constant -- the reservation and the submitted fee are
+	// the same number -- rather than that the number is zero.
+	fee, err := takerFillFee(0, oneE18, oneE18)
+	if err != nil {
+		t.Fatal(err)
 	}
-	required, err := requiredQuote(oneE18, oneE18, takerFillFee)
+	if fee != "0" {
+		t.Fatalf("a zero-bps schedule must charge nothing, got %q", fee)
+	}
+	required, err := requiredQuote(oneE18, oneE18, fee)
 	if err != nil {
 		t.Fatalf("requiredQuote: %v", err)
 	}
