@@ -1,0 +1,34 @@
+# .github/workflows/infra.yml
+# Nothing covered infra/ at all. PR #35 changed the market maker's live subaccount and merged
+# with zero checks reported, because every other workflow is scoped to contracts/ or services/
+# paths. A terraform change reaching main unvalidated is the same class of gap the rest of this
+# directory exists to close.
+#
+# validate runs with -backend=false: the real backend is S3 and needs credentials this workflow
+# deliberately does not have. That still catches syntax, type and reference errors -- which is
+# what a config change breaks -- without giving CI access to production state.
+name: infra
+on:
+  push:
+    branches: [main]
+    paths: ['infra/**', '.github/workflows/infra.yml']
+  pull_request:
+    paths: ['infra/**', '.github/workflows/infra.yml']
+concurrency:
+  group: infra-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/aws
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.3
+          terraform_wrapper: false
+      - run: terraform fmt -check -diff
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
