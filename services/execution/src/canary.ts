@@ -51,6 +51,15 @@ const INVARIANT_ABI = [
     ],
     outputs: [{ type: 'uint256' }],
   },
+  {
+    type: 'function', name: 'getBalance', stateMutability: 'view',
+    inputs: [
+      { name: 'accountId', type: 'uint256' },
+      { name: 'asset', type: 'address' },
+      { name: 'subId', type: 'uint256' },
+    ],
+    outputs: [{ type: 'int256' }],
+  },
 ] as const;
 
 const ASSET_WHITELISTED_EVENT = {
@@ -108,6 +117,16 @@ export type CanarySnapshot = {
    * that is not there, which is worse and reads completely differently to whoever is woken up.
    */
   invariant_failures: string[];
+  /**
+   * What the fee subaccount holds of the module's quote asset, in 18dp, or null when the fee
+   * recipient is not configured or could not be read.
+   *
+   * Deliberately NOT a failure. Zero accrual is the correct reading on a quiet book, and one that
+   * paged would be ignored inside a day. It is here so that "fees are live" is answerable from
+   * the health endpoint instead of an RPC call somebody has to remember to make -- the ownership
+   * and allowance checks above say the fee path CAN work; only this says it IS working.
+   */
+  fee_accrued: string | null;
   consecutive_failures: number;
 };
 
@@ -177,6 +196,8 @@ export class SettlementCanary {
   private readonly log: NonNullable<CanaryOptions['log']>;
   private readonly postAlert: NonNullable<CanaryOptions['postAlert']>;
   private timer: NodeJS.Timeout | undefined;
+  /** Set by checkFeeRecipient on each pass; null whenever the read did not happen or failed. */
+  private feeAccrued: string | null = null;
   private snapshotValue: CanarySnapshot;
 
   constructor(private readonly options: CanaryOptions) {
@@ -201,6 +222,7 @@ export class SettlementCanary {
       account_ids: options.accountIds,
       failures: [],
       invariant_failures: [],
+      fee_accrued: null,
       consecutive_failures: 0,
     };
   }
@@ -248,6 +270,7 @@ export class SettlementCanary {
       account_ids: this.options.accountIds,
       failures,
       invariant_failures,
+      fee_accrued: this.feeAccrued,
       // Counts checks, not accounts: one bad account for ten checks reads as ten, which is
       // what an alert threshold should be counting.
       consecutive_failures: ok ? 0 : this.snapshotValue.consecutive_failures + 1,
@@ -259,6 +282,7 @@ export class SettlementCanary {
       manager: this.options.manager,
       failures,
       invariant_failures,
+      fee_accrued: this.feeAccrued,
       consecutive_failures: this.snapshotValue.consecutive_failures,
     });
 
@@ -391,6 +415,7 @@ export class SettlementCanary {
    */
   private async checkFeeRecipient(read: <T>(a: `0x${string}`, f: string, args?: readonly unknown[]) => Promise<T>): Promise<string[]> {
     const fee = this.options.feeRecipient;
+    this.feeAccrued = null;
     if (!fee) return [];
     const out: string[] = [];
 
@@ -420,6 +445,11 @@ export class SettlementCanary {
             'fill — it will run out; re-grant type(uint).max',
         );
       }
+
+      // Reported, never alerted on: see fee_accrued on CanarySnapshot. subId 0 is the only sub-id
+      // the wrapped quote asset uses, and the same one the module credits the fee to.
+      const accrued = await read<bigint>(subAccounts, 'getBalance', [fee.accountId, fee.quoteAsset, 0n]);
+      this.feeAccrued = accrued.toString();
     } catch (error) {
       out.push(`fee recipient check failed to run: ${describe(error)}`);
     }
@@ -503,6 +533,7 @@ export const DISABLED_CANARY: CanarySnapshot = {
   account_ids: [],
   failures: [],
   invariant_failures: [],
+  fee_accrued: null,
   consecutive_failures: 0,
 };
 

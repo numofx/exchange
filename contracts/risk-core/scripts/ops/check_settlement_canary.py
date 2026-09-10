@@ -79,6 +79,7 @@ SEL_DECIMALS = "0x313ce567"          # decimals()
 SEL_SM_FEES = "0xcb5f01da"           # accruedSmFees()
 SEL_OWNER_OF = "0x6352211e"          # ownerOf(uint256)
 SEL_POS_ALLOWANCE = "0x4997e514"     # positiveAssetAllowance(uint256,address,address,address)
+SEL_GET_BALANCE = "0x0806e640"       # getBalance(uint256,address,uint256)
 
 # AssetWhitelisted(address,uint256,uint8) -- used to discover which assets to check, so a new
 # market is covered without editing this file.
@@ -343,7 +344,15 @@ def check_fee_recipient(url: str, failures: list, checked: list) -> None:
     )
     return
 
-  checked.append(f"fee subaccount {account} vault-owned with an effectively unbounded allowance")
+  # Fee accrual, so a venue that has switched fees on can be seen earning them -- and one that
+  # thinks it has can be seen not earning them. A silently-zero fee account is the symptom of a
+  # schedule that never reached the matcher.
+  balance = int(call(url, sub_accounts, SEL_GET_BALANCE + account_word + addr_arg(quote) + "0" * 64), 16)
+  if balance >= (1 << 255):
+    balance -= 1 << 256
+  checked.append(
+    f"fee subaccount {account} vault-owned, unbounded allowance, accrued {balance / 1e18:.6f} of {quote}"
+  )
 
 
 def alert(webhook: str | None, msg: str) -> None:
@@ -380,6 +389,7 @@ def self_test() -> None:
     "accruedSmFees()": SEL_SM_FEES,
     "ownerOf(uint256)": SEL_OWNER_OF,
     "positiveAssetAllowance(uint256,address,address,address)": SEL_POS_ALLOWANCE,
+    "getBalance(uint256,address,uint256)": SEL_GET_BALANCE,
   }.items():
     actual = "0x" + keccak(signature.encode()).hex()[:8]
     assert actual == expected, f"{signature}: hardcoded {expected}, actual {actual}"

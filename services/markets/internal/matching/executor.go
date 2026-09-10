@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"regexp"
 	"strings"
@@ -22,14 +23,70 @@ import (
 // reaches the chain).
 const makerFillFeeZero = "0"
 
-// takerFillFee is the fee charged on every taker fill, and the SINGLE source of truth for it.
-// It is both submitted to execution-service and reserved against the buyer's cash by
-// buyerCanFund, because the two must agree: TradeModule appends the fee as a third quote-asset
-// transfer in the same batch, so a buyer funded to notional-only reverts SRM_NoNegativeCash.
+// takerFillFee computes the taker fee for one fill, in quote-asset wei, from the market's own
+// schedule in the instrument registry. That registry is the single source: /v1/markets serves the
+// same numbers, so the UI does not carry a second copy to disagree with.
 //
-// Raising this above "0" is therefore not a one-line change to the request builder -- it is a
-// change to what the matcher must reserve before crossing. Keep them reading the same constant.
-const takerFillFee = "0"
+// The result is a TOTAL, in the same units as the notional:
+//
+//	fee = takerFeeBps / 10_000 * price * amount / 1e18
+//
+// Note what it is NOT. TradeModule bounds the fee PER UNIT FILLED -- _fillLimitOrder reverts
+// TM_FeeTooHigh when fee/amountFilled exceeds the order's signed worstFee -- so a signed bound
+// and this total are different quantities and must never be compared directly. worstFeeCovers
+// below does that comparison in the one place it is correct.
+//
+// This is also what buyerCanFund reserves. The two must agree: TradeModule appends the fee as a
+// third quote-asset transfer in the same batch, so a buyer funded to notional-only reverts
+// SRM_NoNegativeCash. Both call this function rather than sharing a constant.
+func takerFillFee(feeBps int, price string, amount string) (string, error) {
+	if feeBps == 0 {
+		return "0", nil
+	}
+	if feeBps < 0 {
+		return "", fmt.Errorf("taker_fee_bps is negative: %d", feeBps)
+	}
+	p, ok := new(big.Int).SetString(strings.TrimSpace(price), 10)
+	if !ok {
+		return "", fmt.Errorf("invalid fill price %q", price)
+	}
+	a, ok := new(big.Int).SetString(strings.TrimSpace(amount), 10)
+	if !ok {
+		return "", fmt.Errorf("invalid fill amount %q", amount)
+	}
+
+	// notional = price * amount / 1e18, truncating exactly as the on-chain multiplyDecimal does.
+	fee := new(big.Int).Mul(p, a)
+	fee.Div(fee, feeQuoteScale)
+	fee.Mul(fee, big.NewInt(int64(feeBps)))
+	fee.Div(fee, big.NewInt(10_000))
+	return fee.String(), nil
+}
+
+// worstFeeCovers reports whether an order's signed per-unit bound admits this total fee.
+//
+// TradeModule compares fee/amountFilled against worstFee, so the total is admissible exactly when
+// fee <= worstFee * amountFilled / 1e18. Integer arithmetic throughout: comparing decimal strings
+// or going through floats is how a bound that just barely holds gets reported as breached.
+func worstFeeCovers(worstFee string, amount string, fee string) (bool, error) {
+	w, ok := new(big.Int).SetString(strings.TrimSpace(worstFee), 10)
+	if !ok {
+		return false, fmt.Errorf("invalid worst_fee %q", worstFee)
+	}
+	a, ok := new(big.Int).SetString(strings.TrimSpace(amount), 10)
+	if !ok {
+		return false, fmt.Errorf("invalid fill amount %q", amount)
+	}
+	f, ok := new(big.Int).SetString(strings.TrimSpace(fee), 10)
+	if !ok {
+		return false, fmt.Errorf("invalid fee %q", fee)
+	}
+	budget := new(big.Int).Mul(w, a)
+	budget.Div(budget, feeQuoteScale)
+	return f.Cmp(budget) <= 0, nil
+}
+
+var feeQuoteScale = new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
 
 type ExecutorClient struct {
 	url         string
@@ -93,12 +150,12 @@ func NewExecutorClient(url string, managerData string, timeout time.Duration) *E
 	}
 }
 
-func (c *ExecutorClient) SubmitMatchForMarket(ctx context.Context, market string, candidate orders.MatchCandidate, price string, amount string) (ExecutorResponse, error) {
+func (c *ExecutorClient) SubmitMatchForMarket(ctx context.Context, market string, candidate orders.MatchCandidate, price string, amount string, takerFee string) (ExecutorResponse, error) {
 	if c.url == "" {
 		return ExecutorResponse{}, fmt.Errorf("EXECUTOR_URL is required")
 	}
 
-	reqBody, err := buildExecutorRequest(market, candidate, c.managerData, price, amount)
+	reqBody, err := buildExecutorRequest(market, candidate, c.managerData, price, amount, takerFee)
 	if err != nil {
 		return ExecutorResponse{}, err
 	}
@@ -181,7 +238,9 @@ func (c *ExecutorClient) SubmitMatchForMarket(ctx context.Context, market string
 	return executorResp, nil
 }
 
-func buildExecutorRequest(market string, candidate orders.MatchCandidate, managerData string, price string, amount string) (ExecutorRequest, error) {
+// takerFee is passed in rather than recomputed: the engine already computed it to size the
+// funding reservation, and a second computation is a second chance to disagree.
+func buildExecutorRequest(market string, candidate orders.MatchCandidate, managerData string, price string, amount string, takerFee string) (ExecutorRequest, error) {
 	if !isEVMAddress(candidate.Taker.AssetAddress) {
 		return ExecutorRequest{}, fmt.Errorf("invalid asset address %q", candidate.Taker.AssetAddress)
 	}
@@ -214,7 +273,7 @@ func buildExecutorRequest(market string, candidate orders.MatchCandidate, manage
 		Signatures:    []string{candidate.Taker.Signature, candidate.Maker.Signature},
 		OrderData: TradeOrderData{
 			TakerAccount: candidate.Taker.SubaccountID,
-			TakerFee:     takerFillFee,
+			TakerFee:     takerFee,
 			FillDetails: []TradeFillDetail{
 				{
 					FilledAccount: candidate.Maker.SubaccountID,

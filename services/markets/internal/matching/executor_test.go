@@ -37,7 +37,7 @@ func TestBuildExecutorRequest(t *testing.T) {
 		},
 	}
 
-	req, err := buildExecutorRequest("USDCcNGN-SPOT", candidate, "0xfeed", "75", "3")
+	req, err := buildExecutorRequest("USDCcNGN-SPOT", candidate, "0xfeed", "75", "3", "0")
 	if err != nil {
 		t.Fatalf("buildExecutorRequest returned error: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestBuildExecutorRequestForSpotMarket(t *testing.T) {
 		},
 	}
 
-	req, err := buildExecutorRequest("USDCcNGN-SPOT", candidate, "0x", "1602", "3000000")
+	req, err := buildExecutorRequest("USDCcNGN-SPOT", candidate, "0x", "1602", "3000000", "0")
 	if err != nil {
 		t.Fatalf("buildExecutorRequest returned error: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestBuildExecutorRequestRejectsActionOwnerMismatch(t *testing.T) {
 		},
 	}
 
-	_, err := buildExecutorRequest("USDCcNGN-SPOT", candidate, "0x", "75", "3")
+	_, err := buildExecutorRequest("USDCcNGN-SPOT", candidate, "0x", "75", "3", "0")
 	if err == nil || err.Error() != "parse taker action_json: owner mismatch" {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestBuildExecutorRequestDefaultsEmptyManagerData(t *testing.T) {
 		},
 	}
 
-	req, err := buildExecutorRequest("USDCcNGN-SPOT", candidate, "", "75", "3")
+	req, err := buildExecutorRequest("USDCcNGN-SPOT", candidate, "", "75", "3", "0")
 	if err != nil {
 		t.Fatalf("buildExecutorRequest returned error: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestBuildExecutorRequestRejectsNonAddressActionOwner(t *testing.T) {
 		},
 	}
 
-	_, err := buildExecutorRequest("USDCcNGN-SPOT", candidate, "0x", "75", "3")
+	_, err := buildExecutorRequest("USDCcNGN-SPOT", candidate, "0x", "75", "3", "0")
 	if err == nil || err.Error() != "parse taker action_json: owner must be a 20-byte 0x address" {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestBuildExecutorRequestRejectsMismatchedActionModules(t *testing.T) {
 		},
 	}
 
-	_, err := buildExecutorRequest("USDCcNGN-SPOT", candidate, "0x", "75", "3")
+	_, err := buildExecutorRequest("USDCcNGN-SPOT", candidate, "0x", "75", "3", "0")
 	if err == nil || err.Error() != "maker module address mismatch: taker=0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa maker=0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -265,7 +265,7 @@ func submitAgainstBody(t *testing.T, body string) (ExecutorResponse, error) {
 	t.Cleanup(server.Close)
 
 	client := NewExecutorClient(server.URL, "0xfeed", 5*time.Second)
-	return client.SubmitMatchForMarket(context.Background(), "USDCcNGN-SPOT", testCandidate(), "75", "3")
+	return client.SubmitMatchForMarket(context.Background(), "USDCcNGN-SPOT", testCandidate(), "75", "3", "0")
 }
 
 // A transaction that mined and reverted moved nothing on chain. It must not reach

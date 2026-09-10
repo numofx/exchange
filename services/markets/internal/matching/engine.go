@@ -170,11 +170,40 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 		return
 	}
 
+	// The fee the taker will actually be charged, from this market's own schedule. Computed once
+	// here and reused for the funding reservation, so the number the buyer is checked against is
+	// the number that reaches the chain.
+	fillFee, feeErr := takerFillFee(instrument.TakerFeeBps, executionFill.FillPrice, executionFill.FillAmount)
+	if feeErr != nil {
+		e.noteMatchFailure(instrument.Symbol, *candidate, "fee_computation_failed")
+		slog.Error("fee_computation_failed", "market", instrument.Symbol, "error", feeErr)
+		reconcileCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = e.orders.ReleaseMatchAfterFailure(reconcileCtx, candidate.Taker.OrderID, candidate.Maker.OrderID)
+		return
+	}
+
+	// A taker whose signed worstFee cannot cover the fee produces a fill that reverts
+	// TM_FeeTooHigh on chain -- _fillLimitOrder bounds fee/amountFilled, not the total. The
+	// chain is still the enforcement; this only makes it visible before the pair is reserved,
+	// reverted, backed off and retried until expiry. Orders signed under an older, lower ceiling
+	// are exactly this case.
+	if covers, coverErr := worstFeeCovers(candidate.Taker.WorstFee, executionFill.FillAmount, fillFee); coverErr == nil && !covers {
+		slog.Warn(
+			"taker_worst_fee_below_schedule",
+			"market", instrument.Symbol,
+			"taker_order_id", candidate.Taker.OrderID,
+			"taker_worst_fee", candidate.Taker.WorstFee,
+			"fee", fillFee,
+			"effect", "this fill will revert TM_FeeTooHigh; the order was signed under a lower fee ceiling",
+		)
+	}
+
 	// The buyer must fund notional + fee, not notional: TradeModule appends the fee as a third
 	// quote-asset transfer in the same batch, and the SRM checks cash >= 0 on the NET delta.
 	// Crossing without this emits matches that revert after the book has already moved.
 	if funded, required, available, fundErr := buyerCanFund(
-		ctx, e.funding, *candidate, executionFill.FillPrice, executionFill.FillAmount, takerFillFee,
+		ctx, e.funding, *candidate, executionFill.FillPrice, executionFill.FillAmount, fillFee,
 	); fundErr != nil {
 		// Fail open. The chain is the real enforcement; an RPC outage must degrade this to the
 		// behaviour we had before the check existed, not halt the venue.
@@ -214,7 +243,7 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 		"executor_fill_price", executionFill.FillPrice,
 		"executor_fill_amount", executionFill.FillAmount,
 	)
-	executorResp, err := e.executor.SubmitMatchForMarket(ctx, instrument.Symbol, *candidate, executionFill.FillPrice, executionFill.FillAmount)
+	executorResp, err := e.executor.SubmitMatchForMarket(ctx, instrument.Symbol, *candidate, executionFill.FillPrice, executionFill.FillAmount, fillFee)
 	if err != nil {
 		reconcileCtx, cancel := detachedContext(ctx, reconciliationTimeout)
 		defer cancel()
