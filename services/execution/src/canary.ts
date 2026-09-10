@@ -18,6 +18,34 @@ import { createPublicClient, defineChain, http, type PublicClient } from 'viem';
  * down and flap tasks while the real problem sits off-box. See SETTLEMENT_CANARY_FAILS_HEALTHCHECK.
  */
 
+const INVARIANT_ABI = [
+  { type: 'function', name: 'cashAsset', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }] },
+  { type: 'function', name: 'wrappedAsset', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }] },
+  { type: 'function', name: 'decimals', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint8' }] },
+  {
+    type: 'function', name: 'balanceOf', stateMutability: 'view',
+    inputs: [{ name: 'account', type: 'address' }], outputs: [{ type: 'uint256' }],
+  },
+  { type: 'function', name: 'totalSupply', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
+  { type: 'function', name: 'totalBorrow', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
+  { type: 'function', name: 'netSettledCash', stateMutability: 'view', inputs: [], outputs: [{ type: 'int256' }] },
+  { type: 'function', name: 'accruedSmFees', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
+  {
+    type: 'function', name: 'totalPosition', stateMutability: 'view',
+    inputs: [{ name: 'manager', type: 'address' }], outputs: [{ type: 'uint256' }],
+  },
+] as const;
+
+const ASSET_WHITELISTED_EVENT = {
+  type: 'event',
+  name: 'AssetWhitelisted',
+  inputs: [
+    { name: 'asset', type: 'address', indexed: false },
+    { name: 'marketId', type: 'uint256', indexed: false },
+    { name: 'assetType', type: 'uint8', indexed: false },
+  ],
+} as const;
+
 const GET_MARGIN_ABI = [
   {
     type: 'function',
@@ -33,6 +61,22 @@ const GET_MARGIN_ABI = [
 
 export type CanaryFailure = { account_id: number; error: string };
 
+/**
+ * A token balance in its native decimals, restated at the 18dp the ledgers use. Both tokens
+ * here are 6dp while every ledger figure is 18dp, so comparing raw numbers would make a
+ * fully-backed wrapper look 1e12 short. The scaling is the check.
+ */
+export function to18(amount: bigint, decimals: number): bigint {
+  if (decimals > 18) throw new Error(`token has ${decimals} decimals; refusing to round down to 18`);
+  return amount * 10n ** BigInt(18 - decimals);
+}
+
+function fmt(v: bigint): string {
+  const neg = v < 0n;
+  const a = neg ? -v : v;
+  return `${neg ? '-' : ''}${a / 10n ** 18n}.${(a % 10n ** 18n).toString().padStart(18, '0').slice(0, 6)}`;
+}
+
 export type CanarySnapshot = {
   enabled: boolean;
   /** null until the first check completes, so "not yet known" is never reported as healthy. */
@@ -41,6 +85,12 @@ export type CanarySnapshot = {
   manager: string | null;
   account_ids: number[];
   failures: CanaryFailure[];
+  /**
+   * Solvency, kept separate from `failures` on purpose. A margin failure means the venue cannot
+   * settle and is loud on its own. A backing failure means it still can -- against collateral
+   * that is not there, which is worse and reads completely differently to whoever is woken up.
+   */
+  invariant_failures: string[];
   consecutive_failures: number;
 };
 
@@ -69,13 +119,22 @@ export type CanaryOptions = {
   announceOnStart?: boolean;
   /** Injected in tests. */
   postAlert?: (url: string, text: string) => Promise<void>;
+  /**
+   * The value netSettledCash is expected to hold. Alerting on movement rather than on
+   * non-zero: the current balance is legitimate settled cash that no available call can
+   * retire, so requiring zero would page forever about something nobody can fix.
+   * Undefined disables the pin.
+   */
+  expectedNetSettledCash?: bigint;
   /** Injected in tests; defaults to a viem client over rpcUrl. */
-  client?: Pick<PublicClient, 'readContract'>;
+  client?: Pick<PublicClient, 'readContract' | 'getLogs'>;
   log?: (level: 'info' | 'error', message: string, fields: Record<string, unknown>) => void;
 };
 
 export class SettlementCanary {
-  private readonly client: Pick<PublicClient, 'readContract'>;
+  private readonly client: Pick<PublicClient, 'readContract' | 'getLogs'>;
+  /** Discovered once: the whitelist does not change between checks, and a log scan every 60s would. */
+  private wrappers: `0x${string}`[] | undefined;
   private readonly log: NonNullable<CanaryOptions['log']>;
   private readonly postAlert: NonNullable<CanaryOptions['postAlert']>;
   private timer: NodeJS.Timeout | undefined;
@@ -102,6 +161,7 @@ export class SettlementCanary {
       manager: options.manager,
       account_ids: options.accountIds,
       failures: [],
+      invariant_failures: [],
       consecutive_failures: 0,
     };
   }
@@ -138,7 +198,8 @@ export class SettlementCanary {
       }
     }
 
-    const ok = failures.length === 0;
+    const invariant_failures = await this.checkInvariants();
+    const ok = failures.length === 0 && invariant_failures.length === 0;
     const wasOk = this.snapshotValue.ok;
     this.snapshotValue = {
       enabled: true,
@@ -147,6 +208,7 @@ export class SettlementCanary {
       manager: this.options.manager,
       account_ids: this.options.accountIds,
       failures,
+      invariant_failures,
       // Counts checks, not accounts: one bad account for ten checks reads as ten, which is
       // what an alert threshold should be counting.
       consecutive_failures: ok ? 0 : this.snapshotValue.consecutive_failures + 1,
@@ -157,11 +219,116 @@ export class SettlementCanary {
       ok,
       manager: this.options.manager,
       failures,
+      invariant_failures,
       consecutive_failures: this.snapshotValue.consecutive_failures,
     });
 
     await this.maybeAlert(ok, wasOk);
     return this.snapshotValue;
+  }
+
+  /**
+   * Solvency invariants. Read-only, and independent of whether anything can be priced:
+   *
+   *   1. Every unit of cash is backed by a real token in the CashAsset, nothing borrowed, and
+   *      nothing manager-printed. netSettledCash is CashAsset's own name for the credited-not-
+   *      deposited component of totalSupply, so a non-zero value is exactly that.
+   *   2. A WrappedERC20Asset mints on deposit and burns on withdraw, so its real token balance
+   *      must equal the position it has credited. Any divergence means tokens entered or left
+   *      without going through deposit()/withdraw().
+   *
+   * Wrappers are discovered from AssetWhitelisted rather than configured, so a new market is
+   * covered without a redeploy. totalPosition is per-manager and the manager set is not
+   * enumerable on chain, so this compares against the configured manager: another manager
+   * holding a position makes the check go RED rather than silently pass.
+   */
+  private async checkInvariants(): Promise<string[]> {
+    const out: string[] = [];
+    // viem infers functionName/args from the ABI literal; this call site is deliberately generic
+    // over eight zero- and one-argument view functions, so the cast is at the boundary only.
+    const read = <T>(address: `0x${string}`, functionName: string, args: readonly unknown[] = []) =>
+      (this.client.readContract as (a: unknown) => Promise<unknown>)({
+        address,
+        abi: INVARIANT_ABI,
+        functionName,
+        args,
+      }) as Promise<T>;
+
+    try {
+      const cash = await read<`0x${string}`>(this.options.manager, 'cashAsset');
+      const token = await read<`0x${string}`>(cash, 'wrappedAsset');
+      const decimals = await read<number>(token, 'decimals');
+      const held = to18(await read<bigint>(token, 'balanceOf', [cash]), decimals);
+      const supply = await read<bigint>(cash, 'totalSupply');
+      const borrow = await read<bigint>(cash, 'totalBorrow');
+      const settled = await read<bigint>(cash, 'netSettledCash');
+      const smFees = await read<bigint>(cash, 'accruedSmFees');
+
+      // Backing as CashAsset itself defines it. netSettledCash is SUBTRACTED here, the same way
+      // _getTotalCash does it: manager-settled cash is recorded there so the contract does not
+      // treat it as cash requiring backing. Comparing `held` against raw totalSupply instead
+      // would be permanently red on a venue that has ever settled asymmetrically, and would be
+      // red for a reason no operator can act on.
+      const totalCash = supply + smFees - borrow - settled;
+      if (held < totalCash) {
+        out.push(
+          `cash ${cash} UNDER-BACKED: holds ${fmt(held)} against ${fmt(totalCash)} of backed cash ` +
+            `(short ${fmt(totalCash - held)})`,
+        );
+      }
+      if (borrow !== 0n) out.push(`cash ${cash} totalBorrow is ${fmt(borrow)}, expected 0`);
+
+      // netSettledCash is pinned rather than required to be zero. It is non-zero today and
+      // cannot be retired by donateBalance -- that burns against totalCash, which already
+      // excludes it, so a max donate burns exactly 0 (verified on a Base fork). What matters
+      // operationally is that it does not MOVE without someone knowing: a change means a manager
+      // printed or burned settled cash.
+      const expected = this.options.expectedNetSettledCash;
+      if (expected !== undefined && settled !== expected) {
+        out.push(
+          `cash ${cash} netSettledCash MOVED: ${fmt(settled)}, pinned at ${fmt(expected)} ` +
+            `(delta ${fmt(settled - expected)}) — a manager printed or burned settled cash`,
+        );
+      }
+    } catch (error) {
+      out.push(`cash backing check failed to run: ${describe(error)}`);
+    }
+
+    try {
+      if (!this.wrappers) {
+        const logs = await this.client.getLogs({
+          address: this.options.manager,
+          event: ASSET_WHITELISTED_EVENT,
+          fromBlock: 0n,
+          toBlock: 'latest',
+        });
+        this.wrappers = [
+          ...new Set(logs.map((l) => (l as { args: { asset: `0x${string}` } }).args.asset)),
+        ];
+      }
+      for (const asset of this.wrappers) {
+        let token: `0x${string}`;
+        let decimals: number;
+        try {
+          token = await read<`0x${string}`>(asset, 'wrappedAsset');
+          decimals = await read<number>(token, 'decimals');
+        } catch {
+          continue; // not a wrapper; nothing to compare
+        }
+        const held = to18(await read<bigint>(token, 'balanceOf', [asset]), decimals);
+        const credited = await read<bigint>(asset, 'totalPosition', [this.options.manager]);
+        if (held !== credited) {
+          out.push(
+            `wrapper ${asset} BACKING MISMATCH: holds ${fmt(held)} of ${token} but has credited ` +
+              `${fmt(credited)} (delta ${fmt(held - credited)}) — tokens moved without deposit()/withdraw()`,
+          );
+        }
+      }
+    } catch (error) {
+      out.push(`wrapper backing check failed to run: ${describe(error)}`);
+    }
+
+    return out;
   }
 
   /**
@@ -192,19 +359,24 @@ export class SettlementCanary {
     const detail = this.snapshotValue.failures
       .map((f) => `  - subaccount ${f.account_id}: ${f.error}`)
       .join('\n');
+    const invariantDetail = this.snapshotValue.invariant_failures.map((f) => `  - ${f}`).join('\n');
+    // Two different emergencies. A halt stops trading and is loud on its own; a backing failure
+    // lets trading continue against collateral that is not there.
+    const halted = this.snapshotValue.failures.length > 0;
 
     const text = announced
       ? `NUMO SETTLEMENT CANARY STARTED\ngetMargin succeeds on ${this.options.manager}. Watching subaccount(s) ${this.options.accountIds.join(', ')}.`
       : recovered
       ? `NUMO SETTLEMENT CANARY RECOVERED\ngetMargin succeeds again on ${this.options.manager}.`
       : [
-          'NUMO SETTLEMENT HALTED',
-          'The risk manager cannot price a live subaccount, so on-chain settlement is failing.',
-          'Orders will keep matching off-chain and every fill will revert, silently.',
+          halted ? 'NUMO SETTLEMENT HALTED' : 'NUMO COLLATERAL BACKING FAILURE',
+          halted
+            ? 'The risk manager cannot price a live subaccount, so on-chain settlement is failing.\nOrders will keep matching off-chain and every fill will revert, silently.'
+            : 'The venue can still price and settle — and that is the problem. Ledger balances are\nnot matched by the tokens behind them, so fills continue against collateral that is\nnot there.',
           '',
           `manager: ${this.options.manager}`,
           `consecutive failing checks: ${failures}`,
-          detail,
+          [detail, invariantDetail].filter(Boolean).join('\n'),
         ].join('\n');
 
     try {
@@ -235,6 +407,7 @@ export const DISABLED_CANARY: CanarySnapshot = {
   manager: null,
   account_ids: [],
   failures: [],
+  invariant_failures: [],
   consecutive_failures: 0,
 };
 

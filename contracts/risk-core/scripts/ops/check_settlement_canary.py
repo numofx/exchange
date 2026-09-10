@@ -5,7 +5,7 @@ The 2026-09-01 feed outage was silent for 6.8 days. Every service was healthy, t
 answered, orders matched -- and every on-chain settlement reverted BLF_DataTooOld. It was
 found by accident. Nothing was watching the one thing that had actually broken.
 
-Two checks, deliberately overlapping:
+Four checks, deliberately overlapping:
 
   1. getMargin(accountId, true) on the StandardManager, for each configured subaccount.
      This walks the same path a settlement does -- _getMarketMargin reads the spot feed for
@@ -17,6 +17,15 @@ Two checks, deliberately overlapping:
      would report healthy in that case, which is exactly the blind spot that let the last
      outage run for a week.
 
+  3. COLLATERAL BACKING of the cash ledger: every unit of cash must be backed by a real USDC
+     sitting in the CashAsset, nothing borrowed, and nothing printed by a manager.
+     Checks 1 and 2 answer "can the venue price a trade"; this answers "is what it would
+     settle actually there".
+
+  4. WRAPPER BACKING: a WrappedERC20Asset mints on deposit and burns on withdraw, so its real
+     token balance must equal the position it has credited. Any divergence means tokens
+     entered or left without going through deposit()/withdraw().
+
 An empty subaccount has no market holding, so the manager reads no feed and check 1 passes
 while proving nothing. Point CANARY_ACCOUNTS at accounts that actually hold positions; the
 script says so loudly when a checked account turns out to have zero markets.
@@ -25,6 +34,7 @@ Env (or ~/.numo-feeds.env):
   RPC_URL            Base mainnet RPC
   ALERT_WEBHOOK_URL  Slack/Discord-compatible webhook (optional; logs only if unset)
   SRM_ADDRESS        StandardManager (default: the live Base deployment)
+  EXPECTED_NET_SETTLED_CASH  pin for netSettledCash; alert if it moves (unset = not checked)
   CANARY_ACCOUNTS    comma-separated subaccount ids (default: 15)
 
 Run every few minutes via systemd timer (see numo-settlement-canary.timer).
@@ -49,6 +59,19 @@ SEL_GET_MARKET_FEEDS = "0xa95371a4"  # getMarketFeeds(uint256)
 SEL_LAST_MARKET_ID = "0x565eb87c"    # lastMarketId()
 SEL_STABLE_FEED = "0xf4d0508a"       # stableFeed()
 SEL_GET_SPOT = "0x2b37269c"          # getSpot()
+SEL_CASH_ASSET = "0x5cd93cf3"        # cashAsset()
+SEL_BALANCE_OF = "0x70a08231"        # balanceOf(address)
+SEL_TOTAL_SUPPLY = "0x18160ddd"      # totalSupply()
+SEL_TOTAL_BORROW = "0x8285ef40"      # totalBorrow()
+SEL_NET_SETTLED = "0x73a46ad0"       # netSettledCash()
+SEL_TOTAL_POSITION = "0xa9578774"    # totalPosition(address)
+SEL_WRAPPED_ASSET = "0xd9a1836a"     # wrappedAsset()
+SEL_DECIMALS = "0x313ce567"          # decimals()
+SEL_SM_FEES = "0xcb5f01da"           # accruedSmFees()
+
+# AssetWhitelisted(address,uint256,uint8) -- used to discover which assets to check, so a new
+# market is covered without editing this file.
+TOPIC_ASSET_WHITELISTED = "0x65e6c2e07fd179979855ae720448f582bc92322fc62ed1cd98a0cc9d4c33b94b"
 
 # Revert selectors worth naming in an alert. Anything else is reported as raw returndata.
 KNOWN_ERRORS = {
@@ -88,10 +111,124 @@ def call(url: str, to: str, data: str) -> str:
 def describe_revert(exc: Exception) -> str:
   """Pull a named custom error out of an eth_call failure where the node returns one."""
   text = str(exc)
+  actual_topic = "0x" + keccak(b"AssetWhitelisted(address,uint256,uint8)").hex()
+  assert actual_topic == TOPIC_ASSET_WHITELISTED, f"whitelist topic drifted: {actual_topic}"
+  assert to18(5_000_000_000, 6) == 5_000 * 10**18, "6dp -> 18dp scaling is wrong"
+  assert to18(1, 18) == 1, "18dp scaling must be a no-op"
   for selector, name in KNOWN_ERRORS.items():
     if selector in text:
       return f"{name} [{selector}]"
   return text[:200]
+
+
+def uint(url: str, to: str, data: str) -> int:
+  return int(call(url, to, data), 16)
+
+
+def as_int256(word: str) -> int:
+  v = int(word, 16)
+  return v - (1 << 256) if v >= (1 << 255) else v
+
+
+def addr_arg(addr: str) -> str:
+  return "0" * 24 + addr[2:].lower()
+
+
+def to18(amount: int, decimals: int) -> int:
+  """A token balance in its native decimals, restated at the 18dp the ledgers use.
+
+  Both tokens here are 6dp while every ledger figure is 18dp, so comparing the raw numbers
+  would make a fully-backed wrapper look 1e12 short. The scaling is the check.
+  """
+  if decimals > 18:
+    raise RuntimeError(f"token has {decimals} decimals; refusing to round down to 18")
+  return amount * (10 ** (18 - decimals))
+
+
+def check_cash_backing(url: str, srm: str, failures: list, checked: list) -> None:
+  """Every unit of cash backed by a real USDC, nothing borrowed, nothing manager-printed.
+
+  netSettledCash is the manager-credited component of totalSupply (CashAsset's own
+  convention), so a non-zero value means cash exists that no deposit put there.
+  """
+  cash = "0x" + call(url, srm, SEL_CASH_ASSET)[26:]
+  token = "0x" + call(url, cash, SEL_WRAPPED_ASSET)[26:]
+  decimals = uint(url, token, SEL_DECIMALS)
+
+  held = to18(uint(url, token, SEL_BALANCE_OF + addr_arg(cash)), decimals)
+  supply = uint(url, cash, SEL_TOTAL_SUPPLY)
+  borrow = uint(url, cash, SEL_TOTAL_BORROW)
+  settled = as_int256(call(url, cash, SEL_NET_SETTLED))
+  sm_fees = uint(url, cash, SEL_SM_FEES)
+
+  # Backing as CashAsset itself defines it: _getTotalCash subtracts netSettledCash, because
+  # manager-settled cash is recorded there so the contract does not treat it as requiring
+  # backing. Comparing against raw totalSupply would be permanently red on any venue that has
+  # settled asymmetrically -- red for a reason nobody can act on.
+  total_cash = supply + sm_fees - borrow - settled
+  ok = True
+  if held < total_cash:
+    ok = False
+    failures.append(
+      f"cash {cash} UNDER-BACKED: holds {held / 1e18:.6f} USDC against {total_cash / 1e18:.6f} "
+      f"of backed cash (short {(total_cash - held) / 1e18:.6f})"
+    )
+  if borrow != 0:
+    ok = False
+    failures.append(f"cash {cash} totalBorrow is {borrow / 1e18:.6f}, expected 0")
+
+  # Pinned, not required-zero. donateBalance burns against total_cash, which already excludes
+  # netSettledCash, so a max donate burns exactly 0 -- verified on a Base fork. Requiring zero
+  # would page forever about a value no available call can change. What matters is movement.
+  expected = os.environ.get("EXPECTED_NET_SETTLED_CASH")
+  if expected is not None and expected.strip() != "":
+    if settled != int(expected):
+      ok = False
+      failures.append(
+        f"cash {cash} netSettledCash MOVED: {settled / 1e18:.6f}, pinned at {int(expected) / 1e18:.6f} "
+        f"(delta {(settled - int(expected)) / 1e18:+.6f}) -- a manager printed or burned settled cash"
+      )
+  if ok:
+    checked.append(
+      f"cash {cash} backed ({held / 1e18:.6f} USDC against {total_cash / 1e18:.6f} required; "
+      f"netSettledCash {settled / 1e18:.6f})"
+    )
+
+
+def check_wrapper_backing(url: str, srm: str, failures: list, checked: list) -> None:
+  """A WrappedERC20Asset's real token balance must equal the position it has credited.
+
+  Discovered from AssetWhitelisted logs rather than hardcoded, so a new market is covered
+  without editing this file. totalPosition is per-manager and the manager set is not
+  enumerable on chain, so this compares against the manager we were given: another manager
+  holding a position makes the check go RED rather than silently pass, which is the safe
+  direction to fail in.
+  """
+  logs = rpc(url, "eth_getLogs", [{
+    "fromBlock": "0x0", "toBlock": "latest", "address": srm, "topics": [TOPIC_ASSET_WHITELISTED],
+  }])
+  seen = set()
+  for entry in logs:
+    asset = "0x" + entry["data"][2:][24:64]
+    if asset in seen:
+      continue
+    seen.add(asset)
+    try:
+      token = "0x" + call(url, asset, SEL_WRAPPED_ASSET)[26:]
+      decimals = uint(url, token, SEL_DECIMALS)
+    except Exception:
+      continue  # not a wrapper (cash is excluded this way too); nothing to compare
+
+    held = to18(uint(url, token, SEL_BALANCE_OF + addr_arg(asset)), decimals)
+    credited = uint(url, asset, SEL_TOTAL_POSITION + addr_arg(srm))
+    if held != credited:
+      failures.append(
+        f"wrapper {asset} BACKING MISMATCH: holds {held / 1e18:.6f} of {token} but has "
+        f"credited {credited / 1e18:.6f} (delta {(held - credited) / 1e18:+.6f}) "
+        "-- tokens moved without deposit()/withdraw()"
+      )
+    else:
+      checked.append(f"wrapper {asset} backed 1:1 ({held / 1e18:.6f})")
 
 
 def alert(webhook: str | None, msg: str) -> None:
@@ -117,9 +254,22 @@ def self_test() -> None:
     "lastMarketId()": SEL_LAST_MARKET_ID,
     "stableFeed()": SEL_STABLE_FEED,
     "getSpot()": SEL_GET_SPOT,
+    "cashAsset()": SEL_CASH_ASSET,
+    "balanceOf(address)": SEL_BALANCE_OF,
+    "totalSupply()": SEL_TOTAL_SUPPLY,
+    "totalBorrow()": SEL_TOTAL_BORROW,
+    "netSettledCash()": SEL_NET_SETTLED,
+    "totalPosition(address)": SEL_TOTAL_POSITION,
+    "wrappedAsset()": SEL_WRAPPED_ASSET,
+    "decimals()": SEL_DECIMALS,
+    "accruedSmFees()": SEL_SM_FEES,
   }.items():
     actual = "0x" + keccak(signature.encode()).hex()[:8]
     assert actual == expected, f"{signature}: hardcoded {expected}, actual {actual}"
+  actual_topic = "0x" + keccak(b"AssetWhitelisted(address,uint256,uint8)").hex()
+  assert actual_topic == TOPIC_ASSET_WHITELISTED, f"whitelist topic drifted: {actual_topic}"
+  assert to18(5_000_000_000, 6) == 5_000 * 10**18, "6dp -> 18dp scaling is wrong"
+  assert to18(1, 18) == 1, "18dp scaling must be a no-op"
   for selector, name in KNOWN_ERRORS.items():
     actual = "0x" + keccak(name.encode()).hex()[:8]
     assert actual == selector, f"{name}: hardcoded {selector}, actual {actual}"
@@ -139,7 +289,8 @@ def main() -> int:
 
   self_test()
 
-  failures: list[str] = []
+  failures: list[str] = []      # cannot price -- the venue is halted
+  solvency: list[str] = []      # can price, but what it would settle is not there
   checked: list[str] = []
 
   # 1. the manager path, per account
@@ -182,15 +333,39 @@ def main() -> int:
     except Exception as exc:
       failures.append(f"{label} {feed} getSpot() REVERTED: {describe_revert(exc)}")
 
-  if failures:
-    alert(
-      webhook,
-      "NUMO SETTLEMENT HALTED\n"
-      "The venue cannot price or settle. Orders will keep matching off-chain and every\n"
-      "on-chain leg will revert, silently, until this is fixed.\n\n"
-      + "\n".join(f"  - {f}" for f in failures)
-      + ("\n\nstill healthy:\n" + "\n".join(f"  - {c}" for c in checked) if checked else ""),
-    )
+  # 3 & 4. solvency, independent of whether anything can be priced
+  try:
+    check_cash_backing(url, srm, solvency, checked)
+  except Exception as exc:
+    failures.append(f"cash backing check FAILED to run: {describe_revert(exc)}")
+  try:
+    check_wrapper_backing(url, srm, solvency, checked)
+  except Exception as exc:
+    failures.append(f"wrapper backing check FAILED to run: {describe_revert(exc)}")
+
+  # Two different emergencies, deliberately not merged into one message. A halt stops trading
+  # and is loud on its own; a backing failure lets trading continue against collateral that is
+  # not there, which is worse and reads completely differently to whoever is woken up.
+  if failures or solvency:
+    parts = []
+    if failures:
+      parts.append(
+        "NUMO SETTLEMENT HALTED\n"
+        "The venue cannot price or settle. Orders will keep matching off-chain and every\n"
+        "on-chain leg will revert, silently, until this is fixed.\n\n"
+        + "\n".join(f"  - {f}" for f in failures)
+      )
+    if solvency:
+      parts.append(
+        "NUMO COLLATERAL BACKING FAILURE\n"
+        "The venue can still price and settle -- and that is the problem. Ledger balances are\n"
+        "not matched by the tokens behind them, so fills continue against collateral that is\n"
+        "not there.\n\n"
+        + "\n".join(f"  - {f}" for f in solvency)
+      )
+    if checked:
+      parts.append("still healthy:\n" + "\n".join(f"  - {c}" for c in checked))
+    alert(webhook, "\n\n".join(parts))
     return 1
 
   print("ok: " + "; ".join(checked))

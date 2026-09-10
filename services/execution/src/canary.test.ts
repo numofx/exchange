@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { buildApp } from './app.js';
-import { SettlementCanary } from './canary.js';
+import { SettlementCanary, to18 } from './canary.js';
 import type { AppConfig } from './config.js';
 import type { ExecuteMatchResponse } from './types.js';
 
@@ -20,6 +20,30 @@ const config: AppConfig = {
   receiptTimeoutMs: 60_000,
 };
 
+const CASH_ = '0x6B232A2155Bd0C9bf741dB4cf8E7e8A0176A6fc6';
+const USDC_ = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+const CNGN_ = '0x46C85152bFe9f96829aA94755D9f915F9B10EF5F';
+
+/**
+ * A chain where every solvency invariant holds. The margin-focused tests below delegate to this
+ * for anything that is not getMargin, so a failure there means what the test name says rather
+ * than "the fixture did not stub cashAsset".
+ */
+function healthyInvariantRead(a: { address: string; functionName: string }): unknown {
+  switch (a.functionName) {
+    case 'cashAsset': return CASH_;
+    case 'wrappedAsset': return a.address === CASH_ ? USDC_ : CNGN_;
+    case 'decimals': return 6;
+    case 'balanceOf': return a.address === USDC_ ? 5_000_000n : 5_000_000_000n;
+    case 'totalSupply': return 5_000_000_000_000_000_000n;
+    case 'totalBorrow': return 0n;
+    case 'netSettledCash': return 0n;
+    case 'accruedSmFees': return 0n;
+    case 'totalPosition': return 5_000_000_000_000_000_000_000n;
+    default: throw new Error(`unexpected call ${a.functionName}`);
+  }
+}
+
 function canaryWith(readContract: () => Promise<unknown>, accountIds = [15]) {
   return new SettlementCanary({
     rpcUrl: config.rpcUrl,
@@ -27,7 +51,56 @@ function canaryWith(readContract: () => Promise<unknown>, accountIds = [15]) {
     manager: MANAGER,
     accountIds,
     intervalMs: 60_000,
-    client: { readContract } as never,
+    client: {
+      getLogs: async () => [{ args: { asset: '0x9D806fD040a719D27a8E5E77dc5aE0ED1e089493' } }],
+      readContract: async (a: { address: string; functionName: string }) =>
+        a.functionName === 'getMargin' ? readContract() : healthyInvariantRead(a),
+    } as never,
+  });
+}
+
+const CASH = '0x6B232A2155Bd0C9bf741dB4cf8E7e8A0176A6fc6';
+const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+const WRAPPER = '0x9D806fD040a719D27a8E5E77dc5aE0ED1e089493';
+const CNGN = '0x46C85152bFe9f96829aA94755D9f915F9B10EF5F';
+
+/** A chain where every invariant holds, overridable per-call to break exactly one of them. */
+function invariantCanary(overrides: Record<string, bigint> = {}, wrappers = [WRAPPER]) {
+  const v = {
+    cashHeld: 5_000_000n, // 5 USDC at 6dp
+    cashSupply: 5_000_000_000_000_000_000n, // 5 cash at 18dp
+    cashBorrow: 0n,
+    cashSettled: 0n,
+    cashSmFees: 0n,
+    wrapperHeld: 5_000_000_000n, // 5000 cNGN at 6dp
+    wrapperCredited: 5_000_000_000_000_000_000_000n, // 5000 at 18dp
+    ...overrides,
+  };
+  return new SettlementCanary({
+    rpcUrl: config.rpcUrl,
+    chainId: config.chainId,
+    manager: MANAGER,
+    accountIds: [15],
+    intervalMs: 60_000,
+    announceOnStart: false,
+    client: {
+      getLogs: async () => wrappers.map((asset) => ({ args: { asset } })),
+      readContract: async (a: { address: string; functionName: string }) => {
+        switch (a.functionName) {
+          case 'getMargin': return 0n;
+          case 'cashAsset': return CASH;
+          case 'wrappedAsset': return a.address === CASH ? USDC : CNGN;
+          case 'decimals': return 6;
+          case 'balanceOf': return a.address === USDC ? v.cashHeld : v.wrapperHeld;
+          case 'totalSupply': return v.cashSupply;
+          case 'totalBorrow': return v.cashBorrow;
+          case 'netSettledCash': return v.cashSettled;
+          case 'accruedSmFees': return v.cashSmFees;
+          case 'totalPosition': return v.wrapperCredited;
+          default: throw new Error(`unexpected call ${a.functionName}`);
+        }
+      },
+    } as never,
   });
 }
 
@@ -48,7 +121,9 @@ function alertingCanary(
     alertRepeatAfterChecks: opts.repeatAfter ?? 30,
     announceOnStart: opts.announceOnStart ?? false,
     client: {
-      readContract: async () => {
+      getLogs: async () => [{ args: { asset: '0x9D806fD040a719D27a8E5E77dc5aE0ED1e089493' } }],
+      readContract: async (a: { address: string; functionName: string }) => {
+        if (a.functionName !== 'getMargin') return healthyInvariantRead(a);
         if (!healthy()) throw new Error('reverted: BLF_DataTooOld()');
         return 0n;
       },
@@ -104,10 +179,21 @@ test('consecutive_failures counts checks and resets on recovery', async () => {
 
 test('every configured account is checked, not just the first', async () => {
   const seen: bigint[] = [];
-  const canary = canaryWith(async (...args: unknown[]) => {
-    seen.push((args[0] as { args: [bigint, boolean] }).args[0]);
-    throw new Error('reverted');
-  }, [15, 16]);
+  const canary = new SettlementCanary({
+    rpcUrl: config.rpcUrl,
+    chainId: config.chainId,
+    manager: MANAGER,
+    accountIds: [15, 16],
+    intervalMs: 60_000,
+    client: {
+      getLogs: async () => [],
+      readContract: async (a: { address: string; functionName: string; args?: unknown[] }) => {
+        if (a.functionName !== 'getMargin') return healthyInvariantRead(a);
+        seen.push((a.args as [bigint, boolean])[0]);
+        throw new Error('reverted');
+      },
+    } as never,
+  });
 
   const snapshot = await canary.check();
   assert.deepEqual(seen, [15n, 16n]);
@@ -224,6 +310,107 @@ test('a failing start-up sends the halt alert, not the start-up notice', async (
 
   assert.equal(sent.length, 1);
   assert.match(sent[0]!.text, /SETTLEMENT HALTED/);
+});
+
+// 6dp tokens against 18dp ledgers: comparing raw numbers would make a fully-backed wrapper
+// look 1e12 short, so the scaling IS the check.
+test('to18 restates a 6dp balance at ledger scale', () => {
+  assert.equal(to18(5_000_000_000n, 6), 5_000_000_000_000_000_000_000n);
+  assert.equal(to18(1n, 18), 1n);
+  assert.throws(() => to18(1n, 24), /refusing to round down/);
+});
+
+test('a fully backed venue reports ok with no invariant failures', async () => {
+  const snapshot = await invariantCanary().check();
+  assert.equal(snapshot.ok, true);
+  assert.deepEqual(snapshot.invariant_failures, []);
+});
+
+test('cash held below cash supply is caught', async () => {
+  const snapshot = await invariantCanary({ cashHeld: 2n }).check();
+  assert.equal(snapshot.ok, false);
+  assert.match(snapshot.invariant_failures.join(' '), /UNDER-BACKED/);
+});
+
+// netSettledCash is SUBTRACTED by CashAsset's own _getTotalCash, so settled cash reduces what
+// must be backed. Checking `held >= totalSupply` instead would be permanently red on any venue
+// that has settled asymmetrically -- red for a reason nobody can act on.
+test('settled cash reduces the backing requirement rather than breaching it', async () => {
+  const snapshot = await invariantCanary({
+    cashSupply: 1_005_000_000_000_000_000_000n, // 1005 of supply
+    cashSettled: 1_000_000_000_000_000_000_000n, // 1000 of it settled
+    cashHeld: 5_000_000n, // 5 real USDC backs the remaining 5
+  }).check();
+  assert.equal(snapshot.ok, true, snapshot.invariant_failures.join(' '));
+});
+
+test('a real backing shortfall is still caught once settled cash is excluded', async () => {
+  const snapshot = await invariantCanary({
+    cashSupply: 1_005_000_000_000_000_000_000n,
+    cashSettled: 1_000_000_000_000_000_000_000n,
+    cashHeld: 1_000_000n, // only 1 real USDC against 5 of backed cash
+  }).check();
+  assert.equal(snapshot.ok, false);
+  assert.match(snapshot.invariant_failures.join(' '), /UNDER-BACKED/);
+});
+
+test('borrowed cash is caught', async () => {
+  const snapshot = await invariantCanary({ cashBorrow: 1n }).check();
+  assert.equal(snapshot.ok, false);
+  assert.match(snapshot.invariant_failures.join(' '), /totalBorrow/);
+});
+
+// Tokens sent straight to the wrapper, bypassing deposit(): balance moves, credited position
+// does not. Verified against a real Base fork as well as here.
+test('a wrapper holding more than it credited is caught', async () => {
+  const snapshot = await invariantCanary({ wrapperHeld: 5_250_000_000n }).check();
+  assert.equal(snapshot.ok, false);
+  assert.match(snapshot.invariant_failures.join(' '), /BACKING MISMATCH/);
+  assert.match(snapshot.invariant_failures.join(' '), /without deposit\(\)/);
+});
+
+test('a wrapper crediting more than it holds is caught', async () => {
+  const snapshot = await invariantCanary({ wrapperHeld: 1n }).check();
+  assert.equal(snapshot.ok, false);
+  assert.match(snapshot.invariant_failures.join(' '), /BACKING MISMATCH/);
+});
+
+test('a backing failure alerts under its own headline, not the halt one', async () => {
+  const sent: string[] = [];
+  const canary = invariantCanary({ wrapperHeld: 5_250_000_000n });
+  (canary as unknown as { options: Record<string, unknown> }).options.alertWebhookUrl = 'https://x.invalid';
+  (canary as unknown as { postAlert: unknown }).postAlert = async (_u: string, t: string) => {
+    sent.push(t);
+  };
+
+  await canary.check();
+
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!, /COLLATERAL BACKING FAILURE/);
+  assert.doesNotMatch(sent[0]!, /SETTLEMENT HALTED/);
+});
+
+// Pinned, not required-zero: donateBalance burns against totalCash, which already excludes
+// netSettledCash, so a max donate burns exactly 0 (verified on a Base fork). Requiring zero
+// would page forever about a value no available call can change.
+test('a pinned netSettledCash that has not moved is not a failure', async () => {
+  const canary = invariantCanary({ cashSettled: 1_000n });
+  (canary as unknown as { options: Record<string, unknown> }).options.expectedNetSettledCash = 1_000n;
+  const snapshot = await canary.check();
+  assert.equal(snapshot.ok, true, snapshot.invariant_failures.join(' '));
+});
+
+test('netSettledCash moving off its pin is caught', async () => {
+  const canary = invariantCanary({ cashSettled: 2_000n });
+  (canary as unknown as { options: Record<string, unknown> }).options.expectedNetSettledCash = 1_000n;
+  const snapshot = await canary.check();
+  assert.equal(snapshot.ok, false);
+  assert.match(snapshot.invariant_failures.join(' '), /netSettledCash MOVED/);
+});
+
+test('no pin configured means netSettledCash is not checked at all', async () => {
+  const snapshot = await invariantCanary({ cashSettled: 99_999n }).check();
+  assert.equal(snapshot.ok, true, snapshot.invariant_failures.join(' '));
 });
 
 test('/healthz reports the canary as disabled when none is wired', async () => {
