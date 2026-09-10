@@ -92,9 +92,23 @@ contract TradeModuleWrappedQuoteForkTest is ForkBase {
   uint internal constant PRE_REPOINT_BLOCK = 51097292;
 
   function setUp() public {
+    /*
+     * Fork Base here rather than depending on `--fork-url` being remembered on the command line.
+     * contracts-execution.yml runs a bare `forge test`, so for as long as this suite has existed
+     * CI has reported all 12 of these as skips -- a green check that asserted nothing about the
+     * fee path, the cutover, or the stale-feed halt. risk-core's fork tests already self-fork
+     * (DeliverableFXManagerBaseFork does exactly this); this brings the two repos in line.
+     *
+     * With BASE_RPC_URL unset it still skips, so a plain `forge test` on a laptop behaves as it
+     * always has. With `--fork-url` passed the chain id is already 8453 and this is a no-op.
+     */
     if (block.chainid == 31337) {
-      vm.skip(true);
-      return;
+      string memory rpc = vm.envOr("BASE_RPC_URL", string(""));
+      if (bytes(rpc).length == 0) {
+        vm.skip(true);
+        return;
+      }
+      vm.createSelectFork(rpc);
     }
 
     _loadLiveAddresses();
