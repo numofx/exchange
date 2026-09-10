@@ -33,3 +33,29 @@ jobs:
       - run: forge fmt --check   # requires foundry.toml [fmt] keys to be valid — see PLAN note
       - run: forge build scripts/*.s.sol   # scripts/ sits outside foundry's default `script` path, so forge test never compiles it
       - run: forge test -vvv     # resolves v2-core/ -> ../risk-core via the in-repo symlink
+        env:
+          # Without this the wrapped-quote fork suite skips: its setUp forks Base itself (the
+          # same way risk-core's fork tests do) and falls back to skipping when the URL is
+          # absent. That fallback is deliberate -- a laptop with no RPC should still be able to
+          # run `forge test` -- but it means a missing secret degrades to a green check, which
+          # is why the step below asserts the suite actually ran.
+          BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}
+
+      # A skipped fork test is indistinguishable from a passing one in the summary line, and this
+      # suite spent its whole existence skipping here: it is the only coverage of the 25 bps fee
+      # landing in the fee subaccount, of a stale ceiling reverting TM_FeeTooHigh, and of the
+      # wrapped-quote cutover settling. Assert it ran rather than trusting that it did.
+      - name: fork tests must run, not skip
+        env:
+          BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}
+        run: |
+          out=$(forge test --match-contract TradeModuleWrappedQuoteForkTest -vv)
+          echo "$out"
+          grep -qE 'Suite result: ok\..*0 skipped' <<<"$out" || {
+            echo "::error::the wrapped-quote fork suite did not run -- is the BASE_RPC_URL secret set?"
+            exit 1
+          }
+          grep -qE 'Suite result: ok\. [1-9][0-9]* passed' <<<"$out" || {
+            echo "::error::the wrapped-quote fork suite reported no passing tests"
+            exit 1
+          }
