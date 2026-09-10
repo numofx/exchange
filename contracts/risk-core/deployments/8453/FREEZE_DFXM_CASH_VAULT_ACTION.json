@@ -1,0 +1,9 @@
+[
+  {
+    "description": "cash.setWhitelistManager(DeliverableFXManager, false) [FREEZES every cash movement on DFXM-managed accounts, including subaccount 14's ~1.368e22 settled cash. CashAsset is shared and unsegregated, so without this any USDC deposited for SRM/market-maker use is withdrawable against that balance by whoever controls 0xc94e23c5. REVERSIBLE: the same call with true re-enables it, which is required before any burn, since updateSettledCash and donateBalance both route through _checkManager.]",
+    "to": "0x6B232A2155Bd0C9bf741dB4cf8E7e8A0176A6fc6",
+    "value": "0",
+    "data": "0xe64cc9da000000000000000000000000ce01f3d74400cae39bd7608cd2d286c2e3874d490000000000000000000000000000000000000000000000000000000000000000",
+    "digest": "0x027ae7e8656ac93ef2e010c93cd948e385b5000c3c13218906cb96fd918e0e8f"
+  }
+]

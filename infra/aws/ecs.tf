@@ -321,14 +321,27 @@ resource "aws_ecs_task_definition" "market_maker" {
 
       # Arrives paused, exactly as it runs on Railway today. Unpausing is the last
       # step of the cutover and a deliberate one, never a side effect of deploying.
-      { name = "MM_OPERATOR_MODE", value = "pause" },
+      # Unpaused at the 2026-09-10 cutover, after the wrapped-quote smoke test settled with
+      # no cash movement on any account. Subaccount 15 is two-sided for the first time --
+      # 5000 cNGN and ~3 wrapped USDC -- because the quote leg is the wrapper rather than
+      # cash the maker could see but never spend.
+      { name = "MM_OPERATOR_MODE", value = "normal" },
       { name = "MM_DRY_RUN", value = "false" },
 
       { name = "MM_MARKET_SYMBOL", value = "USDCcNGN-SPOT" },
       { name = "MM_OWNER_ADDRESS", value = var.mm_address },
       { name = "MM_SIGNER_ADDRESS", value = var.mm_address },
-      { name = "MM_SUBACCOUNT_ID", value = "10" },
-      { name = "MM_RECIPIENT_ID", value = "10" },
+      # Subaccount 15, not 10. Ten is DeliverableFXManager-managed, and the vault
+      # de-whitelisted DFXM on the CashAsset (block 51109818), so every cash adjustment
+      # on it now reverts MW_UnknownManager -- the market maker could quote but never
+      # settle. Fifteen is SRM-managed, held in Matching custody, and signed by the same
+      # MM key, and it holds the cNGN inventory (4999) the maker needs.
+      #
+      # RECIPIENT_ID must equal SUBACCOUNT_ID. Under a WrappedERC20Asset quote leg the
+      # credit side needs an allowance, so a recipient that is not the trading account
+      # reverts; keeping them equal is what the venue actually exercises and tests.
+      { name = "MM_SUBACCOUNT_ID", value = "15" },
+      { name = "MM_RECIPIENT_ID", value = "15" },
 
       { name = "MM_QUOTE_LEVELS", value = "5" },
       { name = "MM_ORDER_SIZE", value = "1.2" },
