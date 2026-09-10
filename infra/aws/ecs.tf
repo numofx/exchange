@@ -236,6 +236,18 @@ resource "aws_ecs_task_definition" "execution" {
       # Re-alert after 30 consecutive failing checks (30 minutes at a 60s interval), so one
       # dropped webhook is not silence for the whole outage.
       { name = "SETTLEMENT_CANARY_ALERT_REPEAT_CHECKS", value = "30" },
+
+      # netSettledCash pinned to its live value rather than required to be zero. CashAsset's
+      # _getTotalCash SUBTRACTS netSettledCash, so settled cash is excluded from what must be
+      # backed -- and donateBalance burns against that same quantity, so a max donate from the
+      # account owner burns exactly 0 (verified on a Base fork). Requiring zero would page
+      # forever about a value no available call can change. A MOVEMENT means a manager printed
+      # or burned settled cash, which is the event worth waking someone for.
+      #
+      # This makes the canary prove "not insolvent by CashAsset's own accounting", NOT 1:1
+      # backing. The wrapper invariant is the one that proves 1:1, and it covers only the
+      # wrapped assets.
+      { name = "SETTLEMENT_CANARY_EXPECTED_NET_SETTLED_CASH", value = "13682574719999999999990057939082285597678" },
       # Reporting, not liveness. Restarting this container does not refresh a stale oracle,
       # and failing the health check would pull the API out of the target group and flap
       # tasks while the real fault sits off-box. The canary's job is to make the halt
