@@ -4,6 +4,11 @@
 # committed files to match a fresh forge build.
 name: abis-drift
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'contracts/execution/**'
+      - 'packages/abis/**'
   pull_request:
     paths:
       - 'contracts/execution/**'
