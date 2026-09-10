@@ -57,6 +57,8 @@ const canary = config.settlementCanary
       manager: config.settlementCanary.manager,
       accountIds: config.settlementCanary.accountIds,
       intervalMs: config.settlementCanary.intervalMs,
+      alertWebhookUrl: config.settlementCanary.alertWebhookUrl,
+      alertRepeatAfterChecks: config.settlementCanary.alertRepeatAfterChecks,
       log: (level, message, fields) => {
         process.stdout.write(`${JSON.stringify({ level, msg: message, ...fields })}\n`);
       },

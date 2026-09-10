@@ -50,6 +50,15 @@ export type CanaryOptions = {
   manager: `0x${string}`;
   accountIds: number[];
   intervalMs: number;
+  /** Slack/Discord-compatible webhook. Without it the canary logs and reaches nobody. */
+  alertWebhookUrl?: string;
+  /**
+   * Re-alert after this many consecutive failing checks, so a single dropped webhook does not
+   * mean silence for the whole outage. 0 disables repeats.
+   */
+  alertRepeatAfterChecks?: number;
+  /** Injected in tests. */
+  postAlert?: (url: string, text: string) => Promise<void>;
   /** Injected in tests; defaults to a viem client over rpcUrl. */
   client?: Pick<PublicClient, 'readContract'>;
   log?: (level: 'info' | 'error', message: string, fields: Record<string, unknown>) => void;
@@ -58,6 +67,7 @@ export type CanaryOptions = {
 export class SettlementCanary {
   private readonly client: Pick<PublicClient, 'readContract'>;
   private readonly log: NonNullable<CanaryOptions['log']>;
+  private readonly postAlert: NonNullable<CanaryOptions['postAlert']>;
   private timer: NodeJS.Timeout | undefined;
   private snapshotValue: CanarySnapshot;
 
@@ -74,6 +84,7 @@ export class SettlementCanary {
         transport: http(options.rpcUrl),
       });
     this.log = options.log ?? (() => {});
+    this.postAlert = options.postAlert ?? defaultPostAlert;
     this.snapshotValue = {
       enabled: true,
       ok: null,
@@ -118,6 +129,7 @@ export class SettlementCanary {
     }
 
     const ok = failures.length === 0;
+    const wasOk = this.snapshotValue.ok;
     this.snapshotValue = {
       enabled: true,
       ok,
@@ -138,8 +150,67 @@ export class SettlementCanary {
       consecutive_failures: this.snapshotValue.consecutive_failures,
     });
 
+    await this.maybeAlert(ok, wasOk);
     return this.snapshotValue;
   }
+
+  /**
+   * Edge-triggered, not level-triggered: one message when it breaks, one when it recovers, and a
+   * repeat every alertRepeatAfterChecks while it stays broken. A message every interval would be
+   * ignored within the hour, which is the same as not sending one.
+   *
+   * Never throws. A webhook that is down must not stop the canary checking; the log line is still
+   * emitted either way.
+   */
+  private async maybeAlert(ok: boolean, wasOk: boolean | null): Promise<void> {
+    const url = this.options.alertWebhookUrl;
+    if (!url) return;
+
+    const repeatAfter = this.options.alertRepeatAfterChecks ?? 30;
+    const failures = this.snapshotValue.consecutive_failures;
+
+    // wasOk === null is the first check of the process. A failure there is still worth sending:
+    // starting up broken is exactly the case where nobody is watching yet.
+    const brokeNow = !ok && (wasOk === true || wasOk === null);
+    const stillBroken = !ok && repeatAfter > 0 && failures > 1 && failures % repeatAfter === 0;
+    const recovered = ok && wasOk === false;
+    if (!brokeNow && !stillBroken && !recovered) return;
+
+    const detail = this.snapshotValue.failures
+      .map((f) => `  - subaccount ${f.account_id}: ${f.error}`)
+      .join('\n');
+
+    const text = recovered
+      ? `NUMO SETTLEMENT CANARY RECOVERED\ngetMargin succeeds again on ${this.options.manager}.`
+      : [
+          'NUMO SETTLEMENT HALTED',
+          'The risk manager cannot price a live subaccount, so on-chain settlement is failing.',
+          'Orders will keep matching off-chain and every fill will revert, silently.',
+          '',
+          `manager: ${this.options.manager}`,
+          `consecutive failing checks: ${failures}`,
+          detail,
+        ].join('\n');
+
+    try {
+      await this.postAlert(url, text);
+      this.log('info', 'settlement_canary_alert_sent', { recovered, consecutive_failures: failures });
+    } catch (error) {
+      this.log('error', 'settlement_canary_alert_failed', { error: describe(error) });
+    }
+  }
+}
+
+async function defaultPostAlert(url: string, text: string): Promise<void> {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    // Both keys on purpose: Slack reads `text`, Discord reads `content`. The ops-box alert
+    // scripts post the same shape, so one webhook serves both senders.
+    body: JSON.stringify({ text, content: text }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) throw new Error(`webhook returned ${response.status}`);
 }
 
 export const DISABLED_CANARY: CanarySnapshot = {

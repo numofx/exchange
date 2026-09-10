@@ -233,6 +233,9 @@ resource "aws_ecs_task_definition" "execution" {
       { name = "SETTLEMENT_CANARY_MANAGER", value = "0x3195Bd7e02d93982bCF8b34DF5B941fFCaE1E49b" },
       { name = "SETTLEMENT_CANARY_ACCOUNTS", value = "15" },
       { name = "SETTLEMENT_CANARY_INTERVAL_MS", value = "60000" },
+      # Re-alert after 30 consecutive failing checks (30 minutes at a 60s interval), so one
+      # dropped webhook is not silence for the whole outage.
+      { name = "SETTLEMENT_CANARY_ALERT_REPEAT_CHECKS", value = "30" },
       # Reporting, not liveness. Restarting this container does not refresh a stale oracle,
       # and failing the health check would pull the API out of the target group and flap
       # tasks while the real fault sits off-box. The canary's job is to make the halt
@@ -243,6 +246,9 @@ resource "aws_ecs_task_definition" "execution" {
     secrets = [
       { name = "PRIVATE_KEY", valueFrom = local.secret_arns.executor_key },
       { name = "RPC_URL", valueFrom = local.secret_arns.rpc_url },
+      # The canary's only route to a person. There is no CloudWatch alarm on this log group, so
+      # without this a failing canary writes a line nobody reads.
+      { name = "ALERT_WEBHOOK_URL", valueFrom = local.secret_arns.alert_webhook_url },
     ]
 
     healthCheck = {
