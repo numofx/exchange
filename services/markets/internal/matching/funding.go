@@ -50,8 +50,8 @@ import (
 // price.multiplyDecimal(amountFilled), i.e. price * amount / 1e18, with both operands in 18dp.
 var quoteScale = new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
 
-// requiredQuote returns the cash a buyer must hold to settle this fill: the notional plus the
-// fee they will be charged in the same batch.
+// requiredQuote returns the quote asset a buyer must hold to settle this fill: the notional plus
+// the fee they will be charged in the same batch.
 func requiredQuote(fillPrice string, fillAmount string, takerFee string) (*big.Int, error) {
 	price, err := parsePositiveInt(fillPrice, "fill_price")
 	if err != nil {
@@ -74,9 +74,15 @@ func requiredQuote(fillPrice string, fillAmount string, takerFee string) (*big.I
 	return notional.Add(notional, fee), nil
 }
 
-// fundingChecker reports the cash balance of a subaccount, in 18dp quote units.
+// fundingChecker reports a subaccount's balance of the TRADE MODULE'S QUOTE ASSET, in 18dp.
+//
+// Which contract that is depends on the module: the cash-quoted module settles in the CashAsset,
+// a wrapped-quote module settles in a WrappedERC20Asset. Both are read the same way --
+// SubAccounts.getBalance(account, asset, 0), which normalises to 18dp regardless of the
+// underlying token's decimals -- so only the address changes. Reading the wrong one is worse than
+// reading none: every buyer is then judged against a ledger the trade never touches.
 type fundingChecker interface {
-	CashBalance(ctx context.Context, subaccountID string) (*big.Int, error)
+	QuoteBalance(ctx context.Context, subaccountID string) (*big.Int, error)
 }
 
 // buyerCanFund reports whether the buy side of a prospective fill can settle. It returns the
@@ -112,7 +118,7 @@ func buyerCanFund(
 		return false, nil, nil, err
 	}
 
-	available, err = checker.CashBalance(ctx, buyer.SubaccountID)
+	available, err = checker.QuoteBalance(ctx, buyer.SubaccountID)
 	if err != nil {
 		return false, required, nil, err
 	}
@@ -139,12 +145,14 @@ const (
 	getBalanceSelector = "0x0806e640"
 	// Matching.subAccounts() -> address
 	subAccountsSelector = "0x779e5012"
+	// TradeModule.quoteAsset() -> address
+	quoteAssetSelector = "0xfdf262b7"
 )
 
 type chainFundingChecker struct {
 	rpcURL          string
 	matchingAddress string
-	cashAsset       string
+	quoteAsset      string
 	httpClient      *http.Client
 	ttl             time.Duration
 	now             func() time.Time
@@ -171,14 +179,14 @@ func newFundingChecker(cfg config.Config) fundingChecker {
 		)
 		return nil
 	}
-	if strings.TrimSpace(cfg.ChainRPCURL) == "" || !isHexAddress(cfg.CashAssetAddress) || !isHexAddress(cfg.MatchingAddress) {
+	if strings.TrimSpace(cfg.ChainRPCURL) == "" || !isHexAddress(cfg.QuoteAsset()) || !isHexAddress(cfg.MatchingAddress) {
 		// config.Load refuses to start in production for exactly this, so reaching here means a
 		// dev or test environment. Say so anyway: a silently inert guard is the failure mode this
 		// whole path exists to avoid.
 		slog.Warn(
 			"funding_check_inert",
-			"reason", "CASH_ASSET_ADDRESS, MATCHING_ADDRESS or CHAIN_RPC_URL is unset",
-			"cash_asset_set", isHexAddress(cfg.CashAssetAddress),
+			"reason", "QUOTE_ASSET_ADDRESS (or CASH_ASSET_ADDRESS), MATCHING_ADDRESS or CHAIN_RPC_URL is unset",
+			"quote_asset_set", isHexAddress(cfg.QuoteAsset()),
 			"matching_address_set", isHexAddress(cfg.MatchingAddress),
 			"chain_rpc_set", strings.TrimSpace(cfg.ChainRPCURL) != "",
 			"app_env", cfg.AppEnv,
@@ -188,12 +196,13 @@ func newFundingChecker(cfg config.Config) fundingChecker {
 	}
 	slog.Info(
 		"funding_check_enabled",
-		"cash_asset", strings.ToLower(strings.TrimSpace(cfg.CashAssetAddress)),
+		"quote_asset", strings.ToLower(strings.TrimSpace(cfg.QuoteAsset())),
+		"is_cash_asset", strings.EqualFold(cfg.QuoteAsset(), cfg.CashAssetAddress),
 	)
 	return &chainFundingChecker{
 		rpcURL:          strings.TrimSpace(cfg.ChainRPCURL),
 		matchingAddress: strings.ToLower(strings.TrimSpace(cfg.MatchingAddress)),
-		cashAsset:       strings.ToLower(strings.TrimSpace(cfg.CashAssetAddress)),
+		quoteAsset:      strings.ToLower(strings.TrimSpace(cfg.QuoteAsset())),
 		httpClient:      &http.Client{Timeout: 5 * time.Second},
 		ttl:             2 * time.Second,
 		now:             time.Now,
@@ -201,7 +210,75 @@ func newFundingChecker(cfg config.Config) fundingChecker {
 	}
 }
 
-func (c *chainFundingChecker) CashBalance(ctx context.Context, subaccountID string) (*big.Int, error) {
+// ErrQuoteAssetMismatch means the venue would settle against a different asset than the one it
+// prices against. Fatal on purpose: see verifyQuoteAssetMatchesTradeModule.
+var ErrQuoteAssetMismatch = errors.New("quote asset does not match the trade module")
+
+// verifyQuoteAssetMatchesTradeModule reads TradeModule.quoteAsset() and compares it against the
+// asset this process was configured to price against.
+//
+// TRADE_MODULE_ADDRESS and QUOTE_ASSET_ADDRESS must move together, and until now nothing enforced
+// that -- three files said so in comments and no code read quoteAsset() anywhere. The pairing is
+// not cosmetic: buyerCanFund reads the buyer's balance of the CONFIGURED asset, while settlement
+// debits whatever the module's immutable quoteAsset actually is. Point them at different assets
+// and every buy is judged against a balance that has nothing to do with the one being spent. After
+// a wrapped-quote cutover that is not a corner case -- every account's wrapped balance starts at
+// zero while its cash balance does not, so the check would pass or fail for entirely the wrong
+// reason on every order.
+//
+// A MISMATCH is fatal. Refusing to start is the whole point: a venue that prices against one asset
+// and settles against another should not run.
+//
+// Being UNABLE to check is not fatal. An unreachable RPC at boot says nothing about whether the
+// configuration is right, and crash-looping the matcher over a flaky endpoint would take matching
+// down for a reason unrelated to the fault this guards. That matches the stance of the rest of this
+// file: a misconfigured checker must not silently become a permanent halt on matching.
+func verifyQuoteAssetMatchesTradeModule(ctx context.Context, cfg config.Config) error {
+	quote := strings.ToLower(strings.TrimSpace(cfg.QuoteAsset()))
+	module := strings.ToLower(strings.TrimSpace(cfg.TradeModuleAddress))
+	rpcURL := strings.TrimSpace(cfg.ChainRPCURL)
+
+	if !isHexAddress(quote) || !isHexAddress(module) || rpcURL == "" {
+		slog.Warn(
+			"quote_asset_pairing_unverified",
+			"reason", "TRADE_MODULE_ADDRESS, QUOTE_ASSET_ADDRESS or CHAIN_RPC_URL is unset",
+			"effect", "the configured quote asset was not checked against the module that settles it",
+		)
+		return nil
+	}
+
+	c := &chainFundingChecker{rpcURL: rpcURL, httpClient: &http.Client{Timeout: 5 * time.Second}}
+	raw, err := c.ethCall(ctx, module, quoteAssetSelector)
+	if err != nil {
+		slog.Warn(
+			"quote_asset_pairing_unverified",
+			"reason", "quoteAsset() call failed",
+			"error", err.Error(),
+			"trade_module", module,
+			"effect", "starting anyway; an unreachable RPC says nothing about whether the config is right",
+		)
+		return nil
+	}
+
+	onChain, err := decodeAddressWord(raw)
+	if err != nil {
+		slog.Warn("quote_asset_pairing_unverified", "reason", "quoteAsset() returned undecodable data",
+			"raw", raw, "error", err.Error())
+		return nil
+	}
+
+	if !strings.EqualFold(onChain, quote) {
+		return fmt.Errorf(
+			"%w: QUOTE_ASSET_ADDRESS is %s but TradeModule %s settles in %s",
+			ErrQuoteAssetMismatch, quote, module, onChain,
+		)
+	}
+
+	slog.Info("quote_asset_pairing_verified", "quote_asset", quote, "trade_module", module)
+	return nil
+}
+
+func (c *chainFundingChecker) QuoteBalance(ctx context.Context, subaccountID string) (*big.Int, error) {
 	subaccountID = strings.TrimSpace(subaccountID)
 	if subaccountID == "" {
 		return nil, errors.New("subaccount_id is required")
@@ -220,11 +297,11 @@ func (c *chainFundingChecker) CashBalance(ctx context.Context, subaccountID stri
 	if err != nil {
 		return nil, err
 	}
-	data := getBalanceSelector + accountWord + encodeAddressArg(c.cashAsset) + strings.Repeat("0", 64)
+	data := getBalanceSelector + accountWord + encodeAddressArg(c.quoteAsset) + strings.Repeat("0", 64)
 
 	raw, err := c.ethCall(ctx, subAccounts, data)
 	if err != nil {
-		return nil, fmt.Errorf("read cash balance: %w", err)
+		return nil, fmt.Errorf("read quote balance: %w", err)
 	}
 	balance, err := decodeInt256(raw)
 	if err != nil {

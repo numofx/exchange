@@ -35,6 +35,10 @@ Env (or ~/.numo-feeds.env):
   ALERT_WEBHOOK_URL  Slack/Discord-compatible webhook (optional; logs only if unset)
   SRM_ADDRESS        StandardManager (default: the live Base deployment)
   EXPECTED_NET_SETTLED_CASH  pin for netSettledCash; alert if it moves (unset = not checked)
+  FEE_SUBACCOUNT, FEE_VAULT, FEE_MODULE, FEE_QUOTE_ASSET
+                     the wrapped-quote fee account, its expected owner, the trade module that
+                     must hold a positive allowance on it, and the quote asset. All four
+                     required together, or the check is skipped.
   CANARY_ACCOUNTS    comma-separated subaccount ids (default: 15)
 
 Run every few minutes via systemd timer (see numo-settlement-canary.timer).
@@ -68,6 +72,8 @@ SEL_TOTAL_POSITION = "0xa9578774"    # totalPosition(address)
 SEL_WRAPPED_ASSET = "0xd9a1836a"     # wrappedAsset()
 SEL_DECIMALS = "0x313ce567"          # decimals()
 SEL_SM_FEES = "0xcb5f01da"           # accruedSmFees()
+SEL_OWNER_OF = "0x6352211e"          # ownerOf(uint256)
+SEL_POS_ALLOWANCE = "0x4997e514"     # positiveAssetAllowance(uint256,address,address,address)
 
 # AssetWhitelisted(address,uint256,uint8) -- used to discover which assets to check, so a new
 # market is covered without editing this file.
@@ -231,6 +237,58 @@ def check_wrapper_backing(url: str, srm: str, failures: list, checked: list) -> 
       checked.append(f"wrapper {asset} backed 1:1 ({held / 1e18:.6f})")
 
 
+def check_fee_recipient(url: str, failures: list, checked: list) -> None:
+  """The wrapped-quote fee path, which fails silently and only under load.
+
+  Two ways it breaks after the cutover, neither visible from a balance:
+
+    - The fee subaccount changes owner. setAssetAllowances keys the grant by
+      ownerOf(accountId), so a transfer silently voids it and every fee-bearing fill starts
+      reverting NotEnoughSubIdOrAssetAllowances.
+    - The allowance is spent down or revoked. _spendAbsAllowance decrements on every fill and
+      has no max-value exemption, so a grant that is not type(uint).max is a scheduled outage.
+
+  Skipped unless all four env vars are set: before the cutover the fee subaccount does not
+  exist yet, and a check that invents an account id would be worse than no check.
+  """
+  account = os.environ.get("FEE_SUBACCOUNT", "").strip()
+  vault = os.environ.get("FEE_VAULT", "").strip()
+  module = os.environ.get("FEE_MODULE", "").strip()
+  quote = os.environ.get("FEE_QUOTE_ASSET", "").strip()
+  if not (account and vault and module and quote):
+    return
+
+  sub_accounts = "0x" + call(url, os.environ.get("SRM_ADDRESS", DEFAULT_SRM), "0x779e5012")[26:]
+  account_word = f"{int(account):064x}"
+
+  owner = "0x" + call(url, sub_accounts, SEL_OWNER_OF + account_word)[26:]
+  if owner.lower() != vault.lower():
+    failures.append(
+      f"fee subaccount {account} OWNER CHANGED: {owner}, expected {vault} "
+      "-- the allowance is keyed by owner, so the grant is now void and every fee-bearing fill reverts"
+    )
+    return
+
+  allowance = uint(url, sub_accounts, SEL_POS_ALLOWANCE + account_word + addr_arg(owner) + addr_arg(quote) + addr_arg(module))
+  if allowance == 0:
+    failures.append(
+      f"fee subaccount {account} has NO positive {quote} allowance for module {module} "
+      "-- every fee-bearing fill reverts NotEnoughSubIdOrAssetAllowances"
+    )
+    return
+
+  # A finite grant is a scheduled outage: allowances decrement on every spend with no max-value
+  # exemption. Warn well before it bites rather than at the moment a fill fails.
+  if allowance < (1 << 255):
+    failures.append(
+      f"fee subaccount {account} allowance is finite ({allowance}) and decrements on every fill "
+      "-- it will run out; re-grant type(uint).max"
+    )
+    return
+
+  checked.append(f"fee subaccount {account} vault-owned with an effectively unbounded allowance")
+
+
 def alert(webhook: str | None, msg: str) -> None:
   print(msg, file=sys.stderr)
   if not webhook:
@@ -263,6 +321,8 @@ def self_test() -> None:
     "wrappedAsset()": SEL_WRAPPED_ASSET,
     "decimals()": SEL_DECIMALS,
     "accruedSmFees()": SEL_SM_FEES,
+    "ownerOf(uint256)": SEL_OWNER_OF,
+    "positiveAssetAllowance(uint256,address,address,address)": SEL_POS_ALLOWANCE,
   }.items():
     actual = "0x" + keccak(signature.encode()).hex()[:8]
     assert actual == expected, f"{signature}: hardcoded {expected}, actual {actual}"
@@ -342,6 +402,10 @@ def main() -> int:
     check_wrapper_backing(url, srm, solvency, checked)
   except Exception as exc:
     failures.append(f"wrapper backing check FAILED to run: {describe_revert(exc)}")
+  try:
+    check_fee_recipient(url, solvency, checked)
+  except Exception as exc:
+    failures.append(f"fee recipient check FAILED to run: {describe_revert(exc)}")
 
   # Two different emergencies, deliberately not merged into one message. A halt stops trading
   # and is loud on its own; a backing failure lets trading continue against collateral that is
