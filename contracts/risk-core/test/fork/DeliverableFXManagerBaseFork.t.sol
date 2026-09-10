@@ -56,8 +56,17 @@ contract FORK_TestDeliverableFXManagerBase is Test {
   address internal bob = address(0xbb01);
   address internal charlie = address(0xcc01);
 
+  /// Last block before cash.setWhitelistManager(DFXM, false) landed.
+  uint internal constant PRE_FREEZE_BLOCK = 51109817;
+
   function setUp() public virtual {
-    vm.createSelectFork(vm.envString("BASE_RPC_URL"));
+    // Pinned to the last block before cash.setWhitelistManager(DFXM, false) landed
+    // (tx 0x13e15eca..., block 51109818). These tests exercise DFXM's cash settlement path,
+    // which is frozen at head: every adjustment reverts MW_UnknownManager. Repointing them at
+    // head would mean deleting the only coverage of the deliverable-FX lifecycle, so they keep
+    // the world they were written for. The freeze itself is asserted at head by
+    // test/fork/FreezeDFXMCashFork.t.sol.
+    vm.createSelectFork(vm.envString("BASE_RPC_URL"), PRE_FREEZE_BLOCK);
 
     string memory root = vm.projectRoot();
     string memory coreJson = vm.readFile(string.concat(root, "/deployments/8453/core.json"));

@@ -37,8 +37,24 @@ contract DonateBurnUnbackedFork is Test {
   address constant SUB_ACCOUNTS = 0x7019244E25FA416e6Ca2ed2F3cA25277aef72843;
   uint constant ACCT = 14;
 
+  /// Last block before cash.setWhitelistManager(DFXM, false) landed.
+  uint constant PRE_FREEZE_BLOCK = 51109817;
+
   function setUp() public {
+    // The burn question is about CashAsset's accounting, not about the freeze, so it is asked
+    // in the world where the call was still reachable. At head it reverts MW_UnknownManager
+    // before reaching any of the arithmetic -- asserted separately below.
+    vm.createSelectFork(vm.envString("BASE_RPC_URL"), PRE_FREEZE_BLOCK);
+  }
+
+  /// After the freeze, the burn path is unreachable rather than merely ineffective. Both facts
+  /// matter: unreachable is reversible by the vault, ineffective is not.
+  function testAtHeadTheDonatePathIsFrozenEntirely() public {
     vm.createSelectFork(vm.envString("BASE_RPC_URL"));
+    address owner = ISubAccountsLike(SUB_ACCOUNTS).ownerOf(ACCT);
+    vm.prank(owner);
+    vm.expectRevert(); // MW_UnknownManager
+    ICashLike(CASH).donateBalance(ACCT, type(uint).max);
   }
 
   function testDonateMaxFromTheAccountOwner() public {
