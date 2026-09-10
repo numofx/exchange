@@ -212,7 +212,29 @@ contract TradeModuleWrappedQuoteForkTest is ForkBase {
     (actions[1], sigs[1]) = _sign(makerAcc, moduleAddr, false, maker, makerPk);
   }
 
+  function _buildActionsWithTakerWorstFee(address moduleAddr, uint takerWorstFee)
+    internal
+    view
+    returns (IActionVerifier.Action[] memory actions, bytes[] memory sigs)
+  {
+    actions = new IActionVerifier.Action[](2);
+    sigs = new bytes[](2);
+    (actions[0], sigs[0]) = _signWithWorstFee(takerAcc, moduleAddr, true, taker, takerPk, takerWorstFee);
+    (actions[1], sigs[1]) = _sign(makerAcc, moduleAddr, false, maker, makerPk);
+  }
+
   function _sign(uint accountId, address moduleAddr, bool isBid, address owner, uint pk)
+    internal
+    view
+    returns (IActionVerifier.Action memory action, bytes memory signature)
+  {
+    return _signWithWorstFee(accountId, moduleAddr, isBid, owner, pk, 1e18);
+  }
+
+  /// @dev worstFee is a bound PER UNIT FILLED -- _fillLimitOrder compares fee/amountFilled
+  ///      against it, not the total -- so a "25 bps" ceiling is 0.0025 * enginePrice, not
+  ///      0.0025 of the notional.
+  function _signWithWorstFee(uint accountId, address moduleAddr, bool isBid, address owner, uint pk, uint worstFee)
     internal
     view
     returns (IActionVerifier.Action memory action, bytes memory signature)
@@ -227,7 +249,7 @@ contract TradeModuleWrappedQuoteForkTest is ForkBase {
           subId: 0,
           limitPrice: PRICE,
           desiredAmount: int(SIZE),
-          worstFee: 1e18,
+          worstFee: worstFee,
           recipientId: accountId,
           isBid: isBid
         })
@@ -518,5 +540,92 @@ contract TradeModuleWrappedQuoteForkTest is ForkBase {
       "no cash may move: the whole point is that CashAsset is out of the trade path"
     );
     module = previous;
+  }
+
+  // -----------------------------------------------------------------------------------------
+  // fee schedule: 25 bps taker, 0 maker, charged in the wrapped quote asset to the fee account
+  // -----------------------------------------------------------------------------------------
+
+  /// @dev 25 bps of the quote notional. NOTIONAL is 70 USDC for SIZE cNGN at PRICE, so the fee
+  ///      is 0.175 USDC. The per-unit bound the order signs is 0.0025 * PRICE.
+  uint internal constant TAKER_FEE_25BPS = (NOTIONAL * 25) / 10_000;
+  uint internal constant WORST_FEE_25BPS = (uint(PRICE) * 25) / 10_000;
+  uint internal constant WORST_FEE_5BPS = (uint(PRICE) * 5) / 10_000;
+
+  function testForkTwentyFiveBpsTakerFeeLandsInTheFeeAccount() public checkFork {
+    uint feeBefore = uint(_bal(address(quoteWrapped), feeAcc));
+    int takerBefore = _bal(address(quoteWrapped), takerAcc);
+
+    _fill(TAKER_FEE_25BPS, 0);
+
+    assertEq(
+      uint(_bal(address(quoteWrapped), feeAcc)) - feeBefore,
+      TAKER_FEE_25BPS,
+      "the fee account must receive exactly 25 bps of the quote notional"
+    );
+    // The taker pays notional AND fee out of the same asset, in one batch.
+    assertEq(
+      takerBefore - _bal(address(quoteWrapped), takerAcc),
+      int(NOTIONAL + TAKER_FEE_25BPS),
+      "the taker pays notional plus the fee, both in the wrapped quote asset"
+    );
+  }
+
+  function testForkMakerPaysNoFee() public checkFork {
+    uint feeBefore = uint(_bal(address(quoteWrapped), feeAcc));
+    int makerBefore = _bal(address(quoteWrapped), makerAcc);
+
+    _fill(TAKER_FEE_25BPS, 0);
+
+    assertEq(
+      _bal(address(quoteWrapped), makerAcc) - makerBefore,
+      int(NOTIONAL),
+      "the maker receives the full notional -- no maker fee is deducted"
+    );
+    assertEq(
+      uint(_bal(address(quoteWrapped), feeAcc)) - feeBefore,
+      TAKER_FEE_25BPS,
+      "everything the fee account received came from the taker"
+    );
+  }
+
+  /// The cutover case: an order signed under the old 5 bps ceiling cannot pay 25 bps.
+  /// _fillLimitOrder reverts TM_FeeTooHigh on fee/amountFilled > worstFee.
+  function testForkTakerWorstFeeBelowScheduleRevertsFeeTooHigh() public checkFork {
+    (IActionVerifier.Action[] memory actions, bytes[] memory sigs) =
+      _buildActionsWithTakerWorstFee(address(module), WORST_FEE_5BPS);
+
+    ITradeModule.FillDetails[] memory fills = new ITradeModule.FillDetails[](1);
+    fills[0] = ITradeModule.FillDetails({filledAccount: makerAcc, amountFilled: SIZE, price: PRICE, fee: 0});
+    bytes memory orderData = abi.encode(
+      ITradeModule.OrderData({
+        takerAccount: takerAcc, takerFee: TAKER_FEE_25BPS, fillDetails: fills, managerData: bytes("")
+      })
+    );
+
+    vm.prank(tradeExecutor);
+    vm.expectRevert(ITradeModule.TM_FeeTooHigh.selector);
+    matching.verifyAndMatch(actions, sigs, orderData);
+  }
+
+  /// A ceiling exactly at the schedule settles: the bound reverts on >, not >=. This is why a
+  /// maker signing worstFee 0 is safe against a 0 bps maker fee, and why a taker signing 0 is
+  /// not safe against any non-zero taker fee.
+  function testForkTakerWorstFeeExactlyAtScheduleSettles() public checkFork {
+    (IActionVerifier.Action[] memory actions, bytes[] memory sigs) =
+      _buildActionsWithTakerWorstFee(address(module), WORST_FEE_25BPS);
+
+    ITradeModule.FillDetails[] memory fills = new ITradeModule.FillDetails[](1);
+    fills[0] = ITradeModule.FillDetails({filledAccount: makerAcc, amountFilled: SIZE, price: PRICE, fee: 0});
+    bytes memory orderData = abi.encode(
+      ITradeModule.OrderData({
+        takerAccount: takerAcc, takerFee: TAKER_FEE_25BPS, fillDetails: fills, managerData: bytes("")
+      })
+    );
+
+    uint feeBefore = uint(_bal(address(quoteWrapped), feeAcc));
+    vm.prank(tradeExecutor);
+    matching.verifyAndMatch(actions, sigs, orderData);
+    assertEq(uint(_bal(address(quoteWrapped), feeAcc)) - feeBefore, TAKER_FEE_25BPS);
   }
 }

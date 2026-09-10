@@ -22,6 +22,10 @@ func DefaultRegistry(cfg config.Config) *Registry {
 			BaseAssetSymbol:    "USDC",
 			QuoteAssetSymbol:   "cNGN",
 			TickSize:           "0.000000000000000001",
+			// 25 bps taker, 0 maker. Charged in the trade module's quote asset -- wrapped USDC
+			// since the 2026-09-10 cutover -- and paid to the module's feeRecipient.
+			TakerFeeBps:        25,
+			MakerFeeBps:        0,
 			MinSize:            "0.000001",
 			ContractMultiplier: "1",
 			QuotePrecision:     18,

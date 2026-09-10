@@ -50,6 +50,10 @@ type marketPresentation struct {
 	DisplayLabel       string `json:"display_label,omitempty"`
 	TickSize           string `json:"tick_size,omitempty"`
 	MinSize            string `json:"min_size,omitempty"`
+	// Served without omitempty on purpose: a zero fee is a fact about the market, and a client
+	// that cannot tell "no fee" from "field absent" will invent its own number.
+	TakerFeeBps        int    `json:"taker_fee_bps"`
+	MakerFeeBps        int    `json:"maker_fee_bps"`
 	ContractMultiplier string `json:"contract_multiplier,omitempty"`
 	SettlementNote     string `json:"settlement_note,omitempty"`
 	PricingModel       string `json:"pricing_model,omitempty"`
@@ -977,6 +981,8 @@ func presentMarket(market instruments.Metadata) marketPresentation {
 		DisplayLabel:       market.DisplayLabel,
 		TickSize:           market.TickSize,
 		MinSize:            market.MinSize,
+		TakerFeeBps:        market.TakerFeeBps,
+		MakerFeeBps:        market.MakerFeeBps,
 		ContractMultiplier: market.ContractMultiplier,
 		SettlementNote:     market.SettlementNote,
 		PricingModel:       market.PricingModel,

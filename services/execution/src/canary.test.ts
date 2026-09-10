@@ -69,7 +69,7 @@ const MODULE = '0x44813aD30b2fFC1bB2871Eed9b19F63c8196eD1c';
 const MAXU = (1n << 256n) - 1n;
 
 /** A canary with the fee path configured; overrides break exactly one of its two invariants. */
-function feeCanary(o: { owner?: string; allowance?: bigint } = {}) {
+function feeCanary(o: { owner?: string; allowance?: bigint; accrued?: bigint } = {}) {
   return new SettlementCanary({
     rpcUrl: config.rpcUrl,
     chainId: config.chainId,
@@ -91,6 +91,7 @@ function feeCanary(o: { owner?: string; allowance?: bigint } = {}) {
           case 'subAccounts': return SUBACCOUNTS;
           case 'ownerOf': return o.owner ?? VAULT;
           case 'positiveAssetAllowance': return o.allowance ?? MAXU;
+          case 'getBalance': return o.accrued ?? 0n;
           default: return healthyInvariantRead(a);
         }
       },
@@ -473,6 +474,27 @@ test('a finite fee allowance is caught before it runs out', async () => {
 test('a correctly configured fee path is not a failure', async () => {
   const s = await feeCanary().check();
   assert.equal(s.ok, true, s.invariant_failures.join(' '));
+});
+
+test('the fee account balance is reported, so accrual is visible without an RPC call', async () => {
+  // 0.175 wrapped USDC — 25 bps on a 70 USDC notional, the fee from one live-sized fill.
+  const s = await feeCanary({ accrued: 175_000_000_000_000_000n }).check();
+  assert.equal(s.fee_accrued, '175000000000000000');
+});
+
+test('zero accrual is reported, not treated as a fault', async () => {
+  // A quiet book accrues nothing. Paging on that would train everyone to ignore the canary,
+  // which is the failure mode it exists to avoid.
+  const s = await feeCanary({ accrued: 0n }).check();
+  assert.equal(s.fee_accrued, '0');
+  assert.equal(s.ok, true, s.invariant_failures.join(' '));
+});
+
+test('an unconfigured fee path reports no accrual rather than zero', async () => {
+  // Zero would assert the venue has collected nothing. Null says nobody looked — the difference
+  // matters on the morning somebody asks whether fees are actually live.
+  const s = await invariantCanary().check();
+  assert.equal(s.fee_accrued, null);
 });
 
 test('no fee recipient configured means the fee path is not checked', async () => {
