@@ -41,6 +41,8 @@ const envSchema = z.object({
   SETTLEMENT_CANARY_EXPECTED_NET_SETTLED_CASH: z.string().regex(/^-?\d+$/).optional().or(z.literal('')),
   // The wrapped-quote fee path. All four required together; the account does not exist before
   // the cutover, and a check against an invented id would be worse than no check.
+  // <address>:<delta18dp> pairs. See canary.ts for why these are pinned, not tolerated.
+  SETTLEMENT_CANARY_WRAPPER_EXCEPTIONS: z.string().optional().or(z.literal('')),
   SETTLEMENT_CANARY_FEE_SUBACCOUNT: z.string().regex(/^\d+$/).optional().or(z.literal('')),
   SETTLEMENT_CANARY_FEE_OWNER: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
   SETTLEMENT_CANARY_FEE_MODULE: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
@@ -69,6 +71,7 @@ export type AppConfig = {
     alertWebhookUrl?: string;
     alertRepeatAfterChecks: number;
     expectedNetSettledCash?: bigint;
+    wrapperDeltaExceptions?: Record<string, bigint>;
     feeRecipient?: {
       accountId: bigint;
       expectedOwner: `0x${string}`;
@@ -107,10 +110,26 @@ export function loadConfig(): AppConfig {
           expectedNetSettledCash: parsed.SETTLEMENT_CANARY_EXPECTED_NET_SETTLED_CASH
             ? BigInt(parsed.SETTLEMENT_CANARY_EXPECTED_NET_SETTLED_CASH)
             : undefined,
+          wrapperDeltaExceptions: parseWrapperExceptions(parsed.SETTLEMENT_CANARY_WRAPPER_EXCEPTIONS),
           feeRecipient: parseFeeRecipient(parsed),
         }
       : undefined,
   };
+}
+
+/** Parse "<address>:<delta>,<address>:<delta>" into a lookup keyed by lowercased address. */
+function parseWrapperExceptions(raw?: string): Record<string, bigint> | undefined {
+  const entries = (raw ?? '').split(',').map((e) => e.trim()).filter((e) => e !== '');
+  if (entries.length === 0) return undefined;
+  const out: Record<string, bigint> = {};
+  for (const entry of entries) {
+    const [addr, delta] = entry.split(':');
+    if (!addr || delta === undefined || !/^0x[0-9a-fA-F]{40}$/.test(addr.trim())) {
+      throw new Error(`SETTLEMENT_CANARY_WRAPPER_EXCEPTIONS entry "${entry}" must be <address>:<delta>`);
+    }
+    out[addr.trim().toLowerCase()] = BigInt(delta.trim());
+  }
+  return out;
 }
 
 /**

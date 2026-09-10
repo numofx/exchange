@@ -147,6 +147,18 @@ export type CanaryOptions = {
    * The wrapped-quote fee path. All four required together, or the check is skipped: before the
    * cutover the fee subaccount does not exist, and inventing an id would be worse than no check.
    */
+  /**
+   * Wrappers permitted a standing, pinned delta between held tokens and credited position,
+   * as {lowercased address: expected delta at 18dp}. A listed wrapper is healthy at exactly
+   * that number and alerts if it MOVES, in either direction; anything unlisted must be 1:1.
+   *
+   * Pinned rather than tolerated on purpose. Widening this to "over-backed is fine" would
+   * discard the property that caught tx 0xfcf33112… — 5 USDC transferred straight to the
+   * wrapped-USDC contract during the 2026-09-10 cutover — within minutes of it happening.
+   * That amount is unrecoverable: WrappedERC20Asset exposes only deposit and withdraw, both
+   * strictly 1:1, has no rescue path, and is not behind a proxy.
+   */
+  wrapperDeltaExceptions?: Record<string, bigint>;
   feeRecipient?: {
     accountId: bigint;
     expectedOwner: `0x${string}`;
@@ -344,10 +356,17 @@ export class SettlementCanary {
         }
         const held = to18(await read<bigint>(token, 'balanceOf', [asset]), decimals);
         const credited = await read<bigint>(asset, 'totalPosition', [this.options.manager]);
-        if (held !== credited) {
+        const delta = held - credited;
+        const expected = this.options.wrapperDeltaExceptions?.[asset.toLowerCase()] ?? 0n;
+
+        if (delta !== expected) {
+          const note =
+            expected === 0n
+              ? ' — tokens moved without deposit()/withdraw()'
+              : ` — this wrapper is pinned at ${fmt(expected)}; the delta MOVED by ${fmt(delta - expected)}`;
           out.push(
             `wrapper ${asset} BACKING MISMATCH: holds ${fmt(held)} of ${token} but has credited ` +
-              `${fmt(credited)} (delta ${fmt(held - credited)}) — tokens moved without deposit()/withdraw()`,
+              `${fmt(credited)} (delta ${fmt(delta)})${note}`,
           );
         }
       }
