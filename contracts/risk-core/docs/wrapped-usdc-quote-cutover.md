@@ -91,7 +91,18 @@ is the only way to carry them across.
 
 The runbook therefore needs, in order:
 
-1. Stop accepting new orders, and cancel the resting book. Do not rely on expiry.
+1. Stop accepting new orders, stop the matcher, and drain the book — then **prove** it:
+
+   ```
+   MATCHER_STOPPED=yes services/markets/scripts/assert_book_drained.sh --drain
+   ```
+
+   This is an assertion, not an action. `CancelByOwnerNonce` filters `status = 'active'`, so an
+   order stranded in `matching` is uncancellable by the documented means, invisible to the book
+   and to `expireOrders`, and returned to `active` by `ReleaseStaleMatches` at the next matcher
+   start — as an **old-module** order in a new-module book. The script cancels those too, and
+   refuses to run at all unless the matcher is confirmed stopped, because `matching` is written
+   on the matcher's own crossing path.
 2. `matching.setAllowedModule(newModule, true)` — **without** disallowing the old one.
 3. Repoint `TRADE_MODULE_ADDRESS` on the execution service and redeploy.
 4. Re-sign and repost the book against the new module.
