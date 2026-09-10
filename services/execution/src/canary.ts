@@ -34,6 +34,23 @@ const INVARIANT_ABI = [
     type: 'function', name: 'totalPosition', stateMutability: 'view',
     inputs: [{ name: 'manager', type: 'address' }], outputs: [{ type: 'uint256' }],
   },
+  {
+    type: 'function', name: 'subAccounts', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }],
+  },
+  {
+    type: 'function', name: 'ownerOf', stateMutability: 'view',
+    inputs: [{ name: 'tokenId', type: 'uint256' }], outputs: [{ type: 'address' }],
+  },
+  {
+    type: 'function', name: 'positiveAssetAllowance', stateMutability: 'view',
+    inputs: [
+      { name: 'accountId', type: 'uint256' },
+      { name: 'owner', type: 'address' },
+      { name: 'asset', type: 'address' },
+      { name: 'delegate', type: 'address' },
+    ],
+    outputs: [{ type: 'uint256' }],
+  },
 ] as const;
 
 const ASSET_WHITELISTED_EVENT = {
@@ -126,6 +143,16 @@ export type CanaryOptions = {
    * Undefined disables the pin.
    */
   expectedNetSettledCash?: bigint;
+  /**
+   * The wrapped-quote fee path. All four required together, or the check is skipped: before the
+   * cutover the fee subaccount does not exist, and inventing an id would be worse than no check.
+   */
+  feeRecipient?: {
+    accountId: bigint;
+    expectedOwner: `0x${string}`;
+    module: `0x${string}`;
+    quoteAsset: `0x${string}`;
+  };
   /** Injected in tests; defaults to a viem client over rpcUrl. */
   client?: Pick<PublicClient, 'readContract' | 'getLogs'>;
   log?: (level: 'info' | 'error', message: string, fields: Record<string, unknown>) => void;
@@ -328,6 +355,55 @@ export class SettlementCanary {
       out.push(`wrapper backing check failed to run: ${describe(error)}`);
     }
 
+    out.push(...(await this.checkFeeRecipient(read)));
+    return out;
+  }
+
+  /**
+   * The fee path fails silently and only under load, in two ways a balance cannot show:
+   *
+   *   - The fee subaccount changes owner. setAssetAllowances keys the grant by ownerOf(accountId),
+   *     so a transfer voids it and every fee-bearing fill starts reverting.
+   *   - The allowance is spent down or revoked. _spendAbsAllowance decrements on every fill with no
+   *     max-value exemption, so a grant that is not type(uint).max is a scheduled outage.
+   *
+   * Note the fee account must NOT be in Matching custody: ownerOf would be the Matching contract,
+   * the grant would be keyed to it, and the vault could not grant one at all.
+   */
+  private async checkFeeRecipient(read: <T>(a: `0x${string}`, f: string, args?: readonly unknown[]) => Promise<T>): Promise<string[]> {
+    const fee = this.options.feeRecipient;
+    if (!fee) return [];
+    const out: string[] = [];
+
+    try {
+      const subAccounts = await read<`0x${string}`>(this.options.manager, 'subAccounts');
+      const owner = await read<`0x${string}`>(subAccounts, 'ownerOf', [fee.accountId]);
+
+      if (owner.toLowerCase() !== fee.expectedOwner.toLowerCase()) {
+        out.push(
+          `fee subaccount ${fee.accountId} OWNER CHANGED: ${owner}, expected ${fee.expectedOwner} — ` +
+            'the allowance is keyed by owner, so the grant is void and every fee-bearing fill reverts',
+        );
+        return out;
+      }
+
+      const allowance = await read<bigint>(subAccounts, 'positiveAssetAllowance', [
+        fee.accountId, owner, fee.quoteAsset, fee.module,
+      ]);
+      if (allowance === 0n) {
+        out.push(
+          `fee subaccount ${fee.accountId} has NO positive ${fee.quoteAsset} allowance for module ` +
+            `${fee.module} — every fee-bearing fill reverts NotEnoughSubIdOrAssetAllowances`,
+        );
+      } else if (allowance < 1n << 255n) {
+        out.push(
+          `fee subaccount ${fee.accountId} allowance is finite (${allowance}) and decrements on every ` +
+            'fill — it will run out; re-grant type(uint).max',
+        );
+      }
+    } catch (error) {
+      out.push(`fee recipient check failed to run: ${describe(error)}`);
+    }
     return out;
   }
 

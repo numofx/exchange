@@ -44,10 +44,20 @@ type Config struct {
 	DeribitWSURL        string
 
 	CNGNSpotAssetAddress string
-	// CashAssetAddress is the CashAsset contract. Required to check that a buyer can fund
-	// notional + fee before a pair is crossed; with marginFactor 0 and borrowing disabled the
-	// SRM enforces cash >= 0 on the NET adjustment, so an underfunded buy reverts on chain.
-	CashAssetAddress             string
+	// CashAssetAddress is the CashAsset contract. Kept as the legacy source of QuoteAssetAddress
+	// so an existing deployment that only sets CASH_ASSET_ADDRESS keeps working unchanged.
+	CashAssetAddress string
+	// QuoteAssetAddress is the asset the TradeModule settles the quote leg in, i.e. its
+	// `quoteAsset()`. Required to check that a buyer can fund notional + fee before a pair is
+	// crossed: the funding check reads SubAccounts.getBalance(account, quoteAsset, 0), and reading
+	// the WRONG asset is worse than reading none -- every buyer looks funded or unfunded against a
+	// ledger the trade does not touch.
+	//
+	// This is a separate variable from CASH_ASSET_ADDRESS because the two stop being the same
+	// contract the moment the USDC leg moves to the wrapped USDC asset. Defaults to
+	// CASH_ASSET_ADDRESS when QUOTE_ASSET_ADDRESS is unset, which is what every deployment before
+	// that migration wants.
+	QuoteAssetAddress            string
 	EnforceFundingCheck          bool
 	EnforceActionDataInvariants  bool
 	CancelProtectedOrderPrefixes []string
@@ -92,6 +102,7 @@ func Load() (Config, error) {
 
 		CNGNSpotAssetAddress:         strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_SPOT_ASSET_ADDRESS"))),
 		CashAssetAddress:             strings.ToLower(strings.TrimSpace(os.Getenv("CASH_ASSET_ADDRESS"))),
+		QuoteAssetAddress:            strings.ToLower(strings.TrimSpace(os.Getenv("QUOTE_ASSET_ADDRESS"))),
 		EnforceFundingCheck:          getenvBool("ENFORCE_FUNDING_CHECK", true),
 		EnforceActionDataInvariants:  getenvBool("ENFORCE_ACTION_DATA_INVARIANTS", true),
 		CancelProtectedOrderPrefixes: getenvCSV("CANCEL_PROTECTED_ORDER_ID_PREFIXES", "validation:,smoke:,manual:"),
@@ -131,6 +142,9 @@ func Load() (Config, error) {
 	if err := cfg.validateFundingCheck(); err != nil {
 		return Config{}, err
 	}
+	if err := cfg.validateTradeModule(); err != nil {
+		return Config{}, err
+	}
 
 	return cfg, nil
 }
@@ -164,8 +178,8 @@ func (c Config) validateFundingCheck() error {
 	}
 
 	var missing []string
-	if !isConfiguredAddress(c.CashAssetAddress) {
-		missing = append(missing, "CASH_ASSET_ADDRESS")
+	if !isConfiguredAddress(c.QuoteAsset()) {
+		missing = append(missing, "QUOTE_ASSET_ADDRESS (or CASH_ASSET_ADDRESS)")
 	}
 	if !isConfiguredAddress(c.MatchingAddress) {
 		missing = append(missing, "MATCHING_ADDRESS")
@@ -182,6 +196,41 @@ func (c Config) validateFundingCheck() error {
 			"without them a buyer short of notional + fee is only caught when the trade reverts on chain. "+
 			"Set them, or set ENFORCE_FUNDING_CHECK=false to run without the check deliberately",
 		c.AppEnv, strings.Join(missing, ", "),
+	)
+}
+
+// QuoteAsset is the asset the configured TradeModule settles the quote leg in.
+//
+// QUOTE_ASSET_ADDRESS falls back to CASH_ASSET_ADDRESS so a deployment predating the wrapped-quote
+// migration needs no new variable and keeps reading the same contract it always did. Once the
+// quote leg moves off the settlement ledger the two are different contracts, and
+// QUOTE_ASSET_ADDRESS is the one that must be right -- the funding check reads it, and reading the
+// cash ledger for a wrapped-quote module judges every buyer against balances the trade does not
+// touch.
+//
+// Resolved here rather than mutated into the struct in Load so the fallback holds for a Config
+// built any way, including the struct literals in tests.
+func (c Config) QuoteAsset() string {
+	if strings.TrimSpace(c.QuoteAssetAddress) != "" {
+		return c.QuoteAssetAddress
+	}
+	return c.CashAssetAddress
+}
+
+// validateTradeModule refuses to start in production without TRADE_MODULE_ADDRESS.
+//
+// The variable used to be loaded and never read, which made it look as though the Go service
+// enforced a module allowlist when the only enforcement was in execution-service. It is now what
+// validateActionModule pins every submitted order to, so leaving it unset silently reopens the
+// book to orders naming any module -- including the one this venue is migrating away from.
+func (c Config) validateTradeModule() error {
+	if !c.IsProduction() || isConfiguredAddress(c.TradeModuleAddress) {
+		return nil
+	}
+	return fmt.Errorf(
+		"APP_ENV=%s requires TRADE_MODULE_ADDRESS; without it orders naming any trade module are "+
+			"accepted and rested, and a cross-module pair is only rejected after it has crossed",
+		c.AppEnv,
 	)
 }
 

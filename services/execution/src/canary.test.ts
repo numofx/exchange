@@ -63,6 +63,40 @@ const CASH = '0x6B232A2155Bd0C9bf741dB4cf8E7e8A0176A6fc6';
 const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const WRAPPER = '0x9D806fD040a719D27a8E5E77dc5aE0ED1e089493';
 const CNGN = '0x46C85152bFe9f96829aA94755D9f915F9B10EF5F';
+const SUBACCOUNTS = '0x7019244E25FA416e6Ca2ed2F3cA25277aef72843';
+const VAULT = '0x1dcA42ab54Bd3862853A821F84B29BF65245F435';
+const MODULE = '0x44813aD30b2fFC1bB2871Eed9b19F63c8196eD1c';
+const MAXU = (1n << 256n) - 1n;
+
+/** A canary with the fee path configured; overrides break exactly one of its two invariants. */
+function feeCanary(o: { owner?: string; allowance?: bigint } = {}) {
+  return new SettlementCanary({
+    rpcUrl: config.rpcUrl,
+    chainId: config.chainId,
+    manager: MANAGER,
+    accountIds: [15],
+    intervalMs: 60_000,
+    announceOnStart: false,
+    feeRecipient: {
+      accountId: 99n,
+      expectedOwner: VAULT as `0x\${string}`,
+      module: MODULE as `0x\${string}`,
+      quoteAsset: WRAPPER as `0x\${string}`,
+    },
+    client: {
+      getLogs: async () => [],
+      readContract: async (a: { address: string; functionName: string }) => {
+        switch (a.functionName) {
+          case 'getMargin': return 0n;
+          case 'subAccounts': return SUBACCOUNTS;
+          case 'ownerOf': return o.owner ?? VAULT;
+          case 'positiveAssetAllowance': return o.allowance ?? MAXU;
+          default: return healthyInvariantRead(a);
+        }
+      },
+    } as never,
+  });
+}
 
 /** A chain where every invariant holds, overridable per-call to break exactly one of them. */
 function invariantCanary(overrides: Record<string, bigint> = {}, wrappers = [WRAPPER]) {
@@ -411,6 +445,39 @@ test('netSettledCash moving off its pin is caught', async () => {
 test('no pin configured means netSettledCash is not checked at all', async () => {
   const snapshot = await invariantCanary({ cashSettled: 99_999n }).check();
   assert.equal(snapshot.ok, true, snapshot.invariant_failures.join(' '));
+});
+
+// The fee subaccount changing owner voids the grant silently: setAssetAllowances keys it by
+// ownerOf(accountId), so a transfer makes every fee-bearing fill revert with nothing in any
+// balance to show why.
+test('a fee subaccount that changed owner is caught', async () => {
+  const s = await feeCanary({ owner: '0x000000000000000000000000000000000000dEaD' }).check();
+  assert.equal(s.ok, false);
+  assert.match(s.invariant_failures.join(' '), /OWNER CHANGED/);
+});
+
+test('a missing fee allowance is caught', async () => {
+  const s = await feeCanary({ allowance: 0n }).check();
+  assert.equal(s.ok, false);
+  assert.match(s.invariant_failures.join(' '), /NO positive/);
+});
+
+// Allowances decrement on every spend with no max-value exemption, so a finite grant is a
+// scheduled outage rather than a smaller version of an unbounded one.
+test('a finite fee allowance is caught before it runs out', async () => {
+  const s = await feeCanary({ allowance: 1_000n }).check();
+  assert.equal(s.ok, false);
+  assert.match(s.invariant_failures.join(' '), /finite/);
+});
+
+test('a correctly configured fee path is not a failure', async () => {
+  const s = await feeCanary().check();
+  assert.equal(s.ok, true, s.invariant_failures.join(' '));
+});
+
+test('no fee recipient configured means the fee path is not checked', async () => {
+  const s = await invariantCanary().check();
+  assert.equal(s.ok, true, s.invariant_failures.join(' '));
 });
 
 test('/healthz reports the canary as disabled when none is wired', async () => {
