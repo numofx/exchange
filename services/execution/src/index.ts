@@ -59,6 +59,7 @@ const canary = config.settlementCanary
       intervalMs: config.settlementCanary.intervalMs,
       alertWebhookUrl: config.settlementCanary.alertWebhookUrl,
       alertRepeatAfterChecks: config.settlementCanary.alertRepeatAfterChecks,
+      expectedNetSettledCash: config.settlementCanary.expectedNetSettledCash,
       log: (level, message, fields) => {
         process.stdout.write(`${JSON.stringify({ level, msg: message, ...fields })}\n`);
       },
