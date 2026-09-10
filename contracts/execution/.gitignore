@@ -29,5 +29,25 @@ deployments/31337/*
 
 verification/
 coverage/
-deployments/
+
+# Deployment records. Everything under deployments/ is generated and ignored, EXCEPT the mainnet
+# records of what is actually deployed: they describe live contracts and the vault actions taken
+# against them, they exist nowhere else, and a machine that loses one loses the only copy.
+#
+# This used to be a blanket `deployments/`, with matching.json and fx/fxUSDC.json force-added past
+# it. That worked, but silently, so the next artifact -- the wrapped-quote module's own record and
+# its vault action digests -- was simply left behind. Naming the exception means a new mainnet
+# record is committed by default rather than by remembering `git add -f`.
+#
+# The rules must be written this way: a trailing-slash `deployments/` excludes the DIRECTORY, and
+# git will not descend into an excluded directory, so nothing inside it can be re-included no
+# matter how many `!` lines follow. Ignoring the CONTENTS (`deployments/*`) instead leaves the
+# directory traversable, and each level below has to be re-included before the one under it.
+deployments/*
+!deployments/31337/
+!deployments/8453/
+deployments/8453/*
+!deployments/8453/matching.json
+!deployments/8453/WRAPPED_QUOTE_*.json
+!deployments/8453/fx/
 *.bak
