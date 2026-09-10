@@ -337,7 +337,16 @@ resource "aws_ecs_task_definition" "market_maker" {
       # no cash movement on any account. Subaccount 15 is two-sided for the first time --
       # 5000 cNGN and ~3 wrapped USDC -- because the quote leg is the wrapper rather than
       # cash the maker could see but never spend.
-      { name = "MM_OPERATOR_MODE", value = "normal" },
+      # Paused 2026-09-10 to drain the book for the fee cutover. Pause CANCELS every resting
+      # order and idles (execution/bot.go honours it on startup as well as in RunCycle), which is
+      # what makes it the drain: the orders on the book were signed with worstFee 0 and would
+      # revert TM_FeeTooHigh once the 25 bps schedule is live.
+      #
+      # It is also the restart. The bot reads /v1/markets once at construction and caches the
+      # MarketSpec, so a process that started before the schedule existed keeps signing worstFee 0
+      # no matter what the API later says. Unpausing after markets-service ships the schedule is
+      # what makes it read taker_fee_bps at all.
+      { name = "MM_OPERATOR_MODE", value = "pause" },
       { name = "MM_DRY_RUN", value = "false" },
 
       { name = "MM_MARKET_SYMBOL", value = "USDCcNGN-SPOT" },
