@@ -1,0 +1,14 @@
+# Every 5 minutes. The failure this catches is total -- nothing settles at all -- so the
+# cost of an hour's delay is an hour of silently failing trades, unlike the gas-balance
+# check where the whole point is days of lead time. Short interval, cheap check: four
+# eth_calls against an RPC that is already serving the venue.
+[Unit]
+Description=Numo settlement canary every 5min
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
