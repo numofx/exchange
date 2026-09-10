@@ -145,6 +145,8 @@ const (
 	getBalanceSelector = "0x0806e640"
 	// Matching.subAccounts() -> address
 	subAccountsSelector = "0x779e5012"
+	// TradeModule.quoteAsset() -> address
+	quoteAssetSelector = "0xfdf262b7"
 )
 
 type chainFundingChecker struct {
@@ -206,6 +208,74 @@ func newFundingChecker(cfg config.Config) fundingChecker {
 		now:             time.Now,
 		cache:           map[string]cachedBalance{},
 	}
+}
+
+// ErrQuoteAssetMismatch means the venue would settle against a different asset than the one it
+// prices against. Fatal on purpose: see verifyQuoteAssetMatchesTradeModule.
+var ErrQuoteAssetMismatch = errors.New("quote asset does not match the trade module")
+
+// verifyQuoteAssetMatchesTradeModule reads TradeModule.quoteAsset() and compares it against the
+// asset this process was configured to price against.
+//
+// TRADE_MODULE_ADDRESS and QUOTE_ASSET_ADDRESS must move together, and until now nothing enforced
+// that -- three files said so in comments and no code read quoteAsset() anywhere. The pairing is
+// not cosmetic: buyerCanFund reads the buyer's balance of the CONFIGURED asset, while settlement
+// debits whatever the module's immutable quoteAsset actually is. Point them at different assets
+// and every buy is judged against a balance that has nothing to do with the one being spent. After
+// a wrapped-quote cutover that is not a corner case -- every account's wrapped balance starts at
+// zero while its cash balance does not, so the check would pass or fail for entirely the wrong
+// reason on every order.
+//
+// A MISMATCH is fatal. Refusing to start is the whole point: a venue that prices against one asset
+// and settles against another should not run.
+//
+// Being UNABLE to check is not fatal. An unreachable RPC at boot says nothing about whether the
+// configuration is right, and crash-looping the matcher over a flaky endpoint would take matching
+// down for a reason unrelated to the fault this guards. That matches the stance of the rest of this
+// file: a misconfigured checker must not silently become a permanent halt on matching.
+func verifyQuoteAssetMatchesTradeModule(ctx context.Context, cfg config.Config) error {
+	quote := strings.ToLower(strings.TrimSpace(cfg.QuoteAsset()))
+	module := strings.ToLower(strings.TrimSpace(cfg.TradeModuleAddress))
+	rpcURL := strings.TrimSpace(cfg.ChainRPCURL)
+
+	if !isHexAddress(quote) || !isHexAddress(module) || rpcURL == "" {
+		slog.Warn(
+			"quote_asset_pairing_unverified",
+			"reason", "TRADE_MODULE_ADDRESS, QUOTE_ASSET_ADDRESS or CHAIN_RPC_URL is unset",
+			"effect", "the configured quote asset was not checked against the module that settles it",
+		)
+		return nil
+	}
+
+	c := &chainFundingChecker{rpcURL: rpcURL, httpClient: &http.Client{Timeout: 5 * time.Second}}
+	raw, err := c.ethCall(ctx, module, quoteAssetSelector)
+	if err != nil {
+		slog.Warn(
+			"quote_asset_pairing_unverified",
+			"reason", "quoteAsset() call failed",
+			"error", err.Error(),
+			"trade_module", module,
+			"effect", "starting anyway; an unreachable RPC says nothing about whether the config is right",
+		)
+		return nil
+	}
+
+	onChain, err := decodeAddressWord(raw)
+	if err != nil {
+		slog.Warn("quote_asset_pairing_unverified", "reason", "quoteAsset() returned undecodable data",
+			"raw", raw, "error", err.Error())
+		return nil
+	}
+
+	if !strings.EqualFold(onChain, quote) {
+		return fmt.Errorf(
+			"%w: QUOTE_ASSET_ADDRESS is %s but TradeModule %s settles in %s",
+			ErrQuoteAssetMismatch, quote, module, onChain,
+		)
+	}
+
+	slog.Info("quote_asset_pairing_verified", "quote_asset", quote, "trade_module", module)
+	return nil
 }
 
 func (c *chainFundingChecker) QuoteBalance(ctx context.Context, subaccountID string) (*big.Int, error) {

@@ -38,6 +38,12 @@ func NewEngine(cfg config.Config, pool *pgxpool.Pool) *Engine {
 }
 
 func (e *Engine) Run(ctx context.Context) error {
+	// Before the first tick, not inside it: a venue that prices against one asset and settles
+	// against another must not start, and finding that out on the first fill is too late.
+	if err := verifyQuoteAssetMatchesTradeModule(ctx, e.cfg); err != nil {
+		return err
+	}
+
 	ticker := time.NewTicker(e.cfg.MatcherPollInterval)
 	defer ticker.Stop()
 

@@ -41,7 +41,7 @@ arbitrary `STABLE_STATIC_FEED` with no code check, no `getSpot()` probe, and no 
 `CNGN_SPOT_STATIC_FEEDS.json`. `setOraclesForMarket(1, <garbage>, 0, 0)` bricks the margin path for
 every account holding wrapped USDC — post-cutover, every account.
 
-### 3. "Drain the book" is not verifiable, and one state cannot be drained
+### 3. ~~"Drain the book" is not verifiable~~ — FIXED
 
 `CancelByOwnerNonce` filters `status = 'active'`. An order in `matching` — which the engine leaves
 deliberately on an unknown outcome — survives the drain, and `ReleaseStaleMatches` runs only at
@@ -54,13 +54,23 @@ The whole cutover rests on this step and it is written as an action, not an asse
 select count(*) from active_orders where status in ('active','matching');  -- must be 0
 ```
 
-### 4. The two module env vars are coupled only by prose
+**Fixed** by `services/markets/scripts/assert_book_drained.sh`, which asserts that count, lists
+what is still open when it is non-zero, and with `--drain` cancels `matching` rows as well —
+refusing unless `MATCHER_STOPPED=yes`, since that is the step that gets skipped. Verified against
+a real Postgres across all four paths: empty, open, refused, drained.
+
+### 4. ~~The two module env vars are coupled only by prose~~ — FIXED
 
 `TRADE_MODULE_ADDRESS` and `QUOTE_ASSET_ADDRESS` must move together; three files say so and nothing
 enforces it. Nothing anywhere reads `TradeModule.quoteAsset()`. The markets service already holds
-`ChainRPCURL` and already does raw `eth_call`, so one call in `newFundingChecker` compared against
+`ChainRPCURL` and already does raw `eth_call`, so one call compared against
 `cfg.QuoteAsset()` turns "an operator set two variables consistently" into "the process refuses to
-start". Post-cutover the wrong pairing mis-judges *every* buyer, because every account's
+start".
+
+**Fixed** by `verifyQuoteAssetMatchesTradeModule`, called from `Engine.Run` before the first tick.
+A mismatch is fatal and names both addresses; an unreachable RPC is not, because that says nothing
+about whether the config is right and crash-looping the matcher on a flaky endpoint would take
+matching down for an unrelated reason. Post-cutover the wrong pairing mis-judges *every* buyer, because every account's
 wrapped-USDC balance is zero while its cash balance is not.
 
 ## Should fix
