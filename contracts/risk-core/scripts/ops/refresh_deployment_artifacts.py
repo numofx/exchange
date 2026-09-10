@@ -299,10 +299,16 @@ def self_test() -> None:
 def main() -> int:
   ap = argparse.ArgumentParser(description="Re-derive core deployment addresses from chain")
   ap.add_argument("--write", action="store_true", help="apply the derivable fixes in place")
+  ap.add_argument("--self-test", action="store_true",
+                  help="check the hardcoded selectors and the doc markers offline; no network")
   args = ap.parse_args()
 
   sys.path.insert(0, str(Path(__file__).resolve().parent))
   self_test()
+  if args.self_test:
+    print(f"self-test ok: {len(SELECTORS)} selectors match their signatures, "
+          "checksummer matches the EIP-55 vector, generated-block markers balanced")
+    return 0
 
   url = os.environ.get("RPC_URL") or os.environ.get("BASE_RPC_URL", "")
   if not url:
