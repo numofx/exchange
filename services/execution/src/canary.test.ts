@@ -33,7 +33,10 @@ function canaryWith(readContract: () => Promise<unknown>, accountIds = [15]) {
 
 type Sent = { url: string; text: string };
 
-function alertingCanary(healthy: () => boolean, opts: { repeatAfter?: number; failPost?: boolean } = {}) {
+function alertingCanary(
+  healthy: () => boolean,
+  opts: { repeatAfter?: number; failPost?: boolean; announceOnStart?: boolean } = {},
+) {
   const sent: Sent[] = [];
   const canary = new SettlementCanary({
     rpcUrl: config.rpcUrl,
@@ -43,6 +46,7 @@ function alertingCanary(healthy: () => boolean, opts: { repeatAfter?: number; fa
     intervalMs: 60_000,
     alertWebhookUrl: 'https://hooks.example.invalid/abc',
     alertRepeatAfterChecks: opts.repeatAfter ?? 30,
+    announceOnStart: opts.announceOnStart ?? false,
     client: {
       readContract: async () => {
         if (!healthy()) throw new Error('reverted: BLF_DataTooOld()');
@@ -187,6 +191,39 @@ test('no webhook configured means no alert attempt and no crash', async () => {
   });
   const snapshot = await canary.check();
   assert.equal(snapshot.ok, false);
+});
+
+// Found by a production drill: a canary failure fixed by a redeploy produced no recovery
+// message at all, because recovery is a within-process transition and the replacement process
+// starts with ok = null. The operator saw HALTED then silence. Since redeploying IS the usual
+// repair, that gap swallowed the common case.
+test('a healthy start-up announces, so a redeploy-shaped recovery is never silent', async () => {
+  const { canary, sent } = alertingCanary(() => true, { announceOnStart: true });
+
+  await canary.check();
+
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!.text, /CANARY STARTED/);
+  assert.match(sent[0]!.text, /subaccount\(s\) 15/);
+});
+
+test('start-up announcement happens once, not on every subsequent healthy check', async () => {
+  const { canary, sent } = alertingCanary(() => true, { announceOnStart: true });
+
+  await canary.check();
+  await canary.check();
+  await canary.check();
+
+  assert.equal(sent.length, 1);
+});
+
+test('a failing start-up sends the halt alert, not the start-up notice', async () => {
+  const { canary, sent } = alertingCanary(() => false, { announceOnStart: true });
+
+  await canary.check();
+
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!.text, /SETTLEMENT HALTED/);
 });
 
 test('/healthz reports the canary as disabled when none is wired', async () => {
