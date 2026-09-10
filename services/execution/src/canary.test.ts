@@ -480,6 +480,40 @@ test('no fee recipient configured means the fee path is not checked', async () =
   assert.equal(s.ok, true, s.invariant_failures.join(' '));
 });
 
+// A pinned exception must keep the invariant's teeth: healthy at exactly the pinned delta,
+// red the moment it moves in either direction. See tx 0xfcf33112… — 5 USDC transferred straight
+// to the wrapped-USDC contract, unrecoverable, so the delta is permanent and has to be pinned
+// rather than tolerated.
+test('a wrapper at exactly its pinned delta is healthy', async () => {
+  const canary = invariantCanary({ wrapperHeld: 5_250_000_000n });
+  (canary as unknown as { options: Record<string, unknown> }).options.wrapperDeltaExceptions = {
+    [WRAPPER.toLowerCase()]: 250_000_000_000_000_000_000n,
+  };
+  const s = await canary.check();
+  assert.equal(s.ok, true, s.invariant_failures.join(' '));
+});
+
+test('a pinned wrapper that moves off its delta is caught', async () => {
+  const canary = invariantCanary({ wrapperHeld: 5_250_000_001n });
+  (canary as unknown as { options: Record<string, unknown> }).options.wrapperDeltaExceptions = {
+    [WRAPPER.toLowerCase()]: 250_000_000_000_000_000_000n,
+  };
+  const s = await canary.check();
+  assert.equal(s.ok, false);
+  assert.match(s.invariant_failures.join(' '), /pinned at/);
+  assert.match(s.invariant_failures.join(' '), /MOVED/);
+});
+
+test('an exception for one wrapper does not excuse another', async () => {
+  const canary = invariantCanary({ wrapperHeld: 5_250_000_000n });
+  (canary as unknown as { options: Record<string, unknown> }).options.wrapperDeltaExceptions = {
+    '0x000000000000000000000000000000000000dead': 250_000_000_000_000_000_000n,
+  };
+  const s = await canary.check();
+  assert.equal(s.ok, false);
+  assert.match(s.invariant_failures.join(' '), /without deposit\(\)/);
+});
+
 test('/healthz reports the canary as disabled when none is wired', async () => {
   const app = buildApp({
     config,

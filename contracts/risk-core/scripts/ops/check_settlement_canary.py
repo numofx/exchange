@@ -35,6 +35,11 @@ Env (or ~/.numo-feeds.env):
   ALERT_WEBHOOK_URL  Slack/Discord-compatible webhook (optional; logs only if unset)
   SRM_ADDRESS        StandardManager (default: the live Base deployment)
   EXPECTED_NET_SETTLED_CASH  pin for netSettledCash; alert if it moves (unset = not checked)
+  WRAPPER_DELTA_EXCEPTIONS
+                     comma-separated <wrapperAddress>:<expectedDelta18dp> pairs. A wrapper listed
+                     here is healthy at exactly that delta and alerts if it MOVES, in either
+                     direction. Unlisted wrappers must be exactly 1:1. See the exceptions block
+                     below for why one exists and why it is pinned rather than tolerated.
   FEE_SUBACCOUNT, FEE_VAULT, FEE_MODULE, FEE_QUOTE_ASSET
                      the wrapped-quote fee account, its expected owner, the trade module that
                      must hold a positive allowance on it, and the quote asset. All four
@@ -201,6 +206,45 @@ def check_cash_backing(url: str, srm: str, failures: list, checked: list) -> Non
     )
 
 
+# ---------------------------------------------------------------------------------------------
+# STANDING EXCEPTION - wrapped USDC, 2026-09-10
+#
+#   0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84 permanently holds 5.000000 USDC more than it has
+#   credited.
+#
+# Cause: tx 0xfcf33112414f44cc53c493e28da4ec57cde8d029ac3920144aceab23dbe5656b, block 51125714.
+# A plain ERC20 transfer of 5 USDC straight to the wrapper during the wrapped-quote cutover,
+# sent through MPCVault's "Send USDC" flow instead of a Custom transaction. Send builds
+# transfer(to, amount) and has nowhere to put calldata, so the intended deposit(15, 5000000)
+# never happened: the tokens arrived, no position was credited, and the ERC20 allowance was
+# left unspent -- which is how we knew within minutes that it was a transfer and not a deposit.
+#
+# RECOVERY: none. WrappedERC20Asset exposes exactly two external functions. deposit() always
+# transfers in and credits the same amount; withdraw() requires msg.sender to own an account and
+# reverts WERC_CannotBeNegative if the debit would take that account below zero. There is no
+# rescue, skim or sweep, no owner-only path, and the contract is not behind a proxy -- both
+# EIP-1967 slots read zero -- so the code cannot change. Nobody can withdraw these tokens,
+# including the vault. They are inert over-collateral: every legitimate holder can still
+# withdraw exactly what they deposited, and this 5 simply sits behind them.
+#
+# WHY PINNED RATHER THAN TOLERATED: the invariant keeps its teeth. Any NEW divergence moves the
+# delta off 5e18 and fires immediately, in either direction. Widening the check to "over-backed
+# is fine" would have thrown away the property that caught this within minutes of it happening.
+# ---------------------------------------------------------------------------------------------
+
+
+def wrapper_exceptions() -> dict:
+  """Parse WRAPPER_DELTA_EXCEPTIONS into {lowercased address: expected delta at 18dp}."""
+  raw = os.environ.get("WRAPPER_DELTA_EXCEPTIONS", "").strip()
+  out = {}
+  for entry in (e.strip() for e in raw.split(",") if e.strip()):
+    addr, _, delta = entry.partition(":")
+    if not delta:
+      raise SystemExit(f"WRAPPER_DELTA_EXCEPTIONS entry {entry!r} must be <address>:<delta>")
+    out[addr.strip().lower()] = int(delta)
+  return out
+
+
 def check_wrapper_backing(url: str, srm: str, failures: list, checked: list) -> None:
   """A WrappedERC20Asset's real token balance must equal the position it has credited.
 
@@ -210,6 +254,7 @@ def check_wrapper_backing(url: str, srm: str, failures: list, checked: list) -> 
   holding a position makes the check go RED rather than silently pass, which is the safe
   direction to fail in.
   """
+  exceptions = wrapper_exceptions()
   logs = rpc(url, "eth_getLogs", [{
     "fromBlock": "0x0", "toBlock": "latest", "address": srm, "topics": [TOPIC_ASSET_WHITELISTED],
   }])
@@ -227,11 +272,23 @@ def check_wrapper_backing(url: str, srm: str, failures: list, checked: list) -> 
 
     held = to18(uint(url, token, SEL_BALANCE_OF + addr_arg(asset)), decimals)
     credited = uint(url, asset, SEL_TOTAL_POSITION + addr_arg(srm))
-    if held != credited:
+    delta = held - credited
+    expected = exceptions.get(asset.lower(), 0)
+
+    if delta != expected:
+      note = (
+        " -- tokens moved without deposit()/withdraw()" if expected == 0
+        else f" -- this wrapper is pinned at {expected / 1e18:+.6f}; the delta MOVED by "
+             f"{(delta - expected) / 1e18:+.6f}"
+      )
       failures.append(
         f"wrapper {asset} BACKING MISMATCH: holds {held / 1e18:.6f} of {token} but has "
-        f"credited {credited / 1e18:.6f} (delta {(held - credited) / 1e18:+.6f}) "
-        "-- tokens moved without deposit()/withdraw()"
+        f"credited {credited / 1e18:.6f} (delta {delta / 1e18:+.6f}){note}"
+      )
+    elif expected:
+      checked.append(
+        f"wrapper {asset} backed with a pinned {expected / 1e18:+.6f} exception "
+        f"({held / 1e18:.6f} held / {credited / 1e18:.6f} credited)"
       )
     else:
       checked.append(f"wrapper {asset} backed 1:1 ({held / 1e18:.6f})")

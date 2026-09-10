@@ -17,3 +17,17 @@ Environment=AWS_REGION=us-east-1
 # Point this at subaccounts that actually hold positions. An empty account makes the manager
 # read no feed, so getMargin passes while proving nothing.
 Environment=CANARY_ACCOUNTS=15
+
+# Pinned values, mirroring infra/aws/ecs.tf. Both are recorded here rather than only on the box:
+# the first version of this unit carried neither, because they were applied by hand over SSM, and
+# a later git pull on the ops box would have silently reverted them.
+#
+# netSettledCash: non-zero and unretirable. donateBalance burns against totalCash, which already
+# excludes it, so a max donate from the account owner burns exactly 0. Alert on MOVEMENT.
+Environment=EXPECTED_NET_SETTLED_CASH=13682574719999999999990057939082285597678
+# Standing exception, 2026-09-10: wrapped USDC permanently holds 5.000000 more than it credited,
+# from tx 0xfcf33112414f44cc53c493e28da4ec57cde8d029ac3920144aceab23dbe5656b (block 51125714) --
+# an ERC20 transfer sent via MPCVault "Send USDC" instead of a deposit() Custom transaction.
+# Unrecoverable: WrappedERC20Asset exposes only deposit and withdraw, both strictly 1:1, has no
+# rescue path, and is not behind a proxy. Pinned so any NEW divergence still fires.
+Environment=WRAPPER_DELTA_EXCEPTIONS=0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84:5000000000000000000
