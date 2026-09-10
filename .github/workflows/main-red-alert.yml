@@ -1,0 +1,37 @@
+# .github/workflows/main-red-alert.yml
+# CI already re-runs on every push to main, and on 2026-09-10 it correctly went red three
+# minutes after a merge: a PR validated against pre-freeze chain state landed into a
+# post-freeze world. The gap was not detection, it was that nobody was told. main stayed
+# broken until someone happened to run the suite locally.
+#
+# This says so, in the same Slack channel the venue's other alerts use. It fires only for
+# main, only on failure, and no-ops when the webhook secret is absent so a fork or a repo
+# without it is not a permanent red X.
+name: main-red-alert
+on:
+  workflow_run:
+    workflows: [contracts-risk-core, contracts-execution, services-markets, services-execution, abis-drift, infra]
+    types: [completed]
+    branches: [main]
+jobs:
+  notify:
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - name: post to slack
+        env:
+          WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          NAME: ${{ github.event.workflow_run.name }}
+          URL: ${{ github.event.workflow_run.html_url }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          TITLE: ${{ github.event.workflow_run.head_commit.message }}
+        run: |
+          if [ -z "${WEBHOOK:-}" ]; then
+            echo "::warning::SLACK_WEBHOOK_URL is not set; main is red and nobody is being told."
+            exit 0
+          fi
+          TEXT=$(printf 'NUMO MAIN IS RED\n%s failed on main.\n\ncommit %s\n%s\n\n%s' \
+                 "$NAME" "${SHA:0:12}" "$(printf '%s' "$TITLE" | head -1)" "$URL")
+          jq -n --arg t "$TEXT" '{text:$t, content:$t}' \
+            | curl -sS -X POST -H 'Content-Type: application/json' -d @- "$WEBHOOK" >/dev/null
+          echo "alerted"
