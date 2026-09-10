@@ -10,7 +10,7 @@
 # place recreates the problem this script was written to remove.
 #
 #   ./scripts/verify.sh              # everything
-#   ./scripts/verify.sh risk-core    # one section: risk-core | execution | markets | node | abis
+#   ./scripts/verify.sh risk-core    # one section: risk-core | execution | markets | node | abis | infra
 #
 # BASE_RPC_URL is required. CI supplies it from secrets, and the fork suites fail in setUp
 # without it — which is the same divergence in the other direction.
@@ -66,6 +66,22 @@ step node . "build @numo/abis" pnpm --filter @numo/abis build
 step node . "matching-executor check" pnpm --filter matching-executor run check
 step node . "matching-executor build" pnpm --filter matching-executor run build
 step node . "matching-executor test" pnpm --filter matching-executor test
+
+# ---- infra.yml -------------------------------------------------------------------------
+# -backend=false matches CI: the real backend is S3 and validate does not need it. Skipped
+# rather than failed when terraform is absent, because it is not required to work on the
+# services and a hard failure here would train people to ignore this script.
+infra_checks() {
+  if ! command -v terraform >/dev/null 2>&1; then
+    echo "terraform not installed; skipping (CI still runs it)" >&2
+    return 0
+  fi
+  ( cd "$ROOT/infra/aws" \
+    && terraform fmt -check -diff \
+    && terraform init -backend=false -input=false >/dev/null \
+    && terraform validate )
+}
+step infra . "terraform fmt + validate" infra_checks
 
 # ---- abis-drift.yml --------------------------------------------------------------------
 # Regenerates in place and fails if the committed files move. Restores them either way, so a
