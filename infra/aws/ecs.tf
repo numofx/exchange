@@ -323,7 +323,7 @@ resource "aws_ecs_task_definition" "market_maker" {
       # credit side needs an allowance, so a recipient that is not the trading account
       # reverts; keeping them equal is what the venue actually exercises and tests.
       { name = "MM_SUBACCOUNT_ID", value = "15" },
-      { name = "MM_RECIPIENT_ID", value    = "15" },
+      { name = "MM_RECIPIENT_ID", value = "15" },
 
       { name = "MM_QUOTE_LEVELS", value = "5" },
       { name = "MM_ORDER_SIZE", value = "1.2" },
