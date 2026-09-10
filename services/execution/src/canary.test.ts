@@ -31,6 +31,32 @@ function canaryWith(readContract: () => Promise<unknown>, accountIds = [15]) {
   });
 }
 
+type Sent = { url: string; text: string };
+
+function alertingCanary(healthy: () => boolean, opts: { repeatAfter?: number; failPost?: boolean } = {}) {
+  const sent: Sent[] = [];
+  const canary = new SettlementCanary({
+    rpcUrl: config.rpcUrl,
+    chainId: config.chainId,
+    manager: MANAGER,
+    accountIds: [15],
+    intervalMs: 60_000,
+    alertWebhookUrl: 'https://hooks.example.invalid/abc',
+    alertRepeatAfterChecks: opts.repeatAfter ?? 30,
+    client: {
+      readContract: async () => {
+        if (!healthy()) throw new Error('reverted: BLF_DataTooOld()');
+        return 0n;
+      },
+    } as never,
+    postAlert: async (url: string, text: string) => {
+      if (opts.failPost) throw new Error('webhook 500');
+      sent.push({ url, text });
+    },
+  });
+  return { canary, sent };
+}
+
 test('a healthy manager reports ok with no failures', async () => {
   const snapshot = await canaryWith(async () => 0n).check();
 
@@ -110,6 +136,57 @@ test('/healthz reports the canary but still returns 200 when it is failing', asy
   assert.equal(response.json().settlement_canary.ok, false);
 
   await app.close();
+});
+
+test('a failure sends exactly one alert, not one per check', async () => {
+  const { canary, sent } = alertingCanary(() => false);
+
+  await canary.check();
+  await canary.check();
+  await canary.check();
+
+  assert.equal(sent.length, 1, 'edge-triggered: an alert every interval is the same as none');
+  assert.match(sent[0]!.text, /NUMO SETTLEMENT HALTED/);
+  assert.match(sent[0]!.text, /BLF_DataTooOld/);
+  assert.match(sent[0]!.text, /subaccount 15/);
+});
+
+test('recovery sends a second alert so silence is never ambiguous', async () => {
+  let healthy = false;
+  const { canary, sent } = alertingCanary(() => healthy);
+
+  await canary.check();
+  healthy = true;
+  await canary.check();
+
+  assert.equal(sent.length, 2);
+  assert.match(sent[1]!.text, /RECOVERED/);
+});
+
+test('a sustained outage re-alerts, so one dropped webhook is not silence forever', async () => {
+  const { canary, sent } = alertingCanary(() => false, { repeatAfter: 3 });
+
+  for (let i = 0; i < 7; i++) await canary.check();
+
+  // checks 1 (broke), 3 and 6 (repeats)
+  assert.equal(sent.length, 3);
+});
+
+test('a webhook that is down does not stop the canary checking', async () => {
+  const { canary, sent } = alertingCanary(() => false, { failPost: true });
+
+  const snapshot = await canary.check();
+
+  assert.equal(sent.length, 0);
+  assert.equal(snapshot.ok, false, 'the check itself still completed and recorded the failure');
+});
+
+test('no webhook configured means no alert attempt and no crash', async () => {
+  const canary = canaryWith(async () => {
+    throw new Error('reverted');
+  });
+  const snapshot = await canary.check();
+  assert.equal(snapshot.ok, false);
 });
 
 test('/healthz reports the canary as disabled when none is wired', async () => {

@@ -90,5 +90,11 @@ locals {
     # repoint it at the executor's provider.
     mm_private_key = local.use_ssm ? "${local.ssm_arn_prefix}/numo/exchange/mm_private_key" : data.aws_secretsmanager_secret.mm_private_key[0].arn
     mm_rpc_url     = local.use_ssm ? "${local.ssm_arn_prefix}/numo/exchange/mm_rpc_url" : data.aws_secretsmanager_secret.mm_rpc_url[0].arn
+
+    # Under /numo/feeds rather than /numo/exchange because it is the same Slack webhook the ops-box
+    # alert timers already post to — one channel for anything that halts the venue, whether the
+    # sender is a systemd timer or a container. Adding it here is what grants the execution role
+    # read access: the IAM policy in ecs.tf scopes to values(local.secret_arns).
+    alert_webhook_url = "${local.ssm_arn_prefix}/numo/feeds/alert_webhook_url"
   }
 }
