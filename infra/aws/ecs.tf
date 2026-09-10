@@ -253,6 +253,15 @@ resource "aws_ecs_task_definition" "execution" {
       # backing. The wrapper invariant is the one that proves 1:1, and it covers only the
       # wrapped assets.
       { name = "SETTLEMENT_CANARY_EXPECTED_NET_SETTLED_CASH", value = "13682574719999999999990057939082285597678" },
+
+      # The wrapped-quote fee path, live from the 2026-09-10 cutover. Subaccount 17 is
+      # vault-owned and deliberately NOT in Matching custody: setAssetAllowances keys the grant
+      # by ownerOf(accountId), so a custodied account would key it to the Matching contract and
+      # the vault could not grant one at all.
+      { name = "SETTLEMENT_CANARY_FEE_SUBACCOUNT", value = "17" },
+      { name = "SETTLEMENT_CANARY_FEE_OWNER", value = "0x1dcA42ab54Bd3862853A821F84B29BF65245F435" },
+      { name = "SETTLEMENT_CANARY_FEE_MODULE", value = "0x12423B366F6F07130961900bE00d05Ea63Acd071" },
+      { name = "SETTLEMENT_CANARY_FEE_QUOTE_ASSET", value = "0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84" },
       # Reporting, not liveness. Restarting this container does not refresh a stale oracle,
       # and failing the health check would pull the API out of the target group and flap
       # tasks while the real fault sits off-box. The canary's job is to make the halt

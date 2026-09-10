@@ -92,8 +92,10 @@ variable "trade_module_address" {
   # The module the venue settles on. Every submitted order is now pinned to this address
   # (markets: validateActionModule), so changing it is a hard cutover, not a rolling one:
   # orders resting for the old module stop being matchable the moment this changes.
+  #
+  # Cutover 2026-09-10: 0x44813aD3 (cash-quoted) -> 0x12423B36 (wrapped-USDC-quoted).
   type    = string
-  default = "0x44813aD30b2fFC1bB2871Eed9b19F63c8196eD1c"
+  default = "0x12423B366F6F07130961900bE00d05Ea63Acd071"
 }
 
 variable "quote_asset_address" {
@@ -103,13 +105,15 @@ variable "quote_asset_address" {
   # judges every buyer against balances the trade does not touch.
   #
   #   cash-quoted module    0x44813aD3...  ->  CashAsset            0x6B232A2155Bd0C9bf741dB4cf8E7e8A0176A6fc6
-  #   wrapped-quote module  (to deploy)    ->  WRAPPED_USDC_DELIV.  0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84
+  #   wrapped-quote module  0x12423B36...  ->  WRAPPED_USDC_DELIV.  0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84
   #
-  # Empty by default because CASH_ASSET_ADDRESS is not set on these tasks either, which
-  # leaves the pre-trade funding check inert -- as it is today. Setting this turns the check
-  # on, so set it deliberately and watch for funding_check_enabled in the logs.
+  # Set at the 2026-09-10 cutover. This also turns the pre-trade funding check ON, which was
+  # inert while it was empty -- watch for funding_check_enabled in the markets logs. The
+  # matcher additionally reads TradeModule.quoteAsset() at startup and refuses to boot if this
+  # disagrees with it, so a half-applied pair fails loudly instead of judging every buyer
+  # against a ledger the trade does not touch.
   type    = string
-  default = ""
+  default = "0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84"
 }
 
 variable "cash_asset_address" {
