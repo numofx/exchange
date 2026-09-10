@@ -3,6 +3,7 @@ import { ZodError } from 'zod';
 import { getAddress } from 'viem';
 
 import type { AppConfig } from './config.js';
+import { DISABLED_CANARY, type SettlementCanary } from './canary.js';
 import type { MatchExecutor } from './executor.js';
 import { executeMatchRequestSchema } from './types.js';
 
@@ -11,6 +12,7 @@ export function buildApp(args: {
   executor: Pick<MatchExecutor, 'execute'>;
   matchingAddress: `0x${string}`;
   tradeModuleAddress: `0x${string}`;
+  canary?: Pick<SettlementCanary, 'snapshot'>;
 }): FastifyInstance {
   const app = Fastify({ logger: true });
 
@@ -24,6 +26,9 @@ export function buildApp(args: {
     expected_action_signer: args.config.expectedActionSigner ? getAddress(args.config.expectedActionSigner) : null,
     matching_address: getAddress(args.matchingAddress),
     trade_module_address: getAddress(args.tradeModuleAddress),
+    // Reported, not enforced. /healthz stays 200 on a canary failure unless
+    // SETTLEMENT_CANARY_FAILS_HEALTHCHECK says otherwise -- see canary.ts for why.
+    settlement_canary: args.canary?.snapshot() ?? DISABLED_CANARY,
   }));
 
   app.post('/', async (req, reply) => handleExecute(args.executor, req.body, reply));

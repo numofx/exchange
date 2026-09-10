@@ -1,4 +1,5 @@
 import { buildApp } from './app.js';
+import { SettlementCanary } from './canary.js';
 import { loadConfig, loadDeploymentAddresses } from './config.js';
 import { loadContractArtifacts } from './contracts.js';
 import { MatchExecutor } from './executor.js';
@@ -15,6 +16,18 @@ if (process.argv.includes('--healthcheck') || process.argv.includes('-healthchec
     });
     if (!response.ok) {
       process.stderr.write(`healthcheck: /healthz returned ${response.status}\n`);
+      process.exit(1);
+    }
+
+    // The canary gates liveness only when explicitly asked to. Reading the flag from the
+    // response rather than the environment keeps this probe free of loadConfig, which is
+    // the point of running it before config parsing.
+    const body = (await response.json()) as {
+      settlement_canary?: { enabled?: boolean; ok?: boolean | null; failures?: unknown[] };
+    };
+    const canary = body.settlement_canary;
+    if (process.env.SETTLEMENT_CANARY_FAILS_HEALTHCHECK === 'true' && canary?.enabled && canary.ok === false) {
+      process.stderr.write(`healthcheck: settlement canary failing: ${JSON.stringify(canary.failures)}\n`);
       process.exit(1);
     }
     process.exit(0);
@@ -37,11 +50,28 @@ const executor = new MatchExecutor(config, {
   tradeModuleAddress,
 });
 
+const canary = config.settlementCanary
+  ? new SettlementCanary({
+      rpcUrl: config.rpcUrl,
+      chainId: config.chainId,
+      manager: config.settlementCanary.manager,
+      accountIds: config.settlementCanary.accountIds,
+      intervalMs: config.settlementCanary.intervalMs,
+      alertWebhookUrl: config.settlementCanary.alertWebhookUrl,
+      alertRepeatAfterChecks: config.settlementCanary.alertRepeatAfterChecks,
+      log: (level, message, fields) => {
+        process.stdout.write(`${JSON.stringify({ level, msg: message, ...fields })}\n`);
+      },
+    })
+  : undefined;
+canary?.start();
+
 const app = buildApp({
   config,
   executor,
   matchingAddress,
   tradeModuleAddress,
+  canary,
 });
 
 app.listen({ host: config.host, port: config.port }).catch((error) => {

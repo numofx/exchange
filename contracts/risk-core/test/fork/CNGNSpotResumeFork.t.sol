@@ -13,13 +13,27 @@ import {CNGNSpotBatch} from "../../scripts/cngn-spot-batch.sol";
 import "openzeppelin/token/ERC20/extensions/IERC20Metadata.sol";
 
 /**
- * @dev Executes every prefix of the batch against live Base state and asserts two things about each:
+ * @dev Executes every prefix of the batch and asserts two things about each:
  *
  *      1. RESUME REPORTING is right — statuses() plus resolve() name exactly the prefix that ran.
  *      2. THE PREFIX IS SAFE — nothing can be deposited or traded until the final action.
  *
  *      (2) is why the ordering was changed. Under the old ordering, stopping early stranded both
  *      static feeds on the deployer key and left the old 3600s stableFeed wired in.
+ *
+ *      PINNED TO PRE_BATCH_BLOCK, DELIBERATELY. Every assertion here describes a world in which
+ *      the batch has NOT run: `lastMarketId == 1`, borrowing still enabled, wrapped cNGN not
+ *      whitelisted, the old 3600s stableFeed wired in. The batch executed on 2026-08-30, and
+ *      against head these tests began reporting failures that were not defects — action 3
+ *      (`setBorrowingEnabled(false)`) reads Done before any prefix runs, because borrowing is
+ *      already false; and prefix 0 permits a deposit, because the venue is live. Both are the
+ *      batch having succeeded, which is the opposite of what a red test should mean.
+ *
+ *      Repointing at head would have been the wrong repair: it would delete the only coverage of
+ *      what a partially-applied batch looks like, which is the thing a signer actually needs the
+ *      resume tooling for and which can never be observed on a chain where the batch completed.
+ *      So the simulation keeps its pre-batch world, and testFork_TheBatchActuallyLanded asserts
+ *      the post-state separately, at head.
  */
 contract FORK_TestCNGNSpotResume is Test {
   uint internal constant CNGN_PER_USDC = 1500e18;
@@ -36,8 +50,13 @@ contract FORK_TestCNGNSpotResume is Test {
   uint internal baseCap;
   uint internal cngnScale;
 
+  /// One block before the batch's first action (staticCngnFeed.acceptOwnership) landed.
+  /// Verified: at this height lastMarketId == 1, borrowingEnabled == true, stableFeed is the
+  /// old live feed, and wrapped cNGN is not whitelisted.
+  uint internal constant PRE_BATCH_BLOCK = 51062181;
+
   function setUp() public {
-    vm.createSelectFork(vm.envString("BASE_RPC_URL"));
+    vm.createSelectFork(vm.envString("BASE_RPC_URL"), PRE_BATCH_BLOCK);
 
     string memory root = vm.projectRoot();
     string memory coreJson = vm.readFile(string.concat(root, "/deployments/8453/core.json"));
@@ -63,6 +82,39 @@ contract FORK_TestCNGNSpotResume is Test {
 
     deal(address(cngn), address(this), 1_000_000_000e6);
     cngn.approve(address(cngnAsset), type(uint).max);
+
+    // Fail loudly if the pin ever stops being pre-batch. Without this, a wrong block number
+    // would not break the suite -- it would quietly change which world is being tested, which
+    // is exactly how these tests went stale in the first place.
+    assertEq(marketId, 2, "PRE_BATCH_BLOCK is not pre-batch: lastMarketId has moved");
+    assertTrue(srm.borrowingEnabled(), "PRE_BATCH_BLOCK is not pre-batch: borrowing already disabled");
+    assertFalse(
+      srm.assetDetails(IAsset(address(cngnAsset))).isWhitelisted,
+      "PRE_BATCH_BLOCK is not pre-batch: wrapped cNGN already whitelisted"
+    );
+  }
+
+  /// @dev The other half, and the one the pinned tests above can no longer cover: the batch is
+  ///      really on chain. Forks head rather than the pin, so this is a statement about the world
+  ///      as it is, not a replay.
+  function testFork_TheBatchActuallyLanded() public {
+    vm.createSelectFork(vm.envString("BASE_RPC_URL"));
+
+    assertEq(srm.lastMarketId(), 2, "market 2 should exist");
+    assertFalse(srm.borrowingEnabled(), "borrowing should be disabled");
+
+    IStandardManager.AssetDetail memory detail = srm.assetDetails(IAsset(address(cngnAsset)));
+    assertTrue(detail.isWhitelisted, "wrapped cNGN should be whitelisted");
+    assertEq(detail.marketId, 2, "wrapped cNGN should be on market 2");
+    assertEq(uint(detail.assetType), uint(IStandardManager.AssetType.Base), "should be a Base asset");
+
+    (ISpotFeed spot,,) = srm.getMarketFeeds(2);
+    assertEq(address(spot), 0xec4ad7B2679f54eB3e971B10120cB56cF1c061A4, "market 2 on the static feed");
+    assertEq(address(srm.stableFeed()), 0x507D645682737C6640dc73b5aC858654BcB9854f, "static stable feed");
+
+    (uint marginFactor, uint imScale) = srm.baseMarginParams(2);
+    assertEq(marginFactor, 0, "market 2 margin factor must stay zero");
+    assertEq(imScale, 0, "market 2 IM scale must stay zero");
   }
 
   function _ctx() internal view returns (CNGNSpotBatch.Ctx memory) {
