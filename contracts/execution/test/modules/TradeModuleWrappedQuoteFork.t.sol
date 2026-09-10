@@ -88,6 +88,9 @@ contract TradeModuleWrappedQuoteForkTest is ForkBase {
   uint internal constant SIZE = 100_000e18; // 100k cNGN
   uint internal constant NOTIONAL = 70e18; // 70 USDC
 
+  /// Last block before srm.setOraclesForMarket(1, staticStableFeed) landed (block 51097293).
+  uint internal constant PRE_REPOINT_BLOCK = 51097292;
+
   function setUp() public {
     if (block.chainid == 31337) {
       vm.skip(true);
@@ -335,7 +338,17 @@ contract TradeModuleWrappedQuoteForkTest is ForkBase {
    *      vault call is the difference between shipping this change and shipping a book that stops
    *      trading the first time a keeper misses an hour.
    */
+  /// @dev Pinned. Market 1 IS on the static feed at head -- that vault call landed at block
+  ///      51097293 -- so this finding can only be observed from the world it was found in.
+  ///      Repointing it at head, or pranking the live feed back in, would make it assert a world
+  ///      it manufactured rather than one it observed, and would delete the only evidence that
+  ///      the repoint was necessary. testForkTheQuoteOracleIsStaticAtHead is the other half.
   function testForkStaleStableFeedHaltsTheBookUntilTheOracleIsRepointed() public checkFork {
+    vm.createSelectFork(vm.envString("BASE_RPC_URL"), PRE_REPOINT_BLOCK);
+    _loadLiveAddresses();
+    _deployModule();
+    _openAccounts();
+
     (ISpotFeed liveFeed,,) = srm.getMarketFeeds(quoteMarketId);
     assertTrue(address(liveFeed) != staticStableFeed, "precondition: market 1 is not yet on the static feed");
 
@@ -425,5 +438,85 @@ contract TradeModuleWrappedQuoteForkTest is ForkBase {
   function _repointQuoteOracle() internal {
     vm.prank(srmOwner);
     srm.setOraclesForMarket(quoteMarketId, ISpotFeed(staticStableFeed), IForwardFeed(address(0)), IVolFeed(address(0)));
+  }
+
+  /**
+   * @dev The other half of the pinned test above: at head the quote oracle is already static, so
+   *      the halt it documents cannot recur. If anyone repoints market 1 back at a heartbeat feed,
+   *      this goes red -- which the pinned test structurally cannot do.
+   */
+  function testForkTheQuoteOracleIsStaticAtHead() public checkFork {
+    (ISpotFeed spot,,) = srm.getMarketFeeds(quoteMarketId);
+    assertEq(address(spot), staticStableFeed, "quote market must be on the static feed at head");
+
+    vm.warp(block.timestamp + 30 days);
+    (uint price,) = ISpotFeed(spot).getSpot();
+    assertGt(price, 0, "a static feed cannot go stale");
+  }
+
+  /**
+   * @dev THE CUTOVER, in the order the deploy script emits it.
+   *
+   *      The script now emits: acceptOwnership, setAssetAllowances, setAllowedModule, and the
+   *      oracle repoint only when chain still needs it. The allowance moved ahead of the enabling
+   *      switch so the batch stops contradicting the runbook the same operator is following.
+   *
+   *      What this proves that the hand-rolled setup above does not: applying the actions in the
+   *      emitted order produces a venue that settles, and the enabling switch really is the gate
+   *      -- a fill attempted before it is refused.
+   */
+  function testForkCutoverInTheEmittedOrderSettles() public checkFork {
+    uint cutoverFeeAcc = subAccounts.createAccount(feeOwner, IManager(address(srm)));
+    TradeModule fresh = new TradeModule(IMatching(address(matching)), IAsset(address(quoteWrapped)), cutoverFeeAcc);
+
+    // 1. fees, before the switch
+    IAllowances.AssetAllowance[] memory grant = new IAllowances.AssetAllowance[](1);
+    grant[0] = IAllowances.AssetAllowance({asset: IAsset(address(quoteWrapped)), positive: type(uint).max, negative: 0});
+    vm.prank(feeOwner);
+    subAccounts.setAssetAllowances(cutoverFeeAcc, address(fresh), grant);
+
+    // ...and the module is inert until the switch: Matching refuses a module it has not allowed.
+    assertFalse(matching.allowedModules(address(fresh)), "module must be inert before the switch");
+
+    // 2. the enabling switch
+    vm.prank(matchingOwner);
+    matching.setAllowedModule(address(fresh), true);
+    assertTrue(matching.allowedModules(address(fresh)), "the switch is what makes it routable");
+
+    // 3. the oracle action is correctly NOT part of this batch at head
+    (ISpotFeed spot,,) = srm.getMarketFeeds(quoteMarketId);
+    assertEq(address(spot), staticStableFeed, "chain says the oracle action is already done");
+
+    // and the venue settles through it, with a fee, moving only wrapped balances
+    TradeModule previous = module;
+    module = fresh;
+    uint makerQuoteBefore = uint(subAccounts.getBalance(makerAcc, IAsset(address(quoteWrapped)), 0));
+    uint takerCashBefore = uint(
+      subAccounts.getBalance(takerAcc, IAsset(cashAsset), 0) < 0
+        ? int(0)
+        : subAccounts.getBalance(takerAcc, IAsset(cashAsset), 0)
+    );
+
+    _fill(1e18, 1e18);
+
+    assertEq(
+      uint(subAccounts.getBalance(cutoverFeeAcc, IAsset(address(quoteWrapped)), 0)),
+      2e18,
+      "both fees must land in the wrapped quote asset"
+    );
+    assertTrue(
+      uint(subAccounts.getBalance(makerAcc, IAsset(address(quoteWrapped)), 0)) != makerQuoteBefore,
+      "the wrapped quote leg must have moved"
+    );
+    assertEq(
+      uint(
+        subAccounts.getBalance(takerAcc, IAsset(cashAsset), 0) < 0
+          ? int(0)
+          : subAccounts.getBalance(takerAcc, IAsset(cashAsset), 0)
+      ),
+      takerCashBefore,
+      "no cash may move: the whole point is that CashAsset is out of the trade path"
+    );
+    module = previous;
   }
 }

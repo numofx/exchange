@@ -98,16 +98,16 @@ it as the last action, after the enabling switch, and prints "Run the batch IN O
 today's zero fees, but it is a contradiction inside the one artifact the signer works from. The safe
 order costs nothing.
 
-### 7. The fork test with the stale precondition
+### 7. ~~The fork test with the stale precondition~~ — FIXED
 
 `TradeModuleWrappedQuoteFork.t.sol:340` asserts market 1 is *not* on the static feed. It is now, so
 the test fails at head. The tempting repairs — delete the assertion, or `vm.prank` the feed back —
 would make it assert a world it manufactured rather than one it observed.
 
-**The repair must preserve the coverage**: pin to a block `< 51097293` (51097292 verified), keep a
-head-forked contrast test, and note `_repointQuoteOracle()` is now a no-op at head.
-`testForkCashQuoteIsUnaffectedByTheStaleStableFeed` still passes but no longer proves anything —
-there is no live feed left in the path — so it needs pinning or re-scoping too.
+**Fixed** exactly that way: the halt test forks `PRE_REPOINT_BLOCK = 51097292` and re-derives its
+world there, and `testForkTheQuoteOracleIsStaticAtHead` asserts at head that the oracle is static
+and cannot go stale. If anyone repoints market 1 back at a heartbeat feed, the head test goes red —
+which the pinned one structurally cannot.
 
 ### 8. Two ways to brick or silently void the fee path — PARTLY FIXED
 
