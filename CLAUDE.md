@@ -33,6 +33,34 @@ in this repo has turned out not to work — a canary that was reported as "watch
 reaching nobody, a recovery message that never fired because the fix was a redeploy, a test whose
 comment claimed a protection it did not implement. Break it, watch it go red, put it back.
 
+## Fix the class, not the instance
+
+When something is wrong in one place, the next move is to find every other place it is wrong —
+before fixing the one in hand, and certainly before calling it fixed. A `grep` across the whole
+surface costs seconds; finding the second instance after shipping costs a review cycle and the
+credibility of the first fix.
+
+This is the mistake that recurs most:
+
+- `worstFee: 0` was fixed in the market maker, then found again in the docs' signing example, then
+  found a third time in the quickstart — the highest-traffic page, and the one where a copied zero
+  bound does the most damage. Each was fixed alone, and each time the sweep happened afterwards.
+- A phantom-fill guard was threaded through the syncer's cancel path and missed the startup
+  reconcile path, which cancels through the client directly. Shipped, deployed, and only caught
+  because the metric was read back afterwards.
+- A canary, a workflow guard, and a fork-test skip were each fixed in one repo while the identical
+  defect sat in the other.
+
+Two habits that follow:
+
+- **Before fixing, grep for the pattern, not the symptom.** The string `worst_fee` finds every
+  example; "the signing page is wrong" finds one.
+- **Before claiming a fix, sweep the surface it belongs to** — the other repo, the other code path,
+  the other doc page — and say what was swept. "No other instances" is a finding; silence is not.
+
+A test that exercises the mechanism rather than the wiring is the same error wearing different
+clothes: it proves the instance and says nothing about whether the thing is actually connected.
+
 ## Measure a deploy after the rollout, never across it
 
 ECS keeps the old task running until the new one is healthy, and both write to the same log group.
