@@ -33,6 +33,31 @@ in this repo has turned out not to work — a canary that was reported as "watch
 reaching nobody, a recovery message that never fired because the fix was a redeploy, a test whose
 comment claimed a protection it did not implement. Break it, watch it go red, put it back.
 
+## Measure a deploy after the rollout, never across it
+
+ECS keeps the old task running until the new one is healthy, and both write to the same log group.
+A window that contains the cutover therefore measures two versions at once, and the old one's
+behaviour is attributed to the new.
+
+This produced a full afternoon of wrong conclusions. A fix that removed 99% of the market maker's
+order churn (13.57 -> 0.14 size_mismatch per minute) was measured across its own rollout, read as
+a 16% improvement, declared broken, and chased through two further hypotheses and a diagnostic
+deploy. Splitting the same logs by stream showed the draining container had produced nearly every
+event being counted — its last cancel landed 35 seconds after the new task started.
+
+Two habits that follow:
+
+- **Wait for the old task to stop, not for the new one to report COMPLETED**, before the window
+  opens. `rolloutState: COMPLETED` says the new task is healthy; it does not say the old one is
+  gone.
+- **When a log group is shared, attribute by `logStreamName` before drawing any conclusion.**
+  One stream is one task is one image. A per-stream count is evidence; a per-group count across a
+  rollout is not.
+
+The general form: when a number disagrees with a result you can derive another way, suspect the
+measurement before rewriting the code. Each wrong turn here came from inferring a quantity rather
+than isolating it.
+
 ## Chain state moves under tests
 
 Fork tests that describe a world before a transaction must pin an explicit block, and the world
