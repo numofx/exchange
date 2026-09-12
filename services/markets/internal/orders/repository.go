@@ -38,6 +38,8 @@ type CreateOrderParams struct {
 	Expiry          int64
 	ActionJSON      json.RawMessage
 	Signature       string
+	// PostOnly asks the venue to refuse this order rather than let it take. See Create.
+	PostOnly bool
 }
 
 type CancelOrderParams struct {
@@ -143,7 +145,67 @@ where limit_price_ticks is null
 	return nil
 }
 
+// WouldCross reports whether an incoming order at these ticks would take against a resting order
+// on the opposite side at oppTicks.
+//
+// It exists to be the single statement of the rule in Go, mirroring crossCondition in SQL and
+// Crosses() for the matcher. All three must agree: if the SQL admits an order the matcher then
+// treats as a taker, post_only has promised something the venue does not honour.
+// TestSQLCrossConditionMatchesGo checks the SQL against this table on a real database.
+func WouldCross(side Side, ticks *big.Int, oppTicks *big.Int) bool {
+	if ticks == nil || oppTicks == nil {
+		return false
+	}
+	switch side {
+	case SideBuy:
+		// A buy takes when it is willing to pay at least what a resting sell asks.
+		return ticks.Cmp(oppTicks) >= 0
+	case SideSell:
+		return ticks.Cmp(oppTicks) <= 0
+	default:
+		return false
+	}
+}
+
+// ErrWouldCross is returned when a post-only order would have taken liquidity instead of resting.
+// The order is not stored: a post-only order that crosses is a rejection, not a fill.
+var ErrWouldCross = errors.New("post_only order would cross the book")
+
+// crossCondition is the SQL form of Crosses(), for the opposite side of the book.
+//
+// A buy takes when its price is at or above a resting sell; a sell takes when its price is at or
+// below a resting bid. Both are `>=` / `<=` rather than strict, matching Crosses() exactly -- an
+// order at the same price as the opposing top of book does trade, so post-only must refuse it.
+// Comparing on limit_price_ticks::numeric is what the matcher compares, so the two cannot drift.
+const crossCondition = `
+exists (
+  select 1 from active_orders opp
+  where opp.asset_address = $8
+    and opp.sub_id = $9
+    and opp.status = 'active'
+    and opp.side <> $7
+    and case when $7 = 'buy'
+             then opp.limit_price_ticks::numeric <= $14::numeric
+             else opp.limit_price_ticks::numeric >= $14::numeric
+        end
+)`
+
+// Create inserts an order, refusing it when PostOnly is set and it would cross.
+//
+// The check lives INSIDE the insert rather than in a read before it. A read-then-insert leaves a
+// window in which a crossing order arrives between the two, and the post-only order rests anyway
+// -- which is exactly the guarantee the flag exists to make. As one statement the database
+// evaluates the condition and the insert together.
+//
+// That closes the common race but not every one: under READ COMMITTED a concurrent transaction
+// inserting a crossing order can still commit between this statement's snapshot and its write. The
+// remaining exposure is one order, briefly, and the matcher is the backstop for it -- see the note
+// in the PR about making the matcher refuse a post-only taker outright, which is what turns this
+// from "almost always" into "never".
 func (r *Repository) Create(ctx context.Context, params CreateOrderParams) (Order, error) {
+	if params.PostOnly {
+		return r.createPostOnly(ctx, params)
+	}
 	const query = `
 insert into active_orders (
   order_id,
@@ -217,6 +279,77 @@ returning order_id, owner_address, signer_address, subaccount_id, recipient_id, 
 		return Order{}, mapPGError(err)
 	}
 
+	return order, nil
+}
+
+// createPostOnly is Create's conditional twin: the same insert, wrapped in a guard that refuses
+// when the order would take. Written as `insert ... select ... where not <crossing>` so the
+// condition and the write are one statement; a zero-row result means the guard fired.
+func (r *Repository) createPostOnly(ctx context.Context, params CreateOrderParams) (Order, error) {
+	query := `
+insert into active_orders (
+  order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side,
+  asset_address, sub_id, desired_amount, filled_amount, limit_price, limit_price_ticks,
+  worst_fee, expiry, action_json, signature, status, post_only
+)
+select $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $15, $16, $17, $18, $19, true
+where not ` + crossCondition + `
+returning order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
+          desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at
+`
+
+	order := Order{}
+	err := r.pool.QueryRow(
+		ctx,
+		query,
+		params.OrderID,       // $1
+		params.OwnerAddress,  // $2
+		params.SignerAddress, // $3
+		params.SubaccountID,  // $4
+		params.RecipientID,   // $5
+		params.Nonce,         // $6
+		params.Side,          // $7  -- also read by crossCondition
+		params.AssetAddress,  // $8  -- also read by crossCondition
+		params.SubID,         // $9  -- also read by crossCondition
+		params.DesiredAmount, // $10
+		params.FilledAmount,  // $11
+		params.LimitPrice,    // $12
+		params.LimitPriceTicks,
+		params.LimitPriceTicks, // $14 -- crossCondition compares against this
+		params.WorstFee,        // $15
+		params.Expiry,          // $16
+		params.ActionJSON,      // $17
+		params.Signature,       // $18
+		StatusActive,           // $19
+	).Scan(
+		&order.OrderID,
+		&order.OwnerAddress,
+		&order.SignerAddress,
+		&order.SubaccountID,
+		&order.RecipientID,
+		&order.Nonce,
+		&order.Side,
+		&order.AssetAddress,
+		&order.SubID,
+		&order.DesiredAmount,
+		&order.FilledAmount,
+		&order.LimitPrice,
+		&order.LimitPriceTicks,
+		&order.WorstFee,
+		&order.Expiry,
+		&order.ActionJSON,
+		&order.Signature,
+		&order.Status,
+		&order.CreatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// The insert's WHERE excluded every row, which for this statement can only mean the
+		// crossing check matched. Nothing was written.
+		return Order{}, ErrWouldCross
+	}
+	if err != nil {
+		return Order{}, mapPGError(err)
+	}
 	return order, nil
 }
 
