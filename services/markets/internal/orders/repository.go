@@ -71,6 +71,11 @@ type OrderStatusSnapshot struct {
 	FilledAmount  string
 	CancelReason  string
 	UpdatedAt     time.Time
+	// PostOnly is whether this order was submitted with the post-only guard. Served on the status
+	// endpoint so a client can confirm the flag was actually recorded rather than assume it: a
+	// service that ignored the field would look identical from the submit side, and the caller
+	// would believe it had a guarantee it does not have.
+	PostOnly bool
 }
 
 type Repository struct {
@@ -444,7 +449,8 @@ select
   desired_amount,
   filled_amount,
   coalesce(cancel_reason, '') as cancel_reason,
-  coalesce(cancelled_at, created_at) as updated_at
+  coalesce(cancelled_at, created_at) as updated_at,
+  post_only
 from active_orders
 where order_id = $1
 `
@@ -457,6 +463,7 @@ where order_id = $1
 		&snapshot.FilledAmount,
 		&snapshot.CancelReason,
 		&snapshot.UpdatedAt,
+		&snapshot.PostOnly,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return OrderStatusSnapshot{}, ErrNotFound
