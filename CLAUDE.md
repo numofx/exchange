@@ -78,6 +78,16 @@ Two habits that follow:
 - **Wait for the old task to stop, not for the new one to report COMPLETED**, before the window
   opens. `rolloutState: COMPLETED` says the new task is healthy; it does not say the old one is
   gone.
+- **Desired status is not stopped status.** `list-tasks --desired-status RUNNING` drops a task the
+  moment ECS decides to stop it, while the container keeps running — and keeps writing. Only
+  `describe-tasks ... lastStatus == STOPPED` says it has actually gone. Waiting on the first is
+  how a wait that looks correct returns early. `infra/aws/wait-for-rollout.sh` does it properly;
+  use it rather than writing the loop again.
+
+  This is not only a measurement problem. A draining market maker kept placing orders for seconds
+  after its successor had started and finished its startup reconciliation, leaving quotes on the
+  live book under the previous configuration that nothing subsequently re-examined — which is why
+  that check now runs every cycle rather than only at boot.
 - **When a log group is shared, attribute by `logStreamName` before drawing any conclusion.**
   One stream is one task is one image. A per-stream count is evidence; a per-group count across a
   rollout is not.
