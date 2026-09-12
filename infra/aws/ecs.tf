@@ -349,6 +349,11 @@ resource "aws_ecs_task_definition" "market_maker" {
       { name = "MM_OPERATOR_MODE", value = "normal" },
       { name = "MM_DRY_RUN", value = "false" },
 
+      # DRILL 2026-09-12: temporarily false to prove the startup terms check fires in production.
+      # The bot defaults this to true; setting it false makes every resting post-only quote
+      # mismatch config, which startup must then replace. Flipped back in the next commit.
+      { name = "MM_POST_ONLY_QUOTES", value = "false" },
+
       { name = "MM_MARKET_SYMBOL", value = "USDCcNGN-SPOT" },
       { name = "MM_OWNER_ADDRESS", value = var.mm_address },
       { name = "MM_SIGNER_ADDRESS", value = var.mm_address },
