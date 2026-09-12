@@ -235,7 +235,7 @@ insert into active_orders (
   $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
 )
 returning order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
-          desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at
+          desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at, post_only
 `
 
 	order := Order{}
@@ -280,6 +280,7 @@ returning order_id, owner_address, signer_address, subaccount_id, recipient_id, 
 		&order.Signature,
 		&order.Status,
 		&order.CreatedAt,
+		&order.PostOnly,
 	); err != nil {
 		return Order{}, mapPGError(err)
 	}
@@ -300,7 +301,7 @@ insert into active_orders (
 select $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $15, $16, $17, $18, $19, true
 where not ` + crossCondition + `
 returning order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
-          desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at
+          desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at, post_only
 `
 
 	order := Order{}
@@ -346,6 +347,7 @@ returning order_id, owner_address, signer_address, subaccount_id, recipient_id, 
 		&order.Signature,
 		&order.Status,
 		&order.CreatedAt,
+		&order.PostOnly,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// The insert's WHERE excluded every row, which for this statement can only mean the
@@ -370,7 +372,7 @@ set status = $3,
     cancelled_by = $5
 where owner_address = $1 and nonce = $2 and status = 'active'
 returning order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
-          desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at
+          desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at, post_only
 `
 
 	order := Order{}
@@ -395,6 +397,7 @@ returning order_id, owner_address, signer_address, subaccount_id, recipient_id, 
 		&order.Signature,
 		&order.Status,
 		&order.CreatedAt,
+		&order.PostOnly,
 	); err != nil {
 		return Order{}, mapPGError(err)
 	}
@@ -405,7 +408,7 @@ returning order_id, owner_address, signer_address, subaccount_id, recipient_id, 
 func (r *Repository) FindActiveByOwnerNonce(ctx context.Context, params CancelOrderParams) (Order, error) {
 	const query = `
 select order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
-          desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at
+          desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at, post_only
 from active_orders
 where owner_address = $1 and nonce = $2 and status = 'active'
 `
@@ -431,6 +434,7 @@ where owner_address = $1 and nonce = $2 and status = 'active'
 		&order.Signature,
 		&order.Status,
 		&order.CreatedAt,
+		&order.PostOnly,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Order{}, ErrNotFound
@@ -727,7 +731,7 @@ func (r *Repository) listBySide(ctx context.Context, assetAddress string, subID 
 
 	query := fmt.Sprintf(`
 select order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
-       desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at
+       desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at, post_only
 from active_orders
 where asset_address = $1 and sub_id = $2 and side = $3 and status = 'active'
 order by %s
@@ -908,7 +912,7 @@ func lockTopBySide(
 
 	query := fmt.Sprintf(`
 select order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
-       desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at
+       desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at, post_only
 from active_orders
 where asset_address = $1 and sub_id = $2 and side = $3 and status = 'active'
 order by %s
@@ -958,6 +962,18 @@ func selectMatchPair(bids []Order, asks []Order, gate MatchGate) (*Order, *Order
 				// not reach any later one either
 				break
 			}
+			// A post-only order may rest and be taken FROM, but must never be the aggressor.
+			//
+			// The submit-time check cannot promise this on its own: it evaluates against the book
+			// as it was, and a crossing order committing concurrently leaves a post-only order
+			// resting where it can take. This is the half that makes the flag mean what its name
+			// says, and it is the only half that holds once more than one maker is quoting.
+			//
+			// `continue`, not `break`: the ordering argument above is about PRICE, and this
+			// rejection is not about price. A later ask may pair with this bid perfectly well.
+			if taker.PostOnly {
+				continue
+			}
 			if gate != nil && gate(taker, maker) {
 				continue
 			}
@@ -998,7 +1014,7 @@ where status = 'active' and expiry <= $1
 func applyFill(ctx context.Context, tx pgx.Tx, orderID string, fillAmount string) (Order, error) {
 	const selectQuery = `
 select order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
-       desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at
+       desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at, post_only
 from active_orders
 where order_id = $1 and status = 'matching'
 for update
@@ -1128,6 +1144,7 @@ func scanOrder(row pgx.Row) (Order, error) {
 		&order.Signature,
 		&order.Status,
 		&order.CreatedAt,
+		&order.PostOnly,
 	); err != nil {
 		return Order{}, mapPGError(err)
 	}

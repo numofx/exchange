@@ -39,4 +39,8 @@ type Order struct {
 	Signature       string
 	Status          Status
 	CreatedAt       time.Time
+	// PostOnly is read back so the matcher can refuse to make this order the taker. Submit-time
+	// rejection alone cannot promise that: it evaluates against the book as it was, and a crossing
+	// order committing concurrently still leaves a post-only order able to take.
+	PostOnly bool
 }
