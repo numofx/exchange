@@ -562,6 +562,22 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 
 	order, err := s.orders.Create(r.Context(), params)
 	if err != nil {
+		// A post-only order that would cross is a rejection the caller asked for, not a failure.
+		// 422 rather than 400: the request was well formed, and it is the state of the book -- not
+		// the payload -- that makes it unacceptable, so the same bytes may succeed a moment later.
+		if errors.Is(err, orders.ErrWouldCross) {
+			slog.Info(
+				"post_only_rejected",
+				"order_id", params.OrderID,
+				"side", params.Side,
+				"limit_price_ticks", params.LimitPriceTicks,
+			)
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{
+				"error": "post_only order would cross the resting book and was not accepted; " +
+					"reprice away from the opposing top of book and resubmit",
+			})
+			return
+		}
 		statusCode := http.StatusInternalServerError
 		if strings.Contains(err.Error(), "duplicate order") {
 			statusCode = http.StatusConflict

@@ -9,3 +9,7 @@ __pycache__/
 .env
 **/.env
 !**/.env.example
+
+# Agent worktrees and local Claude settings: machine-local, never part of a change.
+# They are embedded git repos, so `git add -A` otherwise commits them as gitlinks.
+.claude/
