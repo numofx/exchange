@@ -115,6 +115,11 @@ type orderStatusResponse struct {
 	RemainingAmount string        `json:"remaining_amount"`
 	CancelReason    string        `json:"cancel_reason"`
 	UpdatedAt       time.Time     `json:"updated_at"`
+	// PostOnly is always present, never omitempty: "false" and "the field is missing" mean very
+	// different things here. A client checking whether its post-only flag took effect must be
+	// able to tell an order that was accepted as ordinary from a service too old to have the
+	// concept at all.
+	PostOnly bool `json:"post_only"`
 }
 
 type bookResponse struct {
@@ -507,6 +512,7 @@ func (s *Server) handleGetOrderStatus(w http.ResponseWriter, r *http.Request) {
 		FilledAmount:    snapshot.FilledAmount,
 		RemainingAmount: remaining,
 		CancelReason:    snapshot.CancelReason,
+		PostOnly:        snapshot.PostOnly,
 		UpdatedAt:       snapshot.UpdatedAt.UTC(),
 	})
 }
