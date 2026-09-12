@@ -270,3 +270,56 @@ func encodeSignedWord(value string) []byte {
 	copy(word[32-len(bytes):], bytes)
 	return word
 }
+
+// post_only is plumbed from the request body to the store params. Absent means false, so no
+// existing client changes behaviour by upgrading.
+func TestCreateOrderRequestCarriesPostOnly(t *testing.T) {
+	base := createOrderRequest{
+		OrderID:       "order-po",
+		OwnerAddress:  "0xabc",
+		SignerAddress: "0xabc",
+		SubaccountID:  "10",
+		RecipientID:   "10",
+		Nonce:         "1",
+		Side:          "buy",
+		AssetAddress:  "0xasset",
+		SubID:         "0",
+		DesiredAmount: "100",
+		FilledAmount:  "0",
+		LimitPrice:    "75",
+		WorstFee:      "1",
+		Expiry:        time.Now().Add(time.Hour).Unix(),
+		ActionJSON:    json.RawMessage(`{"subaccount_id":"10","nonce":"1","module":"0xtrade","data":"0xaaa","expiry":"100","owner":"0xabc","signer":"0xabc"}`),
+		Signature:     "0xsig",
+	}
+
+	params, err := base.toParams(config.Config{})
+	if err != nil {
+		t.Fatalf("toParams: %v", err)
+	}
+	if params.PostOnly {
+		t.Fatal("post_only defaulted to true; an omitted flag must mean an ordinary order")
+	}
+
+	withFlag := base
+	withFlag.PostOnly = true
+	params, err = withFlag.toParams(config.Config{})
+	if err != nil {
+		t.Fatalf("toParams: %v", err)
+	}
+	if !params.PostOnly {
+		t.Fatal("post_only was set on the request and did not reach the store params")
+	}
+}
+
+// The wire name matters: the market maker and any integrator send this key, and a rename would
+// silently downgrade every post-only order to an ordinary one that can take.
+func TestPostOnlyDecodesFromTheWireKey(t *testing.T) {
+	var req createOrderRequest
+	if err := json.Unmarshal([]byte(`{"order_id":"x","post_only":true}`), &req); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !req.PostOnly {
+		t.Fatal(`"post_only":true did not decode; the JSON tag has drifted`)
+	}
+}

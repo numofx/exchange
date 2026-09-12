@@ -16,20 +16,23 @@ import (
 )
 
 type createOrderRequest struct {
-	OrderID        string           `json:"order_id"`
-	OwnerAddress   string           `json:"owner_address"`
-	SignerAddress  string           `json:"signer_address"`
-	SubaccountID   string           `json:"subaccount_id"`
-	RecipientID    string           `json:"recipient_id"`
-	Nonce          string           `json:"nonce"`
-	Side           string           `json:"side"`
-	AssetAddress   string           `json:"asset_address"`
-	SubID          string           `json:"sub_id"`
-	DesiredAmount  string           `json:"desired_amount"`
-	FilledAmount   string           `json:"filled_amount"`
-	LimitPrice     string           `json:"limit_price"`
-	WorstFee       string           `json:"worst_fee"`
-	Expiry         int64            `json:"expiry"`
+	OrderID       string `json:"order_id"`
+	OwnerAddress  string `json:"owner_address"`
+	SignerAddress string `json:"signer_address"`
+	SubaccountID  string `json:"subaccount_id"`
+	RecipientID   string `json:"recipient_id"`
+	Nonce         string `json:"nonce"`
+	Side          string `json:"side"`
+	AssetAddress  string `json:"asset_address"`
+	SubID         string `json:"sub_id"`
+	DesiredAmount string `json:"desired_amount"`
+	FilledAmount  string `json:"filled_amount"`
+	LimitPrice    string `json:"limit_price"`
+	WorstFee      string `json:"worst_fee"`
+	Expiry        int64  `json:"expiry"`
+	// PostOnly refuses the order rather than letting it take. Absent means false, so every
+	// existing client is unchanged.
+	PostOnly       bool             `json:"post_only,omitempty"`
 	OrderEntrySpec string           `json:"order_entry_spec,omitempty"`
 	UIIntent       *spotOrderIntent `json:"ui_intent,omitempty"`
 	ActionJSON     json.RawMessage  `json:"action_json"`
@@ -204,6 +207,7 @@ func (r createOrderRequest) toParams(cfg config.Config) (orders.CreateOrderParam
 		Expiry:          r.Expiry,
 		ActionJSON:      r.ActionJSON,
 		Signature:       r.Signature,
+		PostOnly:        r.PostOnly,
 	}, nil
 }
 
