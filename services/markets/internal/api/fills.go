@@ -31,6 +31,10 @@ type presentedFill struct {
 	Market       string                 `json:"market,omitempty"`
 	DisplayName  string                 `json:"display_name,omitempty"`
 	SpotContract *spotOrderContractEcho `json:"spot_contract,omitempty"`
+	// Fee is what this order paid on the fill, in USDC: "0" for a maker, who is never charged, and the
+	// recorded fee for a taker. Absent when the fee is not known.
+	Fee    string `json:"fee,omitempty"`
+	TxHash string `json:"tx_hash,omitempty"`
 }
 
 type fillsResponse struct {
@@ -133,6 +137,17 @@ func (s *Server) presentFills(items []orders.OwnerFill) []presentedFill {
 			spotContract, _ = deriveSpotOrderContractEchoFromEngine(item.OrderSide, item.Price, item.Size)
 		}
 
+		fee := ""
+		if item.Liquidity == orders.LiquidityMaker {
+			fee = "0"
+		} else if item.TakerFee != nil {
+			fee = trimDecimalZeros(*item.TakerFee)
+		}
+		txHash := ""
+		if item.TxHash != nil {
+			txHash = *item.TxHash
+		}
+
 		out = append(out, presentedFill{
 			TradeID:      item.TradeID,
 			OrderID:      item.OrderID,
@@ -146,7 +161,18 @@ func (s *Server) presentFills(items []orders.OwnerFill) []presentedFill {
 			Market:       meta.Symbol,
 			DisplayName:  meta.DisplayName,
 			SpotContract: spotContract,
+			Fee:          fee,
+			TxHash:       txHash,
 		})
 	}
 	return out
+}
+
+// trimDecimalZeros drops a decimal's trailing fractional zeros, so a fee recorded to 18 places reads as
+// the number it is.
+func trimDecimalZeros(value string) string {
+	if !strings.Contains(value, ".") {
+		return value
+	}
+	return strings.TrimSuffix(strings.TrimRight(value, "0"), ".")
 }
