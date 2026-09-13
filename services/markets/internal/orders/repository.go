@@ -671,7 +671,7 @@ func (r *Repository) ReleaseMatchAfterFailure(ctx context.Context, orderIDs ...s
 }
 
 func (r *Repository) FinalizeMatch(ctx context.Context, takerOrderID string, makerOrderID string, fillAmount string) error {
-	return r.FinalizeMatchWithPrice(ctx, takerOrderID, makerOrderID, "", fillAmount)
+	return r.FinalizeMatchWithPrice(ctx, takerOrderID, makerOrderID, "", fillAmount, FillSettlement{})
 }
 
 func (r *Repository) FinalizeMatchWithPrice(
@@ -680,6 +680,7 @@ func (r *Repository) FinalizeMatchWithPrice(
 	makerOrderID string,
 	fillPrice string,
 	fillAmount string,
+	settlement FillSettlement,
 ) error {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -700,7 +701,7 @@ func (r *Repository) FinalizeMatchWithPrice(
 	if fillPrice == "" {
 		fillPrice = makerOrder.LimitPrice
 	}
-	if err := insertTradeFill(ctx, tx, takerOrder, makerOrder, fillPrice, fillAmount); err != nil {
+	if err := insertTradeFill(ctx, tx, takerOrder, makerOrder, fillPrice, fillAmount, settlement); err != nil {
 		return err
 	}
 
@@ -1065,7 +1066,7 @@ where order_id = $1
 	return order, nil
 }
 
-func insertTradeFill(ctx context.Context, tx pgx.Tx, taker Order, maker Order, price string, size string) error {
+func insertTradeFill(ctx context.Context, tx pgx.Tx, taker Order, maker Order, price string, size string, settlement FillSettlement) error {
 	const query = `
 insert into trade_fills (
   asset_address,
@@ -1074,8 +1075,10 @@ insert into trade_fills (
   size,
   aggressor_side,
   taker_order_id,
-  maker_order_id
-) values ($1, $2, $3, $4, $5, $6, $7)
+  maker_order_id,
+  taker_fee,
+  tx_hash
+) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 `
 
 	_, err := tx.Exec(
@@ -1088,8 +1091,18 @@ insert into trade_fills (
 		taker.Side,
 		taker.OrderID,
 		maker.OrderID,
+		unknownIfEmpty(settlement.TakerFee),
+		unknownIfEmpty(settlement.TxHash),
 	)
 	return mapPGError(err)
+}
+
+// unknownIfEmpty stores an empty settlement field as NULL, which a fill row reads as unknown.
+func unknownIfEmpty(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 // Crosses reports whether taker's limit price reaches maker's. Callers must
