@@ -15,7 +15,10 @@ const defaultPruneBatch = 5000
 //
 // 'filled' is never pruned: those rows are real trade history, and they are tiny
 // next to the churn (market-maker requoting leaves a cancelled row per replaced
-// quote — thousands a day — against a handful of fills).
+// quote — thousands a day — against a handful of fills). Neither is a cancelled or
+// expired order that traded before it ended: the order row is the only record of who
+// owned its fills, so deleting it would silently drop them from GET /v1/fills and
+// from the order's filled_quote.
 //
 // The delete is batched on purpose. A single unbounded DELETE over a large backlog
 // writes all of its WAL in one transaction, and on a nearly-full disk that is the
@@ -35,10 +38,14 @@ func (r *Repository) PruneTerminalOrders(ctx context.Context, horizon time.Durat
 	const query = `
 delete from active_orders
 where order_id = any (
-  select order_id
-  from active_orders
-  where status in ('cancelled', 'expired')
-    and created_at < now() - make_interval(secs => $1)
+  select o.order_id
+  from active_orders o
+  where o.status in ('cancelled', 'expired')
+    and o.created_at < now() - make_interval(secs => $1)
+    and not exists (
+      select 1 from trade_fills tf
+      where tf.taker_order_id = o.order_id or tf.maker_order_id = o.order_id
+    )
   limit $2
 )
 `
