@@ -237,6 +237,8 @@ insert into active_orders (
 	}
 }
 
+// The bid and ask sit on different subaccounts: one account trading with itself can never settle,
+// and the matcher does not pair it (#50).
 func TestAcquireMatchCandidateStillReservesCrossedBook(t *testing.T) {
 	pool := openTestPool(t)
 	repo := NewRepository(pool)
@@ -257,15 +259,15 @@ func TestAcquireMatchCandidateStillReservesCrossedBook(t *testing.T) {
 insert into active_orders (
   order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
   desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status
-) values ($1, $2, $3, 1, 1, $4, $5, $6, $7, '100', '0', $8, $9, '0', $10, '{}'::jsonb, '0xsig', 'active')
+) values ($1, $2, $3, $11, $11, $4, $5, $6, $7, '100', '0', $8, $9, '0', $10, '{}'::jsonb, '0xsig', 'active')
 `
 
 	expiry := time.Now().Add(time.Hour).Unix()
 	// Bid 1382 at or above ask 1378: the book crosses.
-	if _, err := pool.Exec(ctx, insertOrder, bidID, "0xowner", "0xsigner", "1", SideBuy, assetAddress, subID, "1382", "1382", expiry); err != nil {
+	if _, err := pool.Exec(ctx, insertOrder, bidID, "0xowner", "0xsigner", "1", SideBuy, assetAddress, subID, "1382", "1382", expiry, "1"); err != nil {
 		t.Fatalf("insert bid: %v", err)
 	}
-	if _, err := pool.Exec(ctx, insertOrder, askID, "0xowner", "0xsigner", "2", SideSell, assetAddress, subID, "1378", "1378", expiry); err != nil {
+	if _, err := pool.Exec(ctx, insertOrder, askID, "0xowner", "0xsigner", "2", SideSell, assetAddress, subID, "1378", "1378", expiry, "2"); err != nil {
 		t.Fatalf("insert ask: %v", err)
 	}
 
@@ -408,14 +410,14 @@ func TestAcquireMatchCandidateSkipsGatedPairWithoutReserving(t *testing.T) {
 insert into active_orders (
   order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
   desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status
-) values ($1, $2, '0xsigner', 1, 1, $3, $4, $5, $6, '100', '0', $7, $8, '0', $9, '{}'::jsonb, '0xsig', 'active')
+) values ($1, $2, '0xsigner', $10, $10, $3, $4, $5, $6, '100', '0', $7, $8, '0', $9, '{}'::jsonb, '0xsig', 'active')
 `
 	expiry := time.Now().Add(time.Hour).Unix()
 	// A crossed book: without the gate this pair would be reserved every tick.
-	if _, err := pool.Exec(ctx, insertOrder, bidID, "0xowner"+bidID, "970001", SideBuy, assetAddress, subID, "1382", "1382", expiry); err != nil {
+	if _, err := pool.Exec(ctx, insertOrder, bidID, "0xowner"+bidID, "970001", SideBuy, assetAddress, subID, "1382", "1382", expiry, "1"); err != nil {
 		t.Fatalf("insert bid: %v", err)
 	}
-	if _, err := pool.Exec(ctx, insertOrder, askID, "0xowner"+askID, "970002", SideSell, assetAddress, subID, "1378", "1378", expiry); err != nil {
+	if _, err := pool.Exec(ctx, insertOrder, askID, "0xowner"+askID, "970002", SideSell, assetAddress, subID, "1378", "1378", expiry, "2"); err != nil {
 		t.Fatalf("insert ask: %v", err)
 	}
 
