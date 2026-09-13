@@ -152,6 +152,7 @@ type orderHistoryTestResponse struct {
 		Market       string     `json:"market"`
 		CancelReason string     `json:"cancel_reason"`
 		CancelledAt  *time.Time `json:"cancelled_at"`
+		FilledQuote  *string    `json:"filled_quote"`
 	} `json:"orders"`
 	NextBefore string `json:"next_before"`
 }
@@ -173,6 +174,7 @@ func TestOrderHistoryListsOnlyTheSignersOrdersNewestFirst(t *testing.T) {
 	base := time.Now().Add(-time.Hour).UTC().Truncate(time.Microsecond)
 
 	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), "delete from trade_fills where taker_order_id like $1 or maker_order_id like $1", suffix+"%")
 		_, _ = pool.Exec(context.Background(), "delete from active_orders where order_id like $1", suffix+"%")
 	})
 
@@ -217,6 +219,24 @@ insert into active_orders (
 		}
 	}
 
+	// Fills are recorded per trade, on whichever side the order was. The filled order took twice; the
+	// cancelled one was hit once as a maker before it was cancelled. What traded is price × size summed:
+	//   filled:    1000 × 0.00074 + 346 × 0.00075 = 0.7400 + 0.2595 = 0.9995
+	//   cancelled:   21 × 0.000742842710484482   = 0.015599696920174122 -> 0.015600
+	const insertFill = `
+insert into trade_fills (asset_address, sub_id, price, size, aggressor_side, taker_order_id, maker_order_id)
+values ($1, '0', $2, $3, 'buy', $4, $5)
+`
+	for _, fill := range []struct{ price, size, taker, maker string }{
+		{price: "0.00074", size: "1000", taker: suffix + "-filled", maker: suffix + "-counterparty-1"},
+		{price: "0.00075", size: "346", taker: suffix + "-filled", maker: suffix + "-counterparty-2"},
+		{price: "0.000742842710484482", size: "21", taker: suffix + "-counterparty-3", maker: suffix + "-cancelled"},
+	} {
+		if _, err := pool.Exec(ctx, insertFill, assetAddress, fill.price, fill.size, fill.taker, fill.maker); err != nil {
+			t.Fatalf("insert fill: %v", err)
+		}
+	}
+
 	now := time.Now()
 	header := signedHistoryHeader(t, key, server.orderHistoryAuth, now, now.Add(time.Hour))
 
@@ -247,6 +267,12 @@ insert into active_orders (
 	if got, want := ids(first), []string{suffix + "-active-b", suffix + "-active-a"}; fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("page 1 = %v, want %v", got, want)
 	}
+	// Nothing traded on these, and "no fills" is absent rather than a zero that reads as a figure.
+	for _, o := range first.Orders {
+		if o.FilledQuote != nil {
+			t.Fatalf("unfilled order %s reports filled_quote %q", o.OrderID, *o.FilledQuote)
+		}
+	}
 	if first.NextBefore == "" {
 		t.Fatal("a full page must offer next_before")
 	}
@@ -261,6 +287,13 @@ insert into active_orders (
 	}
 	if second.Orders[1].Status != "filled" || second.Orders[1].Market == "" {
 		t.Fatalf("filled row not presented: %+v", second.Orders[1])
+	}
+	// What actually traded, from the fills — not the order's amount valued at its signed limit.
+	for order, want := range map[int]string{0: "0.0156", 1: "0.9995"} {
+		got := second.Orders[order].FilledQuote
+		if got == nil || !decimalStringsMatch(*got, want) {
+			t.Fatalf("%s filled_quote = %v, want %s", second.Orders[order].OrderID, got, want)
+		}
 	}
 
 	last := fetch("?limit=2&before=" + second.NextBefore)

@@ -12,6 +12,11 @@ type OrderHistoryEntry struct {
 	Order
 	CancelReason string
 	CancelledAt  *time.Time
+	// FilledQuote is what actually traded, in the quote asset: the sum of price × size over the
+	// order's fills, taker or maker. Empty when the order has no fills. It is the one reliable size
+	// for an order that filled: the order's own amount is valued at its signed limit, which for a
+	// marketable order includes slippage room the fill never used.
+	FilledQuote string
 }
 
 // OrderHistoryCursor is the last row of the previous page. Paging on (created_at, order_id) rather
@@ -30,13 +35,19 @@ type OrderHistoryCursor struct {
 // book, which only ever reads live rows — reaches back to them.
 func (r *Repository) ListOrdersByOwner(ctx context.Context, owner string, before *OrderHistoryCursor, limit int32) ([]OrderHistoryEntry, error) {
 	const query = `
-select order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
-       desired_amount, filled_amount, limit_price, coalesce(limit_price_ticks, ''), worst_fee, expiry, action_json,
-       signature, status, created_at, post_only, coalesce(cancel_reason, ''), cancelled_at
-from active_orders
-where owner_address = $1
-  and ($2::timestamptz is null or (created_at, order_id) < ($2::timestamptz, $3::text))
-order by created_at desc, order_id desc
+select o.order_id, o.owner_address, o.signer_address, o.subaccount_id, o.recipient_id, o.nonce, o.side,
+       o.asset_address, o.sub_id, o.desired_amount, o.filled_amount, o.limit_price,
+       coalesce(o.limit_price_ticks, ''), o.worst_fee, o.expiry, o.action_json, o.signature, o.status,
+       o.created_at, o.post_only, coalesce(o.cancel_reason, ''), o.cancelled_at,
+       coalesce((
+         select sum(tf.price::numeric * tf.size::numeric)::text
+         from trade_fills tf
+         where tf.taker_order_id = o.order_id or tf.maker_order_id = o.order_id
+       ), '')
+from active_orders o
+where o.owner_address = $1
+  and ($2::timestamptz is null or (o.created_at, o.order_id) < ($2::timestamptz, $3::text))
+order by o.created_at desc, o.order_id desc
 limit $4
 `
 
@@ -80,6 +91,7 @@ limit $4
 			&entry.PostOnly,
 			&entry.CancelReason,
 			&entry.CancelledAt,
+			&entry.FilledQuote,
 		); err != nil {
 			return nil, mapPGError(err)
 		}
