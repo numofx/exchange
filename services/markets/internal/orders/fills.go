@@ -23,6 +23,10 @@ type OwnerFill struct {
 	// AggressorSide is the taker's, so it is the owner's only when Liquidity is taker.
 	OrderSide Side
 	Liquidity Liquidity
+	// TakerFee is what the trade's taker paid, in the quote asset; nil when it was not recorded.
+	TakerFee *string
+	// TxHash is the settling transaction; nil when it was not recorded.
+	TxHash *string
 }
 
 // FillCursor is the last row of the previous page. A trade can appear twice for one owner — once as
@@ -42,16 +46,18 @@ func (r *Repository) ListFillsByOwner(ctx context.Context, owner string, before 
 	// One branch per side rather than a join on (taker or maker), so each can use its order-id index.
 	const query = `
 select trade_id, asset_address, sub_id, price, size, aggressor_side, taker_order_id, maker_order_id, created_at,
-       order_id, side, liquidity
+       order_id, side, liquidity, taker_fee, tx_hash
 from (
   select tf.trade_id, tf.asset_address, tf.sub_id, tf.price, tf.size, tf.aggressor_side, tf.taker_order_id,
-         tf.maker_order_id, tf.created_at, o.order_id, o.side, 'taker'::text as liquidity
+         tf.maker_order_id, tf.created_at, o.order_id, o.side, 'taker'::text as liquidity,
+         tf.taker_fee, tf.tx_hash
   from active_orders o
   join trade_fills tf on tf.taker_order_id = o.order_id
   where o.owner_address = $1
   union all
   select tf.trade_id, tf.asset_address, tf.sub_id, tf.price, tf.size, tf.aggressor_side, tf.taker_order_id,
-         tf.maker_order_id, tf.created_at, o.order_id, o.side, 'maker'::text as liquidity
+         tf.maker_order_id, tf.created_at, o.order_id, o.side, 'maker'::text as liquidity,
+         tf.taker_fee, tf.tx_hash
   from active_orders o
   join trade_fills tf on tf.maker_order_id = o.order_id
   where o.owner_address = $1
@@ -91,6 +97,8 @@ limit $4
 			&fill.OrderID,
 			&fill.OrderSide,
 			&fill.Liquidity,
+			&fill.TakerFee,
+			&fill.TxHash,
 		); err != nil {
 			return nil, mapPGError(err)
 		}
@@ -101,4 +109,13 @@ limit $4
 	}
 
 	return results, nil
+}
+
+// FillSettlement is what the chain was asked to do for a fill, recorded with it. An empty field is
+// stored as NULL, which reads as unknown, never as zero.
+type FillSettlement struct {
+	// TakerFee is the fee the taker paid, in the quote asset, as an exact decimal.
+	TakerFee string
+	// TxHash is the transaction that settled the fill, when the executor reported one.
+	TxHash string
 }

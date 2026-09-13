@@ -101,12 +101,14 @@ func TestFillCursorRoundTrips(t *testing.T) {
 
 type fillsTestResponse struct {
 	Fills []struct {
-		TradeID      int64  `json:"trade_id"`
-		OrderID      string `json:"order_id"`
-		Liquidity    string `json:"liquidity"`
-		Side         string `json:"side"`
-		Market       string `json:"market"`
-		DisplayName  string `json:"display_name"`
+		TradeID      int64   `json:"trade_id"`
+		OrderID      string  `json:"order_id"`
+		Liquidity    string  `json:"liquidity"`
+		Side         string  `json:"side"`
+		Market       string  `json:"market"`
+		DisplayName  string  `json:"display_name"`
+		Fee          *string `json:"fee"`
+		TxHash       string  `json:"tx_hash"`
 		SpotContract *struct {
 			UIIntent struct {
 				Side  string `json:"side"`
@@ -180,6 +182,11 @@ values ($1, '0', $2, $3, $4, $5, $6)
 		}
 	}
 
+	// What the matcher recorded for t1's taker. t3's taker fee is left unrecorded.
+	if _, err := pool.Exec(ctx, "update trade_fills set taker_fee = '0.001850000000000000', tx_hash = '0xfeed' where taker_order_id = $1", suffix+"-a"); err != nil {
+		t.Fatalf("record fee: %v", err)
+	}
+
 	now := time.Now()
 	// The order-history login: one signature covers both of the account's history endpoints.
 	header := signedHistoryHeader(t, key, server.orderHistoryAuth, now, now.Add(time.Hour))
@@ -249,6 +256,23 @@ values ($1, '0', $2, $3, $4, $5, $6)
 	if taker.Side != "sell" || taker.SpotContract == nil ||
 		taker.SpotContract.UIIntent.Side != "buy" || !decimalStringsMatch(taker.SpotContract.UIIntent.Size, "0.74") {
 		t.Fatalf("taker fill = %+v, want a 0.74 USDC buy", taker)
+	}
+
+	// What each order paid: a taker its recorded fee, a maker nothing, and a taker whose fee was never
+	// recorded no figure at all rather than a zero.
+	if taker.Fee == nil || *taker.Fee != "0.00185" || taker.TxHash != "0xfeed" {
+		t.Fatalf("taker fill fee = %v tx_hash = %q, want 0.00185 and 0xfeed", taker.Fee, taker.TxHash)
+	}
+	for _, makerFill := range []struct {
+		fee *string
+		id  string
+	}{{maker.Fee, maker.OrderID}, {second.Fills[0].Fee, second.Fills[0].OrderID}} {
+		if makerFill.fee == nil || *makerFill.fee != "0" {
+			t.Fatalf("maker fill %s fee = %v, want 0", makerFill.id, makerFill.fee)
+		}
+	}
+	if first.Fills[0].Fee != nil {
+		t.Fatalf("taker fill with no recorded fee reports fee %q", *first.Fills[0].Fee)
 	}
 
 	// Paging through everything: another owner's fill never appears.

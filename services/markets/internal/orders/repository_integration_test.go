@@ -59,11 +59,11 @@ insert into active_orders (
 		t.Fatalf("insert maker: %v", err)
 	}
 
-	if err := repo.FinalizeMatchWithPrice(ctx, takerID, makerID, "1605.25", "100"); err != nil {
+	if err := repo.FinalizeMatchWithPrice(ctx, takerID, makerID, "1605.25", "100", FillSettlement{}); err != nil {
 		t.Fatalf("finalize match: %v", err)
 	}
 
-	if err := repo.FinalizeMatchWithPrice(ctx, takerID, makerID, "1605.25", "100"); err == nil {
+	if err := repo.FinalizeMatchWithPrice(ctx, takerID, makerID, "1605.25", "100", FillSettlement{}); err == nil {
 		t.Fatal("expected second finalize to fail")
 	}
 
@@ -164,7 +164,7 @@ insert into active_orders (
 		t.Fatalf("insert maker: %v", err)
 	}
 
-	if err := repo.FinalizeMatchWithPrice(ctx, takerID, makerID, "1390", "1"); err != nil {
+	if err := repo.FinalizeMatchWithPrice(ctx, takerID, makerID, "1390", "1", FillSettlement{}); err != nil {
 		t.Fatalf("finalize match: %v", err)
 	}
 
@@ -550,4 +550,75 @@ insert into active_orders (
 	if again != 0 {
 		t.Fatalf("second release moved %d rows, want 0", again)
 	}
+}
+
+// The fee the matcher submitted and the transaction that settled it are recorded with the fill, so what
+// a taker paid can be read back instead of re-derived from a schedule that may have changed. A missing
+// field is stored as unknown, never as zero.
+func TestFinalizeMatchRecordsTheTakerFeeAndTransaction(t *testing.T) {
+	pool := openTestPool(t)
+	repo := NewRepository(pool)
+	ctx := context.Background()
+	suffix := fmt.Sprintf("it-fill-fee-%d", time.Now().UnixNano())
+	assetAddress := "0xfeed0000000000000000000000000000000000cd"
+
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "delete from trade_fills where taker_order_id like $1", suffix+"%")
+		_, _ = pool.Exec(ctx, "delete from active_orders where order_id like $1", suffix+"%")
+	})
+
+	insertOrder := `
+insert into active_orders (
+  order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
+  desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status
+) values ($1, $2, $2, 1, 1, $3, $4, $5, '0', '1', '0', $6, $6, '0', $7, '{}'::jsonb, '0xsig', 'matching')
+`
+	fee := "0.002475414442967443"
+	txHash := fmt.Sprintf("0x%064x", 0xab)
+	expiry := time.Now().Add(time.Hour).Unix()
+
+	for i, tc := range []struct {
+		name       string
+		settlement FillSettlement
+		wantFee    *string
+		wantTxHash *string
+	}{
+		{name: "settled", settlement: FillSettlement{TakerFee: fee, TxHash: txHash}, wantFee: &fee, wantTxHash: &txHash},
+		// The already-filled reconcile path knows the fee it submitted, but not the transaction.
+		{name: "reconciled", settlement: FillSettlement{TakerFee: fee}, wantFee: &fee},
+		{name: "unrecorded", settlement: FillSettlement{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			takerID := fmt.Sprintf("%s-%d-taker", suffix, i)
+			makerID := fmt.Sprintf("%s-%d-maker", suffix, i)
+			owner := "0xowner" + suffix
+			if _, err := pool.Exec(ctx, insertOrder, takerID, owner, 10+2*i, SideBuy, assetAddress, "1391", expiry); err != nil {
+				t.Fatalf("insert taker: %v", err)
+			}
+			if _, err := pool.Exec(ctx, insertOrder, makerID, owner, 11+2*i, SideSell, assetAddress, "1390", expiry); err != nil {
+				t.Fatalf("insert maker: %v", err)
+			}
+			if err := repo.FinalizeMatchWithPrice(ctx, takerID, makerID, "1390", "1", tc.settlement); err != nil {
+				t.Fatalf("finalize match: %v", err)
+			}
+
+			var gotFee, gotTxHash *string
+			if err := pool.QueryRow(ctx, "select taker_fee, tx_hash from trade_fills where taker_order_id = $1", takerID).Scan(&gotFee, &gotTxHash); err != nil {
+				t.Fatalf("load fill row: %v", err)
+			}
+			for field, pair := range map[string][2]*string{"taker_fee": {gotFee, tc.wantFee}, "tx_hash": {gotTxHash, tc.wantTxHash}} {
+				got, want := pair[0], pair[1]
+				if (got == nil) != (want == nil) || (got != nil && *got != *want) {
+					t.Fatalf("%s = %v, want %v", field, deref(got), deref(want))
+				}
+			}
+		})
+	}
+}
+
+func deref(value *string) string {
+	if value == nil {
+		return "<null>"
+	}
+	return *value
 }

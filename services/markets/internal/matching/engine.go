@@ -243,13 +243,17 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 		"executor_fill_price", executionFill.FillPrice,
 		"executor_fill_amount", executionFill.FillAmount,
 	)
+	// Recorded with the fill: the fee as submitted is the fee charged, so the row says what the taker
+	// paid instead of leaving it to be re-derived from a schedule that may since have changed.
+	takerFee := quoteWeiToDecimal(fillFee)
+
 	executorResp, err := e.executor.SubmitMatchForMarket(ctx, instrument.Symbol, *candidate, executionFill.FillPrice, executionFill.FillAmount, fillFee)
 	if err != nil {
 		reconcileCtx, cancel := detachedContext(ctx, reconciliationTimeout)
 		defer cancel()
 
 		if shouldFinalizeAfterExecutorError(err) {
-			if finalizeErr := e.orders.FinalizeMatchWithPrice(reconcileCtx, candidate.Taker.OrderID, candidate.Maker.OrderID, logPrice, fillAmount); finalizeErr != nil {
+			if finalizeErr := e.orders.FinalizeMatchWithPrice(reconcileCtx, candidate.Taker.OrderID, candidate.Maker.OrderID, logPrice, fillAmount, orders.FillSettlement{TakerFee: takerFee}); finalizeErr != nil {
 				slog.Error("reconcile already-filled match",
 					"market", instrument.Symbol,
 					"taker_order_id", candidate.Taker.OrderID,
@@ -331,7 +335,7 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 
 	reconcileCtx, cancel := detachedContext(ctx, reconciliationTimeout)
 	defer cancel()
-	if err := e.orders.FinalizeMatchWithPrice(reconcileCtx, candidate.Taker.OrderID, candidate.Maker.OrderID, logPrice, fillAmount); err != nil {
+	if err := e.orders.FinalizeMatchWithPrice(reconcileCtx, candidate.Taker.OrderID, candidate.Maker.OrderID, logPrice, fillAmount, orders.FillSettlement{TakerFee: takerFee, TxHash: executorResp.TxHash}); err != nil {
 		slog.Error("finalize match", "market", instrument.Symbol, "taker_order_id", candidate.Taker.OrderID, "maker_order_id", candidate.Maker.OrderID, "error", err)
 		return
 	}

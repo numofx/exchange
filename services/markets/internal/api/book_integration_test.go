@@ -267,7 +267,7 @@ func TestDepositedCrossPathEndToEnd(t *testing.T) {
 
 	// desired_amount "1" is one whole unit (amount step "1"), so a full fill is 1
 	// atomic unit — not a raw 1e6-scaled value.
-	if err := repo.FinalizeMatchWithPrice(ctx, candidate.Taker.OrderID, candidate.Maker.OrderID, "1390", "1"); err != nil {
+	if err := repo.FinalizeMatchWithPrice(ctx, candidate.Taker.OrderID, candidate.Maker.OrderID, "1390", "1", orderrepo.FillSettlement{}); err != nil {
 		t.Fatalf("finalize match: %v", err)
 	}
 
