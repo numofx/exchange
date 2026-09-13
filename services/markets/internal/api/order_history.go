@@ -36,6 +36,9 @@ type presentedHistoryOrder struct {
 	presentedOrder
 	CancelReason string     `json:"cancel_reason,omitempty"`
 	CancelledAt  *time.Time `json:"cancelled_at,omitempty"`
+	// FilledQuote is what actually traded, in the quote asset (USDC on USDCcNGN-SPOT), to 6 decimal
+	// places. Absent when the order has no fills.
+	FilledQuote string `json:"filled_quote,omitempty"`
 }
 
 type orderHistoryResponse struct {
@@ -166,7 +169,22 @@ func (s *Server) presentOrderHistory(items []orders.OrderHistoryEntry) []present
 			presentedOrder: presentOrder(item.Order, meta),
 			CancelReason:   item.CancelReason,
 			CancelledAt:    item.CancelledAt,
+			FilledQuote:    formatFilledQuote(item.FilledQuote),
 		})
 	}
 	return out
+}
+
+// formatFilledQuote renders the summed fill notional to the quote asset's 6 decimals. An empty or
+// unparseable sum is omitted rather than reported as zero: "no fills" and "unknown" must not read as
+// an order that traded nothing.
+func formatFilledQuote(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return ""
+	}
+	value, err := parseDecimal(raw)
+	if err != nil || value.Sign() <= 0 {
+		return ""
+	}
+	return formatDecimal(value, spotUISizeDecimalScale)
 }
