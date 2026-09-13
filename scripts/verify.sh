@@ -14,6 +14,10 @@
 #
 # BASE_RPC_URL is required. CI supplies it from secrets, and the fork suites fail in setUp
 # without it — which is the same divergence in the other direction.
+#
+# The markets section also needs MARKETS_SERVICE_TEST_DATABASE_URL, a Postgres it may migrate and
+# write to (CI uses a postgres:18 service). Without it that step fails rather than letting the
+# database-backed tests skip, which is what CI did before it had a database.
 set -uo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -58,7 +62,7 @@ step execution contracts/execution "forge test" forge test
 # ---- services-markets.yml --------------------------------------------------------------
 step markets services/markets "go build ./..." go build ./...
 step markets services/markets "go vet ./..." go vet ./...
-step markets services/markets "go test ./..." go test ./...
+step markets services/markets "go test ./... against Postgres (none may skip)" ./scripts/test-with-db.sh
 
 # ---- services-execution.yml ------------------------------------------------------------
 step node . "pnpm install --frozen-lockfile" pnpm install --frozen-lockfile
