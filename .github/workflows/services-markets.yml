@@ -12,6 +12,19 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Production runs Postgres 18 (infra/aws/data.tf), so the database-backed tests run on 18 too.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: markets_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     defaults:
       run:
         working-directory: services/markets
@@ -23,4 +36,9 @@ jobs:
           cache-dependency-path: services/markets/go.sum
       - run: go build ./...
       - run: go vet ./...
-      - run: go test ./...
+      # Not a bare `go test ./...`: without a database every database-backed test skipped, and a
+      # skip reads as a pass. The script migrates, runs the suite, and fails if any test skipped
+      # for want of a database. verify.sh runs the same script.
+      - run: ./scripts/test-with-db.sh
+        env:
+          MARKETS_SERVICE_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/markets_test?sslmode=disable
