@@ -974,6 +974,14 @@ func selectMatchPair(bids []Order, asks []Order, gate MatchGate) (*Order, *Order
 			if taker.PostOnly {
 				continue
 			}
+			// Two orders on one subaccount can never settle: SubAccounts refuses to move an asset from
+			// an account to itself (AC_CannotTransferAssetToOneself). Pairing them only reserves both,
+			// reverts on chain and backs off — on 2026-09-13 a buy and a sell on subaccount 19 did that
+			// every five minutes while locking the top of the book (#50). `continue` for the same
+			// reason as post-only: it is not about price, so a later ask may still pair with this bid.
+			if taker.SubaccountID != "" && taker.SubaccountID == maker.SubaccountID {
+				continue
+			}
 			if gate != nil && gate(taker, maker) {
 				continue
 			}

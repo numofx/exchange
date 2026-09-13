@@ -133,7 +133,7 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 		return
 	}
 	if fillAmount == "0" {
-		e.noteMatchFailure(instrument.Symbol, *candidate, "zero_fill")
+		e.noteMatchFailure(instrument.Symbol, *candidate, "zero_fill", settlementRevert{})
 		slog.Error(
 			"crossed_order_zero_fill",
 			"market", instrument.Symbol,
@@ -151,7 +151,7 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 
 	executionFill, err := computeExecutionUnits(instrument, *candidate, fillPrice, fillAmount)
 	if err != nil {
-		e.noteMatchFailure(instrument.Symbol, *candidate, "invariant_failed")
+		e.noteMatchFailure(instrument.Symbol, *candidate, "invariant_failed", settlementRevert{})
 		slog.Error(
 			"match_trace_invariant_failed",
 			"market", instrument.Symbol,
@@ -175,7 +175,7 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 	// the number that reaches the chain.
 	fillFee, feeErr := takerFillFee(instrument.TakerFeeBps, executionFill.FillPrice, executionFill.FillAmount)
 	if feeErr != nil {
-		e.noteMatchFailure(instrument.Symbol, *candidate, "fee_computation_failed")
+		e.noteMatchFailure(instrument.Symbol, *candidate, "fee_computation_failed", settlementRevert{})
 		slog.Error("fee_computation_failed", "market", instrument.Symbol, "error", feeErr)
 		reconcileCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -215,7 +215,7 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 			"error", fundErr,
 		)
 	} else if !funded {
-		e.noteMatchFailure(instrument.Symbol, *candidate, "buyer_underfunded")
+		e.noteMatchFailure(instrument.Symbol, *candidate, "buyer_underfunded", settlementRevert{})
 		slog.Warn(
 			"match_trace_buyer_underfunded",
 			"market", instrument.Symbol,
@@ -293,7 +293,7 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 			return
 		}
 
-		e.noteMatchFailure(instrument.Symbol, *candidate, "executor_error")
+		e.noteMatchFailure(instrument.Symbol, *candidate, "executor_error", classifySettlementRevert(err))
 		slog.Error("submit match", "market", instrument.Symbol, "taker_order_id", candidate.Taker.OrderID, "maker_order_id", candidate.Maker.OrderID, "error", err)
 		_ = e.orders.ReleaseMatchAfterFailure(reconcileCtx, candidate.Taker.OrderID, candidate.Maker.OrderID)
 		return
@@ -315,7 +315,7 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 	// is nothing and the cost of being wrong is a fill recorded against a reverted
 	// transaction, which the book cannot detect on its own afterwards.
 	if !executorResp.Accepted {
-		e.noteMatchFailure(instrument.Symbol, *candidate, "executor_not_accepted")
+		e.noteMatchFailure(instrument.Symbol, *candidate, "executor_not_accepted", settlementRevert{})
 		slog.Error("executor did not accept match",
 			"market", instrument.Symbol,
 			"taker_order_id", candidate.Taker.OrderID,
@@ -362,12 +362,35 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 
 // noteMatchFailure widens the retry window for a pair that just failed, so an
 // unsettleable cross cannot spin at the poll rate until one side expires.
-func (e *Engine) noteMatchFailure(market string, candidate orders.MatchCandidate, reason string) {
+//
+// A revert that can never succeed for the pair as signed parks it instead: retrying only repeats the
+// revert, so the pair is skipped until either order changes (#50). Nothing is cancelled — both orders
+// stay on the book and can still trade with anyone else.
+func (e *Engine) noteMatchFailure(market string, candidate orders.MatchCandidate, reason string, revert settlementRevert) {
+	if revert.Class == revertPermanentForPair {
+		attempts := e.backoff.park(candidate.Taker, candidate.Maker)
+		slog.Warn(
+			"match_parked",
+			"market", market,
+			"reason", reason,
+			"revert_selector", revert.Selector,
+			"revert_name", revert.Name,
+			"revert_class", revert.Class.String(),
+			"taker_order_id", candidate.Taker.OrderID,
+			"maker_order_id", candidate.Maker.OrderID,
+			"consecutive_failures", attempts,
+		)
+		return
+	}
+
 	attempts, retryIn := e.backoff.recordFailure(candidate.Taker, candidate.Maker)
 	slog.Warn(
 		"match_backoff",
 		"market", market,
 		"reason", reason,
+		"revert_selector", revert.Selector,
+		"revert_name", revert.Name,
+		"revert_class", revert.Class.String(),
 		"taker_order_id", candidate.Taker.OrderID,
 		"maker_order_id", candidate.Maker.OrderID,
 		"consecutive_failures", attempts,

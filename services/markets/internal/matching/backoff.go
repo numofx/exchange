@@ -24,11 +24,38 @@ const (
 	// Stale entries are dropped once they are this far past their retry time, so
 	// the map cannot grow without bound as orders come and go.
 	matchBackoffTTL = 30 * time.Minute
+
+	// After this many consecutive failures a pair whose failure might still clear — a balance that
+	// could be topped up, or an error that was not recognised — is retried only every
+	// matchSlowRetryInterval rather than every matchBackoffCap until one side expires (#50).
+	//
+	// Past the point the doubling reaches the cap (failure 9: 2s << 8 > 5m), so a transient failure
+	// still gets the whole fast schedule plus a few attempts at the cap — about 23 minutes — first.
+	matchSlowRetryAfter    = 12
+	matchSlowRetryInterval = 30 * time.Minute
+
+	// A parked pair is forgotten after this. The venue signs orders for a day, so both have expired
+	// by then; the entry only has to outlive them.
+	matchParkTTL = 25 * time.Hour
 )
 
 type matchFailure struct {
 	failures    int
 	nextAttempt time.Time
+	// parked: the pair can never settle as signed, so it is skipped until either order changes.
+	parked      bool
+	parkedAt    time.Time
+	fingerprint string
+}
+
+// pairFingerprint identifies the state a parked pair was parked in. A fill on either order changes
+// it, and so does anything else that re-signs or replaces an order, since the order id is part of it.
+func pairFingerprint(taker orders.Order, maker orders.Order) string {
+	first, second := taker, maker
+	if second.OrderID < first.OrderID {
+		first, second = second, first
+	}
+	return first.OrderID + ":" + first.FilledAmount + "|" + second.OrderID + ":" + second.FilledAmount
 }
 
 // matchBackoff tracks consecutive failures per order pair.
@@ -56,11 +83,42 @@ func (b *matchBackoff) shouldSkip(taker orders.Order, maker orders.Order) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	entry, ok := b.state[pairKey(taker, maker)]
+	key := pairKey(taker, maker)
+	entry, ok := b.state[key]
 	if !ok {
 		return false
 	}
+	if entry.parked {
+		if entry.fingerprint == pairFingerprint(taker, maker) {
+			return true
+		}
+		// One side filled or changed since the pair was parked, so the reason may no longer hold.
+		delete(b.state, key)
+		return false
+	}
 	return b.now().Before(entry.nextAttempt)
+}
+
+// park stops retrying a pair whose settlement can never succeed as signed, until either order
+// changes. It never cancels anything: both orders stay on the book and can still trade with others.
+func (b *matchBackoff) park(taker orders.Order, maker orders.Order) (attempts int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	now := b.now()
+	key := pairKey(taker, maker)
+	entry, ok := b.state[key]
+	if !ok {
+		entry = &matchFailure{}
+		b.state[key] = entry
+	}
+	entry.failures++
+	entry.parked = true
+	entry.parkedAt = now
+	entry.fingerprint = pairFingerprint(taker, maker)
+
+	b.pruneLocked(now)
+	return entry.failures
 }
 
 // recordFailure grows the pair's backoff window. Delay doubles per consecutive
@@ -83,6 +141,9 @@ func (b *matchBackoff) recordFailure(taker orders.Order, maker orders.Order) (at
 	if delay <= 0 || delay > matchBackoffCap {
 		delay = matchBackoffCap
 	}
+	if entry.failures >= matchSlowRetryAfter {
+		delay = matchSlowRetryInterval
+	}
 	entry.nextAttempt = now.Add(delay)
 
 	b.pruneLocked(now)
@@ -98,6 +159,12 @@ func (b *matchBackoff) clear(taker orders.Order, maker orders.Order) {
 
 func (b *matchBackoff) pruneLocked(now time.Time) {
 	for key, entry := range b.state {
+		if entry.parked {
+			if now.Sub(entry.parkedAt) > matchParkTTL {
+				delete(b.state, key)
+			}
+			continue
+		}
 		if now.Sub(entry.nextAttempt) > matchBackoffTTL {
 			delete(b.state, key)
 		}

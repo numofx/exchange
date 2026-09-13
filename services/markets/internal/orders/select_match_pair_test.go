@@ -174,3 +174,59 @@ func TestSelectMatchPairHandlesEmptySides(t *testing.T) {
 		t.Fatalf("empty bid side: taker=%v err=%v", taker, err)
 	}
 }
+
+func mkAccountOrder(id string, side Side, priceTicks string, subaccountID string, createdAt time.Time) Order {
+	order := mkOrder(id, side, priceTicks, createdAt)
+	order.SubaccountID = subaccountID
+	return order
+}
+
+// The 2026-09-13 pair: a buy and a sell on subaccount 19 that crossed at the same price and could
+// never settle (#50). The bid must fall through to the next ask instead.
+func TestSameSubaccountPairIsNeverSelected(t *testing.T) {
+	bids := []Order{mkAccountOrder("bid-19", SideBuy, "100", "19", t0)}
+	asks := []Order{
+		mkAccountOrder("ask-19", SideSell, "100", "19", t0.Add(time.Second)),
+		mkAccountOrder("ask-15", SideSell, "100", "15", t0.Add(2*time.Second)),
+	}
+
+	taker, maker, err := selectMatchPair(bids, asks, nil)
+	if err != nil {
+		t.Fatalf("selectMatchPair: %v", err)
+	}
+	if taker == nil {
+		t.Fatal("the bid crosses another account's ask, so a pair must be returned")
+	}
+	if got := pairKeyFor(*taker, *maker); got != "ask-15|bid-19" {
+		t.Fatalf("selected %q, want the other account's ask", got)
+	}
+}
+
+func TestNoPairWhenTheOnlyCrossIsWithTheSameSubaccount(t *testing.T) {
+	bids := []Order{mkAccountOrder("bid-19", SideBuy, "100", "19", t0)}
+	asks := []Order{mkAccountOrder("ask-19", SideSell, "100", "19", t0.Add(time.Second))}
+
+	taker, _, err := selectMatchPair(bids, asks, nil)
+	if err != nil {
+		t.Fatalf("selectMatchPair: %v", err)
+	}
+	if taker != nil {
+		t.Fatal("a self-trade must not be selected")
+	}
+}
+
+// Settlement is refused per subaccount, not per owner: one wallet's two accounts settle normally.
+func TestDifferentSubaccountsOfOneOwnerStillMatch(t *testing.T) {
+	bid := mkAccountOrder("bid-19", SideBuy, "100", "19", t0)
+	bid.OwnerAddress = "0xeabca823b4d35d8f2eac09edb55c42d8077fbfca"
+	ask := mkAccountOrder("ask-20", SideSell, "100", "20", t0.Add(time.Second))
+	ask.OwnerAddress = bid.OwnerAddress
+
+	taker, _, err := selectMatchPair([]Order{bid}, []Order{ask}, nil)
+	if err != nil {
+		t.Fatalf("selectMatchPair: %v", err)
+	}
+	if taker == nil {
+		t.Fatal("two subaccounts of one owner must still be able to trade")
+	}
+}
