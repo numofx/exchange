@@ -34,6 +34,9 @@ type Server struct {
 	signatures  signatureChecker
 	hub         *events.Hub
 	wsAuth      wsauth.Verifier
+	// orderHistoryAuth verifies GET /v1/orders frames: same domain as wsAuth, its own statement and
+	// validity window, so neither kind of frame is accepted by the other.
+	orderHistoryAuth wsauth.Verifier
 }
 
 type marketPresentation struct {
@@ -190,6 +193,11 @@ type marketDiagnosticsResponse struct {
 }
 
 func NewServer(cfg config.Config, pool *pgxpool.Pool, registry *instruments.Registry) *Server {
+	orderHistoryAuthMaxTTL := cfg.OrderHistoryAuthMaxTTL
+	if orderHistoryAuthMaxTTL <= 0 {
+		orderHistoryAuthMaxTTL = defaultOrderHistoryAuthMaxTTL
+	}
+
 	return &Server{
 		cfg:         cfg,
 		pool:        pool,
@@ -199,6 +207,11 @@ func NewServer(cfg config.Config, pool *pgxpool.Pool, registry *instruments.Regi
 		signatures:  newSignatureChecker(cfg),
 		hub:         events.NewHub(pool, cfg, slog.Default()),
 		wsAuth:      wsauth.Verifier{Domain: cfg.WSAuthDomain, MaxTTL: cfg.WSAuthMaxTTL},
+		orderHistoryAuth: wsauth.Verifier{
+			Domain:    cfg.WSAuthDomain,
+			MaxTTL:    orderHistoryAuthMaxTTL,
+			Statement: wsauth.OrderHistoryStatement,
+		},
 	}
 }
 
@@ -213,6 +226,7 @@ func (s *Server) Run(ctx context.Context) error {
 	router.Get("/v1/book", s.handleBook)
 	router.Get("/v1/trades", s.handleTrades)
 	router.Get("/v1/candles", s.handleCandles)
+	router.Get("/v1/orders", s.handleOrderHistory)
 	router.Get("/v1/orders/{order_id}", s.handleGetOrderStatus)
 	router.Get("/debug/markets", s.handleMarketDiagnostics)
 	router.Post("/v1/orders", s.handleCreateOrder)

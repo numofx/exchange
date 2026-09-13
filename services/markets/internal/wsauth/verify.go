@@ -19,6 +19,16 @@ var (
 // clockSkew tolerates minor client/server clock drift on issued_at.
 const clockSkew = 60 * time.Second
 
+// DefaultStatement is what a frame for the WebSocket 'orders' channel authorizes. It is the text
+// every existing client already signs, so it must never change.
+const DefaultStatement = "authenticate for the Numo markets WebSocket"
+
+// OrderHistoryStatement authorizes reading an owner's order history over GET /v1/orders. It is
+// distinct from DefaultStatement so a frame signed for one cannot be replayed against the other:
+// the two accept very different validity windows, and a long-lived history frame must not open a
+// WebSocket session.
+const OrderHistoryStatement = "view your Numo order history"
+
 // AuthFrame is the client's {"op":"auth", ...} payload. Times are unix seconds to avoid any
 // date-format ambiguity between signer and verifier.
 type AuthFrame struct {
@@ -35,6 +45,9 @@ type AuthFrame struct {
 type Verifier struct {
 	Domain string
 	MaxTTL time.Duration
+	// Statement is what the signature authorizes, bound into the signed message. Empty means
+	// DefaultStatement, so existing WebSocket verifiers are unchanged byte-for-byte.
+	Statement string
 }
 
 // Verify recovers the signer and enforces domain/expiry/window checks. On success it returns
@@ -76,13 +89,17 @@ func (v Verifier) Verify(f AuthFrame, now time.Time) (string, error) {
 // Message is the canonical string the client signs. Both sides MUST build it identically,
 // byte-for-byte, or recovery yields a different address and auth fails.
 func (v Verifier) Message(f AuthFrame) string {
+	statement := v.Statement
+	if statement == "" {
+		statement = DefaultStatement
+	}
 	return fmt.Sprintf(
-		"%s wants you to authenticate for the Numo markets WebSocket.\n"+
+		"%s wants you to %s.\n"+
 			"Address: %s\n"+
 			"Nonce: %s\n"+
 			"Issued At: %d\n"+
 			"Expiration Time: %d",
-		v.Domain, strings.ToLower(strings.TrimSpace(f.Address)), f.Nonce, f.IssuedAt, f.Expiry)
+		v.Domain, statement, strings.ToLower(strings.TrimSpace(f.Address)), f.Nonce, f.IssuedAt, f.Expiry)
 }
 
 func isHexAddress(s string) bool {
