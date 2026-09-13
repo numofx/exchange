@@ -153,8 +153,10 @@ not the notification.
 ### Auth (private `orders` channel)
 
 Public channels need no auth. `orders` is per-owner: the client proves control of
-`owner_address` via a short-lived signed token (EIP-712 "login" or an issued API key —
-decide alongside the REST auth work). The hub routes `orders` events by
+`owner_address` with an EIP-191 `personal_sign` frame (`internal/wsauth`) over a canonical
+message bound to `WS_AUTH_DOMAIN`. REST `GET /v1/orders` reuses the same frame, carried in the
+`X-Numo-Auth` header and signed over a different statement (`wsauth.OrderHistoryStatement`), so a
+frame for one is never accepted by the other. The hub routes `orders` events by
 `market_events.owner_address`; a connection only receives rows matching its authenticated
 address. Never broadcast one owner's order events to another.
 

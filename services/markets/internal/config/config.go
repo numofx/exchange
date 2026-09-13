@@ -79,6 +79,11 @@ type Config struct {
 	WSAuthDomain     string        // SIWE domain bound into the signed message
 	WSAuthMaxTTL     time.Duration // max validity window of a single signed auth frame (replay bound)
 	WSAllowedOrigins []string      // browser Origin allowlist; empty = same-origin only
+
+	// Max validity window of a GET /v1/orders auth frame (internal/wsauth, OrderHistoryStatement).
+	// Longer than WSAuthMaxTTL because every history request is verified, where a socket verifies
+	// once per connection; the frame only reads the signer's own orders.
+	OrderHistoryAuthMaxTTL time.Duration
 }
 
 func Load() (Config, error) {
@@ -137,6 +142,7 @@ func Load() (Config, error) {
 
 	cfg.WSAuthDomain = getenvDefault("WS_AUTH_DOMAIN", "markets.numo.xyz")
 	cfg.WSAuthMaxTTL = getenvDurationDefault("WS_AUTH_MAX_TTL", 5*time.Minute)
+	cfg.OrderHistoryAuthMaxTTL = getenvDurationDefault("ORDER_HISTORY_AUTH_MAX_TTL", 24*time.Hour)
 	cfg.WSAllowedOrigins = getenvCSV("WS_ALLOWED_ORIGINS", "")
 
 	if err := cfg.validateFundingCheck(); err != nil {
