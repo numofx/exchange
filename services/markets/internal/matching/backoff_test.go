@@ -48,7 +48,9 @@ func TestMatchBackoffDoublesAndCaps(t *testing.T) {
 	taker, maker := testPair()
 
 	var last time.Duration
-	for i := 1; i <= 20; i++ {
+	// Up to the slow-retry threshold; past it the delay deliberately jumps to matchSlowRetryInterval,
+	// pinned by TestRepeatedFailuresSlowToTheLongInterval.
+	for i := 1; i < matchSlowRetryAfter; i++ {
 		_, retryIn := b.recordFailure(taker, maker)
 		if retryIn > matchBackoffCap {
 			t.Fatalf("failure %d: retryIn %s exceeds cap %s", i, retryIn, matchBackoffCap)
