@@ -12,6 +12,7 @@ PROFILE="${PROFILE:-numo}"
 REGION="${REGION:-us-east-1}"
 MM_ADDRESS="${MM_ADDRESS:-0x3448ac0A3283951A2AFD5B3A582329ECA43CB47B}"
 MATCHING="${MATCHING:-0x9E90A9cD13d859Bd6a08168082FB1F6F7405F191}"
+WITHDRAWAL_MODULE="${WITHDRAWAL_MODULE:-0x0a10AE2f5D2482cE1e43bC309D430B8861C2b5aB}"
 
 fail=0
 note() { printf '%-8s %s\n' "$1" "$2"; }
@@ -38,6 +39,13 @@ if [ "$fail" -eq 0 ]; then
     note "ok" "$addr is an authorized tradeExecutor"
   else
     note "FAIL" "$addr is NOT an authorized tradeExecutor — settlement would revert"; fail=1
+  fi
+
+  # Signed withdrawals revert M_OnlyAllowedModule for a module Matching does not allow.
+  if [ "$(cast call "$MATCHING" 'allowedModules(address)(bool)' "$WITHDRAWAL_MODULE" --rpc-url "$rpc")" = "true" ]; then
+    note "ok" "withdrawal module $WITHDRAWAL_MODULE is allowed on Matching"
+  else
+    note "FAIL" "withdrawal module $WITHDRAWAL_MODULE is NOT allowed on Matching — withdrawals would revert"; fail=1
   fi
 
   # A key that cannot pay for gas fails the same way a missing key does, just later.
