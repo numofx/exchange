@@ -22,6 +22,13 @@ const envSchema = z.object({
   // matcher must exceed this value, or the matcher abandons a request that is still
   // in flight and retries it against a nonce that has not settled yet.
   RECEIPT_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
+  // Signed withdrawals (POST /withdraw). Off unless WITHDRAWAL_ASSET_ADDRESSES names the wrapped assets the module
+  // may pay out of: an allowlist that defaulted to "any asset" would fail in the wrong direction.
+  WITHDRAWAL_MODULE_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
+  WITHDRAWAL_ASSET_ADDRESSES: z.string().default(''),
+  // Shorter than RECEIPT_TIMEOUT_MS because a trader is waiting on it. markets-service's EXECUTOR_TIMEOUT on the
+  // API task must exceed it, or the API gives up on a withdrawal that is still in flight.
+  WITHDRAWAL_RECEIPT_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
   // Settlement canary. Unset SETTLEMENT_CANARY_MANAGER disables it entirely, so a chain
   // or environment without a risk manager is not forced to invent one.
   SETTLEMENT_CANARY_MANAGER: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
@@ -63,6 +70,9 @@ export type AppConfig = {
   dryRun: boolean;
   waitForReceipt: boolean;
   receiptTimeoutMs: number;
+  withdrawalModuleAddress?: `0x${string}`;
+  withdrawalAssetAddresses: `0x${string}`[];
+  withdrawalReceiptTimeoutMs: number;
   settlementCanary?: {
     manager: `0x${string}`;
     accountIds: number[];
@@ -99,6 +109,11 @@ export function loadConfig(): AppConfig {
     dryRun: parsed.DRY_RUN === 'true',
     waitForReceipt: parsed.WAIT_FOR_RECEIPT === 'true',
     receiptTimeoutMs: parsed.RECEIPT_TIMEOUT_MS,
+    withdrawalModuleAddress: parsed.WITHDRAWAL_MODULE_ADDRESS
+      ? (getAddress(parsed.WITHDRAWAL_MODULE_ADDRESS) as `0x${string}`)
+      : undefined,
+    withdrawalAssetAddresses: parseAddressList('WITHDRAWAL_ASSET_ADDRESSES', parsed.WITHDRAWAL_ASSET_ADDRESSES),
+    withdrawalReceiptTimeoutMs: parsed.WITHDRAWAL_RECEIPT_TIMEOUT_MS,
     settlementCanary: parsed.SETTLEMENT_CANARY_MANAGER
       ? {
           manager: getAddress(parsed.SETTLEMENT_CANARY_MANAGER) as `0x${string}`,
@@ -115,6 +130,20 @@ export function loadConfig(): AppConfig {
         }
       : undefined,
   };
+}
+
+/** A comma-separated address list. A malformed entry is a startup failure, never a silently shorter list. */
+function parseAddressList(name: string, raw: string): `0x${string}`[] {
+  return raw
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== '')
+    .map((entry) => {
+      if (!/^0x[0-9a-fA-F]{40}$/.test(entry)) {
+        throw new Error(`${name}: "${entry}" is not an address`);
+      }
+      return getAddress(entry) as `0x${string}`;
+    });
 }
 
 /** Parse "<address>:<delta>,<address>:<delta>" into a lookup keyed by lowercased address. */
@@ -186,7 +215,11 @@ function parseAccountIds(raw: string): number[] {
   return ids;
 }
 
-export function loadDeploymentAddresses(chainId: number): { matching: `0x${string}`; trade: `0x${string}` } {
+export function loadDeploymentAddresses(chainId: number): {
+  matching: `0x${string}`;
+  trade: `0x${string}`;
+  withdrawal?: `0x${string}`;
+} {
   const d = getDeployment(chainId);
-  return { matching: d.matching, trade: d.trade };
+  return { matching: d.matching, trade: d.trade, withdrawal: d.withdrawal };
 }

@@ -11,12 +11,25 @@ import {
 import { privateKeyToAccount } from 'viem/accounts';
 
 import type { AppConfig } from './config.js';
-import type { ExecuteMatchRequest, ExecuteMatchResponse } from './types.js';
+import { createSerialQueue } from './serial-queue.js';
+import type { ExecuteMatchRequest, ExecuteMatchResponse, WithdrawRequest } from './types.js';
+import {
+  WithdrawalRejectedError,
+  assertWithdrawalPolicy,
+  buildWithdrawArgs,
+  describeSimulationRevert,
+  withdrawalRevertErrorsAbi,
+} from './withdrawal.js';
 
 export type ExecutorDependencies = {
   matchingAbi: Abi;
   matchingAddress: `0x${string}`;
   tradeModuleAddress: `0x${string}`;
+  /** Signed withdrawals. Absent when this deployment does not accept them; `withdraw` then refuses. */
+  withdrawal?: {
+    moduleAddress: `0x${string}`;
+    assetAddresses: readonly `0x${string}`[];
+  };
 };
 
 export class MatchExecutor {
@@ -24,6 +37,8 @@ export class MatchExecutor {
   private readonly chain;
   private readonly publicClient;
   private readonly walletClient;
+  // Settlements and withdrawals share this EOA's nonce sequence; see serial-queue.ts.
+  private readonly enqueueSend = createSerialQueue();
 
   constructor(
     private readonly config: AppConfig,
@@ -51,26 +66,32 @@ export class MatchExecutor {
 
     const args = buildVerifyAndMatchArgs(request);
 
-    await this.publicClient.simulateContract({
-      account: this.account,
-      address: this.deps.matchingAddress,
-      abi: this.deps.matchingAbi,
-      functionName: 'verifyAndMatch',
-      args,
+    const txHash = await this.enqueueSend(async () => {
+      await this.publicClient.simulateContract({
+        account: this.account,
+        address: this.deps.matchingAddress,
+        abi: this.deps.matchingAbi,
+        functionName: 'verifyAndMatch',
+        args,
+      });
+
+      if (this.config.dryRun) {
+        return 'dry-run' as const;
+      }
+
+      return this.walletClient.writeContract({
+        account: this.account,
+        address: this.deps.matchingAddress,
+        abi: this.deps.matchingAbi,
+        functionName: 'verifyAndMatch',
+        args,
+        chain: this.chain,
+      });
     });
 
-    if (this.config.dryRun) {
+    if (txHash === 'dry-run') {
       return { accepted: true, tx_hash: 'dry-run' };
     }
-
-    const txHash = await this.walletClient.writeContract({
-      account: this.account,
-      address: this.deps.matchingAddress,
-      abi: this.deps.matchingAbi,
-      functionName: 'verifyAndMatch',
-      args,
-      chain: this.chain,
-    });
 
     if (!this.config.waitForReceipt) {
       return { accepted: true, tx_hash: txHash };
@@ -88,6 +109,78 @@ export class MatchExecutor {
         // the matcher as a plain failure, and the matcher retries plain failures --
         // which would broadcast a second verifyAndMatch for a transaction that is
         // still pending. Naming the outcome lets the matcher decline to retry.
+        return { accepted: false, tx_hash: txHash, receipt_status: 'timeout' };
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Submits one user-signed withdrawal through `Matching.verifyAndMatch`.
+   *
+   * Policy is checked first, then the call is simulated with the withdrawal module's and the assets' errors in the
+   * ABI: a withdrawal the chain would revert is refused with its revert named, and costs no gas. Only then is it
+   * broadcast, in the same queue as settlements. The receipt wait is bounded by WITHDRAWAL_RECEIPT_TIMEOUT_MS; past
+   * it the outcome is reported as unknown, never as failed, because the transaction may still mine.
+   */
+  async withdraw(request: WithdrawRequest): Promise<ExecuteMatchResponse> {
+    const withdrawal = this.deps.withdrawal;
+    if (!withdrawal) {
+      throw new WithdrawalRejectedError('withdrawals are not enabled on this executor');
+    }
+
+    assertWithdrawalPolicy(request, {
+      moduleAddress: withdrawal.moduleAddress,
+      assetAddresses: withdrawal.assetAddresses,
+      nowSeconds: Math.floor(Date.now() / 1000),
+    });
+
+    const args = buildWithdrawArgs(request);
+    const abi = [...this.deps.matchingAbi, ...withdrawalRevertErrorsAbi] as Abi;
+
+    const txHash = await this.enqueueSend(async () => {
+      try {
+        await this.publicClient.simulateContract({
+          account: this.account,
+          address: this.deps.matchingAddress,
+          abi,
+          functionName: 'verifyAndMatch',
+          args,
+        });
+      } catch (error) {
+        const revert = describeSimulationRevert(error);
+        if (revert !== undefined) {
+          throw new WithdrawalRejectedError(`withdrawal would revert: ${revert}`, revert);
+        }
+        throw error;
+      }
+
+      if (this.config.dryRun) {
+        return 'dry-run' as const;
+      }
+
+      return this.walletClient.writeContract({
+        account: this.account,
+        address: this.deps.matchingAddress,
+        abi,
+        functionName: 'verifyAndMatch',
+        args,
+        chain: this.chain,
+      });
+    });
+
+    if (txHash === 'dry-run') {
+      return { accepted: true, tx_hash: 'dry-run' };
+    }
+
+    try {
+      const receipt = await this.publicClient.waitForTransactionReceipt({
+        hash: txHash,
+        timeout: this.config.withdrawalReceiptTimeoutMs,
+      });
+      return buildReceiptResponse(txHash, receipt);
+    } catch (error) {
+      if (error instanceof WaitForTransactionReceiptTimeoutError) {
         return { accepted: false, tx_hash: txHash, receipt_status: 'timeout' };
       }
       throw error;

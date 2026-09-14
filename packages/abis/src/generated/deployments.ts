@@ -3,19 +3,23 @@
 export const deployments = {
   "901": {
     "matching": "0x3cc154e220c2197c5337b7Bd13363DD127Bc0C6E",
-    "trade": "0x87F2863866D85E3192a35A73b388BD625D83f2be"
+    "trade": "0x87F2863866D85E3192a35A73b388BD625D83f2be",
+    "withdrawal": "0xe850641C5207dc5E9423fB15f89ae6031A05fd92"
   },
   "957": {
     "matching": "0xeB8d770ec18DB98Db922E9D83260A585b9F0DeAD",
-    "trade": "0xB8D20c2B7a1Ad2EE33Bc50eF10876eD3035b5e7b"
+    "trade": "0xB8D20c2B7a1Ad2EE33Bc50eF10876eD3035b5e7b",
+    "withdrawal": "0x9d0E8f5b25384C7310CB8C6aE32C8fbeb645d083"
   },
   "8453": {
     "matching": "0x9E90A9cD13d859Bd6a08168082FB1F6F7405F191",
-    "trade": "0x44813aD30b2fFC1bB2871Eed9b19F63c8196eD1c"
+    "trade": "0x44813aD30b2fFC1bB2871Eed9b19F63c8196eD1c",
+    "withdrawal": "0x0a10AE2f5D2482cE1e43bC309D430B8861C2b5aB"
   },
   "84532": {
     "matching": "0x1599636347FD5bA1fBE21D58AfE0b8B9cbe283FF",
-    "trade": "0x0AAE65AaA66Fe7f54486cDbD007956d3De611990"
+    "trade": "0x0AAE65AaA66Fe7f54486cDbD007956d3De611990",
+    "withdrawal": "0xfdDb0D00Df6d1569E46e72D35e7B6CEE4Bb7F9FB"
   }
 } as const;
 
