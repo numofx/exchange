@@ -390,12 +390,12 @@ resource "aws_ecs_task_definition" "market_maker" {
 
       { name = "MM_ANCHOR_SOURCE_TYPE", value = "none" },
       { name = "MM_USDCCNGN_SPOT_EXTERNAL_ANCHOR_ENABLED", value = "true" },
-      { name = "MM_USDCCNGN_SPOT_EXTERNAL_ANCHOR_PROVIDER", value = "cngn-price-oracle" },
+      { name = "MM_USDCCNGN_SPOT_EXTERNAL_ANCHOR_PROVIDER", value = "cngn-rate-picker" },
       { name = "MM_USDCCNGN_SPOT_EXTERNAL_ANCHOR_CHAIN_ID", value = "8453" },
       { name = "MM_USDCCNGN_SPOT_EXTERNAL_ANCHOR_BOOTSTRAP_ONLY", value = "true" },
-      { name = "MM_USDCCNGN_SPOT_EXTERNAL_ANCHOR_MAX_AGE_SECONDS", value = "8000" },
+      { name = "MM_USDCCNGN_SPOT_EXTERNAL_ANCHOR_MAX_AGE_SECONDS", value = "900" },
       { name = "MM_USDCCNGN_SPOT_EXTERNAL_ANCHOR_MAX_DEVIATION_BPS", value = "100" },
-      { name = "MM_USDCCNGN_SPOT_EXTERNAL_ANCHOR_TIMEOUT_MS", value = "1200" },
+      { name = "MM_USDCCNGN_SPOT_EXTERNAL_ANCHOR_TIMEOUT_MS", value = "3000" },
       { name = "MM_STALE_ANCHOR_TIMEOUT_SECONDS", value = "14400" },
 
       { name = "MM_METRICS_ADDR", value = ":8080" },
