@@ -154,9 +154,10 @@ not the notification.
 
 Public channels need no auth. `orders` is per-owner: the client proves control of
 `owner_address` with an EIP-191 `personal_sign` frame (`internal/wsauth`) over a canonical
-message bound to `WS_AUTH_DOMAIN`. REST `GET /v1/orders` reuses the same frame, carried in the
-`X-Numo-Auth` header and signed over a different statement (`wsauth.OrderHistoryStatement`), so a
-frame for one is never accepted by the other. The hub routes `orders` events by
+message bound to `WS_AUTH_DOMAIN`. REST `GET /v1/orders` and `GET /v1/fills` reuse the same frame,
+carried in the `X-Numo-Auth` header and signed over a different statement
+(`wsauth.OrderHistoryStatement`, one statement for both endpoints), so a WebSocket frame is never
+accepted by either and a history frame never opens a WebSocket session. The hub routes `orders` events by
 `market_events.owner_address`; a connection only receives rows matching its authenticated
 address. Never broadcast one owner's order events to another.
 

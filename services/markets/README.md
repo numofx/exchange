@@ -13,7 +13,7 @@ This repo is intentionally narrow. It is not a generic exchange backend.
 
 ## Responsibilities
 
-- expose a REST API for order entry and book inspection
+- expose a REST API for order entry, book inspection, and an owner's signed order and fill history
 - expose a WebSocket API for real-time `book`, `trades`, and (authenticated) `orders` streams
 - run a price-time matching loop
 - submit executor payloads for `Matching.verifyAndMatch(...)`
@@ -41,9 +41,32 @@ internal/
   matching/   matching loop and orchestration
   orders/     order model, repository contracts, and stream snapshots
   pricing/    price helpers
-  wsauth/     EIP-191 signature verification for authenticated WS channels
+  wsauth/     EIP-191 signature verification for the authenticated WS channel and signed REST history
 migrations/   database schema (incl. market_events table + triggers)
 ```
+
+## Matching, retries and retention
+
+- **Same-subaccount pairs are never matched.** SubAccounts reverts a transfer from an account to
+  itself (`AC_CannotTransferAssetToOneself`), so such a pair can never settle. `selectMatchPair`
+  skips it and keeps looking for another counterparty; two subaccounts of one owner still match.
+- **Failed settlements back off.** A failing pair is retried on a doubling schedule from 2s to a
+  5-minute cap, and from the 12th consecutive failure only every 30 minutes, until an order changes
+  or expires.
+- **Permanent reverts park the pair.** The executor error's revert is decoded
+  (`internal/matching/revert.go`). One that follows from what was signed — `TM_FeeTooHigh`,
+  `TM_PriceTooLow`, `BM_NonceAlreadyUsed`, `M_OnlyAllowedModule` and the like — parks the pair,
+  logged as `match_parked`, until either order's fill changes. Balance-dependent reverts
+  (`SRM_NoNegativeCash`, `WERC_CannotBeNegative`, …) and anything unrecognised keep backing off.
+  Nothing is cancelled: both orders stay on the book. Backoff and parks live in memory, so a restart
+  gives a parked pair one more attempt.
+- **Each fill records how it settled.** `trade_fills.taker_fee` is the fee the matcher submitted, as a
+  quote-asset decimal (makers pay none), and `tx_hash` the settling transaction. NULL means unknown;
+  migration 000014 backfilled the fee wherever it was exactly known.
+- **Pruning keeps orders that traded.** The API prunes `cancelled` and `expired` orders older than
+  `ORDERS_PRUNE_HORIZON` (default 30 days) unless they have fills: the order row is the only link from
+  a fill to its owner, which `GET /v1/fills` and `filled_quote` depend on. `filled` orders are never
+  pruned.
 
 ## Configuration
 
