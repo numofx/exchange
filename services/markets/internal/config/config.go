@@ -37,11 +37,24 @@ type Config struct {
 	// matcher gives up first, the transaction is still in flight, the pair is released,
 	// and the retry simulates against a nonce whose fill has not landed yet -- so it
 	// passes, and a second verifyAndMatch goes out for a fill already broadcast.
-	ExecutorTimeout     time.Duration
-	ExpectedOrderOwner  string
-	ExpectedOrderSigner string
-	DeribitBaseURL      string
-	DeribitWSURL        string
+	ExecutorTimeout time.Duration
+	// WithdrawalModuleAddress is the WithdrawalModule every signed withdrawal must target. With
+	// ExecutorWithdrawURL unset or this unset, POST /v1/withdrawals answers 503.
+	WithdrawalModuleAddress string
+	// WithdrawalAssetAddresses are the wrapped assets a withdrawal may pay out of, lowercased:
+	// WITHDRAWAL_ASSET_ADDRESSES, or by default the quote asset and the cNGN spot asset.
+	WithdrawalAssetAddresses []string
+	// ExecutorWithdrawURL is execution-service's POST /withdraw. Unlike ExecutorURL it is read by
+	// the API process, not the matcher.
+	ExecutorWithdrawURL string
+	// ExecutorWithdrawTimeout bounds the forward to execution-service, which waits for the receipt.
+	// It must exceed that service's WITHDRAWAL_RECEIPT_TIMEOUT_MS, or the API reports an unknown
+	// outcome for a withdrawal that was about to land.
+	ExecutorWithdrawTimeout time.Duration
+	ExpectedOrderOwner      string
+	ExpectedOrderSigner     string
+	DeribitBaseURL          string
+	DeribitWSURL            string
 
 	CNGNSpotAssetAddress string
 	// CashAssetAddress is the CashAsset contract. Kept as the legacy source of QuoteAssetAddress
@@ -99,6 +112,8 @@ func Load() (Config, error) {
 		EnforceCancelSignatures: getenvBool("ENFORCE_CANCEL_SIGNATURES", false),
 		TradeModuleAddress:      os.Getenv("TRADE_MODULE_ADDRESS"),
 		ExecutorURL:             os.Getenv("EXECUTOR_URL"),
+		WithdrawalModuleAddress: strings.ToLower(strings.TrimSpace(os.Getenv("WITHDRAWAL_MODULE_ADDRESS"))),
+		ExecutorWithdrawURL:     strings.TrimSpace(os.Getenv("EXECUTOR_WITHDRAW_URL")),
 		ExecutorManagerData:     "0x",
 		ExpectedOrderOwner:      os.Getenv("EXPECTED_ORDER_OWNER"),
 		ExpectedOrderSigner:     os.Getenv("EXPECTED_ORDER_SIGNER"),
@@ -130,6 +145,8 @@ func Load() (Config, error) {
 	cfg.MatcherPollInterval = pollInterval
 
 	cfg.ExecutorTimeout = getenvDurationDefault("EXECUTOR_TIMEOUT", 5*time.Second)
+	cfg.ExecutorWithdrawTimeout = getenvDurationDefault("EXECUTOR_WITHDRAW_TIMEOUT", 45*time.Second)
+	cfg.WithdrawalAssetAddresses = withdrawalAssets(cfg)
 
 	cfg.EventsPruneHorizon = getenvDurationDefault("EVENTS_PRUNE_HORIZON", 2*time.Hour)
 	cfg.EventsPruneInterval = getenvDurationDefault("EVENTS_PRUNE_INTERVAL", 5*time.Minute)
@@ -319,6 +336,21 @@ func getenvBool(key string, fallback bool) bool {
 	default:
 		return fallback
 	}
+}
+
+// withdrawalAssets are the wrapped assets a signed withdrawal may pay out of: WITHDRAWAL_ASSET_ADDRESSES when set,
+// otherwise the two this venue settles in, the quote asset and the cNGN spot asset.
+func withdrawalAssets(cfg Config) []string {
+	if configured := getenvCSV("WITHDRAWAL_ASSET_ADDRESSES", ""); len(configured) > 0 {
+		return configured
+	}
+	assets := make([]string, 0, 2)
+	for _, asset := range []string{cfg.QuoteAsset(), cfg.CNGNSpotAssetAddress} {
+		if asset = strings.ToLower(strings.TrimSpace(asset)); asset != "" {
+			assets = append(assets, asset)
+		}
+	}
+	return assets
 }
 
 func getenvCSV(key string, fallback string) []string {

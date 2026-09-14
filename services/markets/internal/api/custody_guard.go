@@ -87,6 +87,42 @@ func (c *chainCustodyChecker) ValidateDeposited(ctx context.Context, subaccountI
 	return nil
 }
 
+// errNotDepositedInMatching marks a subaccount Matching does not hold, as distinct from a chain read that failed.
+var errNotDepositedInMatching = errors.New("not deposited in matching custody")
+
+// DepositedOwner returns the owner Matching records for a subaccount it holds, lowercased. Unlike ValidateDeposited
+// it names that owner, so a withdrawal can be checked against it, and it tells "Matching does not hold this
+// subaccount" (errNotDepositedInMatching) apart from a read that failed, which a caller must not treat as a no.
+func (c *chainCustodyChecker) DepositedOwner(ctx context.Context, subaccountID string) (string, error) {
+	subaccountID = strings.TrimSpace(subaccountID)
+
+	subAccountsAddress, err := c.subAccountsAddress(ctx)
+	if err != nil {
+		return "", fmt.Errorf("resolve subaccounts contract: %w", err)
+	}
+
+	holder, err := c.callAddress(ctx, subAccountsAddress, "0x6352211e", subaccountID)
+	if err != nil {
+		// ownerOf reverts for a subaccount that does not exist.
+		if strings.Contains(strings.ToLower(err.Error()), "execution reverted") {
+			return "", fmt.Errorf("subaccount_id %s is %w", subaccountID, errNotDepositedInMatching)
+		}
+		return "", fmt.Errorf("read subaccount owner: %w", err)
+	}
+	if holder != c.matchingAddress {
+		return "", fmt.Errorf("subaccount_id %s is %w", subaccountID, errNotDepositedInMatching)
+	}
+
+	recorded, err := c.callAddress(ctx, c.matchingAddress, "0x63f1ddaa", subaccountID)
+	if err != nil {
+		return "", fmt.Errorf("read subaccount ownership record: %w", err)
+	}
+	if recorded == zeroAddress {
+		return "", fmt.Errorf("subaccount_id %s has no owner recorded, so it is %w", subaccountID, errNotDepositedInMatching)
+	}
+	return recorded, nil
+}
+
 func (c *chainCustodyChecker) subAccountsAddress(ctx context.Context) (string, error) {
 	c.mu.RLock()
 	cached := c.subAccountsAddr

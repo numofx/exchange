@@ -131,6 +131,13 @@ resource "aws_ecs_task_definition" "markets" {
       # Empty means same-origin only, which rejects the browser app's websocket and
       # takes the live order book down without any error the API would surface.
       { name = "WS_ALLOWED_ORIGINS", value = var.ws_allowed_origins },
+
+      # Signed withdrawals (POST /v1/withdrawals): verified here, submitted by execution-service.
+      # EXECUTOR_WITHDRAW_TIMEOUT must outlast execution-service's WITHDRAWAL_RECEIPT_TIMEOUT_MS (30s).
+      { name = "WITHDRAWAL_MODULE_ADDRESS", value = var.withdrawal_module_address },
+      { name = "WITHDRAWAL_ASSET_ADDRESSES", value = "${var.quote_asset_address},${var.cngn_spot_asset_address}" },
+      { name = "EXECUTOR_WITHDRAW_URL", value = "http://execution-service.${var.internal_namespace}:8081/withdraw" },
+      { name = "EXECUTOR_WITHDRAW_TIMEOUT", value = "45s" },
     ])
 
     secrets = [
@@ -223,6 +230,12 @@ resource "aws_ecs_task_definition" "execution" {
       # DRY_RUN was unset on Railway and defaulted. Stated explicitly here so the
       # value is a decision rather than a default nobody chose.
       { name = "DRY_RUN", value = "false" },
+
+      # Signed withdrawals (POST /withdraw). Only these two wrapped assets may be paid out, and
+      # markets-service's EXECUTOR_WITHDRAW_TIMEOUT (45s) must outlast the receipt wait.
+      { name = "WITHDRAWAL_MODULE_ADDRESS", value = var.withdrawal_module_address },
+      { name = "WITHDRAWAL_ASSET_ADDRESSES", value = "${var.quote_asset_address},${var.cngn_spot_asset_address}" },
+      { name = "WITHDRAWAL_RECEIPT_TIMEOUT_MS", value = "30000" },
 
       # Settlement canary. Calls StandardManager.getMargin against a real subaccount on a
       # timer and reports the result in /healthz. It exists because the 2026-09-01 feed

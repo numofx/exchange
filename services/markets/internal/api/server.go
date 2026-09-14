@@ -37,6 +37,8 @@ type Server struct {
 	// orderHistoryAuth verifies GET /v1/orders and GET /v1/fills frames: same domain as wsAuth, its own
 	// statement and validity window, so neither kind of frame is accepted by the other.
 	orderHistoryAuth wsauth.Verifier
+	// withdrawals serves POST /v1/withdrawals; nil when not fully configured, and the endpoint answers 503.
+	withdrawals *withdrawalService
 }
 
 type marketPresentation struct {
@@ -201,13 +203,16 @@ func NewServer(cfg config.Config, pool *pgxpool.Pool, registry *instruments.Regi
 		orderHistoryAuthMaxTTL = defaultOrderHistoryAuthMaxTTL
 	}
 
+	signatures := newSignatureChecker(cfg)
+
 	return &Server{
 		cfg:         cfg,
 		pool:        pool,
 		orders:      orders.NewRepository(pool),
 		instruments: registry,
 		custody:     newCustodyChecker(cfg),
-		signatures:  newSignatureChecker(cfg),
+		signatures:  signatures,
+		withdrawals: newWithdrawalService(cfg, signatures),
 		hub:         events.NewHub(pool, cfg, slog.Default()),
 		wsAuth:      wsauth.Verifier{Domain: cfg.WSAuthDomain, MaxTTL: cfg.WSAuthMaxTTL},
 		orderHistoryAuth: wsauth.Verifier{
@@ -235,6 +240,7 @@ func (s *Server) Run(ctx context.Context) error {
 	router.Get("/debug/markets", s.handleMarketDiagnostics)
 	router.Post("/v1/orders", s.handleCreateOrder)
 	router.Post("/v1/orders/cancel", s.handleCancelOrder)
+	router.Post("/v1/withdrawals", s.handleCreateWithdrawal)
 	router.Get("/v1/ws", s.handleWS)
 
 	// Real-time event fan-out: tail market_events over LISTEN/NOTIFY for the whole process.

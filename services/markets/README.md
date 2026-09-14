@@ -68,6 +68,31 @@ migrations/   database schema (incl. market_events table + triggers)
   a fill to its owner, which `GET /v1/fills` and `filled_quote` depend on. `filled` orders are never
   pruned.
 
+## Signed withdrawals
+
+`POST /v1/withdrawals` lets a trader withdraw from a subaccount held by Matching, which is every account the app
+creates. The trader signs one `WithdrawalModule` action (`data = abi.encode(address asset, uint256 amount)`, amount
+in the token's native decimals); this service checks it and forwards it to execution-service's `POST /withdraw`,
+which simulates it and submits it through `Matching.verifyAndMatch`. The account stays in Matching throughout.
+
+Every check fails closed: a signature or owner that cannot be read is refused, not waved through.
+
+| Status | Meaning |
+| --- | --- |
+| 200 | `{ accepted, tx_hash, receipt_status, block_number }`; `receipt_status: "timeout"` means not yet known |
+| 400 | malformed, off-policy (module, subaccount 0, signer ≠ owner, expiry past or > 1h ahead, asset, amount 0), or the subaccount is not in Matching |
+| 401 | the signature does not authorize the action |
+| 403 | Matching records another owner for the subaccount |
+| 422 | execution-service refused it; `revert` names the revert its simulation hit |
+| 429 | a withdrawal for this owner is in flight, or more than 5 in a minute (per API task) |
+| 502 | outcome unknown: check the balance before signing another |
+| 503 | not configured, or the chain or signature could not be read |
+
+Env: `WITHDRAWAL_MODULE_ADDRESS` and `EXECUTOR_WITHDRAW_URL` (both required to enable),
+`WITHDRAWAL_ASSET_ADDRESSES` (default: the quote asset and `CNGN_SPOT_ASSET_ADDRESS`),
+`EXECUTOR_WITHDRAW_TIMEOUT` (default 45s; must exceed execution-service's `WITHDRAWAL_RECEIPT_TIMEOUT_MS`).
+Also needs `CHAIN_ID`, `MATCHING_ADDRESS` and `CHAIN_RPC_URL`, whatever `ENFORCE_MATCHING_CUSTODY` says.
+
 ## Configuration
 
 Copy `.env.example` into your own environment and set the required values.
