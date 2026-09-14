@@ -86,6 +86,20 @@ export const executeMatchRequestSchema = z
 
 export type ExecuteMatchRequest = z.infer<typeof executeMatchRequestSchema>;
 
+// A signature is at least 65 bytes (EOA); an ERC-1271 wallet's can be longer.
+const signatureSchema = z.string().regex(/^0x(?:[0-9a-fA-F]{2}){65,}$/, 'expected a signature of at least 65 bytes');
+
+/**
+ * One user-signed WithdrawalModule action. Matching lends the deposited subaccount to the module, which pays the
+ * action's owner out of the wrapped asset and hands the account back.
+ */
+export const withdrawRequestSchema = z.object({
+  action: actionSchema,
+  signature: signatureSchema,
+});
+
+export type WithdrawRequest = z.infer<typeof withdrawRequestSchema>;
+
 export type ExecuteMatchResponse = {
   // False when the transaction was mined and reverted. The matcher must not
   // record a fill for one of these, so it is not a `true` literal any more.

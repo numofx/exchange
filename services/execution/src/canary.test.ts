@@ -18,6 +18,8 @@ const config: AppConfig = {
   dryRun: true,
   waitForReceipt: false,
   receiptTimeoutMs: 60_000,
+  withdrawalAssetAddresses: [],
+  withdrawalReceiptTimeoutMs: 30_000,
 };
 
 const CASH_ = '0x6B232A2155Bd0C9bf741dB4cf8E7e8A0176A6fc6';
