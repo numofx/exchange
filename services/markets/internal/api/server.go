@@ -228,20 +228,7 @@ func NewServer(cfg config.Config, pool *pgxpool.Pool, registry *instruments.Regi
 // requests after deregistration, but a process that exits the instant it sees
 // SIGTERM kills the requests already in its hands.
 func (s *Server) Run(ctx context.Context) error {
-	router := chi.NewRouter()
-	router.Get("/healthz", s.handleHealth)
-	router.Get("/v1/markets", s.handleMarkets)
-	router.Get("/v1/book", s.handleBook)
-	router.Get("/v1/trades", s.handleTrades)
-	router.Get("/v1/candles", s.handleCandles)
-	router.Get("/v1/orders", s.handleOrderHistory)
-	router.Get("/v1/fills", s.handleFills)
-	router.Get("/v1/orders/{order_id}", s.handleGetOrderStatus)
-	router.Get("/debug/markets", s.handleMarketDiagnostics)
-	router.Post("/v1/orders", s.handleCreateOrder)
-	router.Post("/v1/orders/cancel", s.handleCancelOrder)
-	router.Post("/v1/withdrawals", s.handleCreateWithdrawal)
-	router.Get("/v1/ws", s.handleWS)
+	router := s.routes(newIntegrationCache(integrationCacheTTL, time.Now))
 
 	// Real-time event fan-out: tail market_events over LISTEN/NOTIFY for the whole process.
 	hubCtx, cancelHub := context.WithCancel(context.Background())
