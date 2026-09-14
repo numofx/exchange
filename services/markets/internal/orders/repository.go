@@ -821,6 +821,7 @@ select
   coalesce((select max(price)::text from recent), ''),
   coalesce((select min(price)::text from recent), ''),
   coalesce((select sum(size)::text from recent), ''),
+  coalesce((select sum(price * size)::text from recent), ''),
   coalesce((
     select ((select price from latest) - (select price from earliest))::text
   ), '')
@@ -832,6 +833,7 @@ select
 		&stats.High,
 		&stats.Low,
 		&stats.Volume,
+		&stats.QuoteVolume,
 		&stats.Change,
 	)
 	if err != nil {

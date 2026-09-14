@@ -153,6 +153,9 @@ type presentedTradeStats struct {
 	Last   string `json:"last,omitempty"`
 	Low    string `json:"low,omitempty"`
 	Volume string `json:"volume,omitempty"`
+	// QuoteVolume is the 24h fill notional in the quote asset (USDC on USDCcNGN-SPOT); volume is in
+	// the engine's traded unit.
+	QuoteVolume string `json:"quote_volume,omitempty"`
 }
 
 type tradesResponse struct {
@@ -895,11 +898,12 @@ func presentTrades(items []orders.TradeFill, instrument instruments.Metadata) []
 
 func presentTradeStats(stats orders.TradeStats24h) presentedTradeStats {
 	return presentedTradeStats{
-		Change: stats.Change,
-		High:   stats.High,
-		Last:   stats.Last,
-		Low:    stats.Low,
-		Volume: stats.Volume,
+		Change:      stats.Change,
+		High:        stats.High,
+		Last:        stats.Last,
+		Low:         stats.Low,
+		Volume:      stats.Volume,
+		QuoteVolume: stats.QuoteVolume,
 	}
 }
 
