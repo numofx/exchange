@@ -177,3 +177,31 @@ bash scripts/deposit_cash.sh
 ```
 
 This approves Base USDC to the cash asset and then calls `CashAsset.deposit(accountId, stableAmount)`.
+
+## Signed withdrawals (`POST /withdraw`)
+
+Submits one user-signed `WithdrawalModule` action through `Matching.verifyAndMatch`. Matching lends the
+deposited subaccount to the module, which pays the action's `owner` out of the wrapped asset and returns the
+account, so a trader withdraws without taking the account out of Matching.
+
+Request: `{ "action": { subaccount_id, nonce, module, data, expiry, owner, signer }, "signature": "0x…" }`,
+where `data` is `abi.encode(address asset, uint256 amount)` with the amount in the token's native decimals.
+
+Before anything is simulated, the executor refuses a withdrawal whose module is not the withdrawal module, whose
+subaccount is 0, whose signer is not its owner (session keys are not supported yet), whose expiry has passed,
+whose asset is not in `WITHDRAWAL_ASSET_ADDRESSES`, or whose amount is 0. It then simulates the call: a withdrawal
+the chain would revert is refused with the revert named, and costs no gas. Only then is it broadcast.
+
+| Status | Body |
+| --- | --- |
+| 200 | `{ accepted, tx_hash, receipt_status, block_number }`; `receipt_status: "timeout"` means the outcome is not yet known |
+| 400 | `{ error: "invalid request", details }` |
+| 422 | `{ error, revert? }` — breaks policy, or would revert (`revert` names it) |
+| 503 | withdrawals are not configured |
+
+Settlements and withdrawals share the executor EOA's nonce sequence, so both go through one queue: a send is
+simulated and broadcast before the next starts.
+
+Env: `WITHDRAWAL_ASSET_ADDRESSES` (comma-separated; unset disables `/withdraw`), `WITHDRAWAL_MODULE_ADDRESS`
+(defaults to the deployment record in `@numo/abis`), `WITHDRAWAL_RECEIPT_TIMEOUT_MS` (default 30000; the caller's
+timeout must exceed it).

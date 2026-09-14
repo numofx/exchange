@@ -38,7 +38,7 @@ function readDeployments() {
     if (!existsSync(f)) continue;
     const raw = JSON.parse(readFileSync(f, 'utf8'));
     if (!raw.matching || !raw.trade) continue;          // skip incomplete records
-    out[chainId] = { matching: raw.matching, trade: raw.trade };
+    out[chainId] = { matching: raw.matching, trade: raw.trade, ...(raw.withdrawal ? { withdrawal: raw.withdrawal } : {}) };
   }
   return out;
 }

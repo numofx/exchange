@@ -44,10 +44,19 @@ const artifacts = loadContractArtifacts();
 const matchingAddress = config.matchingAddress ?? deploymentAddresses.matching;
 const tradeModuleAddress = config.tradeModuleAddress ?? deploymentAddresses.trade;
 
+// Withdrawals are on only when the assets they may pay out of are named. The module address defaults to the
+// deployment record, which @numo/abis carries per chain.
+const withdrawalModuleAddress = config.withdrawalModuleAddress ?? deploymentAddresses.withdrawal;
+const withdrawal =
+  withdrawalModuleAddress && config.withdrawalAssetAddresses.length > 0
+    ? { moduleAddress: withdrawalModuleAddress, assetAddresses: config.withdrawalAssetAddresses }
+    : undefined;
+
 const executor = new MatchExecutor(config, {
   matchingAbi: artifacts.matchingAbi,
   matchingAddress,
   tradeModuleAddress,
+  withdrawal,
 });
 
 const canary = config.settlementCanary
@@ -75,6 +84,8 @@ const app = buildApp({
   matchingAddress,
   tradeModuleAddress,
   canary,
+  withdrawer: withdrawal ? executor : undefined,
+  withdrawal,
 });
 
 app.listen({ host: config.host, port: config.port }).catch((error) => {
