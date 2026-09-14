@@ -135,6 +135,13 @@ variable "cancel_protected_order_id_prefixes" {
   default     = "validation:,smoke:,manual:"
 }
 
+variable "withdrawal_module_address" {
+  # The WithdrawalModule signed withdrawals go through. markets-service pins every withdrawal to it and
+  # execution-service submits only to it; Matching must allow it (preflight.sh checks).
+  type    = string
+  default = "0x0a10AE2f5D2482cE1e43bC309D430B8861C2b5aB"
+}
+
 variable "cngn_spot_asset_address" {
   # Losing this silently disables the only market. The boot guard turns that into a
   # crash; keeping it in Terraform keeps it from being lost in the first place.
