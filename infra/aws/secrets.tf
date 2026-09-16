@@ -98,3 +98,48 @@ locals {
     alert_webhook_url = "${local.ssm_arn_prefix}/numo/feeds/alert_webhook_url"
   }
 }
+
+# ----------------------------------------------------------- executor signing key
+#
+# The executor settles every trade and every signed withdrawal. Held as a KMS key rather than a
+# secret so the private key never exists outside KMS: not in the task definition, not in the
+# process, not in a secret anyone with read access can print. Compare executor_private_key above,
+# which is exactly that and is what this replaces.
+#
+# Creating the key does NOT authorise it. Matching gates settlement on tradeExecutors[msg.sender],
+# an owner-only mapping, so the new address must be added with setTradeExecutor and the old one
+# retired deliberately, after the new key is proven to settle.
+resource "aws_kms_key" "executor" {
+  count                    = var.executor_kms_enabled ? 1 : 0
+  description              = "${var.name} trade executor signing key (secp256k1)"
+  key_usage                = "SIGN_VERIFY"
+  customer_master_key_spec = "ECC_SECG_P256K1"
+  # Signing keys are not recoverable once deleted and this one is an on-chain identity: retiring it
+  # means a setTradeExecutor call, not a terraform destroy.
+  deletion_window_in_days = 30
+  enable_key_rotation     = false
+}
+
+resource "aws_kms_alias" "executor" {
+  count         = var.executor_kms_enabled ? 1 : 0
+  name          = "alias/${var.name}-executor"
+  target_key_id = aws_kms_key.executor[0].key_id
+}
+
+# Scoped to this one key by ARN, and attached to the TASK role (the container's own identity),
+# not the execution role that only pulls secrets at startup. Sign and GetPublicKey only: the task
+# can use the key and read its address, and can neither export, schedule deletion, nor re-policy it.
+data "aws_iam_policy_document" "executor_kms_sign" {
+  count = var.executor_kms_enabled ? 1 : 0
+  statement {
+    actions   = ["kms:Sign", "kms:GetPublicKey"]
+    resources = [aws_kms_key.executor[0].arn]
+  }
+}
+
+resource "aws_iam_role_policy" "executor_kms_sign" {
+  count  = var.executor_kms_enabled ? 1 : 0
+  name   = "executor-kms-sign"
+  role   = aws_iam_role.task.id
+  policy = data.aws_iam_policy_document.executor_kms_sign[0].json
+}

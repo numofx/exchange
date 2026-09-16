@@ -7,10 +7,12 @@ import {
   getAddress,
   http,
   type Abi,
+  type LocalAccount,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 import type { AppConfig } from './config.js';
+import { createKmsAccount } from './kms-signer.js';
 import { createSerialQueue } from './serial-queue.js';
 import type { ExecuteMatchRequest, ExecuteMatchResponse, WithdrawRequest } from './types.js';
 import {
@@ -33,18 +35,36 @@ export type ExecutorDependencies = {
 };
 
 export class MatchExecutor {
-  private readonly account;
+  private readonly account: LocalAccount;
   private readonly chain;
   private readonly publicClient;
   private readonly walletClient;
   // Settlements and withdrawals share this EOA's nonce sequence; see serial-queue.ts.
   private readonly enqueueSend = createSerialQueue();
 
-  constructor(
+  /**
+   * Resolves the signing account, then builds the executor.
+   *
+   * A KMS account cannot be built in a constructor: its address comes from the key itself, which is
+   * a network round trip. Done here rather than lazily so a key that is missing, the wrong spec, or
+   * not permitted to the task role stops the process at boot instead of at the first settlement.
+   */
+  static async create(config: AppConfig, deps: ExecutorDependencies): Promise<MatchExecutor> {
+    const account = config.kmsKeyId
+      ? await createKmsAccount(config.kmsKeyId)
+      : privateKeyToAccount(config.privateKey as `0x${string}`);
+    // config.executorAddress is the placeholder when signing through KMS, because loadConfig has no
+    // way to ask the key. /healthz reports it, so it is filled in before anything can read it.
+    config.executorAddress = account.address;
+    return new MatchExecutor(config, deps, account);
+  }
+
+  private constructor(
     private readonly config: AppConfig,
     private readonly deps: ExecutorDependencies,
+    account: LocalAccount,
   ) {
-    this.account = privateKeyToAccount(config.privateKey);
+    this.account = account;
     this.chain = defineChain({
       id: config.chainId,
       name: `chain-${config.chainId}`,

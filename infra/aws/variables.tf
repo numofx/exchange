@@ -218,3 +218,15 @@ variable "mm_address" {
   type        = string
   default     = "0x3448ac0A3283951A2AFD5B3A582329ECA43CB47B"
 }
+
+variable "executor_kms_enabled" {
+  description = <<-EOT
+    Create the KMS signing key for the trade executor and grant the task role Sign on it.
+
+    Off by default so this lands without a flag day: the key can be created and its address
+    authorised with setTradeExecutor before EXECUTOR_KMS_KEY_ID is set on the service, and
+    PRIVATE_KEY keeps working until it is.
+  EOT
+  type        = bool
+  default     = false
+}

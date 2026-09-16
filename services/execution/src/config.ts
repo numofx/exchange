@@ -9,7 +9,11 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(8081),
   HOST: z.string().default('0.0.0.0'),
   RPC_URL: z.string().url(),
-  PRIVATE_KEY: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+  // Exactly one of these. PRIVATE_KEY is the historical path and still works; EXECUTOR_KMS_KEY_ID
+  // keeps the key inside KMS, where nothing that can read the task definition or this process's
+  // memory can read the key itself. See kms-signer.ts.
+  PRIVATE_KEY: z.string().regex(/^0x[0-9a-fA-F]{64}$/).optional().or(z.literal('')),
+  EXECUTOR_KMS_KEY_ID: z.string().min(1).optional().or(z.literal('')),
   CHAIN_ID: z.coerce.number().int().positive(),
   MATCHING_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
   TRADE_MODULE_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
@@ -60,7 +64,10 @@ export type AppConfig = {
   port: number;
   host: string;
   rpcUrl: string;
-  privateKey: `0x${string}`;
+  /** Set when signing with a local key. Exactly one of privateKey and kmsKeyId is present. */
+  privateKey?: `0x${string}`;
+  /** Set when signing through AWS KMS; the key never enters this process. */
+  kmsKeyId?: string;
   chainId: number;
   matchingAddress?: `0x${string}`;
   tradeModuleAddress?: `0x${string}`;
@@ -93,13 +100,29 @@ export type AppConfig = {
 
 export function loadConfig(): AppConfig {
   const parsed = envSchema.parse(process.env);
-  const executorAddress = privateKeyToAccount(parsed.PRIVATE_KEY as `0x${string}`).address;
+  const privateKey = parsed.PRIVATE_KEY ? (parsed.PRIVATE_KEY as `0x${string}`) : undefined;
+  const kmsKeyId = parsed.EXECUTOR_KMS_KEY_ID ? parsed.EXECUTOR_KMS_KEY_ID : undefined;
+  // Never both: two configured keys means two possible executor addresses, and which one signs
+  // would depend on construction order rather than on anything an operator stated.
+  if (privateKey && kmsKeyId) {
+    throw new Error('set PRIVATE_KEY or EXECUTOR_KMS_KEY_ID, not both');
+  }
+  if (!privateKey && !kmsKeyId) {
+    throw new Error('one of PRIVATE_KEY or EXECUTOR_KMS_KEY_ID is required');
+  }
+  // With KMS the address comes from the key itself, which needs a round trip; the executor fills
+  // it in when it builds the account. `0x0` here would be a lie that reads as an address, so the
+  // field stays empty until it is known.
+  const executorAddress = privateKey
+    ? privateKeyToAccount(privateKey).address
+    : ('0x' as `0x${string}`);
 
   return {
     port: parsed.PORT,
     host: parsed.HOST,
     rpcUrl: parsed.RPC_URL,
-    privateKey: parsed.PRIVATE_KEY as `0x${string}`,
+    privateKey,
+    kmsKeyId,
     chainId: parsed.CHAIN_ID,
     matchingAddress: parsed.MATCHING_ADDRESS ? (parsed.MATCHING_ADDRESS as `0x${string}`) : undefined,
     tradeModuleAddress: parsed.TRADE_MODULE_ADDRESS ? (parsed.TRADE_MODULE_ADDRESS as `0x${string}`) : undefined,
