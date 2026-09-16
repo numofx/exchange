@@ -52,7 +52,7 @@ const withdrawal =
     ? { moduleAddress: withdrawalModuleAddress, assetAddresses: config.withdrawalAssetAddresses }
     : undefined;
 
-const executor = new MatchExecutor(config, {
+const executor = await MatchExecutor.create(config, {
   matchingAbi: artifacts.matchingAbi,
   matchingAddress,
   tradeModuleAddress,
