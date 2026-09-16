@@ -192,6 +192,17 @@ resource "aws_ecs_task_definition" "matcher" {
 }
 
 resource "aws_ecs_task_definition" "execution" {
+  # Signing with a key that does not exist is caught here rather than as an index error on
+  # aws_kms_key.executor[0], and at plan time rather than after the task is registered. The order
+  # matters because the wrong one strands the venue: with PRIVATE_KEY dropped and no key to sign
+  # with, execution-service fails its config schema at boot and settles nothing.
+  lifecycle {
+    precondition {
+      condition     = !var.executor_kms_signing || var.executor_kms_enabled
+      error_message = "executor_kms_signing requires executor_kms_enabled: apply the key first, authorise its address with Matching.setTradeExecutor, then switch signing on."
+    }
+  }
+
   family                   = "${var.name}-execution-service"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
@@ -294,13 +305,14 @@ resource "aws_ecs_task_definition" "execution" {
       { name = "SETTLEMENT_CANARY_FAILS_HEALTHCHECK", value = "false" },
       ],
       # The KMS key id is an ARN, not a secret: the key material never leaves KMS, and using it is
-      # gated by the task role's kms:Sign grant rather than by knowing its name. Set only when
-      # executor_kms_enabled, and never alongside PRIVATE_KEY -- the service refuses both at boot.
-      var.executor_kms_enabled ? [{ name = "EXECUTOR_KMS_KEY_ID", value = aws_kms_key.executor[0].arn }] : []
+      # gated by the task role's kms:Sign grant rather than by knowing its name. Gated on
+      # executor_kms_signing, NOT on the key existing -- creating a key must not change how the
+      # running service signs. Never alongside PRIVATE_KEY; the service refuses both at boot.
+      var.executor_kms_signing ? [{ name = "EXECUTOR_KMS_KEY_ID", value = aws_kms_key.executor[0].arn }] : []
     )
 
     secrets = concat(
-      var.executor_kms_enabled ? [] : [{ name = "PRIVATE_KEY", valueFrom = local.secret_arns.executor_key }],
+      var.executor_kms_signing ? [] : [{ name = "PRIVATE_KEY", valueFrom = local.secret_arns.executor_key }],
       [
         { name = "RPC_URL", valueFrom = local.secret_arns.rpc_url },
         # The canary's only route to a person. There is no CloudWatch alarm on this log group, so
