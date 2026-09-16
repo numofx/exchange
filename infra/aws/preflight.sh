@@ -13,11 +13,12 @@ REGION="${REGION:-us-east-1}"
 MM_ADDRESS="${MM_ADDRESS:-0x3448ac0A3283951A2AFD5B3A582329ECA43CB47B}"
 MATCHING="${MATCHING:-0x9E90A9cD13d859Bd6a08168082FB1F6F7405F191}"
 WITHDRAWAL_MODULE="${WITHDRAWAL_MODULE:-0x0a10AE2f5D2482cE1e43bC309D430B8861C2b5aB}"
+EXECUTOR_KMS_ALIAS="${EXECUTOR_KMS_ALIAS:-alias/numo-exchange-executor}"
 
 fail=0
 note() { printf '%-8s %s\n' "$1" "$2"; }
 
-for name in /numo/exchange/executor_private_key /numo/exchange/rpc_url \
+for name in /numo/exchange/rpc_url \
             /numo/exchange/mm_private_key /numo/exchange/mm_rpc_url; do
   if aws ssm get-parameter --profile "$PROFILE" --region "$REGION" --name "$name" >/dev/null 2>&1; then
     note "ok" "$name exists"
@@ -29,13 +30,23 @@ done
 if [ "$fail" -eq 0 ]; then
   rpc=$(aws ssm get-parameter --profile "$PROFILE" --region "$REGION" \
         --name /numo/exchange/rpc_url --with-decryption --query Parameter.Value --output text)
-  addr=$(cast wallet address "$(aws ssm get-parameter --profile "$PROFILE" --region "$REGION" \
-        --name /numo/exchange/executor_private_key --with-decryption --query Parameter.Value --output text)")
-
-  note "info" "executor key derives to $addr"
+  # The executor signs through KMS, so its address comes from the key's public half. Nothing here
+  # can decrypt a signing key any more, which is the point: there is no stored key to decrypt.
+  # keccak over the 64-byte public point, last 20 bytes of the digest. Passed as hex rather than
+  # piped: `cast keccak` hashes its ARGUMENT, so piping the raw bytes silently hashes the wrong
+  # thing and yields a plausible-looking address that nothing can sign for.
+  point=$(aws kms get-public-key --profile "$PROFILE" --region "$REGION" \
+          --key-id "$EXECUTOR_KMS_ALIAS" --query PublicKey --output text \
+    | base64 --decode | tail -c 64 | xxd -p -c 64)
+  addr=$(cast keccak "0x$point" 2>/dev/null | sed -E 's/^0x[0-9a-fA-F]{24}/0x/')
+  if [ -z "$addr" ] || [ "${#addr}" -ne 42 ]; then
+    note "FAIL" "could not derive the executor address from $EXECUTOR_KMS_ALIAS"; fail=1; addr=""
+  else
+    note "info" "KMS executor key derives to $addr"
+  fi
 
   # The signer only matters if the chain agrees it may settle trades.
-  if [ "$(cast call "$MATCHING" 'tradeExecutors(address)(bool)' "$addr" --rpc-url "$rpc")" = "true" ]; then
+  if [ -n "$addr" ] && [ "$(cast call "$MATCHING" 'tradeExecutors(address)(bool)' "$addr" --rpc-url "$rpc")" = "true" ]; then
     note "ok" "$addr is an authorized tradeExecutor"
   else
     note "FAIL" "$addr is NOT an authorized tradeExecutor — settlement would revert"; fail=1
@@ -49,7 +60,7 @@ if [ "$fail" -eq 0 ]; then
   fi
 
   # A key that cannot pay for gas fails the same way a missing key does, just later.
-  bal=$(cast balance "$addr" --rpc-url "$rpc" --ether)
+  bal=$(cast balance "${addr:-0x0000000000000000000000000000000000000000}" --rpc-url "$rpc" --ether)
   if [ "$(echo "$bal < 0.005" | bc -l)" = "1" ]; then
     note "WARN" "gas balance is $bal ETH — top up before unpause"
   else

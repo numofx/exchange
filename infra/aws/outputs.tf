@@ -33,10 +33,8 @@ output "secret_backend_in_use" {
 output "manual_secrets_required" {
   description = "Created out of band so they never enter Terraform state."
   value = local.use_ssm ? [
-    "/numo/exchange/executor_private_key",
     "/numo/exchange/rpc_url",
     ] : [
-    "${var.name}/executor_private_key",
     "${var.name}/rpc_url",
   ]
 }
