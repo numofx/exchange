@@ -312,7 +312,9 @@ resource "aws_ecs_task_definition" "execution" {
     )
 
     secrets = concat(
-      var.executor_kms_signing ? [] : [{ name = "PRIVATE_KEY", valueFrom = local.secret_arns.executor_key }],
+      # No PRIVATE_KEY path any more: the stored key was deleted once the KMS address was
+      # authorised and the old one revoked on chain (2026-09-16). EXECUTOR_KMS_KEY_ID is the only
+      # way this service signs, and executor_kms_signing must stay true.
       [
         { name = "RPC_URL", valueFrom = local.secret_arns.rpc_url },
         # The canary's only route to a person. There is no CloudWatch alarm on this log group, so
