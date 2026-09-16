@@ -223,9 +223,32 @@ variable "executor_kms_enabled" {
   description = <<-EOT
     Create the KMS signing key for the trade executor and grant the task role Sign on it.
 
-    Off by default so this lands without a flag day: the key can be created and its address
-    authorised with setTradeExecutor before EXECUTOR_KMS_KEY_ID is set on the service, and
-    PRIVATE_KEY keeps working until it is.
+    Creating the key changes nothing about how the service signs: that is executor_kms_signing.
+    The two are separate because the new address must be funded and authorised on Matching with
+    setTradeExecutor (owner-only) BEFORE it signs anything, and that happens between the two
+    applies.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "executor_kms_signing" {
+  description = <<-EOT
+    Sign settlements with the KMS key: sets EXECUTOR_KMS_KEY_ID on execution-service and drops the
+    PRIVATE_KEY secret from the task.
+
+    Flip this only after ALL of:
+      1. executor_kms_enabled = true has been applied, so the key exists
+      2. the image running execution-service understands EXECUTOR_KMS_KEY_ID (exchange#62 or later)
+      3. the key's address holds ETH for gas
+      4. Matching.setTradeExecutor(<kms address>, true) has been sent by the owner
+
+    Miss 2 and the task fails its config schema at boot with no PRIVATE_KEY to fall back to. Miss 4
+    and every verifyAndMatch reverts with M_OnlyTradeExecutor: the service is signing as an address
+    the venue does not recognise.
+
+    Rollback is this flag back to false plus a rollout; the old key stays authorised until it is
+    retired deliberately.
   EOT
   type        = bool
   default     = false
