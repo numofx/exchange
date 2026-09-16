@@ -292,15 +292,22 @@ resource "aws_ecs_task_definition" "execution" {
       # tasks while the real fault sits off-box. The canary's job is to make the halt
       # visible; the alerting on it is numo-settlement-canary.timer on the ops box.
       { name = "SETTLEMENT_CANARY_FAILS_HEALTHCHECK", value = "false" },
-    ])
+      ],
+      # The KMS key id is an ARN, not a secret: the key material never leaves KMS, and using it is
+      # gated by the task role's kms:Sign grant rather than by knowing its name. Set only when
+      # executor_kms_enabled, and never alongside PRIVATE_KEY -- the service refuses both at boot.
+      var.executor_kms_enabled ? [{ name = "EXECUTOR_KMS_KEY_ID", value = aws_kms_key.executor[0].arn }] : []
+    )
 
-    secrets = [
-      { name = "PRIVATE_KEY", valueFrom = local.secret_arns.executor_key },
-      { name = "RPC_URL", valueFrom = local.secret_arns.rpc_url },
-      # The canary's only route to a person. There is no CloudWatch alarm on this log group, so
-      # without this a failing canary writes a line nobody reads.
-      { name = "ALERT_WEBHOOK_URL", valueFrom = local.secret_arns.alert_webhook_url },
-    ]
+    secrets = concat(
+      var.executor_kms_enabled ? [] : [{ name = "PRIVATE_KEY", valueFrom = local.secret_arns.executor_key }],
+      [
+        { name = "RPC_URL", valueFrom = local.secret_arns.rpc_url },
+        # The canary's only route to a person. There is no CloudWatch alarm on this log group, so
+        # without this a failing canary writes a line nobody reads.
+        { name = "ALERT_WEBHOOK_URL", valueFrom = local.secret_arns.alert_webhook_url },
+      ]
+    )
 
     healthCheck = {
       command     = ["CMD", "node", "dist/index.js", "--healthcheck"]
