@@ -26,7 +26,8 @@ resource "aws_ssm_parameter" "database_url" {
 # The executor private key and the RPC URL (which carries an Alchemy API key) are
 # placed out of band and referenced by ARN only:
 #
-#   aws ssm put-parameter --name /numo/exchange/executor_private_key \
+#   (the executor no longer has a stored key: it signs through KMS, see aws_kms_key.executor)
+#   aws ssm put-parameter --name /numo/exchange/rpc_url \
 #     --type SecureString --value 0x... --profile numo
 #
 # Their ARNs are CONSTRUCTED here rather than resolved through a
@@ -57,10 +58,6 @@ resource "aws_secretsmanager_secret_version" "database_url" {
   secret_string = local.database_url
 }
 
-data "aws_secretsmanager_secret" "executor_key" {
-  count = local.use_ssm ? 0 : 1
-  name  = "${var.name}/executor_private_key"
-}
 
 data "aws_secretsmanager_secret" "rpc_url" {
   count = local.use_ssm ? 0 : 1
@@ -82,7 +79,6 @@ data "aws_secretsmanager_secret" "mm_rpc_url" {
 locals {
   secret_arns = {
     database_url = local.use_ssm ? aws_ssm_parameter.database_url[0].arn : aws_secretsmanager_secret.database_url[0].arn
-    executor_key = local.use_ssm ? "${local.ssm_arn_prefix}/numo/exchange/executor_private_key" : data.aws_secretsmanager_secret.executor_key[0].arn
     rpc_url      = local.use_ssm ? "${local.ssm_arn_prefix}/numo/exchange/rpc_url" : data.aws_secretsmanager_secret.rpc_url[0].arn
 
     # The market maker signs as 0x3448ac0A…CB47B — a different key from the executor,
@@ -103,8 +99,9 @@ locals {
 #
 # The executor settles every trade and every signed withdrawal. Held as a KMS key rather than a
 # secret so the private key never exists outside KMS: not in the task definition, not in the
-# process, not in a secret anyone with read access can print. Compare executor_private_key above,
-# which is exactly that and is what this replaces.
+# process, not in a secret anyone with read access can print. It replaced a SecureString holding the
+# raw key, which was deleted on 2026-09-16 once this key's address was authorised and the old one
+# revoked on chain.
 #
 # Creating the key does NOT authorise it. Matching gates settlement on tradeExecutors[msg.sender],
 # an owner-only mapping, so the new address must be added with setTradeExecutor and the old one
