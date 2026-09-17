@@ -227,9 +227,13 @@ variable "executor_kms_enabled" {
     The two are separate because the new address must be funded and authorised on Matching with
     setTradeExecutor (owner-only) BEFORE it signs anything, and that happens between the two
     applies.
+
+    Defaults true because the key exists and is authorised on Matching. A plan that resolves
+    this to false proposes destroying the venue's settlement key; aws_kms_key.executor carries
+    prevent_destroy so that fails loudly instead of succeeding quietly.
   EOT
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "executor_kms_signing" {
@@ -249,7 +253,32 @@ variable "executor_kms_signing" {
 
     Rollback is this flag back to false plus a rollout; the old key stays authorised until it is
     retired deliberately.
+
+    Defaults true because #64 deleted the stored PRIVATE_KEY. There is no second signing path:
+    resolved false, execution-service gets neither EXECUTOR_KMS_KEY_ID nor PRIVATE_KEY and
+    refuses to boot. The rollout sequence above is history, kept because it explains the split.
   EOT
   type        = bool
-  default     = false
+  default     = true
+}
+
+variable "rebalance_kms_enabled" {
+  description = <<-EOT
+    Create the KMS signing key the cNGN rebalance uses to swap USDC for cNGN on the HyperFX
+    IntentGateway (0xAe041F7B0CB581876832830baeB6a2Aa2a3C9716 on Base).
+
+    Deliberately NOT the executor key. The executor is authorised on Matching by
+    setTradeExecutor and settles every trade and withdrawal on the venue; this one only ever
+    holds a few hundred dollars of working capital and signs placeOrder. Keeping them apart
+    means a compromised rebalance key costs the float, not the venue's settlement authority --
+    the same reason the executor was moved off the personal wallet on 2026-09-16.
+
+    Creating the key grants nothing and starts nothing. Until the loop is automated the swap is
+    run as a one-shot by an operator, who already holds kms:Sign through their own role, so no
+    task role gets Sign on this key yet.
+    Defaults true for the same reason as the executor key: it exists, it holds working capital,
+    and a plan that resolves it to false proposes deleting it out from under that balance.
+  EOT
+  type        = bool
+  default     = true
 }

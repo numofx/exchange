@@ -115,6 +115,13 @@ resource "aws_kms_key" "executor" {
   # means a setTradeExecutor call, not a terraform destroy.
   deletion_window_in_days = 30
   enable_key_rotation     = false
+  # Terraform must never be able to delete this: the venue settles every trade and every
+  # withdrawal with this key, and Matching gates settlement on its address.
+  # Retiring it is a deliberate act (sweep the balance, re-point what signs), which means
+  # removing this block first -- not a flag someone forgot on a routine plan.
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "aws_kms_alias" "executor" {
@@ -139,4 +146,35 @@ resource "aws_iam_role_policy" "executor_kms_sign" {
   name   = "executor-kms-sign"
   role   = aws_iam_role.task.id
   policy = data.aws_iam_policy_document.executor_kms_sign[0].json
+}
+
+# Working capital for the cNGN rebalance. The market maker's flow is one-directional -- it sells
+# cNGN for USDC -- so without a routine that buys cNGN back the bid side eventually goes dark.
+# HyperFX fills that swap same-chain on Base against the identical cNGN the venue settles
+# (0x46C85152bFe9f96829aA94755D9f915F9B10EF5F), so the round trip never leaves the chain.
+#
+# The address this key derives to needs ETH for gas and its own USDC allowance to the gateway
+# before it can swap. Neither is terraform's to give it.
+resource "aws_kms_key" "rebalance" {
+  count                    = var.rebalance_kms_enabled ? 1 : 0
+  description              = "${var.name} cNGN rebalance signing key (secp256k1)"
+  key_usage                = "SIGN_VERIFY"
+  customer_master_key_spec = "ECC_SECG_P256K1"
+  # Same reasoning as the executor key: a signing key is an on-chain identity holding value, and
+  # deleting it strands whatever it holds. Retiring it means sweeping the balance first.
+  deletion_window_in_days = 30
+  enable_key_rotation     = false
+  # Terraform must never be able to delete this: it holds the rebalance float, and deleting it
+  # strands whatever USDC and cNGN sit at its address.
+  # Retiring it is a deliberate act (sweep the balance, re-point what signs), which means
+  # removing this block first -- not a flag someone forgot on a routine plan.
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_kms_alias" "rebalance" {
+  count         = var.rebalance_kms_enabled ? 1 : 0
+  name          = "alias/${var.name}-rebalance"
+  target_key_id = aws_kms_key.rebalance[0].key_id
 }
