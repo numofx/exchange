@@ -399,7 +399,12 @@ resource "aws_ecs_task_definition" "market_maker" {
       { name = "MM_SUBACCOUNT_ID", value = "15" },
       { name = "MM_RECIPIENT_ID", value = "15" },
 
-      { name = "MM_QUOTE_LEVELS", value = "5" },
+      # Rungs per side. The binding constraint is inventory, not this: buildLevels walks outward
+      # placing ORDER_SIZE * LEVEL_SIZE_MULT^k until the side's budget is spent. At 5 the ladder
+      # ran out of levels before it ran out of money -- 148.83 USDC quoted per side against 310
+      # USDC and 448k cNGN held, leaving ~340 USDC of the funding idle. 8 deploys all of it
+      # (310 ask / 327.7 bid); 9+ changes nothing because the budget binds first.
+      { name = "MM_QUOTE_LEVELS", value = "8" },
       # Ladder geometry: QUOTE_LEVELS=5 with LEVEL_SIZE_MULT=1.2 places
       # 1 + 1.2 + 1.44 + 1.728 + 2.0736 = 7.4416 x this per side, so 40 is ~298 USDC of depth
       # each way. One value governs both sides; the ask side is bounded by USDC held and the bid
