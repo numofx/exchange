@@ -400,12 +400,26 @@ resource "aws_ecs_task_definition" "market_maker" {
       { name = "MM_RECIPIENT_ID", value = "15" },
 
       { name = "MM_QUOTE_LEVELS", value = "5" },
-      { name = "MM_ORDER_SIZE", value = "1.2" },
+      # Ladder geometry: QUOTE_LEVELS=5 with LEVEL_SIZE_MULT=1.2 places
+      # 1 + 1.2 + 1.44 + 1.728 + 2.0736 = 7.4416 x this per side, so 40 is ~298 USDC of depth
+      # each way. One value governs both sides; the ask side is bounded by USDC held and the bid
+      # side by cNGN held, so whichever leg is thinner simply quotes fewer rungs (buildLevels
+      # truncates, it does not fail). Funded 2026-09-17 with ~300 USDC and ~441k cNGN.
+      { name = "MM_ORDER_SIZE", value = "40" },
       { name = "MM_HALF_SPREAD_BPS", value = "10" },
       { name = "MM_LEVEL_SPREAD_STEP_BPS", value = "15" },
       { name = "MM_LEVEL_SIZE_MULT", value = "1.2" },
-      { name = "MM_MAX_NET_INVENTORY", value = "60" },
-      { name = "MM_MAX_NOTIONAL_PER_SIDE", value = "15000" },
+      # Halts above this (risk.Evaluate: "inventory exceeds max long"), so it has to cover the
+      # worst case rather than the target: if every cNGN rung fills, the bot ends up holding its
+      # own ~300 USDC plus the ~322 USDC the cNGN converted into, ~622. Raise this in step with
+      # any further funding -- it is a halt, not a soft cap, and it cancels the whole ladder.
+      { name = "MM_MAX_NET_INVENTORY", value = "650" },
+      # In cNGN, and it binds BEFORE order size: at 15000 it capped each side at 15000/1368 ~ 11
+      # USDC no matter what ORDER_SIZE said. 450000 cNGN is ~329 USDC of side budget, which covers
+      # the ~298 ladder with room to step ORDER_SIZE toward 50 without touching this again. It is
+      # also a per-order halt, so it must exceed the largest single rung: 40 * 1.2^4 = 82.9 USDC
+      # ~ 113k cNGN.
+      { name = "MM_MAX_NOTIONAL_PER_SIDE", value = "450000" },
       { name = "MM_MAX_ANCHOR_DEVIATION_BPS", value = "150" },
       { name = "MM_PROTECTED_ORDER_ID_PREFIXES", value = "validation:,smoke:,manual:,test:" },
 
