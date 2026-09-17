@@ -409,11 +409,13 @@ resource "aws_ecs_task_definition" "market_maker" {
       { name = "MM_HALF_SPREAD_BPS", value = "10" },
       { name = "MM_LEVEL_SPREAD_STEP_BPS", value = "15" },
       { name = "MM_LEVEL_SIZE_MULT", value = "1.2" },
-      # Halts above this (risk.Evaluate: "inventory exceeds max long"), so it has to cover the
-      # worst case rather than the target: if every cNGN rung fills, the bot ends up holding its
-      # own ~300 USDC plus the ~322 USDC the cNGN converted into, ~622. Raise this in step with
-      # any further funding -- it is a halt, not a soft cap, and it cancels the whole ladder.
-      { name = "MM_MAX_NET_INVENTORY", value = "650" },
+      # Halts above this (risk.Evaluate: "inventory exceeds max long"), so it covers the worst
+      # case rather than the target: every cNGN rung fills and the whole cNGN balance becomes
+      # USDC. Inventory counts USDC ONLY, so that worst case is priced in cNGN and moves with the
+      # rate -- 300 USDC + 441k cNGN is 639 at 1368 but 685 at 1200. 650 was sized at today's
+      # price and would have halted on a ~5% cNGN rally; 800 holds down to ~1150. Raise it in
+      # step with any further funding: it is a halt, not a soft cap, and it cancels the ladder.
+      { name = "MM_MAX_NET_INVENTORY", value = "800" },
       # In cNGN, and it binds BEFORE order size: at 15000 it capped each side at 15000/1368 ~ 11
       # USDC no matter what ORDER_SIZE said. 450000 cNGN is ~329 USDC of side budget, which covers
       # the ~298 ladder with room to step ORDER_SIZE toward 50 without touching this again. It is
