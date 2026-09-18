@@ -67,9 +67,16 @@ step markets services/markets "go test ./... against Postgres (none may skip)" .
 # ---- services-execution.yml ------------------------------------------------------------
 step node . "pnpm install --frozen-lockfile" pnpm install --frozen-lockfile
 step node . "build @numo/abis" pnpm --filter @numo/abis build
+step node . "build @numo/kms-signer" pnpm --filter @numo/kms-signer build
+step node . "@numo/kms-signer check" pnpm --filter @numo/kms-signer run check
+step node . "@numo/kms-signer test" pnpm --filter @numo/kms-signer test
 step node . "matching-executor check" pnpm --filter matching-executor run check
 step node . "matching-executor build" pnpm --filter matching-executor run build
 step node . "matching-executor test" pnpm --filter matching-executor test
+
+# ---- services-rebalance.yml ------------------------------------------------------------
+step node . "cngn-rebalance check" pnpm --filter cngn-rebalance run check
+step node . "cngn-rebalance test" pnpm --filter cngn-rebalance test
 
 # ---- infra.yml -------------------------------------------------------------------------
 # -backend=false matches CI: the real backend is S3 and validate does not need it. Skipped

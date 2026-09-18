@@ -12,7 +12,7 @@ import {
 import { privateKeyToAccount } from 'viem/accounts';
 
 import type { AppConfig } from './config.js';
-import { createKmsAccount } from './kms-signer.js';
+import { createKmsAccount } from '@numo/kms-signer';
 import { createSerialQueue } from './serial-queue.js';
 import type { ExecuteMatchRequest, ExecuteMatchResponse, WithdrawRequest } from './types.js';
 import {
