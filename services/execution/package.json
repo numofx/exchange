@@ -16,13 +16,13 @@
   "dependencies": {
     "@aws-sdk/client-kms": "3.1133.0",
     "@numo/abis": "workspace:*",
+    "@numo/kms-signer": "workspace:*",
     "dotenv": "^16.4.7",
     "fastify": "^5.2.1",
     "viem": "^2.23.5",
     "zod": "^3.24.2"
   },
   "devDependencies": {
-    "@noble/curves": "1.9.1",
     "@types/node": "^22.13.10",
     "tsx": "^4.19.3",
     "typescript": "^5.8.2"

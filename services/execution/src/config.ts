@@ -11,7 +11,7 @@ const envSchema = z.object({
   RPC_URL: z.string().url(),
   // Exactly one of these. PRIVATE_KEY is the historical path and still works; EXECUTOR_KMS_KEY_ID
   // keeps the key inside KMS, where nothing that can read the task definition or this process's
-  // memory can read the key itself. See kms-signer.ts.
+  // memory can read the key itself. See @numo/kms-signer.
   PRIVATE_KEY: z.string().regex(/^0x[0-9a-fA-F]{64}$/).optional().or(z.literal('')),
   EXECUTOR_KMS_KEY_ID: z.string().min(1).optional().or(z.literal('')),
   CHAIN_ID: z.coerce.number().int().positive(),
