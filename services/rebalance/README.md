@@ -18,6 +18,8 @@ Everything is a dry run unless `--execute` is passed.
 
 ```bash
 export BASE_RPC_URL=...            # keyed endpoint, see below
+pnpm rebalance check               # is a rebalance due? (for a timer)
+pnpm rebalance check --alert       # ...and post to the ops webhook if so
 pnpm rebalance quote 20            # what the live feed prices it at
 pnpm rebalance approve 20 --execute
 pnpm rebalance swap 20 --execute   # place, auction, fill
@@ -76,8 +78,36 @@ the balance first (see `infra/aws/secrets.tf`).
 
 The signer needs ETH for gas — a whole three-leg cycle costs about $0.02 at current Base prices.
 
+## When to rebalance
+
+`check` reads the subaccount and decides. The trigger is **cNGN's share of inventory value**, not
+an absolute USDC figure: the first version alerted on "idle USDC over $200" and fired on a balanced
+book holding $310 USDC against $348 of cNGN, where converting would have made the imbalance worse.
+A threshold that is wrong the first time it runs is one an operator learns to ignore.
+
+| condition | action |
+| --- | --- |
+| cNGN under `CNGN_FLOOR_USD` ($100) | **urgent** — the bid side is about to go dark |
+| cNGN under `CNGN_MIN_SHARE` (35%) of inventory value | **rebalance** — convert some USDC |
+| USDC within 20% of `HALT_NET_INVENTORY_USD` ($800) | noted in the message |
+
+`--alert` refuses to run without `ALERT_WEBHOOK_URL` rather than logging and exiting 0: an alert
+path that reaches nobody while reporting success is the failure this repo keeps finding.
+
 ## Not done yet
 
-The **withdrawal leg**: sub 15 → this signer. Sub 15 is owned by the market maker's wallet, so
-either this signer is authorised to withdraw from it or the loop goes through `POST /v1/withdrawals`
-with an MM-signed request. Until then the loop is manual on that one step.
+The **withdrawal leg** cannot be automated as things stand, and it is worth being precise about why.
+Withdrawals pay out **only to the subaccount owner** — the action data carries just `(asset, amount)`,
+with no recipient — and `assertWithdrawalPolicy` refuses any withdrawal whose signer is not the
+owner (`session-key withdrawals are not supported`). So USDC leaving sub 15 lands at the market
+maker's wallet, signed by the market maker's key, and no delegation to this signer is possible.
+
+That leaves the operator in the loop for one step: withdraw, then forward to this signer. `check`
+exists to make that step reliably prompted rather than remembered. Automating it properly means the
+market maker doing the withdrawal itself — it already holds the key and already knows when USDC is
+piling up — which is a change to the Go service and a separate piece of work.
+
+Granting this service `kms:Sign` on the market maker's key would also work and should **not** be
+done: KMS grants are not partial, so it would confer full market-maker authority — cancelling every
+order, withdrawing everything — which is a wider blast radius than the executor separation this key
+exists to preserve.

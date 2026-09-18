@@ -1,6 +1,7 @@
 /**
  * cNGN rebalance CLI. Every command is a DRY RUN unless `--execute` is passed.
  *
+ *   rebalance check   [--alert]           is a rebalance due? (for a timer)
  *   rebalance quote   [amount]           what the live feed prices this at
  *   rebalance approve [amount]           exact-amount USDC allowance to the gateway
  *   rebalance swap    [amount]           place, run the auction, fill
@@ -14,12 +15,13 @@ import { formatUnits, parseUnits } from 'viem';
 import { createClients } from './clients.js';
 import { loadConfig } from './config.js';
 import { cancel } from './cancel.js';
+import { check } from './check.js';
 import { deposit } from './deposit.js';
 import { latestSnapshot, priceFromSnapshot } from './quote.js';
 import { approve, swap } from './swap.js';
 import { CNGN, TOKEN_DECIMALS, USDC } from './venue.js';
 
-const USAGE = `usage: rebalance <quote|approve|swap|cancel|deposit> [amount|commitment] [--execute]`;
+const USAGE = `usage: rebalance <check|quote|approve|swap|cancel|deposit> [amount|commitment] [--execute]`;
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
@@ -47,6 +49,7 @@ async function main(): Promise<void> {
     case 'approve': return approve(config, clients, parseUnits(arg ?? '20', TOKEN_DECIMALS), execute);
     case 'swap': return swap(config, clients, parseUnits(arg ?? '20', TOKEN_DECIMALS), execute);
     case 'cancel': return cancel(config, clients, arg, execute);
+    case 'check': return check(config, clients, argv.includes('--alert'));
     case 'deposit': return deposit(config, clients, arg ? parseUnits(arg, TOKEN_DECIMALS) : undefined, execute);
     default: throw new Error(`unknown command "${command}"\n${USAGE}`);
   }
