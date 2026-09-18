@@ -44,6 +44,25 @@ const schema = z.object({
   DEADLINE_BLOCKS: z.coerce.bigint().default(120n),
   /** Auction window handed to executeBest. */
   AUCTION_MS: z.coerce.number().int().positive().default(30_000),
+  /** Slack/Discord-compatible webhook the `check` command alerts to. */
+  ALERT_WEBHOOK_URL: z.string().url().optional(),
+  /**
+   * Rebalance when cNGN falls below this share of total inventory value.
+   *
+   * A ratio, not an absolute USDC figure: the first version of this check alerted on idle USDC
+   * over $200 and fired on a balanced book ($310 USDC against $348 of cNGN), where converting
+   * would have worsened the imbalance. 0.35 leaves room for the ladder to lean either way
+   * without paging.
+   */
+  CNGN_MIN_SHARE: z.coerce.number().positive().max(1).default(0.35),
+  /**
+   * cNGN holdings, valued in dollars, below which the bid side is close to dark. This is the
+   * condition that actually hurts -- idle USDC is only a pending problem, a thin cNGN side is a
+   * live one -- so it is treated as urgent rather than as a larger version of the same alert.
+   */
+  CNGN_FLOOR_USD: z.coerce.number().positive().default(100),
+  /** MM_MAX_NET_INVENTORY, mirrored here only to say how close the halt is. */
+  HALT_NET_INVENTORY_USD: z.coerce.number().positive().default(800),
 });
 
 export type Config = z.infer<typeof schema> & { bundlerUrl: string };
