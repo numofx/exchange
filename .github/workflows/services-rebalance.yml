@@ -1,0 +1,39 @@
+# .github/workflows/services-rebalance.yml
+# Depends on @numo/kms-signer, whose main/types resolve to a gitignored dist/, so it must be
+# BUILT before this package can check or test.
+name: services-rebalance
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'services/rebalance/**'
+      - 'packages/kms-signer/**'
+      - 'pnpm-workspace.yaml'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/services-rebalance.yml'
+  pull_request:
+    paths:
+      - 'services/rebalance/**'
+      - 'packages/kms-signer/**'
+      - 'pnpm-workspace.yaml'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/services-rebalance.yml'
+concurrency:
+  group: services-rebalance-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @numo/kms-signer build
+      - run: pnpm --filter cngn-rebalance run check
+      - run: pnpm --filter cngn-rebalance test
