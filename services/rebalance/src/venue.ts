@@ -14,6 +14,8 @@ export const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' as const;
 export const CNGN = '0x46C85152bFe9f96829aA94755D9f915F9B10EF5F' as const;
 /** WrappedERC20Asset escrow for cNGN — the venue's cNGN leg, and the spot market's asset_address. */
 export const CNGN_ESCROW = '0x9D806fD040a719D27a8E5E77dc5aE0ED1e089493' as const;
+/** WrappedERC20Asset escrow for USDC — the wrapped-quote module's quoteAsset(). */
+export const USDC_ESCROW = '0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84' as const;
 export const SUBACCOUNTS = '0x7019244E25FA416e6Ca2ed2F3cA25277aef72843' as const;
 
 /** Both tokens are 6dp on Base. SubAccounts reports balances in 18dp regardless. */
