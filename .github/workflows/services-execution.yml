@@ -46,3 +46,8 @@ jobs:
       - run: pnpm --filter matching-executor run check
       - run: pnpm --filter matching-executor run build
       - run: pnpm --filter matching-executor test
+      # Builds the deployable image. tsc above resolves workspace packages through the root
+      # node_modules and passes whatever the Dockerfile copies; the image only has what it COPYs
+      # and builds. That gap let @numo/kms-signer land green while making the image unbuildable,
+      # which is the kind of thing found at deploy time, when it is most expensive.
+      - run: docker build -f services/execution/Dockerfile -t numo-exchange/execution:ci .
