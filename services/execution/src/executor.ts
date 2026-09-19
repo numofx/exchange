@@ -14,6 +14,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import type { AppConfig } from './config.js';
 import { createKmsAccount } from '@numo/kms-signer';
 import { createSerialQueue } from './serial-queue.js';
+import { assertSignerIsOwner, type SubmittedAction } from './signer-guard.js';
 import type { ExecuteMatchRequest, ExecuteMatchResponse, WithdrawRequest } from './types.js';
 import {
   WithdrawalRejectedError,
@@ -77,6 +78,52 @@ export class MatchExecutor {
     this.walletClient = createWalletClient({ account: this.account, chain: this.chain, transport: http(config.rpcUrl) });
   }
 
+  /**
+   * The one place an action reaches `Matching.verifyAndMatch`.
+   *
+   * Both callers -- settlement and withdrawal -- route through here so the signer guard is applied
+   * once at the boundary rather than once per handler. A seventh module, or a third caller, inherits
+   * it by construction instead of needing to remember it.
+   *
+   * The guard runs BEFORE the queue: a refusal costs no queue slot and no simulation. Everything
+   * that differs between the two callers -- the ABI, and what a failed simulation means -- is passed
+   * in, so this method decides nothing about them.
+   */
+  private async submitVerifyAndMatch(
+    args: readonly [readonly SubmittedAction[], readonly `0x${string}`[], `0x${string}`],
+    options: { abi: Abi; onSimulationError?: (error: unknown) => never },
+  ): Promise<`0x${string}` | 'dry-run'> {
+    assertSignerIsOwner(args[0]);
+
+    return this.enqueueSend(async () => {
+      try {
+        await this.publicClient.simulateContract({
+          account: this.account,
+          address: this.deps.matchingAddress,
+          abi: options.abi,
+          functionName: 'verifyAndMatch',
+          args,
+        });
+      } catch (error) {
+        options.onSimulationError?.(error);
+        throw error;
+      }
+
+      if (this.config.dryRun) {
+        return 'dry-run' as const;
+      }
+
+      return this.walletClient.writeContract({
+        account: this.account,
+        address: this.deps.matchingAddress,
+        abi: options.abi,
+        functionName: 'verifyAndMatch',
+        args,
+        chain: this.chain,
+      });
+    });
+  }
+
   async execute(request: ExecuteMatchRequest): Promise<ExecuteMatchResponse> {
     assertPayloadConsistency(request, {
       tradeModuleAddress: this.deps.tradeModuleAddress,
@@ -86,28 +133,7 @@ export class MatchExecutor {
 
     const args = buildVerifyAndMatchArgs(request);
 
-    const txHash = await this.enqueueSend(async () => {
-      await this.publicClient.simulateContract({
-        account: this.account,
-        address: this.deps.matchingAddress,
-        abi: this.deps.matchingAbi,
-        functionName: 'verifyAndMatch',
-        args,
-      });
-
-      if (this.config.dryRun) {
-        return 'dry-run' as const;
-      }
-
-      return this.walletClient.writeContract({
-        account: this.account,
-        address: this.deps.matchingAddress,
-        abi: this.deps.matchingAbi,
-        functionName: 'verifyAndMatch',
-        args,
-        chain: this.chain,
-      });
-    });
+    const txHash = await this.submitVerifyAndMatch(args, { abi: this.deps.matchingAbi });
 
     if (txHash === 'dry-run') {
       return { accepted: true, tx_hash: 'dry-run' };
@@ -158,35 +184,15 @@ export class MatchExecutor {
     const args = buildWithdrawArgs(request);
     const abi = [...this.deps.matchingAbi, ...withdrawalRevertErrorsAbi] as Abi;
 
-    const txHash = await this.enqueueSend(async () => {
-      try {
-        await this.publicClient.simulateContract({
-          account: this.account,
-          address: this.deps.matchingAddress,
-          abi,
-          functionName: 'verifyAndMatch',
-          args,
-        });
-      } catch (error) {
+    const txHash = await this.submitVerifyAndMatch(args, {
+      abi,
+      onSimulationError: (error) => {
         const revert = describeSimulationRevert(error);
         if (revert !== undefined) {
           throw new WithdrawalRejectedError(`withdrawal would revert: ${revert}`, revert);
         }
         throw error;
-      }
-
-      if (this.config.dryRun) {
-        return 'dry-run' as const;
-      }
-
-      return this.walletClient.writeContract({
-        account: this.account,
-        address: this.deps.matchingAddress,
-        abi,
-        functionName: 'verifyAndMatch',
-        args,
-        chain: this.chain,
-      });
+      },
     });
 
     if (txHash === 'dry-run') {
