@@ -74,6 +74,19 @@ step node . "matching-executor check" pnpm --filter matching-executor run check
 step node . "matching-executor build" pnpm --filter matching-executor run build
 step node . "matching-executor test" pnpm --filter matching-executor test
 
+# The image, not just the type check. tsc resolves workspace packages through the root
+# node_modules and passes whatever the Dockerfile copies; the image only has what it COPYs and
+# builds. Skipped rather than failed when docker is absent -- it is not needed to work on the
+# services, and a hard failure here would train people to ignore this script.
+execution_image() {
+  if ! docker info >/dev/null 2>&1; then
+    echo "docker not available; skipping the image build (CI still runs it)" >&2
+    return 0
+  fi
+  ( cd "$ROOT" && docker build -f services/execution/Dockerfile -t numo-exchange/execution:verify . )
+}
+step node . "execution image builds" execution_image
+
 # ---- services-rebalance.yml ------------------------------------------------------------
 step node . "cngn-rebalance check" pnpm --filter cngn-rebalance run check
 step node . "cngn-rebalance test" pnpm --filter cngn-rebalance test
