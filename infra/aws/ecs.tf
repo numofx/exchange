@@ -548,6 +548,20 @@ resource "aws_ecs_service" "execution" {
   desired_count   = var.desired_count_execution
   launch_type     = "FARGATE"
 
+  # Stop the old task before starting the new one, as the matcher already does. Two tasks sign with
+  # the SAME KMS key, and nothing coordinates the executor EOA's nonce across processes --
+  # serial-queue.ts serialises within one process and says so: "viem reads the next nonce from the
+  # RPC at send time, so two sends in flight at once can take the same nonce and one replaces or
+  # rejects the other." With the AWS defaults (100/200) every rolling deploy opened that window:
+  # there is no load balancer, so Cloud Map returns an A record for BOTH tasks (MULTIVALUE, TTL 10s)
+  # and a settlement lands on either.
+  #
+  # The cost is a settlement gap of roughly a minute or two per deploy. That is lag, not loss: the
+  # matcher treats an unrecognised executor error as transient (internal/matching/revert.go,
+  # revertUnknown) and retries on a doubling backoff that never cancels an order.
+  deployment_minimum_healthy_percent = 0
+  deployment_maximum_percent         = 100
+
   network_configuration {
     subnets         = aws_subnet.app[*].id
     security_groups = [aws_security_group.app.id]
@@ -566,6 +580,13 @@ resource "aws_ecs_service" "market_maker" {
   task_definition = aws_ecs_task_definition.market_maker.arn
   desired_count   = var.desired_count_market_maker
   launch_type     = "FARGATE"
+
+  # Stop before start: two market makers quote the same book at once. This is not hypothetical --
+  # a draining task kept placing orders for seconds after its successor had finished its startup
+  # reconciliation, leaving quotes resting under the previous configuration that nothing
+  # re-examined. Going dark for a minute between tasks is the cheaper failure.
+  deployment_minimum_healthy_percent = 0
+  deployment_maximum_percent         = 100
 
   network_configuration {
     subnets          = aws_subnet.app[*].id
