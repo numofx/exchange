@@ -1,7 +1,7 @@
 /**
  * cNGN rebalance CLI. Every command is a DRY RUN unless `--execute` is passed.
  *
- *   rebalance check   [--alert]           is a rebalance due? (for a timer)
+ *   rebalance check   [--alert] [--heartbeat]  is a rebalance due? (for a timer)
  *   rebalance quote   [amount]           what the live feed prices this at
  *   rebalance approve [amount]           exact-amount USDC allowance to the gateway
  *   rebalance swap    [amount]           place, run the auction, fill
@@ -11,6 +11,7 @@
  * Amounts are decimal token units (`20` = 20 USDC). `cancel` with no commitment targets the
  * newest still-PLACED order from this signer; `deposit` with no amount moves the whole balance.
  */
+import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { formatUnits, parseUnits } from 'viem';
 import { createClients, createReadClient, type Clients, type ReadClients } from './clients.js';
@@ -23,7 +24,7 @@ import { latestSnapshot, priceFromSnapshot } from './quote.js';
 import { approve, swap } from './swap.js';
 import { CNGN, TOKEN_DECIMALS, USDC } from './venue.js';
 
-const USAGE = `usage: rebalance <check|quote|approve|swap|cancel|deposit> [amount|commitment] [--execute]`;
+const USAGE = `usage: rebalance <check|quote|approve|swap|cancel|deposit> [amount|commitment] [--execute] [--alert] [--heartbeat]`;
 
 /**
  * The seams a test needs. `signingClients` is separate from `readClients` so a test can assert it
@@ -66,14 +67,15 @@ export async function runCommand(argv: string[], config: Config, deps: CliDeps =
   // Read-only commands must never reach for the signer.
   if (command === 'check') {
     const wantAlert = argv.includes('--alert');
+    const wantHeartbeat = argv.includes('--heartbeat');
     try {
-      return await check(config, deps.readClients(config), wantAlert, deps.post, deps.fetchSnapshot);
+      return await check(config, deps.readClients(config), wantAlert, deps.post, deps.fetchSnapshot, wantHeartbeat);
     } catch (error) {
       // A check that could not RUN is not a quiet check. Unattended, a crash into a log nobody
       // reads is the same failure as an alert that reaches nobody, so a failed run pages exactly
       // like a fired one -- and still exits non-zero so a scheduler's OnFailure can catch it when
       // the webhook is what broke.
-      if (wantAlert && config.ALERT_WEBHOOK_URL) {
+      if ((wantAlert || wantHeartbeat) && config.ALERT_WEBHOOK_URL) {
         const why = String(error instanceof Error ? error.message : error).split('\n')[0];
         const text =
           `cNGN rebalance check FAILED TO RUN (sub ${config.MM_SUBACCOUNT_ID}): ${why}. ` +
@@ -102,9 +104,26 @@ async function main(): Promise<void> {
   await runCommand(process.argv.slice(2), loadConfig());
 }
 
-// Only when run as the CLI. Without this guard, importing this module executes main() -- which
-// calls loadConfig() and throws before a test can reach anything.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+/**
+ * True when this module IS the process entry point.
+ *
+ * argv[1] is resolved through realpath first. `import.meta.url` is always the real path, while
+ * argv[1] is whatever was typed -- so invoked through a symlink the two differ, the guard does not
+ * fire, and the CLI prints nothing and exits 0. Silent success is the worst failure available to a
+ * scheduled job, and a `bin` entry (node_modules/.bin/* is a symlink) or a symlinked unit path is
+ * exactly how that would arrive. Verified: without realpath, `node /tmp/link-to-cli.js check`
+ * produced no output and exit 0.
+ */
+export function isEntryPoint(moduleUrl: string, argv1: string | undefined): boolean {
+  if (!argv1) return false;
+  try {
+    return moduleUrl === pathToFileURL(realpathSync(argv1)).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isEntryPoint(import.meta.url, process.argv[1])) {
   main().catch((e: unknown) => {
     console.error(String(e instanceof Error ? e.message : e));
     process.exit(1);

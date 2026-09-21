@@ -124,3 +124,66 @@ test('--alert refuses to run with no webhook configured', async () => {
   // Rather than logging and exiting 0, which is the silent-alert failure this repo keeps finding.
   await assert.rejects(() => runCommand(['check', '--alert'], config, deps()), /ALERT_WEBHOOK_URL/);
 });
+
+test('the entry-point guard survives a symlinked invocation path', async () => {
+  // Without realpath resolution this returns false and the CLI silently does nothing: argv[1] is
+  // the symlink, import.meta.url is the resolved target. A `bin` entry or a symlinked unit path
+  // produces exactly that shape, and the failure is a clean exit 0 with no output.
+  const { mkdtempSync, writeFileSync, symlinkSync, rmSync, realpathSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { pathToFileURL } = await import('node:url');
+  const { isEntryPoint } = await import('./cli.js');
+
+  const dir = mkdtempSync(join(tmpdir(), 'entrypoint-'));
+  try {
+    const real = join(dir, 'cli.js');
+    const link = join(dir, 'linked-cli');
+    writeFileSync(real, '');
+    symlinkSync(real, link);
+    // Node always gives import.meta.url as the REAL path, so the fixture must too -- on macOS
+    // tmpdir() sits under a symlinked /var, and a hand-built URL would not match.
+    const moduleUrl = pathToFileURL(realpathSync(real)).href;
+
+    assert.equal(isEntryPoint(moduleUrl, real), true, 'direct path must fire');
+    assert.equal(isEntryPoint(moduleUrl, link), true, 'symlinked path must fire');
+    assert.equal(isEntryPoint(moduleUrl, join(dir, 'other.js')), false, 'a different file must not');
+    assert.equal(isEntryPoint(moduleUrl, undefined), false, 'no argv[1] must not');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('--heartbeat posts on a HEALTHY run, so silence cannot pass for healthy', async () => {
+  // The gap this closes: a healthy --alert run posts nothing, which is indistinguishable from a
+  // timer that stopped firing, a host that went away, or credentials that lapsed.
+  const posted: string[] = [];
+  const withHook = { ...config, ALERT_WEBHOOK_URL: 'https://hook.example/x' } as Config;
+  await runCommand(['check', '--heartbeat'], withHook, deps({ post: async (_u, t) => { posted.push(t); } }));
+  assert.equal(posted.length, 1, 'a healthy heartbeat run must still post');
+  assert.match(posted[0] ?? '', /heartbeat/);
+  // It carries the numbers, so the heartbeat is evidence rather than just a ping.
+  assert.match(posted[0] ?? '', /cNGN 53%|healthy/);
+});
+
+test('--alert alone stays silent on a healthy run', async () => {
+  const posted: string[] = [];
+  const withHook = { ...config, ALERT_WEBHOOK_URL: 'https://hook.example/x' } as Config;
+  await runCommand(['check', '--alert'], withHook, deps({ post: async (_u, t) => { posted.push(t); } }));
+  assert.equal(posted.length, 0, 'alert-only must not page when nothing is wrong');
+});
+
+test('--heartbeat still pages loudly when the run fails', async () => {
+  const posted: string[] = [];
+  const withHook = { ...config, ALERT_WEBHOOK_URL: 'https://hook.example/x' } as Config;
+  const d = deps({
+    readClients: () => { throw new Error('RPC unreachable'); },
+    post: async (_u, t) => { posted.push(t); },
+  });
+  await assert.rejects(() => runCommand(['check', '--heartbeat'], withHook, d), /RPC unreachable/);
+  assert.match(posted[0] ?? '', /FAILED TO RUN/);
+});
+
+test('--heartbeat refuses to run with no webhook configured', async () => {
+  await assert.rejects(() => runCommand(['check', '--heartbeat'], config, deps()), /reach nobody/);
+});

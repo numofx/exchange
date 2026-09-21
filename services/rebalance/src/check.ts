@@ -24,12 +24,13 @@ export async function check(
   alert: boolean,
   post: PostAlert = defaultPostAlert,
   fetchSnapshot: typeof latestSnapshot = latestSnapshot,
+  heartbeat = false,
 ): Promise<void> {
   // Validated BEFORE anything is read, not at the point of sending. Checked only when an alert
   // was due, a --alert run with no webhook configured looks healthy for as long as the inventory
   // is healthy, and fails for the first time on the run that finally had something to say.
-  if (alert && !config.ALERT_WEBHOOK_URL) {
-    throw new Error('ALERT_WEBHOOK_URL is not set, so --alert would reach nobody');
+  if ((alert || heartbeat) && !config.ALERT_WEBHOOK_URL) {
+    throw new Error('ALERT_WEBHOOK_URL is not set, so --alert/--heartbeat would reach nobody');
   }
 
   const sub = config.MM_SUBACCOUNT_ID;
@@ -56,8 +57,16 @@ export async function check(
   console.log(`action      ${verdict.action}`);
   for (const reason of verdict.reasons) console.log(`  - ${reason}`);
 
-  if (!alert) { if (verdict.action !== 'none') console.log('\n(pass --alert to post this to the ops webhook)'); return; }
-  if (verdict.action === 'none') return;
-  await post(config.ALERT_WEBHOOK_URL as string, verdict.message);
-  console.log('alert posted');
+  // --heartbeat posts on EVERY run, healthy or not. Without it a healthy --alert run is silent,
+  // and silence is indistinguishable from a timer that stopped firing, a host that went away, or
+  // credentials that lapsed. Schedule --alert often (pages only on a finding) and --heartbeat
+  // rarely (proves the checker is alive and carries the numbers with it).
+  const shouldPost = heartbeat || (alert && verdict.action !== 'none');
+  if (!shouldPost) {
+    if (!alert && verdict.action !== 'none') console.log('\n(pass --alert to post this to the ops webhook)');
+    return;
+  }
+  const prefix = verdict.action === 'none' ? 'heartbeat — ' : '';
+  await post(config.ALERT_WEBHOOK_URL as string, `${prefix}${verdict.message}`);
+  console.log(heartbeat && verdict.action === 'none' ? 'heartbeat posted' : 'alert posted');
 }
