@@ -187,3 +187,21 @@ test('--heartbeat still pages loudly when the run fails', async () => {
 test('--heartbeat refuses to run with no webhook configured', async () => {
   await assert.rejects(() => runCommand(['check', '--heartbeat'], config, deps()), /reach nobody/);
 });
+
+test('--test marks a drill so nobody investigates a healthy venue', async () => {
+  const posted: string[] = [];
+  const withHook = { ...config, ALERT_WEBHOOK_URL: 'https://hook.example/x' } as Config;
+  await runCommand(['check', '--heartbeat', '--test'], withHook, deps({ post: async (_u, t) => { posted.push(t); } }));
+  assert.match(posted[0] ?? '', /^\[TEST\] /);
+});
+
+test('--test marks a forced FAILURE drill too', async () => {
+  const posted: string[] = [];
+  const withHook = { ...config, ALERT_WEBHOOK_URL: 'https://hook.example/x' } as Config;
+  const d = deps({
+    readClients: () => { throw new Error('forced'); },
+    post: async (_u, t) => { posted.push(t); },
+  });
+  await assert.rejects(() => runCommand(['check', '--alert', '--test'], withHook, d));
+  assert.match(posted[0] ?? '', /^\[TEST\] cNGN rebalance check FAILED TO RUN/);
+});

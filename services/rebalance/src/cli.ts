@@ -18,13 +18,13 @@ import { createClients, createReadClient, type Clients, type ReadClients } from 
 import { postAlert, type PostAlert } from './alert.js';
 import { loadConfig, type Config } from './config.js';
 import { cancel } from './cancel.js';
-import { check } from './check.js';
+import { check, TEST_PREFIX } from './check.js';
 import { deposit } from './deposit.js';
 import { latestSnapshot, priceFromSnapshot } from './quote.js';
 import { approve, swap } from './swap.js';
 import { CNGN, TOKEN_DECIMALS, USDC } from './venue.js';
 
-const USAGE = `usage: rebalance <check|quote|approve|swap|cancel|deposit> [amount|commitment] [--execute] [--alert] [--heartbeat]`;
+const USAGE = `usage: rebalance <check|quote|approve|swap|cancel|deposit> [amount|commitment] [--execute] [--alert] [--heartbeat] [--test]`;
 
 /**
  * The seams a test needs. `signingClients` is separate from `readClients` so a test can assert it
@@ -68,8 +68,9 @@ export async function runCommand(argv: string[], config: Config, deps: CliDeps =
   if (command === 'check') {
     const wantAlert = argv.includes('--alert');
     const wantHeartbeat = argv.includes('--heartbeat');
+    const isTest = argv.includes('--test');
     try {
-      return await check(config, deps.readClients(config), wantAlert, deps.post, deps.fetchSnapshot, wantHeartbeat);
+      return await check(config, deps.readClients(config), wantAlert, deps.post, deps.fetchSnapshot, wantHeartbeat, isTest);
     } catch (error) {
       // A check that could not RUN is not a quiet check. Unattended, a crash into a log nobody
       // reads is the same failure as an alert that reaches nobody, so a failed run pages exactly
@@ -78,7 +79,8 @@ export async function runCommand(argv: string[], config: Config, deps: CliDeps =
       if ((wantAlert || wantHeartbeat) && config.ALERT_WEBHOOK_URL) {
         const why = String(error instanceof Error ? error.message : error).split('\n')[0];
         const text =
-          `cNGN rebalance check FAILED TO RUN (sub ${config.MM_SUBACCOUNT_ID}): ${why}. ` +
+          `${isTest ? TEST_PREFIX : ''}cNGN rebalance check FAILED TO RUN ` +
+          `(sub ${config.MM_SUBACCOUNT_ID}): ${why}. ` +
           'Inventory is UNKNOWN, not healthy — nothing has been checked.';
         try {
           await deps.post(config.ALERT_WEBHOOK_URL, text);

@@ -9,6 +9,12 @@ import { postAlert as defaultPostAlert, type PostAlert } from './alert.js';
 import type { ReadClients } from './clients.js';
 import type { Config } from './config.js';
 import { assessInventory } from './inventory.js';
+
+/**
+ * Prefix for anything fired by hand into a shared channel. Without it a drill is indistinguishable
+ * from a real finding, and someone spends their afternoon investigating a venue that is fine.
+ */
+export const TEST_PREFIX = '[TEST] ';
 import { latestSnapshot, priceFromSnapshot } from './quote.js';
 import { CNGN, CNGN_ESCROW, LEDGER_DECIMALS, SUBACCOUNTS, SUBACCOUNTS_ABI, TOKEN_DECIMALS, USDC, USDC_ESCROW } from './venue.js';
 
@@ -25,6 +31,8 @@ export async function check(
   post: PostAlert = defaultPostAlert,
   fetchSnapshot: typeof latestSnapshot = latestSnapshot,
   heartbeat = false,
+  /** Marks a message as a drill. Anything posted to a shared channel by hand must carry this. */
+  testRun = false,
 ): Promise<void> {
   // Validated BEFORE anything is read, not at the point of sending. Checked only when an alert
   // was due, a --alert run with no webhook configured looks healthy for as long as the inventory
@@ -66,7 +74,7 @@ export async function check(
     if (!alert && verdict.action !== 'none') console.log('\n(pass --alert to post this to the ops webhook)');
     return;
   }
-  const prefix = verdict.action === 'none' ? 'heartbeat — ' : '';
+  const prefix = `${testRun ? TEST_PREFIX : ''}${verdict.action === 'none' ? 'heartbeat — ' : ''}`;
   await post(config.ALERT_WEBHOOK_URL as string, `${prefix}${verdict.message}`);
   console.log(heartbeat && verdict.action === 'none' ? 'heartbeat posted' : 'alert posted');
 }
