@@ -77,13 +77,19 @@ export async function runCommand(argv: string[], config: Config, deps: CliDeps =
       // like a fired one -- and still exits non-zero so a scheduler's OnFailure can catch it when
       // the webhook is what broke.
       if ((wantAlert || wantHeartbeat) && config.ALERT_WEBHOOK_URL) {
-        const why = String(error instanceof Error ? error.message : error).split('\n')[0];
+        // Trailing punctuation stripped: viem's messages already end in '.', and the drill on
+        // 2026-09-22 put "HTTP request failed.." in the channel.
+        const why = String(error instanceof Error ? error.message : error).split('\n')[0].replace(/[.\s]+$/, '');
         const text =
           `${isTest ? TEST_PREFIX : ''}cNGN rebalance check FAILED TO RUN ` +
           `(sub ${config.MM_SUBACCOUNT_ID}): ${why}. ` +
           'Inventory is UNKNOWN, not healthy — nothing has been checked.';
         try {
           await deps.post(config.ALERT_WEBHOOK_URL, text);
+          // Confirmed locally, not just attempted. The healthy path already prints 'heartbeat
+          // posted'; without this the path that matters MOST -- a check that could not run --
+          // was the one giving the operator no sign the page went out.
+          console.error('failure alert posted');
         } catch (postError) {
           console.error(`failure alert could not be posted: ${String(postError)}`);
         }
