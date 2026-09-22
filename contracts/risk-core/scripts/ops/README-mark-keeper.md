@@ -54,3 +54,51 @@ cp numo-mark-callback.service numo-mark-signer.service numo-mark-keeper.service 
 systemctl daemon-reload
 systemctl enable --now numo-mark-callback numo-mark-signer numo-mark-keeper
 ```
+
+## RETIRED 2026-09-22 — the cNGN feed signer is not being refunded
+
+`0xc9f1ffDE…20fdc`, the EOA that pushed prices into the cNGN spot feed
+`0x41512C6a2af5AcD219EbCcfaF34f7088A2999ABC`, ran out of gas on **2026-09-11** (balance
+0.0000017 ETH, nonce 65,466) and is deliberately **not** being refunded. The mark keeper is a
+downstream casualty: it reads that feed, the read reverts `BLF_DataTooOld()`, and it fails closed
+rather than marking to a frozen price — which is correct behaviour.
+
+**Nothing that trades depends on either feed this signer wrote to.** Verified 2026-09-22:
+
+| feed | why it is dead |
+| --- | --- |
+| `0x41512C6a` cNGN spot | spot moved to the static feeds at the SRM cutover, 2026-09-10 |
+| `0xDAe566ad` market 1 USDC | deliberately moved off in the market-1-inert batch, 2026-09-09, `marginFactor 0` |
+
+Those were the signer's **only** two destinations (95 and 5 of its last 100 transactions).
+
+Supporting evidence, all read off chain rather than assumed:
+
+- `totalPosition`, `totalLongPosition`, `totalShortPosition` on the SEP16 future are **0**, under
+  both the DFXM and the SRM.
+- The SEP16 manager `0xcE01f3D7…4d49` is `allowedModules = false` on Matching, so its accounts
+  cannot settle a trade whatever any feed says.
+- Spot's static feeds answer (`0xec4ad7B2` -> 743376685636834), while the live feed reverts. A real
+  spot settlement landed on 2026-09-20 (tx `0xb3df1d1d…`) with this feed already 9 days stale.
+
+### The alert retires itself, rather than being switched off
+
+`check_mark_staleness.py` now returns early when open interest is zero, in the same shape as its
+existing settled-series exit. The premise is re-checked on **every run**, so if anyone ever opens a
+position on this future the alert resumes on its own. A retirement that depends on a human
+remembering to undo it is how a venue ends up with an unmonitored market.
+
+If the open-interest read itself fails, it alerts and exits 1 — it will not infer "safe to skip"
+from a failure to check. Both paths were exercised before this was written.
+
+### To un-retire
+
+Fund `0xc9f1ffDE…20fdc` (it burns ~0.01 ETH/month at ~1 update/min; 0.05 ETH is ~5 months), and
+restart `numo-mark-keeper.service`. The alert needs no change. Do this **before** re-pointing any
+market at a live feed, not after.
+
+### Still to do on the ops box (not done from here)
+
+`numo-mark-keeper.service` and `numo-mark-alert-ssm.service` are still enabled. The keeper is
+harmless — it fails closed every cycle — but it is noise in the journal, and the alert timer is now
+a no-op that still costs an RPC round trip a minute. Stopping and disabling both is the tidy-up.
