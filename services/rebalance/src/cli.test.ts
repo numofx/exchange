@@ -205,3 +205,32 @@ test('--test marks a forced FAILURE drill too', async () => {
   await assert.rejects(() => runCommand(['check', '--alert', '--test'], withHook, d));
   assert.match(posted[0] ?? '', /^\[TEST\] cNGN rebalance check FAILED TO RUN/);
 });
+
+test('a failed check confirms locally that the page went out', async () => {
+  // The healthy path printed 'heartbeat posted'; the failure path printed nothing, so the run
+  // that matters most gave no sign the alert had been delivered. Observed in the 2026-09-22 drill.
+  const lines: string[] = [];
+  const err = console.error;
+  console.error = (m?: unknown) => { lines.push(String(m)); };
+  try {
+    const withHook = { ...config, ALERT_WEBHOOK_URL: 'https://hook.example/x' } as Config;
+    const d = deps({ readClients: () => { throw new Error('RPC unreachable'); }, post: async () => {} });
+    await assert.rejects(() => runCommand(['check', '--alert'], withHook, d));
+  } finally {
+    console.error = err;
+  }
+  assert.ok(lines.some((l) => l === 'failure alert posted'), `expected a delivery confirmation, got ${JSON.stringify(lines)}`);
+});
+
+test('the failure reason carries no doubled punctuation', async () => {
+  // viem messages already end in '.', and "HTTP request failed.." reached the ops channel.
+  const posted: string[] = [];
+  const withHook = { ...config, ALERT_WEBHOOK_URL: 'https://hook.example/x' } as Config;
+  const d = deps({
+    readClients: () => { throw new Error('HTTP request failed.'); },
+    post: async (_u, t) => { posted.push(t); },
+  });
+  await assert.rejects(() => runCommand(['check', '--alert'], withHook, d));
+  assert.match(posted[0] ?? '', /HTTP request failed\. Inventory is UNKNOWN/);
+  assert.doesNotMatch(posted[0] ?? '', /\.\./);
+});
