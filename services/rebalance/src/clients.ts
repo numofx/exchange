@@ -5,6 +5,20 @@ import { createPublicClient, createWalletClient, http } from 'viem';
 import { base } from 'viem/chains';
 import type { Config } from './config.js';
 
+/**
+ * Chain reads only. No KMS, no AWS credentials, no network round trip to build it.
+ *
+ * Split out because `check` is the command meant to run unattended on a timer, and it reads two
+ * balances and a price -- it signs nothing. It used to go through createClients anyway, so it
+ * needed AWS credentials it never used and died on an expired SSO session. A scheduled job that
+ * fails whenever a human's login lapses is not a monitor.
+ */
+export function createReadClient(config: Config) {
+  return { publicClient: createPublicClient({ chain: base, transport: http(config.BASE_RPC_URL) }) };
+}
+
+export type ReadClients = ReturnType<typeof createReadClient>;
+
 export async function createClients(config: Config) {
   const account = await createKmsAccount(config.REBALANCE_KMS_KEY_ID, new KMSClient({}));
   const transport = http(config.BASE_RPC_URL);
