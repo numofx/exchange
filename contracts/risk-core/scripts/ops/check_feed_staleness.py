@@ -32,6 +32,30 @@ SPOT_DETAIL_SLOT = "0x6"
 CNGN_WARN_SEC = 120
 STABLE_WARN_SEC = 3000
 
+SEL_GET_SPOT = "0x2b37269c"  # getSpot() -- derived with `cast sig`, NOT by hand (see below)
+
+# OraclesSet(uint256 marketId, address spotFeed, address forwardFeed, address volFeed)
+ORACLES_SET_TOPIC = "0xd761335b0ab3a850d6b3f035a4973246956aaabab419b2c3dc0c0d25fbaf788f"
+
+
+def live_spot_feeds(url: str, srm: str) -> set[str]:
+  """The spot feed each SRM market currently uses, lowercased.
+
+  Read from OraclesSet logs rather than storage: `spotFeeds` is internal, and the latest event per
+  market is the current setting. Self-correcting by construction -- re-point a market at a live
+  feed and it reappears here on the next run.
+  """
+  logs = rpc(url, "eth_getLogs", [{"address": srm, "topics": [ORACLES_SET_TOPIC],
+                                   "fromBlock": "0x0", "toBlock": "latest"}])
+  current: dict[int, str] = {}
+  for log in logs:
+    topics, data = log["topics"], log["data"][2:]
+    # marketId is indexed on this event; the three feeds are the first words of data.
+    market = int(topics[1], 16) if len(topics) > 1 else int(data[0:64], 16)
+    offset = 0 if len(topics) > 1 else 64
+    current[market] = ("0x" + data[offset:offset + 64][-40:]).lower()
+  return set(current.values())
+
 
 def load_env_file(path: Path) -> None:
   if not path.exists():
@@ -63,6 +87,22 @@ def feed_age(url: str, feed: str) -> tuple[int, float]:
   return int(time.time()) - ts, price
 
 
+def is_static_feed(url: str, feed: str) -> bool:
+  """A feed with no spotDetail timestamp that still prices is STATIC, not stale.
+
+  The static feeds market 1 and 2 were moved onto are constants: they answer getSpot() forever and
+  never write slot 6, so `now - 0` makes them look 1.8 billion seconds stale and this alert would
+  fire on them for good. Distinguished from a LIVE feed that has never been published -- which has
+  no timestamp AND cannot price -- so that genuine case still alerts.
+  """
+  try:
+    out = rpc(url, "eth_call", [{"to": feed, "data": SEL_GET_SPOT}, "latest"])
+  except Exception:
+    return False
+  raw = out[2:] if out.startswith("0x") else out
+  return len(raw) >= 64 and int(raw[0:64], 16) > 0
+
+
 def alert(webhook: str | None, msg: str) -> None:
   print(msg, file=sys.stderr)
   if not webhook:
@@ -87,10 +127,31 @@ def main() -> int:
     ("stable feed", core["stableFeed"], STABLE_WARN_SEC),
   ]
 
+  # A feed no market reads cannot freeze anything, so alerting on its staleness is noise. Both of
+  # these were orphaned on purpose -- market 1 moved to the static stable feed on 2026-09-09 and
+  # market 2 to the static cNGN feed at the SRM cutover on 2026-09-10 -- and their publisher
+  # (numo-feeds) was retired on 2026-09-22 once its relayer ran out of gas.
+  #
+  # Deliberately a CONDITION, not a disabled timer: the set is re-read every run, so re-pointing a
+  # market at one of these brings its alert straight back. Same shape as the zero-open-interest
+  # exit in check_mark_staleness.py.
+  try:
+    live = live_spot_feeds(url, core["srm"])
+  except Exception as exc:
+    # Fail LOUD: without the set we cannot tell an orphan from a feed that is freezing trading.
+    alert(webhook, f"NUMO FEED ALERT\nLIVE-FEED LOOKUP FAILED (cannot tell which feeds are in use): {exc}")
+    return 1
+
   problems = []
   for name, addr, warn in feeds:
+    if addr.lower() not in live:
+      print(f"skip: {name} {addr} is not the spot feed of any SRM market; staleness cannot freeze trading")
+      continue
     try:
       age, price = feed_age(url, addr)
+      if price == 0 and is_static_feed(url, addr):
+        print(f"skip: {name} {addr} is a static feed (prices, never publishes); staleness is not meaningful")
+        continue
       if age > warn:
         problems.append(f"{name} {addr} STALE: last update {age}s ago (warn {warn}s), price {price:.2f}")
       else:
