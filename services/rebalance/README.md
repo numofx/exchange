@@ -103,7 +103,8 @@ owner (`session-key withdrawals are not supported`). So USDC leaving sub 15 land
 maker's wallet, signed by the market maker's key, and no delegation to this signer is possible.
 
 That leaves the operator in the loop for one step: withdraw, then forward to this signer. `check`
-exists to make that step reliably prompted rather than remembered. Automating it properly means the
+exists to make that step reliably prompted rather than remembered, and **[RUNBOOK.md](./RUNBOOK.md)
+is the procedure it prompts for** — addresses, both withdrawal routes, and the traps. Automating it properly means the
 market maker doing the withdrawal itself — it already holds the key and already knows when USDC is
 piling up — which is a change to the Go service and a separate piece of work.
 

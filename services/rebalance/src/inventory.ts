@@ -80,8 +80,13 @@ export function assessInventory(reading: InventoryReading, thresholds: Inventory
   const body = reasons.length ? `${balances}. ${reasons.join('; ')}.` : `${balances}.`;
   // The next step is a human one -- a withdrawal pays out only to the subaccount owner and cannot
   // be delegated -- so the message says what to do rather than just what is true.
+  //
+  // It is TWO moves, not one. An earlier version read "withdraw to the rebalance signer", which the
+  // chain cannot do: the action data is (asset, amount) with no recipient, so a withdrawal always
+  // pays the owner. An operator following that literally goes looking for an argument that does not
+  // exist. Full procedure in services/rebalance/RUNBOOK.md.
   const next = action === 'none'
     ? ''
-    : ' Withdraw USDC from the subaccount to the rebalance signer, then `pnpm rebalance swap <amount> --execute` and `pnpm rebalance deposit --execute`.';
+    : ' Withdraw USDC from the subaccount (pays the owner), forward it to the rebalance signer, then `pnpm rebalance swap <amount> --execute` and `pnpm rebalance deposit --execute`. Runbook: services/rebalance/RUNBOOK.md.';
   return { action, usdcUsd, cngnUsd, cngnShare, reasons, message: `${head}: ${body}${next}` };
 }
