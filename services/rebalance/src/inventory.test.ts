@@ -52,6 +52,17 @@ test('an empty subaccount is empty, not lopsided', () => {
 test('says what to do, because the next step cannot be automated', () => {
   const v = assessInventory({ usdc: ledger(500), cngn: ledger(150_000), rate: RATE }, thresholds, SUB);
   assert.match(v.message, /Withdraw USDC from the subaccount/);
+  assert.match(v.message, /RUNBOOK\.md/);
+});
+
+test('the next step is described as two moves, not a withdrawal to the signer', () => {
+  // A withdrawal's data is (asset, amount) with no recipient, so it ALWAYS pays the subaccount
+  // owner. The message used to read "withdraw to the rebalance signer", which is an instruction the
+  // chain cannot carry out -- the operator is sent looking for an argument that does not exist.
+  const v = assessInventory({ usdc: ledger(500), cngn: ledger(150_000), rate: RATE }, thresholds, SUB);
+  assert.match(v.message, /pays the owner/);
+  assert.match(v.message, /forward it to the rebalance signer/);
+  assert.doesNotMatch(v.message, /Withdraw USDC from the subaccount to the rebalance signer/);
 });
 
 test('refuses to value the cNGN side without a rate', () => {
