@@ -57,6 +57,17 @@ async function main() {
     console.log(`[keeper] health on http://${config.HEALTH_HOST}:${config.HEALTH_PORT}/health`);
   }
 
+  if (process.argv.includes('--settle-frozen')) {
+    const { settled, underLiquidation } = await chain.settleFrozenPositions(config.DRY_RUN);
+    const verb = config.DRY_RUN ? 'would settle' : 'settled';
+    console.log(`[keeper] ${verb} ${settled.length} frozen position(s): ${settled.join(', ') || 'none'}`);
+    if (underLiquidation.length > 0) {
+      console.log(`[keeper] under liquidation, not settled: ${underLiquidation.join(', ')}; let the keeper finish their auctions, then run again`);
+      process.exitCode = 2;
+    }
+    return;
+  }
+
   await tick();
   if (process.argv.includes('--once')) return;
 
