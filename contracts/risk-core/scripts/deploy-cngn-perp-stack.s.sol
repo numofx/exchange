@@ -62,8 +62,9 @@ import "./config-mainnet.sol";
  *     forge script scripts/deploy-cngn-perp-stack.s.sol --rpc-url $BASE_RPC_URL --broadcast
  *
  * Optional env:
- *   PERP_OI_CAP   total position cap in NGN, 18dp (default 50,000,000). It sums |position| over
- *                 BOTH sides, so 50M allows 25M NGN of open interest (≈ $18k at 0.00072).
+ *   PERP_OI_CAP   the cap the ENABLE action opens the market to, NGN 18dp (default 50,000,000). It
+ *                 sums |position| over BOTH sides, so 50M allows 25M NGN of OI (≈ $18k at 0.00072).
+ *                 The stack itself deploys with a cap of 0: closed to every path, not just Matching.
  */
 contract DeployCngnPerpStack is Utils {
   string internal constant ARTIFACT_NAME = "CNGN_PERP_STACK";
@@ -120,7 +121,7 @@ contract DeployCngnPerpStack is Utils {
     vm.stopBroadcast();
 
     assertStack(stack, params, vm.addr(deployerPrivateKey));
-    _writeArtifacts(stack);
+    _writeArtifacts(stack, params.perpOICap);
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -237,7 +238,11 @@ contract DeployCngnPerpStack is Utils {
     stack.perp.setRateBounds(fundingRateCap);
     stack.perp.setConvergencePeriod(convergencePeriod);
     stack.perp.setWhitelistManager(address(stack.srm), true);
-    stack.perp.setTotalPositionCap(stack.srm, params.perpOICap);
+    // Closed at deploy. The cap is the only switch that stops EVERY path to a position -- Matching
+    // allowlisting gates the venue, but two accounts under this SRM can move perp between themselves
+    // with SubAccounts.submitTransfers the moment the feeds are live. Opening it (to params.perpOICap)
+    // is the final enable action, proposed by propose_perp_enable_batch.py once its gates pass.
+    stack.perp.setTotalPositionCap(stack.srm, 0);
   }
 
   function _registerMarket(Stack memory stack) internal {
@@ -319,7 +324,7 @@ contract DeployCngnPerpStack is Utils {
     (address spot,,) = _marketFeeds(stack);
     if (spot != address(stack.indexFeed)) revert("market index feed not set");
     if (!stack.perp.whitelistedManager(address(stack.srm))) revert("perp does not whitelist the srm");
-    if (stack.perp.totalPositionCap(stack.srm) != params.perpOICap) revert("perp cap not set");
+    if (stack.perp.totalPositionCap(stack.srm) != 0) revert("perp must deploy closed (cap 0)");
   }
 
   function _marketFeeds(Stack memory stack) internal view returns (address spot, address fwd, address vol) {
@@ -339,7 +344,7 @@ contract DeployCngnPerpStack is Utils {
   // artifacts
   // ---------------------------------------------------------------------------------------------
 
-  function _writeArtifacts(Stack memory stack) internal {
+  function _writeArtifacts(Stack memory stack, uint launchCap) internal {
     string memory obj = "cngn-perp-stack";
     vm.serializeAddress(obj, "rateModel", address(stack.rateModel));
     vm.serializeAddress(obj, "cash", address(stack.cash));
@@ -354,6 +359,7 @@ contract DeployCngnPerpStack is Utils {
     vm.serializeAddress(obj, "impactBidFeed", address(stack.impactBidFeed));
     vm.serializeAddress(obj, "perp", address(stack.perp));
     vm.serializeUint(obj, "marketId", stack.marketId);
+    vm.serializeUint(obj, "launchOICap", launchCap);
     vm.serializeUint(obj, "securityModuleAccount", stack.securityModule.accountId());
     string memory json = vm.serializeUint(obj, "feeRecipientAccount", stack.feeRecipientAccount);
     _writeToDeployments(ARTIFACT_NAME, json);

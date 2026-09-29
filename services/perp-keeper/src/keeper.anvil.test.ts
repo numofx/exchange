@@ -85,6 +85,7 @@ const SIZE = 10_000_000n * E18;
 
 const abi = parseAbi([
   'function acceptOwnership()',
+  'function setTotalPositionCap(address manager, uint256 cap)',
   'function createAccount(address owner, address manager) returns (uint256)',
   'function createAccountWithApproval(address owner, address spender, address manager) returns (uint256)',
   'function lastAccountId() view returns (uint256)',
@@ -220,6 +221,8 @@ describe('keeper against the real perp stack on an anvil fork', { skip: !RPC }, 
       await rpc('anvil_setBalance', [address, toHex(10n ** 18n)]);
     }
     for (const contract of stack.owned) await write(VAULT, contract, 'acceptOwnership', []);
+    // The stack deploys closed; the cap half of the enable action opens it.
+    await write(VAULT, stack.perp, 'setTotalPositionCap', [stack.srm, 50_000_000n * E18]);
 
     await publish(INDEX);
 

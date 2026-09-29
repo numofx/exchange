@@ -89,7 +89,26 @@ contract CngnPerpTradeModuleForkTest is Test {
 
   // ---------------------------------------------------------------------------------------------
 
+  /// Both deploy batches applied, enable not yet: the book is closed.
+  function testDeployBatchesAloneLeaveTheBookClosed() public {
+    bytes memory managerData = _feedUpdates(uint(PRICE));
+    nonce++;
+    IActionVerifier.Action[] memory actions = new IActionVerifier.Action[](2);
+    bytes[] memory sigs = new bytes[](2);
+    (actions[0], sigs[0]) = _sign(takerAcc, true, taker, takerPk, PRICE);
+    (actions[1], sigs[1]) = _sign(makerAcc, false, maker, makerPk, PRICE);
+    ITradeModule.FillDetails[] memory fills = new ITradeModule.FillDetails[](1);
+    fills[0] = ITradeModule.FillDetails({filledAccount: makerAcc, amountFilled: SIZE, price: PRICE, fee: 0});
+    bytes memory orderData = abi.encode(
+      ITradeModule.OrderData({takerAccount: takerAcc, takerFee: 0, fillDetails: fills, managerData: managerData})
+    );
+    vm.prank(tradeExecutor);
+    vm.expectRevert(IMatching.M_OnlyAllowedModule.selector);
+    matching.verifyAndMatch(actions, sigs, orderData);
+  }
+
   function testPerpFillsThroughMatchingWithFeedsOnTheFill() public {
+    _enablePerp();
     // No feed has ever been published: the only prices this fill sees are the ones it carries.
     _fill(0, _feedUpdates(uint(PRICE)));
 
@@ -100,6 +119,7 @@ contract CngnPerpTradeModuleForkTest is Test {
   }
 
   function testFeeIsCollectedInBackedCashWithoutAnAllowance() public {
+    _enablePerp();
     int takerCash = _bal(address(stack.cash), takerAcc);
     // 25 bps of $7,200 = $18 taker fee; the vault-owned fee account never granted anything.
     _fill(18e18, _feedUpdates(uint(PRICE)));
@@ -109,6 +129,7 @@ contract CngnPerpTradeModuleForkTest is Test {
   }
 
   function testFillAboveMarkMovesTheDifferenceInCash() public {
+    _enablePerp();
     // Traded 1% over mark: the long pays the difference to the short, in the stack's cash.
     int tradePrice = PRICE * 101 / 100;
     int takerCash = _bal(address(stack.cash), takerAcc);
@@ -122,6 +143,7 @@ contract CngnPerpTradeModuleForkTest is Test {
   }
 
   function testUnallowlistedModuleCannotTrade() public {
+    _enablePerp();
     vm.prank(VAULT);
     matching.setAllowedModule(address(module), false);
 
@@ -170,9 +192,19 @@ contract CngnPerpTradeModuleForkTest is Test {
     moduleScript.assertPreconditions(moduleParams);
     module = moduleScript.deployModule(moduleParams);
     moduleScript.assertModule(module, moduleParams);
-    _runVaultBatch(moduleScript.vaultActionsJson(module, moduleParams), 2);
+    _runVaultBatch(moduleScript.vaultActionsJson(module, moduleParams), 1);
     assertEq(module.owner(), VAULT, "vault owns the module");
-    assertTrue(matching.allowedModules(address(module)), "module allowlisted");
+    // Custody does not open the book: that is the separate, gated enable action.
+    assertFalse(matching.allowedModules(address(module)), "the deploy batches must not allowlist the module");
+  }
+
+  /// The final enable action, as propose_perp_enable_batch.py emits it once its gates pass: open the
+  /// OI cap (the switch for every path) and allowlist the module (the switch for the venue).
+  function _enablePerp() internal {
+    vm.startPrank(VAULT);
+    stack.perp.setTotalPositionCap(stack.srm, 50_000_000e18);
+    matching.setAllowedModule(address(module), true);
+    vm.stopPrank();
   }
 
   function _runVaultBatch(string memory json, uint count) internal {

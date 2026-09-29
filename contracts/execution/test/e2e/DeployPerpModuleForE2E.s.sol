@@ -30,6 +30,9 @@ contract DeployPerpModuleForE2E is DeployCngnPerpTradeModule {
     vm.stopBroadcast();
 
     assertModule(module, params);
-    vm.writeJson(vm.serializeAddress("e2e", "tradePerp", address(module)), string.concat(vm.projectRoot(), "/cache/e2e-perp-module.json"));
+    vm.writeJson(
+      vm.serializeAddress("e2e", "tradePerp", address(module)),
+      string.concat(vm.projectRoot(), "/cache/e2e-perp-module.json")
+    );
   }
 }

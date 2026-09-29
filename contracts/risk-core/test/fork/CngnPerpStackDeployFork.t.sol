@@ -90,6 +90,7 @@ contract CngnPerpStackDeployFork is Test {
 
   function testPublishedFeedsLetThePerpTrade() public {
     _executeVaultBatch();
+    _enableCap();
     uint aliceAcc = subAccounts.createAccountWithApproval(alice, address(this), stack.srm);
     uint bobAcc = subAccounts.createAccountWithApproval(bob, address(this), stack.srm);
     _deposit(alice, aliceAcc, 5_000e6);
@@ -107,6 +108,7 @@ contract CngnPerpStackDeployFork is Test {
   /// managerData before the transfers (execution-side fork test).
   function testFeedsMustBePublishedBeforeTheTrade() public {
     _executeVaultBatch();
+    _enableCap();
     uint aliceAcc = subAccounts.createAccountWithApproval(alice, address(this), stack.srm);
     uint bobAcc = subAccounts.createAccountWithApproval(bob, address(this), stack.srm);
     _deposit(alice, aliceAcc, 5_000e6);
@@ -117,9 +119,24 @@ contract CngnPerpStackDeployFork is Test {
     _tradePerpWithData(bobAcc, aliceAcc, 10_000_000e18, managerData);
   }
 
+  /// Deployed closed: with live feeds and funded accounts, even a raw SubAccounts transfer -- which
+  /// never touches Matching -- cannot open a position until the enable action raises the cap.
+  function testStackDeploysClosedToEveryPathNotJustMatching() public {
+    _executeVaultBatch();
+    uint aliceAcc = subAccounts.createAccountWithApproval(alice, address(this), stack.srm);
+    uint bobAcc = subAccounts.createAccountWithApproval(bob, address(this), stack.srm);
+    _deposit(alice, aliceAcc, 5_000e6);
+    _deposit(bob, bobAcc, 5_000e6);
+    _publish(0.00072e18);
+
+    vm.expectRevert(IBaseManager.BM_AssetCapExceeded.selector);
+    _tradePerp(bobAcc, aliceAcc, 1e18);
+  }
+
   /// The cap counts |position| on BOTH sides: 50M allows 25M NGN of open interest.
   function testLowOICapStopsOversizedPositions() public {
     _executeVaultBatch();
+    _enableCap();
     uint aliceAcc = subAccounts.createAccountWithApproval(alice, address(this), stack.srm);
     uint bobAcc = subAccounts.createAccountWithApproval(bob, address(this), stack.srm);
     _deposit(alice, aliceAcc, 100_000e6);
@@ -133,6 +150,12 @@ contract CngnPerpStackDeployFork is Test {
   }
 
   // --- helpers ---------------------------------------------------------------------
+
+  /// The cap half of the final enable action, as propose_perp_enable_batch.py emits it.
+  function _enableCap() internal {
+    vm.prank(VAULT);
+    stack.perp.setTotalPositionCap(stack.srm, params.perpOICap);
+  }
 
   function _executeVaultBatch() internal {
     string memory json = script.vaultActionsJson(stack);

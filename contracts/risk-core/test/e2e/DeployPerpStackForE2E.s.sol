@@ -47,6 +47,7 @@ contract DeployPerpStackForE2E is DeployCngnPerpStack {
     vm.serializeUint(obj, "securityModuleAccount", stack.securityModule.accountId());
     vm.serializeUint(obj, "feeRecipientAccount", stack.feeRecipientAccount);
     vm.serializeUint(obj, "blockNumber", block.number);
+    vm.serializeUint(obj, "launchOICap", params.perpOICap);
     string memory json = vm.serializeAddress(obj, "owned", ownedContracts(stack));
     vm.writeJson(json, string.concat(vm.projectRoot(), "/cache/e2e-perp-stack.json"));
   }

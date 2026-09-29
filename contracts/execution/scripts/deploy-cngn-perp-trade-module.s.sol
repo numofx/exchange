@@ -34,7 +34,8 @@ import {Utils} from "./utils.sol";
  *
  * @dev CUSTODY. Born owned by the deployer, then nominated to the vault. Its owner can call
  *      setDatedFutureAsset, which zeroes the quote leg of every fill in that asset, so the vault
- *      batch accepts ownership FIRST and allowlists the module on Matching SECOND.
+ *      accepts ownership before anything else. This batch does only that: allowlisting the module on
+ *      Matching opens the book, and is its own final, gated action (propose_perp_enable_batch.py).
  *
  * Usage:
  *   PRIVATE_KEY=<deployer> forge script scripts/deploy-cngn-perp-trade-module.s.sol \
@@ -136,21 +137,22 @@ contract DeployCngnPerpTradeModule is Utils {
 
     console2.log("PERP_TRADE_MODULE_ADDRESS=%s", address(module));
     console2.log("PERP_QUOTE_ASSET_ADDRESS=%s", params.cash);
-    console2.log("Run the stack's CNGN_PERP_STACK_VAULT_ACTIONS first, then this batch in order.");
+    console2.log("Run the stack's CNGN_PERP_STACK_VAULT_ACTIONS first, then this batch. Neither opens the book:");
+    console2.log("that is propose_perp_enable_batch.py, once feeds, keeper, security module and quoter are live.");
   }
 
-  /// @dev 0: take custody of the module. 1: allowlist it on Matching. In that order, always.
-  function vaultActionsJson(TradeModule module, Params memory params) public pure returns (string memory) {
+  /// @dev Custody only: the vault accepts the module. It does NOT allowlist it on Matching -- that is
+  ///      the separate, final enable action, proposed by scripts/ops/propose_perp_enable_batch.py only
+  ///      once feeds, keeper, security module and a quoter are all live. Deploying and taking custody
+  ///      of the perp must never be what opens its book.
+  function vaultActionsJson(TradeModule module, Params memory) public pure returns (string memory) {
     bytes memory accept = abi.encodeWithSignature("acceptOwnership()");
-    bytes memory allow = abi.encodeCall(Matching.setAllowedModule, (address(module), true));
     return string.concat(
       "[",
       _action(
-        "module.acceptOwnership() [custody first: the owner can zero a fill's quote leg]", address(module), accept
-      ),
-      ",",
-      _action(
-        "matching.setAllowedModule(perpTradeModule, true) [opens the USDCcNGN-PERP book]", params.matching, allow
+        "module.acceptOwnership() [custody only; the book stays closed until the separate enable action]",
+        address(module),
+        accept
       ),
       "]"
     );
