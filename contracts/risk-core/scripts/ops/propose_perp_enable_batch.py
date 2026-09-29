@@ -11,12 +11,14 @@ opens the market:
 
 Gates, all read live and all required (re-checked before EACH action is proposed):
 
-  custody   the vault owns every stack contract and the module; the market is still closed
+  custody   the vault owns every stack contract and the module; the SRM has a guardian that is not the
+            vault (the stack batch's last action); the market is still closed
   feeds     index, mark and both impact feeds answer and are fresh (index <= 600s, diffs <= 600s)
   keeper    its /health says a pass completed OK within 3 poll intervals and DRY_RUN is off; its
-            funding account sits under the perp SRM, holds only cash, and holds >= --min-keeper-cash;
+            funding account is owned by the keeper EOA, sits under the perp SRM, holds only cash, and holds >= --min-keeper-cash;
             its EOA holds >= --min-keeper-eth for gas
-  sm        the security module's account holds >= --min-sm-cash of the stack's cash
+  sm        the security module's account holds at least a third of ONE side's notional at the launch
+            cap (cap / 2 NGN at the live index), and never less than --min-sm-cash
   quoter    the perp book on markets-service has a bid and an ask, each with >= --min-quote-usd of
             depth within 2% of the index (optionally from --quoter-owner)
 
@@ -73,6 +75,8 @@ QUOTE_BAND = 0.02
 
 SIGNATURES = {
   "owner": "owner()",
+  "guardian": "guardian()",
+  "ownerOf": "ownerOf(uint256)",
   "allowedModules": "allowedModules(address)",
   "totalPositionCap": "totalPositionCap(address)",
   "setTotalPositionCap": "setTotalPositionCap(address,uint256)",
@@ -165,11 +169,17 @@ def gate_custody(rpc_url: str, v: Venue, vault: str) -> Gate:
   not_owned = [c for c in v.owned if address_at(call(rpc_url, c, selector("owner"))).lower() != vault.lower()]
   if not_owned:
     return Gate("custody", False, f"vault does not own {', '.join(not_owned)}")
+  # The stack batch ends with srm.setGuardian: without a guardian nobody but the vault can pause.
+  guardian = address_at(call(rpc_url, v.srm, selector("guardian")))
+  if int(guardian, 16) == 0:
+    return Gate("custody", False, "srm has no guardian: the stack vault batch did not finish (setGuardian is its last action)")
+  if guardian.lower() == vault.lower():
+    return Gate("custody", False, "srm guardian is the vault: set the hot ops key, or no one can pause without signers")
   allowed = uint_at(call(rpc_url, v.matching, selector("allowedModules") + word_address(v.module)))
   cap = uint_at(call(rpc_url, v.perp, selector("totalPositionCap") + word_address(v.srm)))
   if allowed or cap:
     return Gate("custody", False, f"market is not closed (module allowed={bool(allowed)}, cap={cap}); nothing to enable")
-  return Gate("custody", True, f"vault owns all {len(v.owned)} contracts; market closed (cap 0, module not allowed)")
+  return Gate("custody", True, f"vault owns all {len(v.owned)} contracts; guardian {guardian}; market closed (cap 0, module not allowed)")
 
 
 def gate_feeds(rpc_url: str, v: Venue) -> Gate:
@@ -211,6 +221,11 @@ def gate_keeper(rpc_url: str, v: Venue, health_url: str, min_cash: float, min_et
   manager = address_at(call(rpc_url, SUB_ACCOUNTS, selector("manager") + word_uint(account)))
   if manager.lower() != v.srm.lower():
     return Gate("keeper", False, f"funding account #{account} is not under the perp SRM")
+  # An account opened through the app or SubAccountCreator is held by Matching: the keeper could not
+  # move its cash into a bid account, and every bid would fail.
+  owner = address_at(call(rpc_url, SUB_ACCOUNTS, selector("ownerOf") + word_uint(account)))
+  if owner.lower() != str(health.get("keeperAddress", "")).lower():
+    return Gate("keeper", False, f"funding account #{account} is owned by {owner}, not the keeper EOA {health.get('keeperAddress')}")
   balance = lambda asset: int_at(call(rpc_url, SUB_ACCOUNTS, selector("getBalance") + word_uint(account) + word_address(asset) + word_uint(0)))  # noqa: E731
   cash, perp = balance(v.cash) / 1e18, balance(v.perp)
   if perp != 0:
@@ -223,12 +238,26 @@ def gate_keeper(rpc_url: str, v: Venue, health_url: str, min_cash: float, min_et
   return Gate("keeper", True, f"live, not dry-run, last pass {age}s ago; account #{account} {cash:,.2f} cash; {eth:.4f} ETH")
 
 
+def sm_seed_required(launch_cap: int, index_usd_per_ngn: float, floor: float) -> float:
+  """The seed rule (docs/cngn-perp-go-live.md): at least a third of ONE side's notional at the cap
+  being opened. The cap sums both sides, so one side is cap / 2 NGN. A third is the initial margin
+  on that side; the fork test (testSecurityModuleLossFromIndexJumpAtFullCap) shows the worst-case
+  SecurityModule payout reaching it at a ~50% index jump."""
+  one_side_usd = (launch_cap / 2 / 1e18) * index_usd_per_ngn
+  return max(floor, one_side_usd / 3)
+
+
 def gate_security_module(rpc_url: str, v: Venue, min_cash: float) -> Gate:
   raw = call(rpc_url, SUB_ACCOUNTS, selector("getBalance") + word_uint(v.sm_account) + word_address(v.cash) + word_uint(0))
   cash = int_at(raw) / 1e18
-  if cash < min_cash:
-    return Gate("sm", False, f"security module holds {cash:,.2f} (< {min_cash:,.2f})")
-  return Gate("sm", True, f"security module holds {cash:,.2f}")
+  try:
+    index = uint_at(call(rpc_url, v.index_feed, selector("getSpot"))) / 1e18
+  except Exception as exc:  # noqa: BLE001
+    return Gate("sm", False, f"index unreadable, cannot size the seed: {exc}")
+  required = sm_seed_required(v.launch_cap, index, min_cash)
+  if cash < required:
+    return Gate("sm", False, f"security module holds {cash:,.2f} (< {required:,.2f}: a third of one side at the {v.launch_cap // 10**18:,} NGN cap)")
+  return Gate("sm", True, f"security module holds {cash:,.2f} (>= {required:,.2f}, a third of one side at the cap)")
 
 
 def gate_quoter(rpc_url: str, v: Venue, markets_url: str, min_usd: float, owner: str | None) -> Gate:
@@ -288,11 +317,14 @@ def report(gates: list[Gate]) -> bool:
 def self_test() -> int:
   assert keccak(b"").hex() == "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470", "keccak broken"
   pinned = {"setTotalPositionCap": "0x40a557bd", "setAllowedModule": "0xb1b62825", "allowedModules": "0x8ba5a0c2",
-            "totalPositionCap": "0x745ab570"}
+            "totalPositionCap": "0x745ab570", "guardian": "0x452a9320", "ownerOf": "0x6352211e"}
   for name, want in pinned.items():
     got = selector(name)
     assert got == want, f"{name}: {got} != {want}"
-  print("self-test ok: selectors match their `cast sig` values")
+  # 50M NGN cap at 1374 NGN/USD: 25M NGN a side is $18,195, a third of it $6,065.
+  assert round(sm_seed_required(50_000_000 * 10**18, 1 / 1374, 5_000)) == 6065
+  assert sm_seed_required(1 * 10**18, 1 / 1374, 5_000) == 5_000
+  print("self-test ok: selectors match their `cast sig` values; seed rule sized")
   return 0
 
 
