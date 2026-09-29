@@ -180,6 +180,81 @@ contract CngnPerpStackFork is Test {
     assertEq(IERC20Metadata(USDC).balanceOf(bob) - before, 1_000e6, "withdrawal must still pay");
   }
 
+  // --- SecurityModule exposure at the launch cap ----------------------------------
+
+  /// The launch cap, 50M NGN, counts both sides: 25M long against 25M short.
+  int constant CAP_SIDE = 25_000_000e18;
+
+  /**
+   * What the SecurityModule pays for an index jump at the full launch cap, in the worst case the
+   * keeper can leave behind: the ENTIRE long side held by one account sitting just above
+   * maintenance margin when the index falls, and the insolvent auction run to its last second
+   * (the most the SM ever pays a bidder). A 10% jump is the question; the larger ones say where
+   * the SecurityModule actually starts paying.
+   *
+   * Two things this does not model, both of which only make it more conservative: the index
+   * publisher refuses any move over 300bps without an operator's accept (so a 10% jump halts the
+   * market first), and a keeper that bids as soon as the payout covers the deficit pays less than
+   * the auction's floor.
+   */
+  function testSecurityModuleLossFromIndexJumpAtFullCap() public {
+    perp.setTotalPositionCap(srm, 2 * uint(CAP_SIDE));
+    _fundSecurityModule(1_000_000e6); // deep enough that nothing socializes: we measure the SM alone
+
+    uint16[6] memory jumpsBps = [uint16(1_000), 2_000, 2_500, 3_000, 4_000, 5_000];
+    for (uint i; i < jumpsBps.length; ++i) {
+      uint snapshot = vm.snapshotState();
+      (int mtmAfter, uint smPaid) = _jumpAtCap(jumpsBps[i]);
+      console2.log("jump bps:", jumpsBps[i]);
+      console2.log("  equity after jump ($, 18dp, signed):", mtmAfter);
+      console2.log("  security module paid ($, 18dp):", smPaid);
+      if (jumpsBps[i] == 1_000) {
+        assertGt(mtmAfter, 0, "an account at MM survives a 10% jump solvent");
+        assertEq(smPaid, 0, "a 10% jump at the full cap must cost the SecurityModule nothing");
+      }
+      vm.revertToState(snapshot);
+    }
+  }
+
+  /// Opens the full long side on one account, walks the index to just above its maintenance
+  /// margin, then drops the index by `jumpBps` and liquidates. Returns equity after the jump and
+  /// what the SecurityModule paid out.
+  function _jumpAtCap(uint jumpBps) internal returns (int mtmAfter, uint smPaid) {
+    // Alice opens at the initial margin, 1/3 of $18,000.
+    _deposit(alice, aliceAcc, 6_001e6);
+    _deposit(bob, bobAcc, 100_000e6);
+    _deposit(charlie, charlieAcc, 100_000e6);
+    _tradePerp(bobAcc, aliceAcc, CAP_SIDE);
+    assertGe(srm.getMargin(aliceAcc, true), 0, "alice opens within initial margin");
+
+    // Equity D + N(p - p0) meets mm*N*p at p = (N*p0 - D) / (N*(1 - mm)); sit 5bps above it.
+    uint n = uint(CAP_SIDE);
+    uint atMM = (n * INDEX_PRICE / 1e18 - 6_001e18) * 1e18 / (n * 0.8e18 / 1e18);
+    uint96 preJump = uint96(atMM * 10_005 / 10_000);
+    _setPrices(preJump);
+    int mmMargin = srm.getMargin(aliceAcc, false);
+    assertGe(mmMargin, 0, "alice sits above maintenance margin");
+    assertLt(mmMargin, 50e18, "and only just: within $50 of it");
+
+    uint96 postJump = uint96(uint(preJump) * (10_000 - jumpBps) / 10_000);
+    _setPrices(postJump);
+    (, mtmAfter) = srm.getMarginAndMarkToMarket(aliceAcc, false, 0);
+
+    uint smAcc = securityModule.accountId();
+    int smBefore = _cash(smAcc);
+    auction.startAuction(aliceAcc, 0);
+    if (auction.getAuction(aliceAcc).insolvent) {
+      vm.warp(block.timestamp + auction.getAuctionParams().insolventAuctionLength);
+      _setPrices(postJump);
+      vm.prank(charlie);
+      auction.bid(aliceAcc, charlieAcc, 1e18, 0, 0);
+      assertEq(_perpBalance(aliceAcc), 0, "the insolvent auction must close the whole position");
+    }
+    int smAfter = _cash(smAcc);
+    smPaid = smAfter < smBefore ? uint(smBefore - smAfter) : 0;
+    assertGe(cash.getCashToStableExchangeRate(), 1e18, "a funded SecurityModule must cover it without socializing");
+  }
+
   // --- scenario helpers ------------------------------------------------------------
 
   /// Alice longs 10M NGN on $2,500, just over the 33% IM, then NGN falls 40%.
