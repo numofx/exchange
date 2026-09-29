@@ -170,7 +170,24 @@ export function createKeeperChain(config: Config) {
   async function send(request: Parameters<typeof wallet.writeContract>[0]) {
     const hash = await wallet.writeContract(request);
     const receipt = await client.waitForTransactionReceipt({ hash, timeout: 60_000 });
-    if (receipt.status !== 'success') throw new Error(`transaction reverted on chain: ${hash}`);
+    if (receipt.status !== 'success') {
+      // TRACE BRANCH ONLY: say whether it ran out of gas, and whether it succeeds with unlimited gas.
+      const tx = await client.getTransaction({ hash });
+      const block = await client.getBlock({ blockNumber: receipt.blockNumber });
+      const prev = await client.getBlock({ blockNumber: receipt.blockNumber - 1n });
+      const replay = await client
+        .call({ account: tx.from, to: tx.to!, data: tx.input, blockNumber: receipt.blockNumber - 1n })
+        .then(() => 'succeeds with unlimited gas')
+        .catch((error: Error) => `reverts: ${error.message.split('\n')[0]}`);
+      const trace = await client
+        .request({ method: 'debug_traceTransaction' as never, params: [hash, { disableStack: true, disableMemory: true, disableStorage: true }] as never })
+        .then((t: any) => `trace failed=${t.failed} gas=${t.gas} last=${JSON.stringify((t.structLogs ?? []).slice(-2).map((l: any) => [l.op, l.gas, l.gasCost, l.error]))}`)
+        .catch((error: Error) => `trace unavailable: ${error.message.split('\n')[0]}`);
+      throw new Error(
+        `transaction reverted on chain: ${hash} ${String(request.functionName)}: gasUsed ${receipt.gasUsed} of limit ${tx.gas} ` +
+          `(block ts ${block.timestamp}, previous ${prev.timestamp}); replay at previous block ${replay}; ${trace}`,
+      );
+    }
     return receipt;
   }
 
