@@ -181,6 +181,163 @@ contract CngnPerpStackFork is Test {
     assertEq(IERC20Metadata(USDC).balanceOf(bob) - before, 1_000e6, "withdrawal must still pay");
   }
 
+  // --- manual settlement after a step past INDEX_STEP_MAX_BPS -------------------------
+
+  /// The runbook's path for an index step over 50%: the market stays closed, the vault freezes the
+  /// perp at the confirmed level with perp.disable(), every account is settled at that frozen price
+  /// (which deletes its position), and a loser left below zero goes through the insolvent auction
+  /// like any other, paid by the SecurityModule. The winner then withdraws real USDC.
+  function testManualSettlementAfterAStepPastTheBound() public {
+    _fundSecurityModule(10_000e6);
+    _deposit(alice, aliceAcc, 2_500e6);
+    _deposit(bob, bobAcc, 10_000e6);
+    _deposit(charlie, charlieAcc, 10_000e6);
+    _tradePerp(bobAcc, aliceAcc, 10_000_000e18); // alice long 10M NGN ($7,200)
+
+    // The venue is closed first by disallowing the module on Matching (not modelled here: this stack
+    // has no Matching). The cap is NOT cut yet -- see testCapBelowOpenInterestFreezesPositionHolders.
+    // Put the confirmed level on the feeds (a 60% fall in USD per NGN) and freeze the perp there.
+    _setPrices(0.000288e18);
+    perp.disable();
+    assertEq(uint(perp.frozenPerpPrice()), 0.000288e18, "frozen at the confirmed level");
+
+    // Settle every account at the frozen price. Anyone can call this; the keeper or a script does.
+    _realize(aliceAcc);
+    _realize(bobAcc);
+    assertEq(_perpBalance(aliceAcc), 0, "alice's position is deleted");
+    assertEq(_perpBalance(bobAcc), 0, "bob's position is deleted");
+    // Alice lost $4,320 on $2,500: $1,820 short. Bob gained the $4,320.
+    assertApproxEqAbs(_cash(aliceAcc), -1_820e18, 5e18, "alice's shortfall is negative cash");
+    assertApproxEqAbs(_cash(bobAcc), 14_320e18, 5e18, "bob is credited his gain");
+    // Every position is settled, so nobody holds the perp and the cap can close the market for good.
+    // (disable() deletes positions without the perp's hook, so the OI counter keeps its old value;
+    // that is harmless once no account holds the perp, since the cap is only checked for holders.)
+    perp.setTotalPositionCap(srm, 0);
+    vm.expectRevert(IBaseManager.BM_AssetCapExceeded.selector);
+    _tradePerp(bobAcc, charlieAcc, 1e18);
+
+    // The shortfall goes through the insolvent auction and the SecurityModule pays the bidder.
+    uint smAcc = securityModule.accountId();
+    int smBefore = _cash(smAcc);
+    auction.startAuction(aliceAcc, 0);
+    assertTrue(auction.getAuction(aliceAcc).insolvent, "a cash-only account below zero auctions insolvent");
+    vm.warp(block.timestamp + auction.getAuctionParams().insolventAuctionLength);
+    _setPrices(0.000288e18);
+    vm.prank(charlie);
+    auction.bid(aliceAcc, charlieAcc, 1e18, 0, 0);
+    console2.log("security module paid for the shortfall (18dp):", uint(smBefore - _cash(smAcc)));
+    assertGe(_cash(aliceAcc), 0, "alice's account is made whole");
+    assertGe(cash.getCashToStableExchangeRate(), 1e18, "covered by the SecurityModule, nothing socialized");
+
+    // And the winner is paid in real USDC.
+    uint before = IERC20Metadata(USDC).balanceOf(bob);
+    vm.prank(bob);
+    cash.withdraw(bobAcc, 14_000e6, bob);
+    assertEq(IERC20Metadata(USDC).balanceOf(bob) - before, 14_000e6, "bob withdraws his gain");
+  }
+
+  /// The hazard the settlement order avoids: with open interest above the cap, every account that
+  /// holds the perp is frozen out of deposits and withdrawals. A cash-only adjustment never snapshots
+  /// the perp's pre-trade OI, so the cap check reads it as 0 and sees the whole OI as an increase.
+  /// A top-up is exactly what a trader needs before liquidation, so the vault must never set the cap
+  /// below current OI; lowering it TO current OI stops growth without freezing anyone.
+  function testCapBelowOpenInterestFreezesPositionHolders() public {
+    _deposit(alice, aliceAcc, 5_000e6);
+    _deposit(bob, bobAcc, 10_000e6);
+    _tradePerp(bobAcc, aliceAcc, 10_000_000e18);
+    uint oi = perp.totalPosition(srm);
+
+    perp.setTotalPositionCap(srm, oi - 1);
+    deal(USDC, alice, 1_000e6);
+    vm.startPrank(alice);
+    IERC20Metadata(USDC).approve(address(cash), 1_000e6);
+    vm.expectRevert(IBaseManager.BM_AssetCapExceeded.selector);
+    cash.deposit(aliceAcc, 1_000e6);
+    vm.stopPrank();
+    vm.prank(bob);
+    vm.expectRevert(IBaseManager.BM_AssetCapExceeded.selector);
+    cash.withdraw(bobAcc, 1e6, bob);
+
+    // At exactly the current OI, nobody is frozen, and new positions still cannot open.
+    perp.setTotalPositionCap(srm, oi);
+    vm.prank(alice);
+    cash.deposit(aliceAcc, 1_000e6);
+    vm.expectRevert(IBaseManager.BM_AssetCapExceeded.selector);
+    _tradePerp(bobAcc, aliceAcc, 1e18);
+  }
+
+  // --- deposit gas: estimated in one block, executed in another --------------------
+
+  /// CashAsset._accrueInterest returns early when the cash was already touched at this timestamp,
+  /// and otherwise writes the timestamp and, once anything is borrowed, runs the whole accrual. A
+  /// gas estimate taken against the block that last touched the cash therefore prices the cheap
+  /// path, and the deposit mined in a later block runs the expensive one.
+  function testDepositGasDependsOnWhetherTheCashWasTouchedThisBlock() public {
+    _deposit(alice, aliceAcc, 5_000e6);
+    (uint sameBlock, uint laterBlock) = _depositGasBothWays(bobAcc);
+    console2.log("deposit gas, no borrows: same block", sameBlock, "later block", laterBlock);
+    assertGt(laterBlock, sameBlock, "a later block costs more");
+
+    // With borrows outstanding (a loss past a deposit is negative cash, i.e. borrowed), the later
+    // block runs the rate model and the fee cut too.
+    _deposit(bob, bobAcc, 10_000e6);
+    _tradePerp(bobAcc, aliceAcc, 10_000_000e18);
+    _setPrices(0.0002e18); // a $5,200 loss on $5,000
+    _realize(aliceAcc);
+    assertGt(cash.totalBorrow(), 0, "alice's loss past her deposit is a borrow");
+    _deposit(charlie, charlieAcc, 1_000e6);
+    (uint sameBlockBorrow, uint laterBlockBorrow) = _depositGasBothWays(charlieAcc);
+    console2.log("deposit gas, with borrows: same block", sameBlockBorrow, "later block", laterBlockBorrow);
+    assertGt(laterBlockBorrow, sameBlockBorrow, "a later block costs more");
+
+    // The failure itself: exactly the same-block cost is not enough a block later.
+    deal(USDC, charlie, 1e6);
+    vm.prank(charlie);
+    IERC20Metadata(USDC).approve(address(cash), 1e6);
+    vm.warp(block.timestamp + 2);
+    vm.cool(address(cash));
+    vm.cool(address(rateModel));
+    vm.cool(address(subAccounts));
+    vm.cool(address(srm));
+    vm.cool(address(viewer));
+    vm.cool(USDC);
+    vm.prank(charlie);
+    (bool ok,) = address(cash).call{gas: sameBlockBorrow}(abi.encodeCall(CashAsset.deposit, (charlieAcc, 1e6)));
+    assertFalse(ok, "a limit priced on the touching block runs out of gas a block later");
+  }
+
+  /// A deposit's gas as its own transaction would pay it: every contract it touches starts cold.
+  function _coldDepositGas(address owner, uint acc) internal returns (uint used) {
+    vm.cool(address(cash));
+    vm.cool(address(rateModel));
+    vm.cool(address(subAccounts));
+    vm.cool(address(srm));
+    vm.cool(address(viewer));
+    vm.cool(USDC);
+    vm.prank(owner);
+    uint before = gasleft();
+    cash.deposit(acc, 1e6);
+    used = before - gasleft();
+  }
+
+  /// Gas for a 1 USDC deposit into `acc`, at the timestamp the cash was last touched and 2s later.
+  function _depositGasBothWays(uint acc) internal returns (uint sameBlock, uint laterBlock) {
+    address owner = subAccounts.ownerOf(acc);
+    deal(USDC, owner, 2e6);
+    vm.prank(owner);
+    IERC20Metadata(USDC).approve(address(cash), 2e6);
+    // Touch the cash at this timestamp, as another user's deposit or a trade in the same block would.
+    _deposit(address(0x70c4), subAccounts.createAccount(address(0x70c4), srm), 1e6);
+
+    uint snapshot = vm.snapshotState();
+    sameBlock = _coldDepositGas(owner, acc);
+    vm.revertToState(snapshot);
+
+    vm.warp(block.timestamp + 2);
+    laterBlock = _coldDepositGas(owner, acc);
+    vm.revertToState(snapshot);
+  }
+
   // --- guardian pause -------------------------------------------------------------
 
   address guardian = address(0x6a2d);
