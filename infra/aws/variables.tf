@@ -305,3 +305,14 @@ variable "rebalance_kms_enabled" {
   type        = bool
   default     = true
 }
+
+variable "perp_guardian_kms_enabled" {
+  description = <<-EOT
+    Creates the USDCcNGN-PERP guardian's KMS signing key (alias/<name>-perp-guardian). Defaults to
+    true, like the other signing keys: a plan that forgets the flag must not propose deleting a key
+    whose address is the perp's guardian (prevent_destroy would refuse anyway).
+  EOT
+  type        = bool
+  default     = true
+}
+
