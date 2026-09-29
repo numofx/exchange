@@ -2,6 +2,7 @@ import { createAlerter } from './alert.js';
 import { createChain } from './chain.js';
 import { loadConfig } from './config.js';
 import { buildProviders, IndexPublisher } from './index-publisher.js';
+import { assertRpcIsLocal, parseFixedPrice, publishFixedPrice } from './local-fixed-price.js';
 import { MarkPublisher } from './mark-publisher.js';
 
 /**
@@ -19,11 +20,24 @@ async function main() {
 
   console.log(`[perp-feeds] signer=${chain.signer.address} relayer=${chain.relayer.address} dryRun=${config.DRY_RUN}`);
 
+  const once = process.argv.includes('--once');
+  const fixedPrice = parseFixedPrice(process.argv);
+  if (fixedPrice !== null) {
+    // Checked before anything is signed: this mode bypasses every guard below.
+    await assertRpcIsLocal(config);
+    await publishFixedPrice(config, chain, fixedPrice);
+    if (!once) {
+      every(config.MARK_INTERVAL_MS, () =>
+        publishFixedPrice(config, chain, fixedPrice).catch((error) => console.error(`[local-fixed-price] ${error}`)),
+      );
+    }
+    return;
+  }
+
   const index = new IndexPublisher(config, chain, buildProviders(config), alert);
   await index.load();
   const mark = new MarkPublisher(config, chain, alert);
 
-  const once = process.argv.includes('--once');
   const guarded = (name: string, task: () => Promise<void>) => async () => {
     try {
       await task();

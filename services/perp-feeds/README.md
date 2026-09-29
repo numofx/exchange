@@ -27,6 +27,19 @@ Every refusal alerts through `ALERT_WEBHOOK_URL`.
 A real devaluation will trip the 300 bps jump guard too. When an operator has confirmed the move,
 restart once with `INDEX_ACCEPT_JUMP=true`, then remove it.
 
+A refresh is a recompute, never a re-sign. When a feed is republished because it is getting old,
+the mark and impacts are rebuilt from the current index and book and clamped again, and the index
+is a fresh TWAP through the jump guard. The index also refuses when its newest accepted sample is
+older than `INDEX_MAX_SAMPLE_AGE_MS` (3 minutes): a window still "full" of older samples after the
+sources stopped agreeing is not republished. `src/publishers.test.ts` pins both.
+
+## Local only: `--local-fixed-price`
+
+`node dist/main.js --local-fixed-price=1374` publishes a constant index (1374 NGN per USD) with zero
+mark and impact diffs, every `MARK_INTERVAL_MS`, and nothing else. It skips every guard above, so it
+asks the RPC for its chain id and refuses unless both that and `CHAIN_ID` are 31337; Base (8453) and
+Base Sepolia (84532) are refused by name. It exists for `scripts/local-venue`.
+
 ## Running
 
 Secrets come from SSM through `run-with-ssm.sh` (`RPC_URL`, `FEED_SIGNER_KEY`, `RELAYER_KEY`,
