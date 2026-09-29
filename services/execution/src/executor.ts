@@ -28,6 +28,11 @@ export type ExecutorDependencies = {
   matchingAbi: Abi;
   matchingAddress: `0x${string}`;
   tradeModuleAddress: `0x${string}`;
+  /**
+   * Modules settled alongside the main one: the USDCcNGN-PERP module, which settles in its own
+   * stack's cash. A request may name any one of them, but every action in it must name that same one.
+   */
+  additionalTradeModules?: readonly `0x${string}`[];
   /** Signed withdrawals. Absent when this deployment does not accept them; `withdraw` then refuses. */
   withdrawal?: {
     moduleAddress: `0x${string}`;
@@ -127,6 +132,7 @@ export class MatchExecutor {
   async execute(request: ExecuteMatchRequest): Promise<ExecuteMatchResponse> {
     assertPayloadConsistency(request, {
       tradeModuleAddress: this.deps.tradeModuleAddress,
+      additionalTradeModules: this.deps.additionalTradeModules,
       expectedActionOwner: this.config.expectedActionOwner,
       expectedActionSigner: this.config.expectedActionSigner,
     });
@@ -252,6 +258,7 @@ export function assertPayloadConsistency(
     | `0x${string}`
     | {
         tradeModuleAddress: `0x${string}`;
+        additionalTradeModules?: readonly `0x${string}`[];
         expectedActionOwner?: `0x${string}`;
         expectedActionSigner?: `0x${string}`;
       },
@@ -260,12 +267,16 @@ export function assertPayloadConsistency(
     typeof tradeModuleAddressOrExpectations === 'string'
       ? { tradeModuleAddress: tradeModuleAddressOrExpectations }
       : tradeModuleAddressOrExpectations;
-  const expected = getAddress(expectations.tradeModuleAddress);
+  const allowed = [expectations.tradeModuleAddress, ...(expectations.additionalTradeModules ?? [])].map((address) =>
+    getAddress(address),
+  );
   const moduleAddress = getAddress(request.module_address);
 
-  if (moduleAddress !== expected) {
-    throw new Error(`module_address mismatch: expected ${expected}, got ${moduleAddress}`);
+  if (!allowed.includes(moduleAddress)) {
+    throw new Error(`module_address mismatch: expected one of ${allowed.join(', ')}, got ${moduleAddress}`);
   }
+  // Every action names the request's own module: one fill never spans the spot and perp modules.
+  const expected = moduleAddress;
 
   for (const [index, action] of request.actions.entries()) {
     const actionModule = getAddress(action.module);

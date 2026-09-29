@@ -22,6 +22,7 @@ type Engine struct {
 	registry *instruments.Registry
 	backoff  *matchBackoff
 	funding  fundingChecker
+	margin   marginChecker
 }
 
 const reconciliationTimeout = 5 * time.Second
@@ -34,6 +35,7 @@ func NewEngine(cfg config.Config, pool *pgxpool.Pool) *Engine {
 		registry: instruments.DefaultRegistry(cfg),
 		backoff:  newMatchBackoff(),
 		funding:  newFundingChecker(cfg),
+		margin:   newMarginChecker(cfg),
 	}
 }
 
@@ -41,6 +43,9 @@ func (e *Engine) Run(ctx context.Context) error {
 	// Before the first tick, not inside it: a venue that prices against one asset and settles
 	// against another must not start, and finding that out on the first fill is too late.
 	if err := verifyQuoteAssetMatchesTradeModule(ctx, e.cfg); err != nil {
+		return err
+	}
+	if err := verifyPerpQuoteAsset(ctx, e.cfg); err != nil {
 		return err
 	}
 
@@ -199,35 +204,11 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 		)
 	}
 
-	// The buyer must fund notional + fee, not notional: TradeModule appends the fee as a third
-	// quote-asset transfer in the same batch, and the SRM checks cash >= 0 on the NET delta.
-	// Crossing without this emits matches that revert after the book has already moved.
-	if funded, required, available, fundErr := buyerCanFund(
-		ctx, e.funding, *candidate, executionFill.FillPrice, executionFill.FillAmount, fillFee,
-	); fundErr != nil {
-		// Fail open. The chain is the real enforcement; an RPC outage must degrade this to the
-		// behaviour we had before the check existed, not halt the venue.
-		slog.Warn(
-			"funding_check_unavailable",
-			"market", instrument.Symbol,
-			"taker_order_id", candidate.Taker.OrderID,
-			"maker_order_id", candidate.Maker.OrderID,
-			"error", fundErr,
-		)
-	} else if !funded {
-		e.noteMatchFailure(instrument.Symbol, *candidate, "buyer_underfunded", settlementRevert{})
-		slog.Warn(
-			"match_trace_buyer_underfunded",
-			"market", instrument.Symbol,
-			"asset_address", strings.ToLower(instrument.AssetAddress),
-			"sub_id", instrument.SubID,
-			"taker_order_id", candidate.Taker.OrderID,
-			"maker_order_id", candidate.Maker.OrderID,
-			"required_quote_with_fee", required.String(),
-			"available_cash", available.String(),
-			"shortfall", new(big.Int).Sub(required, available).String(),
-			"taker_fee", takerFillFee,
-		)
+	if instrument.IsPerpetual() {
+		if !e.perpMarginAllows(ctx, instrument, *candidate, executionFill.FillPrice, executionFill.FillAmount, fillFee) {
+			return
+		}
+	} else if !e.buyerFunded(ctx, instrument, *candidate, executionFill.FillPrice, executionFill.FillAmount, fillFee) {
 		return
 	}
 
@@ -483,4 +464,77 @@ type matcherError struct {
 
 func (e *matcherError) Error() string {
 	return e.message
+}
+
+// buyerFunded is the spot pre-trade check. The buyer must fund notional + fee, not notional:
+// TradeModule appends the fee as a third quote-asset transfer in the same batch, and the SRM checks
+// cash >= 0 on the NET delta. Crossing without this emits matches that revert after the book has
+// already moved.
+func (e *Engine) buyerFunded(ctx context.Context, instrument instruments.Metadata, candidate orders.MatchCandidate, fillPrice, fillAmount, fillFee string) bool {
+	funded, required, available, fundErr := buyerCanFund(ctx, e.funding, candidate, fillPrice, fillAmount, fillFee)
+	if fundErr != nil {
+		// Fail open. The chain is the real enforcement; an RPC outage must degrade this to the
+		// behaviour we had before the check existed, not halt the venue.
+		slog.Warn(
+			"funding_check_unavailable",
+			"market", instrument.Symbol,
+			"taker_order_id", candidate.Taker.OrderID,
+			"maker_order_id", candidate.Maker.OrderID,
+			"error", fundErr,
+		)
+		return true
+	}
+	if funded {
+		return true
+	}
+	e.noteMatchFailure(instrument.Symbol, candidate, "buyer_underfunded", settlementRevert{})
+	slog.Warn(
+		"match_trace_buyer_underfunded",
+		"market", instrument.Symbol,
+		"asset_address", strings.ToLower(instrument.AssetAddress),
+		"sub_id", instrument.SubID,
+		"taker_order_id", candidate.Taker.OrderID,
+		"maker_order_id", candidate.Maker.OrderID,
+		"required_quote_with_fee", required.String(),
+		"available_cash", available.String(),
+		"shortfall", new(big.Int).Sub(required, available).String(),
+		"taker_fee", fillFee,
+	)
+	return false
+}
+
+// perpMarginAllows is the perp pre-trade check: both sides must stay above initial margin after the
+// fill (see margin.go). Fails open on an RPC error, like the funding check.
+func (e *Engine) perpMarginAllows(ctx context.Context, instrument instruments.Metadata, candidate orders.MatchCandidate, fillPrice, fillAmount, fillFee string) bool {
+	if e.margin == nil {
+		return true
+	}
+	verdict, err := e.margin.CheckPerpFill(ctx, instrument, candidate, fillPrice, fillAmount, fillFee)
+	if err != nil {
+		slog.Warn(
+			"perp_margin_check_unavailable",
+			"market", instrument.Symbol,
+			"taker_order_id", candidate.Taker.OrderID,
+			"maker_order_id", candidate.Maker.OrderID,
+			"error", err,
+		)
+		return true
+	}
+	if verdict.OK {
+		return true
+	}
+	e.noteMatchFailure(instrument.Symbol, candidate, "perp_margin_insufficient", settlementRevert{})
+	surplus := ""
+	if verdict.SurplusAfter != nil {
+		surplus = verdict.SurplusAfter.String()
+	}
+	slog.Warn(
+		"match_trace_perp_margin_insufficient",
+		"market", instrument.Symbol,
+		"taker_order_id", candidate.Taker.OrderID,
+		"maker_order_id", candidate.Maker.OrderID,
+		"subaccount_id", verdict.Account,
+		"im_surplus_after", surplus,
+	)
+	return false
 }

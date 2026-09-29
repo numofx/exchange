@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	spotOrderEntrySpec          = "usdc_cngn_spot_v1"
+	spotOrderEntrySpec          = instruments.SpotOrderEntrySpec
 	spotEngineDecimalScale      = 18
 	spotUIPriceDecimalScale     = 6
 	spotUISizeDecimalScale      = 6
@@ -41,22 +41,36 @@ type spotOrderContractEcho struct {
 	BalanceDelta spotBalanceDeltas `json:"balance_delta"`
 }
 
+// isSpotContractInstrument reports whether the market is quoted in the inverted UI orientation:
+// price in cNGN per USDC, size in USDC notional, side flipped against the engine. Spot and the perp
+// both are -- the perp is USD per NGN on chain -- so one translation serves both, keyed on the
+// market's own order_entry_spec. (The name predates the perp; every caller wants this predicate.)
 func isSpotContractInstrument(instrument instruments.Metadata) bool {
-	return instrument.Symbol == instruments.CNGNSpotSymbol && instrument.ContractType == "spot"
+	switch instrument.OrderEntrySpec {
+	case instruments.SpotOrderEntrySpec:
+		return instrument.Symbol == instruments.CNGNSpotSymbol && instrument.ContractType == instruments.ContractTypeSpot
+	case instruments.PerpOrderEntrySpec:
+		return instrument.Symbol == instruments.CNGNPerpSymbol && instrument.ContractType == instruments.ContractTypePerpetual
+	default:
+		return false
+	}
 }
 
-func validateOrTranslateSpotUIIntent(orderEntrySpec string, uiIntent *spotOrderIntent, engineSide orders.Side, enginePrice string, engineAmount string) (orders.Side, string, string, error) {
+// validateOrTranslateSpotUIIntent checks a ui_intent against, and translates it into, the engine
+// order. `spec` is the market's own order_entry_spec: an intent signed for one market's spec is
+// refused on another's, so a spot ticket cannot be replayed onto the perp or the other way round.
+func validateOrTranslateSpotUIIntent(spec string, orderEntrySpec string, uiIntent *spotOrderIntent, engineSide orders.Side, enginePrice string, engineAmount string) (orders.Side, string, string, error) {
 	if orderEntrySpec == "" && uiIntent == nil {
 		return engineSide, enginePrice, engineAmount, nil
 	}
-	if orderEntrySpec != spotOrderEntrySpec {
-		return "", "", "", fmt.Errorf("order_entry_spec must be %q for spot ui_intent", spotOrderEntrySpec)
+	if orderEntrySpec != spec {
+		return "", "", "", fmt.Errorf("order_entry_spec must be %q for this market's ui_intent", spec)
 	}
 	if uiIntent == nil {
 		return "", "", "", fmt.Errorf("ui_intent is required when order_entry_spec is provided")
 	}
 
-	translated, err := translateSpotUIIntent(uiIntent)
+	translated, err := translateSpotUIIntent(spec, uiIntent)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -74,7 +88,7 @@ func validateOrTranslateSpotUIIntent(orderEntrySpec string, uiIntent *spotOrderI
 	return translatedEngineSide, translated.EngineOrder.Price, translated.EngineOrder.Amount, nil
 }
 
-func translateSpotUIIntent(uiIntent *spotOrderIntent) (*spotOrderContractEcho, error) {
+func translateSpotUIIntent(spec string, uiIntent *spotOrderIntent) (*spotOrderContractEcho, error) {
 	if uiIntent == nil {
 		return nil, fmt.Errorf("ui_intent is required")
 	}
@@ -108,7 +122,7 @@ func translateSpotUIIntent(uiIntent *spotOrderIntent) (*spotOrderContractEcho, e
 	}
 
 	return &spotOrderContractEcho{
-		Spec: spotOrderEntrySpec,
+		Spec: spec,
 		UIIntent: spotOrderIntent{
 			Side:  string(uiSide),
 			Price: normalizeDecimalString(uiIntent.Price),
@@ -130,17 +144,20 @@ func deriveSpotContractFromOrder(order orders.Order, instrument instruments.Meta
 	if !isSpotContractInstrument(instrument) {
 		return nil, nil
 	}
-	return deriveSpotOrderContractEchoFromEngine(order.Side, order.LimitPrice, order.DesiredAmount)
+	return deriveSpotOrderContractEchoFromEngine(instrument.OrderEntrySpec, order.Side, order.LimitPrice, order.DesiredAmount)
 }
 
 func deriveSpotContractFromTrade(trade orders.TradeFill, instrument instruments.Metadata) (*spotOrderContractEcho, error) {
 	if !isSpotContractInstrument(instrument) {
 		return nil, nil
 	}
-	return deriveSpotOrderContractEchoFromEngine(trade.AggressorSide, trade.Price, trade.Size)
+	return deriveSpotOrderContractEchoFromEngine(instrument.OrderEntrySpec, trade.AggressorSide, trade.Price, trade.Size)
 }
 
-func deriveSpotOrderContractEchoFromEngine(engineSide orders.Side, enginePrice string, engineAmount string) (*spotOrderContractEcho, error) {
+// deriveSpotOrderContractEchoFromEngine presents an engine order in UI terms. For the perp the
+// balance_delta is the change in USD/NGN exposure a fill opens, not a token movement: the same
+// numbers, since the translation is the same, but nothing is delivered.
+func deriveSpotOrderContractEchoFromEngine(spec string, engineSide orders.Side, enginePrice string, engineAmount string) (*spotOrderContractEcho, error) {
 	if engineSide != orders.SideBuy && engineSide != orders.SideSell {
 		return nil, fmt.Errorf("spot engine side must be buy or sell")
 	}
@@ -169,7 +186,7 @@ func deriveSpotOrderContractEchoFromEngine(engineSide orders.Side, enginePrice s
 	}
 
 	return &spotOrderContractEcho{
-		Spec: spotOrderEntrySpec,
+		Spec: spec,
 		UIIntent: spotOrderIntent{
 			Side:  string(uiSide),
 			Price: formatDecimal(uiPrice, spotUIPriceDecimalScale),

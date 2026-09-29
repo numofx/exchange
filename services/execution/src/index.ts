@@ -56,6 +56,7 @@ const executor = await MatchExecutor.create(config, {
   matchingAbi: artifacts.matchingAbi,
   matchingAddress,
   tradeModuleAddress,
+  additionalTradeModules: config.perpTradeModuleAddress ? [config.perpTradeModuleAddress] : [],
   withdrawal,
 });
 

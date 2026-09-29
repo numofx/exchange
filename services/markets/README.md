@@ -93,6 +93,38 @@ Env: `WITHDRAWAL_MODULE_ADDRESS` and `EXECUTOR_WITHDRAW_URL` (both required to e
 `EXECUTOR_WITHDRAW_TIMEOUT` (default 45s; must exceed execution-service's `WITHDRAWAL_RECEIPT_TIMEOUT_MS`).
 Also needs `CHAIN_ID`, `MATCHING_ADDRESS` and `CHAIN_RPC_URL`, whatever `ENFORCE_MATCHING_CUSTODY` says.
 
+## USDCcNGN-PERP
+
+A USDC-settled perpetual on its own stack: a CashAsset over real USDC, its own SRM, security module
+and auction (risk-core `CNGN_PERP_STACK.json`), traded through its own TradeModule quoted in that cash
+(execution `CNGN_PERP_TRADE_MODULE.json`). Enabled by four variables, all or none — a partial set
+refuses to boot:
+
+| Env | Source |
+| --- | --- |
+| `CNGN_PERP_ASSET_ADDRESS` | `CNGN_PERP_STACK.json` `perp` |
+| `CNGN_PERP_TRADE_MODULE_ADDRESS` | `CNGN_PERP_TRADE_MODULE.json` `tradePerp` |
+| `CNGN_PERP_CASH_ADDRESS` | `CNGN_PERP_STACK.json` `cash` |
+| `CNGN_PERP_SRM_ADDRESS` | `CNGN_PERP_STACK.json` `srm` |
+
+Set them on the API **and** the matcher, and set `PERP_TRADE_MODULE_ADDRESS` on execution-service.
+
+- **Orientation.** On chain the perp is USD per NGN, sized in NGN. The venue shows it like spot:
+  NGN per USD, sized in USD notional, side flipped — a UI long is a short of the NGN perp. Orders
+  use `order_entry_spec: "usdc_cngn_perp_v1"` with the same `ui_intent` translation as spot, and an
+  intent signed for one market's spec is refused on the other's.
+- **Module.** A perp order must name the perp module; a spot order the spot module. The matcher
+  verifies at boot that the perp module's `quoteAsset()` is `CNGN_PERP_CASH_ADDRESS`.
+- **Pre-trade check.** Not the spot funding check (full notional, buyer only) but a margin check on
+  both sides: IM surplus now, minus the price-vs-mark leg, the taker fee and the initial margin the
+  fill adds. Reducing a position is always allowed. Fails open on RPC errors, like the funding check;
+  the SRM is the enforcement.
+- **`/v1/markets`** adds a `perp` object for the perp: mark and index (both orientations), the hourly
+  funding rate (`funding_rate_1h`, paid by NGN longs; `ui_long_funding_rate_1h` is the venue long's
+  view), open interest, margin rates, max leverage, and the module/cash/SRM to sign and deposit for.
+- **`GET /v1/positions?subaccount_id=N`** returns the account's perp position from chain: side and
+  size in UI terms, mark, unrealized PnL, IM/MM surplus and an estimated liquidation price.
+
 ## Configuration
 
 Copy `.env.example` into your own environment and set the required values.

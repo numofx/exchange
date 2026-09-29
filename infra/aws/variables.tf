@@ -149,6 +149,29 @@ variable "cngn_spot_asset_address" {
   default = "0x9D806fD040a719D27a8E5E77dc5aE0ED1e089493"
 }
 
+# USDCcNGN-PERP, on its own stack (risk-core CNGN_PERP_STACK.json, execution
+# CNGN_PERP_TRADE_MODULE.json). All four or none: markets-service refuses a partial set at boot.
+# Empty keeps the perp off; spot is unaffected either way.
+variable "cngn_perp_asset_address" {
+  type    = string
+  default = ""
+}
+
+variable "cngn_perp_trade_module_address" {
+  type    = string
+  default = ""
+}
+
+variable "cngn_perp_cash_address" {
+  type    = string
+  default = ""
+}
+
+variable "cngn_perp_srm_address" {
+  type    = string
+  default = ""
+}
+
 variable "matcher_poll_interval" {
   type    = string
   default = "250ms"

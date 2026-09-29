@@ -57,6 +57,15 @@ type Config struct {
 	DeribitWSURL            string
 
 	CNGNSpotAssetAddress string
+
+	// USDCcNGN-PERP, on its own stack (risk-core CNGN_PERP_STACK.json and execution
+	// CNGN_PERP_TRADE_MODULE.json). All four or none: the perp settles through its own TradeModule,
+	// in its own CashAsset, margined by its own SRM, and a partial set would route perp orders
+	// through the spot module or check them against the wrong manager.
+	CNGNPerpAssetAddress       string
+	CNGNPerpTradeModuleAddress string
+	CNGNPerpCashAddress        string
+	CNGNPerpSRMAddress         string
 	// CashAssetAddress is the CashAsset contract. Kept as the legacy source of QuoteAssetAddress
 	// so an existing deployment that only sets CASH_ASSET_ADDRESS keeps working unchanged.
 	CashAssetAddress string
@@ -121,6 +130,10 @@ func Load() (Config, error) {
 		DeribitWSURL:            getenvDefault("DERIBIT_WS_URL", "wss://test.deribit.com/ws/api/v2"),
 
 		CNGNSpotAssetAddress:         strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_SPOT_ASSET_ADDRESS"))),
+		CNGNPerpAssetAddress:         strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_ASSET_ADDRESS"))),
+		CNGNPerpTradeModuleAddress:   strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_TRADE_MODULE_ADDRESS"))),
+		CNGNPerpCashAddress:          strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_CASH_ADDRESS"))),
+		CNGNPerpSRMAddress:           strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_SRM_ADDRESS"))),
 		CashAssetAddress:             strings.ToLower(strings.TrimSpace(os.Getenv("CASH_ASSET_ADDRESS"))),
 		QuoteAssetAddress:            strings.ToLower(strings.TrimSpace(os.Getenv("QUOTE_ASSET_ADDRESS"))),
 		EnforceFundingCheck:          getenvBool("ENFORCE_FUNDING_CHECK", true),
@@ -166,6 +179,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if err := cfg.validateTradeModule(); err != nil {
+		return Config{}, err
+	}
+	if err := cfg.validatePerpStack(); err != nil {
 		return Config{}, err
 	}
 
@@ -257,6 +273,38 @@ func (c Config) validateTradeModule() error {
 	)
 }
 
+// PerpEnabled reports whether USDCcNGN-PERP is configured. The asset address is the switch; the rest
+// of the stack is required alongside it by validatePerpStack.
+func (c Config) PerpEnabled() bool {
+	return strings.TrimSpace(c.CNGNPerpAssetAddress) != ""
+}
+
+// validatePerpStack refuses a partial perp configuration, in every environment. The four addresses
+// are one deployment: with the module but not the SRM the margin check would read nothing, and with
+// the asset but not the module perp orders would be pinned to the spot module and rejected (or,
+// worse, if the two ever matched, settled in the wrong cash).
+func (c Config) validatePerpStack() error {
+	fields := map[string]string{
+		"CNGN_PERP_ASSET_ADDRESS":        c.CNGNPerpAssetAddress,
+		"CNGN_PERP_TRADE_MODULE_ADDRESS": c.CNGNPerpTradeModuleAddress,
+		"CNGN_PERP_CASH_ADDRESS":         c.CNGNPerpCashAddress,
+		"CNGN_PERP_SRM_ADDRESS":          c.CNGNPerpSRMAddress,
+	}
+	var set, missing []string
+	for _, name := range []string{"CNGN_PERP_ASSET_ADDRESS", "CNGN_PERP_TRADE_MODULE_ADDRESS", "CNGN_PERP_CASH_ADDRESS", "CNGN_PERP_SRM_ADDRESS"} {
+		if isConfiguredAddress(fields[name]) {
+			set = append(set, name)
+		} else {
+			missing = append(missing, name)
+		}
+	}
+	if len(set) == 0 || len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("the perp stack is configured partially: %s set but %s missing; set all four or none",
+		strings.Join(set, ", "), strings.Join(missing, ", "))
+}
+
 func isConfiguredAddress(value string) bool {
 	trimmed := strings.TrimSpace(strings.ToLower(value))
 	if !strings.HasPrefix(trimmed, "0x") || len(trimmed) != 42 {
@@ -338,14 +386,16 @@ func getenvBool(key string, fallback bool) bool {
 	}
 }
 
-// withdrawalAssets are the wrapped assets a signed withdrawal may pay out of: WITHDRAWAL_ASSET_ADDRESSES when set,
-// otherwise the two this venue settles in, the quote asset and the cNGN spot asset.
+// withdrawalAssets are the assets a signed withdrawal may pay out of: WITHDRAWAL_ASSET_ADDRESSES when set,
+// otherwise those this venue settles in: the quote asset, the cNGN spot asset and, when the perp is
+// configured, the perp stack's cash.
 func withdrawalAssets(cfg Config) []string {
 	if configured := getenvCSV("WITHDRAWAL_ASSET_ADDRESSES", ""); len(configured) > 0 {
 		return configured
 	}
-	assets := make([]string, 0, 2)
-	for _, asset := range []string{cfg.QuoteAsset(), cfg.CNGNSpotAssetAddress} {
+	assets := make([]string, 0, 3)
+	// The perp's cash is withdrawable too: it is real USDC held by that stack's CashAsset.
+	for _, asset := range []string{cfg.QuoteAsset(), cfg.CNGNSpotAssetAddress, cfg.CNGNPerpCashAddress} {
 		if asset = strings.ToLower(strings.TrimSpace(asset)); asset != "" {
 			assets = append(assets, asset)
 		}
