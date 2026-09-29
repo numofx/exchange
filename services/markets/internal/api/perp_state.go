@@ -77,6 +77,16 @@ type presentedPosition struct {
 	LiquidationPriceUI string `json:"liquidation_price_ui,omitempty"`
 }
 
+// presentedPerpAccount is the account's margin on a perp stack, whether or not it holds a position:
+// what the ticket shows as available before the first trade.
+type presentedPerpAccount struct {
+	Market                   string `json:"market"`
+	SubaccountID             string `json:"subaccount_id"`
+	Cash                     string `json:"cash"`
+	InitialMarginSurplus     string `json:"initial_margin_surplus"`
+	MaintenanceMarginSurplus string `json:"maintenance_margin_surplus"`
+}
+
 type perpStateReader struct {
 	chain *chainCustodyChecker // eth_call and the SubAccounts address
 
@@ -186,6 +196,51 @@ func (r *perpStateReader) marketState(ctx context.Context, market instruments.Me
 	r.cache[key] = cachedPerpState{state: state, raw: raw, at: r.now()}
 	r.mu.Unlock()
 	return state, raw, nil
+}
+
+// account reads the subaccount's cash and margin on the perp's stack. Surpluses are the SRM's own:
+// for an account with no position the initial surplus is its cash.
+func (r *perpStateReader) account(ctx context.Context, market instruments.Metadata, subaccountID string) (*presentedPerpAccount, error) {
+	account, err := encodeUint256(subaccountID)
+	if err != nil {
+		return nil, err
+	}
+	srm := strings.ToLower(market.MarginManagerAddress)
+	subAccounts, err := r.chain.subAccountsAddress(ctx)
+	if err != nil {
+		return nil, err
+	}
+	cashRaw, err := r.chain.ethCall(ctx, subAccounts, sigGetBalance+account+addressArg(market.QuoteAssetAddress)+strings.Repeat("0", 64))
+	if err != nil {
+		return nil, fmt.Errorf("cash: %w", err)
+	}
+	cash, err := signedWord(cashRaw, 0)
+	if err != nil {
+		return nil, err
+	}
+	imRaw, err := r.chain.ethCall(ctx, srm, sigGetMargin+account+fmt.Sprintf("%064x", 1))
+	if err != nil {
+		return nil, fmt.Errorf("initial margin: %w", err)
+	}
+	im, err := signedWord(imRaw, 0)
+	if err != nil {
+		return nil, err
+	}
+	mmRaw, err := r.chain.ethCall(ctx, srm, sigGetMargin+account+fmt.Sprintf("%064x", 0))
+	if err != nil {
+		return nil, fmt.Errorf("maintenance margin: %w", err)
+	}
+	mm, err := signedWord(mmRaw, 0)
+	if err != nil {
+		return nil, err
+	}
+	return &presentedPerpAccount{
+		Market:                   market.Symbol,
+		SubaccountID:             subaccountID,
+		Cash:                     e18String(cash),
+		InitialMarginSurplus:     e18String(im),
+		MaintenanceMarginSurplus: e18String(mm),
+	}, nil
 }
 
 func (r *perpStateReader) position(ctx context.Context, market instruments.Metadata, subaccountID string) (*presentedPosition, error) {
@@ -352,8 +407,9 @@ func (s *Server) handlePositions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	positions := []presentedPosition{}
+	accounts := []presentedPerpAccount{}
 	if s.perp == nil || s.instruments == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"positions": positions})
+		writeJSON(w, http.StatusOK, map[string]any{"positions": positions, "accounts": accounts})
 		return
 	}
 	for _, market := range s.instruments.Enabled() {
@@ -369,6 +425,13 @@ func (s *Server) handlePositions(w http.ResponseWriter, r *http.Request) {
 		if position != nil {
 			positions = append(positions, *position)
 		}
+		account, err := s.perp.account(r.Context(), market, subaccountID)
+		if err != nil {
+			slog.Error("read perp account", "market", market.Symbol, "subaccount_id", subaccountID, "error", err)
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "could not read the account from chain"})
+			return
+		}
+		accounts = append(accounts, *account)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"positions": positions})
+	writeJSON(w, http.StatusOK, map[string]any{"positions": positions, "accounts": accounts})
 }

@@ -186,6 +186,10 @@ func TestPositionsIsEmptyForAnAccountWithNoPerp(t *testing.T) {
 	if !strings.Contains(recorder.Body.String(), `"positions":[]`) {
 		t.Fatalf("want an empty list, got %s", recorder.Body.String())
 	}
+	// The account's margin is still served: it is what the ticket shows before the first trade.
+	if !strings.Contains(recorder.Body.String(), `"initial_margin_surplus":"1540"`) {
+		t.Fatalf("want the account summary, got %s", recorder.Body.String())
+	}
 }
 
 func TestPositionsRequiresASubaccount(t *testing.T) {
