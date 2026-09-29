@@ -113,6 +113,18 @@ export const auctionAbi = parseAbi([
 
 /** Gas sent as a percentage of the estimate. */
 const GAS_HEADROOM_PCT = 150n;
+/**
+ * And never less than this much over it: the perp cash's interest accrual costs a roughly fixed ~59k
+ * gas when the estimate's block skipped it (CngnPerpStackFork
+ * .testDepositGasDependsOnWhetherTheCashWasTouchedThisBlock), so a percentage is thinnest on the
+ * smallest calls -- the funding transfer into a bid account among them.
+ */
+const GAS_HEADROOM_MIN = 100_000n;
+
+export function withGasHeadroom(estimate: bigint): bigint {
+  const scaled = (estimate * GAS_HEADROOM_PCT) / 100n;
+  return scaled > estimate + GAS_HEADROOM_MIN ? scaled : estimate + GAS_HEADROOM_MIN;
+}
 
 const subAccountsAbi = parseAbi([
   'function getBalance(uint256 accountId, address asset, uint256 subId) view returns (int256)',
@@ -129,7 +141,9 @@ const cashAbi = parseAbi([
 const perpAbi = parseAbi([
   'function totalPosition(address manager) view returns (uint256)',
   'function totalPositionCap(address manager) view returns (uint256)',
+  'function isDisabled() view returns (bool)',
 ]);
+const settleAbi = parseAbi(['function settlePerpsWithIndex(uint256 accountId)']);
 
 const accountCreated = parseAbiItem(
   'event AccountCreated(address indexed owner, uint256 indexed accountId, address indexed manager)',
@@ -168,7 +182,10 @@ export function createKeeperChain(config: Config) {
   let scannedTo = config.START_BLOCK - 1n;
 
   async function send(request: Parameters<typeof wallet.writeContract>[0]) {
-    const hash = await wallet.writeContract(request);
+    // Every keeper transaction touches the perp cash (bid-account funding moves it directly), so
+    // every one carries the same headroom as the auction calls.
+    const estimate = await client.estimateContractGas(request as never);
+    const hash = await wallet.writeContract({ ...request, gas: withGasHeadroom(estimate) } as never);
     const receipt = await client.waitForTransactionReceipt({ hash, timeout: 60_000 });
     if (receipt.status !== 'success') throw new Error(`transaction reverted on chain: ${hash}`);
     return receipt;
@@ -334,6 +351,35 @@ export function createKeeperChain(config: Config) {
       return { ...view, canTerminate: status[0], bidPrice, maxProportion };
     },
 
+    /**
+     * `--settle-frozen`: after the vault has frozen the perp (perp.disable(), the runbook's step past
+     * INDEX_STEP_MAX_BPS), settles every account still holding it at the frozen price, which deletes
+     * the position. The cap may only be cut to 0 once this has run: an account still holding the perp
+     * when OI is above the cap cannot deposit or withdraw. An account mid-auction cannot be settled
+     * (BM_AccountUnderLiquidation): it is skipped and reported, for the keeper's normal passes to
+     * finish or terminate its auction first. Run until both lists are empty.
+     */
+    async settleFrozenPositions(dryRun: boolean): Promise<{ settled: bigint[]; underLiquidation: bigint[] }> {
+      const disabled = await client.readContract({ address: config.PERP, abi: perpAbi, functionName: 'isDisabled' });
+      if (!disabled) throw new Error('the perp is not disabled: --settle-frozen only runs after the vault freezes it');
+      const settled: bigint[] = [];
+      const underLiquidation: bigint[] = [];
+      // Every account under the SRM, the keeper's own bid accounts included: they hold positions too.
+      const candidates = [...new Set([...(await this.discoverAccounts()), ...ownAccounts])];
+      for (const accountId of candidates) {
+        if ((await balance(accountId, config.PERP)) === 0n) continue;
+        const auction = await client.readContract({ address: config.AUCTION, abi: auctionAbi, functionName: 'getAuction', args: [accountId] });
+        if (auction.ongoing) {
+          underLiquidation.push(accountId);
+          continue;
+        }
+        settled.push(accountId);
+        if (dryRun) continue;
+        await send({ account: keeper, chain, address: config.SRM, abi: settleAbi, functionName: 'settlePerpsWithIndex', args: [accountId] });
+      }
+      return { settled, underLiquidation };
+    },
+
     async keeperCash(): Promise<bigint> {
       return balance(config.KEEPER_ACCOUNT, config.CASH);
     },
@@ -396,7 +442,7 @@ export function createKeeperChain(config: Config) {
       // gas estimated against one block can fall short in the next. A liquidation that runs out of
       // gas is the failure a keeper exists to prevent: send with headroom.
       const estimate = await client.estimateContractGas(params);
-      const hash = await wallet.writeContract({ ...request, gas: (estimate * GAS_HEADROOM_PCT) / 100n });
+      const hash = await wallet.writeContract({ ...request, gas: withGasHeadroom(estimate) });
       const receipt = await client.waitForTransactionReceipt({ hash, timeout: 60_000 });
       if (receipt.status !== 'success') throw new Error(`${call.functionName} reverted on chain: ${hash}`);
       return { sent: hash };

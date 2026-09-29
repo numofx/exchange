@@ -31,7 +31,7 @@ import {
 } from 'viem';
 import { privateKeyToAccount, type PrivateKeyAccount } from 'viem/accounts';
 
-import { createKeeperChain } from './chain.js';
+import { createKeeperChain, withGasHeadroom } from './chain.js';
 import { loadConfig } from './config.js';
 import { runOnce } from './keeper.js';
 
@@ -85,6 +85,7 @@ const SIZE = 10_000_000n * E18;
 
 const abi = parseAbi([
   'function acceptOwnership()',
+  'function disable()',
   'function setTotalPositionCap(address manager, uint256 cap)',
   'function createAccount(address owner, address manager) returns (uint256)',
   'function createAccountWithApproval(address owner, address spender, address manager) returns (uint256)',
@@ -131,9 +132,33 @@ describe('keeper against the real perp stack on an anvil fork', { skip: !RPC }, 
   async function write(from: PrivateKeyAccount | Address, address: Address, functionName: string, args: unknown[]) {
     // Simulated first, so a revert surfaces with its reason instead of a bare failed receipt.
     await client.simulateContract({ address, abi, functionName: functionName as never, args: args as never, account: from as never });
-    const hash = await walletOf(from).writeContract({ address, abi, functionName: functionName as never, args: args as never, chain, account: from as never });
+    // Sent with the keeper's headroom: an exact estimate from the block that last touched the perp
+    // cash skips its interest accrual and runs out of gas a block later (the CI flake of 2026-09-29).
+    const estimate = await client.estimateContractGas({ address, abi, functionName: functionName as never, args: args as never, account: from as never });
+    const hash = await walletOf(from).writeContract({
+      address,
+      abi,
+      functionName: functionName as never,
+      args: args as never,
+      chain,
+      account: from as never,
+      gas: withGasHeadroom(estimate),
+    });
     const receipt = await client.waitForTransactionReceipt({ hash });
-    assert.equal(receipt.status, 'success', `${functionName} reverted`);
+    if (receipt.status !== 'success') {
+      // A call that simulated fine and then reverted: say whether it ran out of gas and whether the
+      // same call succeeds against the same pre-state with unlimited gas.
+      const tx = await client.getTransaction({ hash });
+      const block = await client.getBlock({ blockNumber: receipt.blockNumber });
+      const replay = await client
+        .call({ account: tx.from, to: tx.to!, data: tx.input, blockNumber: receipt.blockNumber - 1n })
+        .then(() => 'succeeds with unlimited gas')
+        .catch((error: Error) => `reverts: ${error.message.split('\n')[0]}`);
+      assert.fail(
+        `${functionName} reverted: gasUsed ${receipt.gasUsed} of limit ${tx.gas} at block ${receipt.blockNumber} ` +
+          `(timestamp ${block.timestamp}); replay at the previous block ${replay}`,
+      );
+    }
   }
 
   async function rpc(method: string, params: unknown[]) {
@@ -293,5 +318,41 @@ describe('keeper against the real perp stack on an anvil fork', { skip: !RPC }, 
     assert.equal(await perpOf(accounts.alice!), 0n, 'alice closed out: a second bid works after the first');
     assert.ok((await cashOf(BigInt(stack.securityModuleAccount))) < smBefore, 'security module paid the keeper');
     assert.equal(await perpOf(accounts.keeper!), 0n, 'funding account still cash-only');
+  });
+
+  // The runbook's step past INDEX_STEP_MAX_BPS: the vault freezes the perp, then --settle-frozen
+  // settles everything still open -- the counterparty and the keeper's own bid accounts -- so the cap
+  // can be closed without freezing anyone.
+  it('after the vault freezes the perp, --settle-frozen leaves nobody holding it', async () => {
+    const chainView = createKeeperChain(keeperConfig(false));
+    await publish(CRASHED);
+    await assert.rejects(chainView.settleFrozenPositions(false), /not disabled/);
+
+    await write(VAULT, stack.perp, 'disable', []);
+    const dry = await createKeeperChain(keeperConfig(true)).settleFrozenPositions(true);
+    assert.ok(dry.settled.includes(accounts.bob!), 'the dry run lists bob, the open counterparty');
+    assert.notEqual(await perpOf(accounts.bob!), 0n, 'and changes nothing');
+
+    // Carol is mid-auction: she cannot be settled until the auction ends, and is reported instead.
+    const first = await chainView.settleFrozenPositions(false);
+    assert.ok(first.settled.includes(accounts.bob!), 'bob settled');
+    assert.deepEqual(first.underLiquidation, [accounts.carol!], 'carol reported, not settled');
+
+    // A solvent auction that has sold what it can but left buffer margin a hair below zero cannot be
+    // terminated until its solvent phase (15 min fast + 12 h slow) runs out; then the keeper's
+    // normal pass terminates or converts it, and the sweep completes. The runbook allows for this.
+    await warp(12 * 60 * 60 + 15 * 60 + 60);
+    await publish(CRASHED);
+    for (let pass = 0; pass < 3 && (await auctionOf(accounts.carol!)).ongoing; pass++) {
+      await runOnce(keeperConfig(false), chainView, alert);
+    }
+    assert.equal((await auctionOf(accounts.carol!)).ongoing, false, "carol's auction ended");
+    const second = await chainView.settleFrozenPositions(false);
+    assert.deepEqual(second.underLiquidation, [], 'nothing left under liquidation');
+    for (const id of [...first.settled, ...second.settled, accounts.alice!, accounts.bob!, accounts.carol!]) {
+      assert.equal(await perpOf(id), 0n, `account ${id} still holds the perp`);
+    }
+    const third = await chainView.settleFrozenPositions(false);
+    assert.deepEqual([third.settled, third.underLiquidation], [[], []], 'a last pass finds nothing');
   });
 });
