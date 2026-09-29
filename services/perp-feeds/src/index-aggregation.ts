@@ -53,6 +53,12 @@ export type WindowRules = {
   windowMs: number;
   /** Fewest accepted samples the window must hold before a TWAP means anything. */
   minSamples: number;
+  /**
+   * Oldest the NEWEST accepted sample may be. Without it, a run of refused samples (sources that
+   * disagree, or stopped answering) still leaves older accepted ones in the window, and every
+   * publish would re-sign a TWAP of the past -- the market running on a price nobody is confirming.
+   */
+  maxNewestAgeMs: number;
 };
 
 export type TwapResult = { ok: true; ngnPerUsdt: number; samples: number } | { ok: false; reason: string };
@@ -64,6 +70,13 @@ export type TwapResult = { ok: true; ngnPerUsdt: number; samples: number } | { o
  */
 export function windowTwap(samples: PricePoint[], nowMs: number, rules: WindowRules): TwapResult {
   const inWindow = withinWindow(samples, nowMs - rules.windowMs);
+  const newest = inWindow.reduce((latest, point) => Math.max(latest, point.at), Number.NEGATIVE_INFINITY);
+  if (inWindow.length > 0 && nowMs - newest > rules.maxNewestAgeMs) {
+    return {
+      ok: false,
+      reason: `newest accepted sample is ${Math.round((nowMs - newest) / 1000)}s old (limit ${Math.round(rules.maxNewestAgeMs / 1000)}s): sources have not confirmed the price since`,
+    };
+  }
   if (inWindow.length < rules.minSamples) {
     return { ok: false, reason: `window holds ${inWindow.length} of ${rules.minSamples} required samples` };
   }

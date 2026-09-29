@@ -35,6 +35,8 @@ const envSchema = z.object({
   INDEX_PUBLISH_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
   INDEX_TWAP_WINDOW_MS: z.coerce.number().int().positive().default(900_000),
   INDEX_MIN_WINDOW_SAMPLES: z.coerce.number().int().positive().default(10),
+  /** Three missed samples: past this, the index is not republished from older ones. */
+  INDEX_MAX_SAMPLE_AGE_MS: z.coerce.number().int().positive().default(180_000),
   INDEX_MIN_SOURCES: z.coerce.number().int().min(3).default(3),
   INDEX_MAX_SOURCE_DEVIATION_BPS: z.coerce.number().positive().default(150),
   INDEX_MAX_JUMP_BPS: z.coerce.number().int().positive().default(300),

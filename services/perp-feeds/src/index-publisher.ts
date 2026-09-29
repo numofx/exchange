@@ -102,6 +102,7 @@ export class IndexPublisher {
     const twap = windowTwap(this.state.samples, this.now(), {
       windowMs: this.config.INDEX_TWAP_WINDOW_MS,
       minSamples: this.config.INDEX_MIN_WINDOW_SAMPLES,
+      maxNewestAgeMs: this.config.INDEX_MAX_SAMPLE_AGE_MS,
     });
     if (!twap.ok) {
       console.warn(`[index] not publishing: ${twap.reason}`);

@@ -73,7 +73,7 @@ describe('aggregateSample', () => {
 
 describe('windowTwap', () => {
   const now = 1_000_000_000;
-  const window = { windowMs: 15 * 60_000, minSamples: 10 };
+  const window = { windowMs: 15 * 60_000, minSamples: 10, maxNewestAgeMs: 180_000 };
 
   it('refuses a window without enough samples', () => {
     const samples = Array.from({ length: 9 }, (_, i) => ({ price: 1374, at: now - i * 60_000 }));
@@ -88,15 +88,24 @@ describe('windowTwap', () => {
     assert.deepEqual(result, { ok: true, ngnPerUsdt: 1374, samples: 10 });
   });
 
+  it('refuses to republish when every recent sample was refused, though older ones fill the window', () => {
+    // 12 accepted samples from 15..4 minutes ago, nothing accepted since: the window is "full" but
+    // no source has confirmed the price for 4 minutes.
+    const samples = Array.from({ length: 12 }, (_, i) => ({ price: 1374, at: now - (15 - i) * 60_000 + 30_000 }));
+    const result = windowTwap(samples, now, window);
+    assert.equal(result.ok, false);
+    assert.match(!result.ok ? result.reason : '', /newest accepted sample/);
+  });
+
   it('weights each sample by how long it stood', () => {
     const samples = [
-      ...Array.from({ length: 9 }, (_, i) => ({ price: 1370, at: now - (14 - i) * 60_000 })),
-      { price: 1400, at: now - 5 * 60_000 },
+      ...Array.from({ length: 9 }, (_, i) => ({ price: 1370, at: now - (11 - i) * 60_000 })),
+      { price: 1400, at: now - 2 * 60_000 },
     ];
     const result = windowTwap(samples, now, window);
-    // 1370 stood 9 minutes, 1400 stood the last 5: (1370*9 + 1400*5) / 14
+    // 1370 stood 9 minutes, 1400 stood the last 2: (1370*9 + 1400*2) / 11
     assert.ok(result.ok);
-    assert.ok(Math.abs((result.ok ? result.ngnPerUsdt : 0) - (1370 * 9 + 1400 * 5) / 14) < 1e-9);
+    assert.ok(Math.abs((result.ok ? result.ngnPerUsdt : 0) - (1370 * 9 + 1400 * 2) / 11) < 1e-9);
   });
 });
 
