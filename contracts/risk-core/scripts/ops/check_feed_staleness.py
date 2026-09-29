@@ -31,8 +31,14 @@ ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 SPOT_DETAIL_SLOT = "0x6"
 CNGN_WARN_SEC = 120
 STABLE_WARN_SEC = 3000
+# USDCcNGN-PERP (heartbeats 1200s index, 900s mark, 1200s impacts). Warn with a publish or two of
+# margin left: a stale index halts the perp's trading AND its liquidations.
+PERP_INDEX_WARN_SEC = 900
+PERP_MARK_WARN_SEC = 600
+PERP_IMPACT_WARN_SEC = 900
 
 SEL_GET_SPOT = "0x2b37269c"  # getSpot() -- derived with `cast sig`, NOT by hand (see below)
+SEL_SPOT_DIFF_DETAILS = "0xf8ff41bd"  # spotDiffDetails() -- `cast sig "spotDiffDetails()"`
 
 # OraclesSet(uint256 marketId, address spotFeed, address forwardFeed, address volFeed)
 ORACLES_SET_TOPIC = "0xd761335b0ab3a850d6b3f035a4973246956aaabab419b2c3dc0c0d25fbaf788f"
@@ -85,6 +91,62 @@ def feed_age(url: str, feed: str) -> tuple[int, float]:
   ts = (word >> 160) & 0xFFFFFFFFFFFFFFFF
   price = (word & (1 << 96) - 1) / 1e18
   return int(time.time()) - ts, price
+
+
+def diff_feed_age(url: str, feed: str) -> int:
+  """Age of a LyraSpotDiffFeed's last update, from its public spotDiffDetails() getter."""
+  out = rpc(url, "eth_call", [{"to": feed, "data": SEL_SPOT_DIFF_DETAILS}, "latest"])
+  raw = out[2:] if out.startswith("0x") else out
+  ts = int(raw[128:192], 16)  # (int96 spotDiff, uint64 confidence, uint64 timestamp)
+  if ts == 0:
+    raise RuntimeError("never published")
+  return int(time.time()) - ts
+
+
+def check_perp_feeds(url: str) -> list[str]:
+  """USDCcNGN-PERP's four feeds, once its stack is deployed.
+
+  The index is checked only while the perp SRM's market actually reads it, like every other spot
+  feed here. Mark and impacts are not SRM oracles, so they ride on the index: when the index is live
+  so is the market, and a stale mark mis-marks every position in it.
+  """
+  artifact = ROOT_DIR / "deployments/8453/CNGN_PERP_STACK.json"
+  if not artifact.exists():
+    print("skip: CNGN_PERP_STACK.json not present; the perp is not deployed")
+    return []
+  stack = json.loads(artifact.read_text())
+  try:
+    live = live_spot_feeds(url, stack["srm"])
+  except Exception as exc:
+    return [f"perp LIVE-FEED LOOKUP FAILED: {exc}"]
+  if stack["indexFeed"].lower() not in live:
+    print("skip: perp index feed is not read by the perp SRM; staleness cannot freeze trading")
+    return []
+
+  problems = []
+  try:
+    age, price = feed_age(url, stack["indexFeed"])
+    if age > PERP_INDEX_WARN_SEC:
+      problems.append(f"perp index feed {stack['indexFeed']} STALE: last update {age}s ago (warn {PERP_INDEX_WARN_SEC}s)")
+    else:
+      print(f"ok: perp index age {age}s price {price:.8f} USD/NGN")
+  except Exception as exc:
+    problems.append(f"perp index feed CHECK FAILED: {exc}")
+
+  for name, key, warn in [
+    ("perp mark feed", "markFeed", PERP_MARK_WARN_SEC),
+    ("perp impact ask feed", "impactAskFeed", PERP_IMPACT_WARN_SEC),
+    ("perp impact bid feed", "impactBidFeed", PERP_IMPACT_WARN_SEC),
+  ]:
+    try:
+      age = diff_feed_age(url, stack[key])
+      if age > warn:
+        problems.append(f"{name} {stack[key]} STALE: last update {age}s ago (warn {warn}s)")
+      else:
+        print(f"ok: {name} age {age}s")
+    except Exception as exc:
+      problems.append(f"{name} {stack[key]} CHECK FAILED: {exc}")
+  return problems
 
 
 def is_static_feed(url: str, feed: str) -> bool:
@@ -158,6 +220,8 @@ def main() -> int:
         print(f"ok: {name} age {age}s price {price:.2f}")
     except Exception as exc:
       problems.append(f"{name} {addr} CHECK FAILED: {exc}")
+
+  problems += check_perp_feeds(url)
 
   if problems:
     alert(webhook, "NUMO FEED ALERT\n" + "\n".join(problems))

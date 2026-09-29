@@ -1,0 +1,67 @@
+# perp-feeds
+
+Price publishers for `USDCcNGN-PERP`. One process, one feed signer, one relayer:
+
+- **Index.** Every minute, each USDT/NGN provider from
+  [`cngn-rate-picker`](https://github.com/wrappedcbdc/cngn-rate-picker) (Quidax, Textile, Bybit P2P,
+  and Blockradar when `BLOCKRADAR_API_KEY` is set) is queried. A sample is the **median**, and is
+  refused if fewer than 3 sources answer or any source sits more than 150 bps from the median. Every
+  5 minutes the 15-minute **time-weighted average** of accepted samples is inverted to USD per NGN,
+  refused if it would move the on-chain index more than 300 bps, then signed and pushed.
+- **Mark and impacts.** Every minute, the perp book from markets-service gives the mark (book mid)
+  and impact prices (average fill for $1,000 each side), each clamped to the index ± 200 bps. A side
+  without that depth reads as the index, so a thin book creates no funding premium. Published on a
+  10 bps move or before 7 minutes have passed, whichever comes first.
+
+The picker's own multi-source mode is not used: with `threshold > 1` it averages the first N
+successes weighted by fetch-time gaps and never compares them, which is neither a median nor a
+disagreement check. `src/index-aggregation.ts` says more.
+
+## Failing closed
+
+A publisher that refuses leaves the feed to go stale. A stale index makes `getSpot` revert, which
+halts the perp's trading **and its liquidations** until a fresh value lands (heartbeat 20 minutes).
+That is the design: an index nobody is sure of liquidates solvent traders; no index stops the market.
+Every refusal alerts through `ALERT_WEBHOOK_URL`.
+
+A real devaluation will trip the 300 bps jump guard too. When an operator has confirmed the move,
+restart once with `INDEX_ACCEPT_JUMP=true`, then remove it.
+
+## Running
+
+Secrets come from SSM through `run-with-ssm.sh` (`RPC_URL`, `FEED_SIGNER_KEY`, `RELAYER_KEY`,
+`ALERT_WEBHOOK_URL` from `/numo/feeds/*`) — the revived cNGN signer `0xdA1976…918f`, relayed by
+`0xC9F1…0FDc`. The relayer ran dry on 2026-09-11; fund it before starting. `check_signer_balance.py`
+already watches it.
+
+Put the addresses from `risk-core/deployments/8453/CNGN_PERP_STACK.json` in `/etc/numo/perp-feeds.env`:
+
+```bash
+DATA_SUBMITTER=0xe0C06DD245f1e8C8bC516c66C66e64648987F912   # core.json dataSubmitter
+PERP_ASSET=<perp>
+INDEX_FEED=<indexFeed>
+MARK_FEED=<markFeed>
+IMPACT_ASK_FEED=<impactAskFeed>
+IMPACT_BID_FEED=<impactBidFeed>
+INDEX_STATE_FILE=/var/lib/numo/perp-index-state.json
+# BLOCKRADAR_API_KEY=...   # a fourth source; needed if Bybit P2P is unreachable from the host
+```
+
+Then install `contracts/risk-core/scripts/ops/numo-perp-feeds-ssm.service`. Dry run first:
+
+```bash
+DRY_RUN=true node dist/main.js --once
+```
+
+The index needs `INDEX_MIN_WINDOW_SAMPLES` (10) accepted samples before its first publish, so the
+first index lands ~10 minutes after a cold start. Samples persist in `INDEX_STATE_FILE`, so a
+restart does not wait again.
+
+## Tests
+
+```bash
+pnpm test                                        # decisions: refusals, median, TWAP, clamps
+anvil --port 8599 &
+(cd ../../contracts/risk-core && forge build)
+ANVIL_RPC_URL=http://127.0.0.1:8599 pnpm test    # + the real feed contracts accept what we sign
+```
