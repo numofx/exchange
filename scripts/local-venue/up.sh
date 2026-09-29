@@ -37,6 +37,7 @@ key() { cast keccak "numo.local-venue.$1"; }
 FEED_SIGNER_KEY=$(key feed-signer)
 EXECUTOR_KEY=$(key executor)
 KEEPER_KEY=$(key keeper)
+GUARDIAN=$(cast wallet address --private-key "$(key guardian)")
 
 step() { printf '\n== %s\n' "$*"; }
 start() { # start <name> <cmd...>: background, logged, pid recorded
@@ -53,6 +54,8 @@ as_vault() { cast send "$@" --from $VAULT --unlocked --rpc-url $RPC >/dev/null; 
 json() { python3 -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$@"; }
 
 "$HERE/down.sh" >/dev/null 2>&1 || true
+# A fresh fork every run: nothing from the last one (account labels, index samples, step audit) applies.
+rm -f "$DIR/accounts.json" "$DIR/venue.json" "$DIR/perp-index-state.json" "$DIR/perp-index-steps.jsonl" "$DIR/enable-actions.json"
 
 step "anvil: Base fork as chain 31337 on :$ANVIL_PORT"
 start anvil anvil --fork-url "$BASE_RPC_URL" --chain-id 31337 --port $ANVIL_PORT --silent
@@ -60,7 +63,7 @@ wait_for anvil cast chain-id --rpc-url $RPC
 [ "$(cast chain-id --rpc-url $RPC)" = 31337 ] || { echo "not a local fork" >&2; exit 1; }
 
 step "deploy: perp stack (cap 0) and TradeModule (not allowlisted)"
-(cd "$ROOT/contracts/risk-core" && FEED_SIGNER=$(cast wallet address --private-key "$FEED_SIGNER_KEY") \
+(cd "$ROOT/contracts/risk-core" && FEED_SIGNER=$(cast wallet address --private-key "$FEED_SIGNER_KEY") PERP_GUARDIAN=$GUARDIAN \
   forge script test/e2e/DeployPerpStackForE2E.s.sol --sig "runE2E()" --rpc-url $RPC \
   --private-key $DEPLOYER --broadcast --non-interactive >"$DIR/logs/deploy-stack.log" 2>&1)
 (cd "$ROOT/contracts/execution" && forge script test/e2e/DeployPerpModuleForE2E.s.sol --sig "runE2E()" \
@@ -69,18 +72,21 @@ STACK="$ROOT/contracts/risk-core/cache/e2e-perp-stack.json"
 MODULE_JSON="$ROOT/contracts/execution/cache/e2e-perp-module.json"
 MODULE=$(json "$MODULE_JSON" tradePerp)
 
-step "vault: the deploy batches (acceptOwnership on every contract, nothing else)"
+step "vault: the deploy batches (acceptOwnership everywhere, then the SRM guardian; nothing opens the market)"
 cast rpc anvil_impersonateAccount $VAULT --rpc-url $RPC >/dev/null
 cast rpc anvil_setBalance $VAULT 0xDE0B6B3A7640000 --rpc-url $RPC >/dev/null
-for C in $(python3 -c "import json,sys;print(' '.join(json.load(open(sys.argv[1]))['owned']))" "$STACK") $MODULE; do
-  as_vault "$C" "acceptOwnership()"
-done
+# The stack batch exactly as the deploy script writes it for the vault, guardian included.
+python3 -c "import json,sys;[print(a['to'], a['data']) for a in json.load(open(sys.argv[1]))]" \
+  "$ROOT/contracts/risk-core/cache/e2e-perp-stack-vault-actions.json" |
+  while read -r TO DATA; do cast send "$TO" "$DATA" --from $VAULT --unlocked --rpc-url $RPC >/dev/null; done
+as_vault "$MODULE" "acceptOwnership()"
 # The local executor stands in for the venue's KMS key.
 EXECUTOR=$(cast wallet address --private-key "$EXECUTOR_KEY")
 as_vault $MATCHING "setTradeExecutor(address,bool)" "$EXECUTOR" true
 cast rpc anvil_setBalance "$EXECUTOR" 0xDE0B6B3A7640000 --rpc-url $RPC >/dev/null
 echo "cap=$(cast call "$(json "$STACK" perp)" 'totalPositionCap(address)(uint256)' "$(json "$STACK" srm)" --rpc-url $RPC)" \
-  "module allowed=$(cast call $MATCHING 'allowedModules(address)(bool)' "$MODULE" --rpc-url $RPC)"
+  "module allowed=$(cast call $MATCHING 'allowedModules(address)(bool)' "$MODULE" --rpc-url $RPC)" \
+  "guardian=$(cast call "$(json "$STACK" srm)" 'guardian()(address)' --rpc-url $RPC)"
 
 python3 - "$STACK" "$MODULE" "$DIR/venue.json" <<'PY'
 import json, sys
@@ -136,16 +142,31 @@ wait_for execution curl -sf http://127.0.0.1:$EXEC_PORT/healthz
 wait_for "markets api" curl -sf http://127.0.0.1:$API_PORT/v1/markets
 
 step "perp-feeds --local-fixed-price=$INDEX_NGN_PER_USD"
-(cd "$ROOT/services/perp-feeds" && RPC_URL=$RPC CHAIN_ID=31337 FEED_SIGNER_KEY=$FEED_SIGNER_KEY RELAYER_KEY=$DEPLOYER \
-  DATA_SUBMITTER=$DATA_SUBMITTER PERP_ASSET=$PERP INDEX_FEED="$(json "$V" indexFeed)" MARK_FEED="$(json "$V" markFeed)" \
-  IMPACT_ASK_FEED="$(json "$V" impactAskFeed)" IMPACT_BID_FEED="$(json "$V" impactBidFeed)" \
+cat >"$DIR/perp-feeds.env" <<ENV
+RPC_URL=$RPC
+CHAIN_ID=31337
+FEED_SIGNER_KEY=$FEED_SIGNER_KEY
+RELAYER_KEY=$DEPLOYER
+DATA_SUBMITTER=$DATA_SUBMITTER
+PERP_ASSET=$PERP
+INDEX_FEED=$(json "$V" indexFeed)
+MARK_FEED=$(json "$V" markFeed)
+IMPACT_ASK_FEED=$(json "$V" impactAskFeed)
+IMPACT_BID_FEED=$(json "$V" impactBidFeed)
+MARKETS_SERVICE_URL=http://127.0.0.1:$API_PORT
+INDEX_STATE_FILE=$DIR/perp-index-state.json
+INDEX_STEP_AUDIT_FILE=$DIR/perp-index-steps.jsonl
+KEEPER_HEALTH_URL=http://127.0.0.1:$KEEPER_HEALTH_PORT/health
+ENV
+(cd "$ROOT/services/perp-feeds" && set -a && . "$DIR/perp-feeds.env" && set +a && \
   start perp-feeds node dist/main.js --local-fixed-price="$INDEX_NGN_PER_USD")
 wait_for "index feed" cast call "$(json "$V" indexFeed)" "getSpot()(uint256,uint256)" --rpc-url $RPC
 
 VENUE="pnpm --dir $HERE exec tsx $HERE/venue.ts $DIR"
 step "keeper: funded account under the perp SRM, live, /health on :$KEEPER_HEALTH_PORT"
-# Opened by the keeper's own EOA (label "keeper" is KEEPER_KEY), so the keeper owns what it bids with.
-$VENUE account keeper 5000
+# Created by the keeper's own EOA (label "keeper" is KEEPER_KEY) straight on SubAccounts, not through
+# SubAccountCreator: that parks the account in Matching, and the keeper could not fund bids from it.
+$VENUE keeper-account 20000
 (cd "$ROOT/services/perp-keeper" && RPC_URL=$RPC CHAIN_ID=31337 KEEPER_KEY=$KEEPER_KEY \
   KEEPER_ACCOUNT="$(json "$DIR/accounts.json" keeper)" DRY_RUN=false SUB_ACCOUNTS=$SUB_ACCOUNTS SRM=$SRM \
   AUCTION="$(json "$V" auction)" CASH=$CASH PERP=$PERP SECURITY_MODULE_ACCOUNT="$(json "$V" securityModuleAccount)" \

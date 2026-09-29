@@ -7,9 +7,15 @@
  * anything on a real network, and none of it can reach one.
  *
  *   tsx venue.ts <state-dir> account <label> <usdc>   open a perp account (createAndDepositSubAccount)
+ *   tsx venue.ts <state-dir> keeper-account <usdc>     the keeper's funding account: created by and owned by
+ *                                                       the keeper EOA (not through Matching), then deposited
  *   tsx venue.ts <state-dir> fund-sm <usdc>            donate to the stack's SecurityModule
  *   tsx venue.ts <state-dir> quote                      maker rests a bid and an ask 0.5% around the index
  *   tsx venue.ts <state-dir> cross                      taker lifts the maker's offer; waits for the position
+ *   tsx venue.ts <state-dir> fill-cap                   opens the rest of the OI cap: an NGN long at ~3x
+ *                                                       ("ngn-long") against a well-funded NGN short
+ *   tsx venue.ts <state-dir> report                     positions, cash, SecurityModule, exchange rate, OI
+ *   tsx venue.ts <state-dir> wait-closed <label> <sec>  waits for an account's perp position to reach 0
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -39,6 +45,7 @@ const MARKETS = process.env.LOCAL_VENUE_MARKETS ?? 'http://127.0.0.1:8090';
 const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const USDC_BALANCE_SLOT = 9n;
 const MATCHING = '0x9E90A9cD13d859Bd6a08168082FB1F6F7405F191';
+const SUB_ACCOUNTS = '0x7019244E25FA416e6Ca2ed2F3cA25277aef72843';
 const SUBACCOUNT_CREATOR = '0x568890A8D63Ba8a03b6eCbEedA1bD9f6ea014D5D';
 
 /** The app's taker fee bound, as a rate of USD notional (trading-app SPOT_TAKER_FEE_RATE). */
@@ -48,11 +55,26 @@ const abi = parseAbi([
   'function approve(address, uint256) returns (bool)',
   'function createAndDepositSubAccount(address baseAsset, uint256 initDeposit, address manager) returns (uint256)',
   'function donate(uint256 amount)',
+  'function createAccount(address owner, address manager) returns (uint256)',
+  'function deposit(uint256 recipientAccount, uint256 amount)',
+  'event AccountCreated(address indexed owner, uint256 indexed accountId, address indexed manager)',
   'function getSpot() view returns (uint256, uint256)',
+  'function getBalance(uint256 accountId, address asset, uint256 subId) view returns (int256)',
+  'function totalPosition(address manager) view returns (uint256)',
+  'function totalPositionCap(address manager) view returns (uint256)',
+  'function getCashToStableExchangeRate() view returns (uint256)',
   'event DepositedSubAccount(uint256 indexed accountId, address indexed owner)',
 ]);
 
-type Venue = { perp: Address; cash: Address; srm: Address; securityModule: Address; indexFeed: Address; tradePerp: Address };
+type Venue = {
+  perp: Address;
+  cash: Address;
+  srm: Address;
+  securityModule: Address;
+  securityModuleAccount: number;
+  indexFeed: Address;
+  tradePerp: Address;
+};
 type Accounts = Record<string, string>;
 
 const [stateDir, command, ...args] = process.argv.slice(2);
@@ -94,7 +116,12 @@ async function funded(label: string, usdc: bigint) {
   return { account, wallet: createWalletClient({ account, chain, transport: http(RPC) }) };
 }
 
-async function send(wallet: Awaited<ReturnType<typeof funded>>['wallet'], address: Address, functionName: 'approve' | 'createAndDepositSubAccount' | 'donate', args: readonly unknown[]) {
+async function send(
+  wallet: Awaited<ReturnType<typeof funded>>['wallet'],
+  address: Address,
+  functionName: 'approve' | 'createAndDepositSubAccount' | 'donate' | 'createAccount' | 'deposit',
+  args: readonly unknown[],
+) {
   const hash = await wallet.writeContract({ address, abi, functionName, args } as never);
   const receipt = await client.waitForTransactionReceipt({ hash });
   if (receipt.status !== 'success') throw new Error(`${functionName} reverted (${hash})`);
@@ -121,6 +148,31 @@ async function openAccount(label: string, usdcWhole: bigint) {
   const id = event.args.accountId.toString();
   writeFileSync(accountsFile, JSON.stringify({ ...readAccounts(), [label]: id }, null, 2));
   console.log(JSON.stringify({ label, address: account.address, subaccountId: id, usdc: usdcWhole.toString() }));
+}
+
+/**
+ * The keeper's funding account. Not opened through SubAccountCreator like a trader's: that deposits
+ * the account into Matching, and the keeper then cannot move its cash into bid accounts.
+ */
+async function openKeeperAccount(usdcWhole: bigint) {
+  const usdc = usdcWhole * 10n ** 6n;
+  const { account, wallet } = await funded('keeper', usdc);
+  const receipt = await send(wallet, SUB_ACCOUNTS, 'createAccount', [account.address, venue.srm]);
+  const created = receipt.logs
+    .map((log) => {
+      try {
+        return decodeEventLog({ abi, data: log.data, topics: log.topics });
+      } catch {
+        return null;
+      }
+    })
+    .find((decoded) => decoded?.eventName === 'AccountCreated');
+  if (created?.eventName !== 'AccountCreated') throw new Error('keeper: no AccountCreated');
+  const id = created.args.accountId;
+  await send(wallet, USDC, 'approve', [venue.cash, usdc]);
+  await send(wallet, venue.cash, 'deposit', [id, usdc]);
+  writeFileSync(accountsFile, JSON.stringify({ ...readAccounts(), keeper: id.toString() }, null, 2));
+  console.log(JSON.stringify({ label: 'keeper', address: account.address, subaccountId: id.toString(), usdc: usdcWhole.toString() }));
 }
 
 async function fundSecurityModule(usdcWhole: bigint) {
@@ -259,9 +311,78 @@ async function waitForPosition(label: string) {
   throw new Error(`${label}: no position after 2 minutes; check the matcher and execution logs`);
 }
 
+async function balance(accountId: string | number, asset: Address) {
+  return client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'getBalance', args: [BigInt(accountId), asset, 0n] });
+}
+
+const usd = (value: bigint) => Number(value) / 1e18;
+
+/**
+ * Opens whatever is left of the OI cap as one NGN long at ~3x (the most the SRM allows) against a
+ * well-funded NGN short, both at the index: the worst book a step can meet at the launch cap.
+ */
+async function fillCap() {
+  const [cap, total] = await Promise.all([
+    client.readContract({ address: venue.perp, abi, functionName: 'totalPositionCap', args: [venue.srm] }),
+    client.readContract({ address: venue.perp, abi, functionName: 'totalPosition', args: [venue.srm] }),
+  ]);
+  const index = await uiIndex();
+  const perSideNgn = (cap - total) / 2n / 10n ** 18n;
+  const uiSize = perSideNgn / index;
+  if (uiSize < 1n) throw new Error(`nothing left under the cap (cap ${cap}, total ${total})`);
+  // Initial margin is a third of notional; the deposit covers it, the taker fee, and $50.
+  await openAccount('ngn-long', (uiSize * 34n) / 100n + 50n);
+  await openAccount('ngn-short', uiSize + 1_000n);
+  // The NGN long is a UI short: it rests at the index, and the NGN short's UI buy takes it there.
+  await placeOrder('ngn-long', 'sell', index, uiSize);
+  await placeOrder('ngn-short', 'buy', index, uiSize);
+  await waitForPosition('ngn-long');
+  const after = await client.readContract({ address: venue.perp, abi, functionName: 'totalPosition', args: [venue.srm] });
+  console.log(`OI ${after / 10n ** 18n} of cap ${cap / 10n ** 18n} NGN (each side $${uiSize} at ${index} NGN/USD)`);
+}
+
+async function report() {
+  const accounts = readAccounts();
+  const [index] = await client.readContract({ address: venue.indexFeed, abi, functionName: 'getSpot' }).catch(() => [0n]);
+  const rows = await Promise.all(
+    Object.entries(accounts).map(async ([label, id]) => ({
+      label,
+      account: id,
+      perpNgn: Number((await balance(id, venue.perp)) / 10n ** 18n),
+      cashUsd: usd(await balance(id, venue.cash)).toFixed(2),
+    })),
+  );
+  console.table(rows);
+  const summary = {
+    indexNgnPerUsd: index === 0n ? 'stale' : (1e18 / Number(index)).toFixed(2),
+    oiNgn: Number((await client.readContract({ address: venue.perp, abi, functionName: 'totalPosition', args: [venue.srm] })) / 10n ** 18n),
+    securityModuleCashUsd: usd(await balance(venue.securityModuleAccount, venue.cash)).toFixed(2),
+    cashToUsdcRate: formatUnits(await client.readContract({ address: venue.cash, abi, functionName: 'getCashToStableExchangeRate' }), 18),
+  };
+  console.log(JSON.stringify(summary));
+}
+
+async function waitClosed(label: string, timeoutSec: number) {
+  const id = readAccounts()[label];
+  if (id === undefined) throw new Error(`no account ${label}`);
+  const deadline = Date.now() + timeoutSec * 1000;
+  while (Date.now() < deadline) {
+    const position = await balance(id, venue.perp);
+    if (position === 0n) {
+      console.log(`${label} (#${id}) closed`);
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
+  }
+  throw new Error(`${label} (#${id}) still open after ${timeoutSec}s: ${await balance(id, venue.perp)}`);
+}
+
 switch (command) {
   case 'account':
     await openAccount(args[0] ?? 'trader', BigInt(args[1] ?? '5000'));
+    break;
+  case 'keeper-account':
+    await openKeeperAccount(BigInt(args[0] ?? '20000'));
     break;
   case 'fund-sm':
     await fundSecurityModule(BigInt(args[0] ?? '10000'));
@@ -279,6 +400,15 @@ switch (command) {
     await waitForPosition('taker');
     break;
   }
+  case 'fill-cap':
+    await fillCap();
+    break;
+  case 'report':
+    await report();
+    break;
+  case 'wait-closed':
+    await waitClosed(args[0] ?? 'ngn-long', Number(args[1] ?? '600'));
+    break;
   default:
     throw new Error(`unknown command ${command}`);
 }

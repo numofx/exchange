@@ -20,6 +20,21 @@ BASE_RPC_URL=<archive-capable Base RPC> ./scripts/local-venue/up.sh
    services and writes the enable actions, then applies them as the vault;
 6. has a taker cross the quote, and reads the position back from `/v1/positions`.
 
+## Index-step drill
+
+`./scripts/local-venue/step-drill.sh [bps]` (default 4000) runs on top of `up.sh`. It fills the rest
+of the OI cap with an NGN long at about 3x against a well-funded NGN short, then runs the index-step
+procedure from `contracts/risk-core/docs/cngn-perp-go-live.md`:
+1. it seeds the index sources' window at the new level;
+2. it checks that the step is refused while the keeper is unreachable;
+3. it publishes the step with the keeper live, and prints the audit record;
+4. it restarts the feeds at the new level and waits for the keeper to liquidate;
+5. it reports what the SecurityModule paid and whether anything socialized.
+
+`perp-feeds --local-sources=<price>` stands three agreeing providers in for the real ones, so the
+drill runs the real sampling, TWAP and step code. It has the same 31337-only refusal as
+`--local-fixed-price`.
+
 Needs `anvil`, `forge`, `cast`, Go, pnpm and Postgres binaries (`initdb`, `pg_ctl`). State, logs and
 pids go to `.local-venue/` (override with `LOCAL_VENUE_DIR`). Ports are anvil 8600, Postgres 5544,
 markets 8090, execution 8091 and keeper health 9464.
