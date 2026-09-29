@@ -114,20 +114,16 @@ describe('checkJump', () => {
   const rules = { maxJumpBps: 300 };
 
   it('lets a move inside the band through', () => {
-    assert.deepEqual(checkJump((last * 102n) / 100n, last, rules, false), { ok: true });
+    assert.deepEqual(checkJump((last * 102n) / 100n, last, rules), { ok: true });
   });
 
   it('refuses a move past the band, either direction', () => {
-    assert.equal(checkJump((last * 104n) / 100n, last, rules, false).ok, false);
-    assert.equal(checkJump((last * 96n) / 100n, last, rules, false).ok, false);
-  });
-
-  it('lets the operator accept one jump', () => {
-    assert.deepEqual(checkJump(last / 2n, last, rules, true), { ok: true });
+    assert.equal(checkJump((last * 104n) / 100n, last, rules).ok, false);
+    assert.equal(checkJump((last * 96n) / 100n, last, rules).ok, false);
   });
 
   it('has nothing to compare against before the first publish', () => {
-    assert.deepEqual(checkJump(last, null, rules, false), { ok: true });
+    assert.deepEqual(checkJump(last, null, rules), { ok: true });
   });
 });
 

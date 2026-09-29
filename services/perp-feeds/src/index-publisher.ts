@@ -57,6 +57,22 @@ export class IndexPublisher {
     }
   }
 
+  /** Accepted samples, as loaded: what `--accept-index-step` checks the operator's level against. */
+  samples(): PricePoint[] {
+    return [...this.state.samples];
+  }
+
+  /** The last index this process got onto the chain, if any. */
+  lastPublished(): bigint | null {
+    return this.state.lastPublished === null ? null : BigInt(this.state.lastPublished);
+  }
+
+  /** Records a publish made outside publish(): the index step, so the next restart guards from it. */
+  async recordPublished(value: bigint): Promise<void> {
+    this.state.lastPublished = value.toString();
+    await this.save();
+  }
+
   private async save(): Promise<void> {
     const tmp = `${this.config.INDEX_STATE_FILE}.tmp`;
     await writeFile(tmp, JSON.stringify(this.state));
@@ -115,13 +131,13 @@ export class IndexPublisher {
     // restart against a stale feed still guards against the jump it would otherwise publish.
     const onChain = await this.chain.readIndex(this.config.INDEX_FEED);
     const reference = onChain ?? (this.state.lastPublished === null ? null : BigInt(this.state.lastPublished));
-    const jump = checkJump(next, reference, { maxJumpBps: this.config.INDEX_MAX_JUMP_BPS }, this.config.INDEX_ACCEPT_JUMP);
+    const jump = checkJump(next, reference, { maxJumpBps: this.config.INDEX_MAX_JUMP_BPS });
     if (!jump.ok) {
       console.error(`[index] not publishing: ${jump.reason}`);
       await this.alert(
         'index-jump',
         `index NOT published, market will halt when it goes stale: ${jump.reason}. ` +
-          'If the move is real, restart with INDEX_ACCEPT_JUMP=true for one publish.',
+          'If the move is real, follow the index-step procedure (perp-feeds README): --accept-index-step.',
       );
       return;
     }

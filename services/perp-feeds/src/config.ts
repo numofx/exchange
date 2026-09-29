@@ -40,8 +40,15 @@ const envSchema = z.object({
   INDEX_MIN_SOURCES: z.coerce.number().int().min(3).default(3),
   INDEX_MAX_SOURCE_DEVIATION_BPS: z.coerce.number().positive().default(150),
   INDEX_MAX_JUMP_BPS: z.coerce.number().int().positive().default(300),
-  /** Operator override for one publish past the jump guard. Unset it again afterwards. */
-  INDEX_ACCEPT_JUMP: bool.default('false'),
+  /**
+   * `--accept-index-step` (index-step.ts): the confirmed level must sit within this of the sources'
+   * own window TWAP, and the step may be no larger than INDEX_STEP_MAX_BPS. Every accepted step is
+   * appended to INDEX_STEP_AUDIT_FILE. KEEPER_HEALTH_URL is the keeper's /health, which must pass.
+   */
+  INDEX_STEP_MATCH_BPS: z.coerce.number().int().positive().default(100),
+  INDEX_STEP_MAX_BPS: z.coerce.number().int().positive().default(5_000),
+  INDEX_STEP_AUDIT_FILE: z.string().default('./perp-index-steps.jsonl'),
+  KEEPER_HEALTH_URL: z.string().url().optional().or(z.literal('')),
   INDEX_STATE_FILE: z.string().default('./perp-index-state.json'),
   BLOCKRADAR_API_KEY: z.string().optional().or(z.literal('')),
   PROVIDER_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),

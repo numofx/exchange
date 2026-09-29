@@ -1,3 +1,4 @@
+import type { RateProvider } from 'cngn-rate-picker';
 import { createPublicClient, http } from 'viem';
 
 import type { Chain } from './chain.js';
@@ -64,4 +65,26 @@ export async function publishFixedPrice(config: Config, chain: Chain, ngnPerUsd:
   ]);
   const tx = await chain.submit(encodeManagerData(updates));
   console.log(`[local-fixed-price] published index ${index} (${ngnPerUsd} NGN/USD), zero diffs, tx=${tx}`);
+}
+
+/**
+ * `--local-sources=<NGN per USD>`: three providers that all answer that price, in place of the real
+ * ones, so the local venue can drive the REAL index publisher (sampling, TWAP, jump guard, the
+ * index-step procedure) without the network. Same refusal as --local-fixed-price: 31337 only.
+ */
+export function parseLocalSources(argv: string[]): number | null {
+  const flag = argv.find((arg) => arg.startsWith('--local-sources'));
+  if (flag === undefined) return null;
+  const value = Number(flag.split('=')[1]);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`--local-sources needs a positive NGN-per-USD value, e.g. --local-sources=2290 (got ${flag})`);
+  }
+  return value;
+}
+
+export function localSources(ngnPerUsd: number): RateProvider[] {
+  return ['local-a', 'local-b', 'local-c'].map((name) => ({
+    name,
+    getPriceInNgn: async () => ({ price: ngnPerUsd }),
+  }));
 }

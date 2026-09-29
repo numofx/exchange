@@ -95,22 +95,27 @@ export type JumpRules = {
 /**
  * Refuses an index that has moved too far from the last one published. A genuine devaluation will
  * trip this too; that is deliberate. The market halts and an operator decides, rather than a
- * publisher liquidating half the book on one bad print. `acceptJump` is that decision.
+ * publisher liquidating half the book on one bad print. That decision is `--accept-index-step`
+ * (index-step.ts): one publish, approved by name, with the keeper confirmed live first.
  */
 export function checkJump(
   nextUsdPerNgn: bigint,
   lastUsdPerNgn: bigint | null,
   rules: JumpRules,
-  acceptJump: boolean,
 ): { ok: true } | { ok: false; reason: string } {
-  if (lastUsdPerNgn === null || lastUsdPerNgn === 0n || acceptJump) {
+  if (lastUsdPerNgn === null || lastUsdPerNgn === 0n) {
     return { ok: true };
   }
-  const moveBps = Number(((nextUsdPerNgn - lastUsdPerNgn) * 10_000n) / lastUsdPerNgn);
+  const moveBps = stepBps(nextUsdPerNgn, lastUsdPerNgn);
   if (Math.abs(moveBps) > rules.maxJumpBps) {
     return { ok: false, reason: `index would move ${moveBps}bps from ${lastUsdPerNgn}, over ${rules.maxJumpBps}bps` };
   }
   return { ok: true };
+}
+
+/** Signed move from `from` to `to`, in bps of `from`. */
+export function stepBps(to: bigint, from: bigint): number {
+  return Number(((to - from) * 10_000n) / from);
 }
 
 /**

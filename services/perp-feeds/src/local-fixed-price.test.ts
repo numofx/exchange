@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { assertLocalChain, parseFixedPrice } from './local-fixed-price.js';
+import { assertLocalChain, localSources, parseFixedPrice, parseLocalSources } from './local-fixed-price.js';
 
 describe('--local-fixed-price', () => {
   it('runs on a local anvil', () => {
@@ -24,5 +24,14 @@ describe('--local-fixed-price', () => {
     assert.equal(parseFixedPrice(['node', 'main.js', '--once']), null);
     assert.throws(() => parseFixedPrice(['--local-fixed-price']));
     assert.throws(() => parseFixedPrice(['--local-fixed-price=0']));
+  });
+});
+
+describe('--local-sources', () => {
+  it('stands in three agreeing providers, and is off without the flag', async () => {
+    assert.equal(parseLocalSources(['--local-sources=2290']), 2290);
+    assert.equal(parseLocalSources(['--once']), null);
+    const quotes = await Promise.all(localSources(2290).map((provider) => provider.getPriceInNgn({ signal: new AbortController().signal, fetch })));
+    assert.deepEqual(quotes.map((quote) => quote.price), [2290, 2290, 2290]);
   });
 });

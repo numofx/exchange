@@ -24,8 +24,13 @@ halts the perp's trading **and its liquidations** until a fresh value lands (hea
 That is the design: an index nobody is sure of liquidates solvent traders; no index stops the market.
 Every refusal alerts through `ALERT_WEBHOOK_URL`.
 
-A real devaluation will trip the 300 bps jump guard too. When an operator has confirmed the move,
-restart once with `INDEX_ACCEPT_JUMP=true`, then remove it.
+A real devaluation will trip the 300 bps jump guard too. Reopening is the index-step procedure in
+`contracts/risk-core/docs/cngn-perp-go-live.md`: `--accept-index-step --level=… --approved-by=…
+--reason=…` publishes the sources' TWAP once. It refuses without a live keeper, or if the sources
+disagree with the confirmed level, and it writes an audit record. There is no env override.
+
+`--probe-sources` asks each provider once and reports which answered. It signs nothing. Run it on
+the publisher's host before launch: the index needs 3.
 
 A refresh is a recompute, never a re-sign. When a feed is republished because it is getting old,
 the mark and impacts are rebuilt from the current index and book and clamped again, and the index
