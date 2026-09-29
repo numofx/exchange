@@ -133,7 +133,23 @@ describe('keeper against the real perp stack on an anvil fork', { skip: !RPC }, 
     await client.simulateContract({ address, abi, functionName: functionName as never, args: args as never, account: from as never });
     const hash = await walletOf(from).writeContract({ address, abi, functionName: functionName as never, args: args as never, chain, account: from as never });
     const receipt = await client.waitForTransactionReceipt({ hash });
-    assert.equal(receipt.status, 'success', `${functionName} reverted`);
+    if (receipt.status !== 'success') {
+      const tx = await client.getTransaction({ hash });
+      const block = await client.getBlock({ blockNumber: receipt.blockNumber });
+      const prev = await client.getBlock({ blockNumber: receipt.blockNumber - 1n });
+      const replay = await client
+        .call({ account: tx.from, to: tx.to!, data: tx.input, blockNumber: receipt.blockNumber - 1n })
+        .then(() => 'succeeds with unlimited gas')
+        .catch((error: Error) => `reverts: ${error.message.split('\n')[0]}`);
+      const trace = await client
+        .request({ method: 'debug_traceTransaction' as never, params: [hash, { disableStack: true, disableMemory: true, disableStorage: true }] as never })
+        .then((t: any) => `trace failed=${t.failed} gas=${t.gas} returnValue=${t.returnValue} last=${JSON.stringify((t.structLogs ?? []).slice(-3).map((l: any) => [l.op, l.gas, l.gasCost, l.error]))}`)
+        .catch((error: Error) => `trace unavailable: ${error.message.split('\n')[0]}`);
+      assert.fail(
+        `${functionName} reverted: gasUsed ${receipt.gasUsed} of limit ${tx.gas} at block ${receipt.blockNumber} ` +
+          `(timestamp ${block.timestamp}, previous block ${prev.timestamp}); replay at the previous block ${replay}; ${trace}`,
+      );
+    }
   }
 
   async function rpc(method: string, params: unknown[]) {
