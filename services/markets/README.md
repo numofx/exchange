@@ -115,6 +115,13 @@ Set them on the API **and** the matcher, and set `PERP_TRADE_MODULE_ADDRESS` on 
   intent signed for one market's spec is refused on the other's.
 - **Module.** A perp order must name the perp module; a spot order the spot module. The matcher
   verifies at boot that the perp module's `quoteAsset()` is `CNGN_PERP_CASH_ADDRESS`.
+- **Closed until enabled.** The stack deploys with position cap 0 and the module not allowlisted,
+  and the matcher skips the perp until `Matching.allowedModules(module)` is true and
+  `perp.totalPositionCap(srm)` is above zero. It re-reads both every 30s and treats an unreadable
+  gate as closed. Orders are accepted and rest while the market is closed. `/v1/markets` reports
+  the gate as `perp.trading_enabled` and the cap as `perp.position_cap`. The enable is a separate,
+  final vault action (`risk-core/scripts/ops/propose_perp_enable_batch.py`), gated on live feeds, a
+  live keeper, a seeded SecurityModule and a two-sided quote.
 - **Pre-trade check.** Not the spot funding check (full notional, buyer only) but a margin check on
   both sides: IM surplus now, minus the price-vs-mark leg, the taker fee and the initial margin the
   fill adds. Reducing a position is always allowed. Fails open on RPC errors, like the funding check;

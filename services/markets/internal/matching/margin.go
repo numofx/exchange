@@ -305,3 +305,87 @@ func wordAt(raw string, index int) (*big.Int, error) {
 	}
 	return value, nil
 }
+
+// perpTradingGate reports whether the perp is open on chain: its module allowlisted on Matching AND
+// its OI cap above zero. Both are the final enable action's; until it runs, the matcher does not
+// cross perp orders, which could only settle into a revert (module) or a cap breach (cap).
+//
+// Unlike the pre-trade checks this fails CLOSED: not knowing whether the market is open is not a
+// reason to cross orders into it. Cached briefly so it costs two reads per interval, not per tick.
+type perpTradingGate struct {
+	rpc      *chainFundingChecker
+	matching string
+	module   string
+	perp     string
+	srm      string
+
+	mu      sync.Mutex
+	open    bool
+	checked time.Time
+	ttl     time.Duration
+	now     func() time.Time
+}
+
+func newPerpTradingGate(cfg config.Config) *perpTradingGate {
+	if !cfg.PerpEnabled() || strings.TrimSpace(cfg.ChainRPCURL) == "" {
+		return nil
+	}
+	return &perpTradingGate{
+		rpc:      &chainFundingChecker{rpcURL: strings.TrimSpace(cfg.ChainRPCURL), httpClient: &http.Client{Timeout: 5 * time.Second}},
+		matching: strings.ToLower(strings.TrimSpace(cfg.MatchingAddress)),
+		module:   strings.ToLower(strings.TrimSpace(cfg.CNGNPerpTradeModuleAddress)),
+		perp:     strings.ToLower(strings.TrimSpace(cfg.CNGNPerpAssetAddress)),
+		srm:      strings.ToLower(strings.TrimSpace(cfg.CNGNPerpSRMAddress)),
+		ttl:      30 * time.Second,
+		now:      time.Now,
+	}
+}
+
+// Open reports the cached verdict, refreshing it when stale. An unreadable chain reads as closed.
+func (g *perpTradingGate) Open(ctx context.Context) bool {
+	g.mu.Lock()
+	if !g.checked.IsZero() && g.now().Sub(g.checked) < g.ttl {
+		open := g.open
+		g.mu.Unlock()
+		return open
+	}
+	g.mu.Unlock()
+
+	open, err := g.read(ctx)
+	if err != nil {
+		slog.Warn("perp_trading_gate_unreadable", "error", err.Error(), "effect", "perp treated as closed")
+		open = false
+	}
+	g.mu.Lock()
+	if open != g.open || g.checked.IsZero() {
+		slog.Info("perp_trading_gate", "open", open)
+	}
+	g.open, g.checked = open, g.now()
+	g.mu.Unlock()
+	return open
+}
+
+func (g *perpTradingGate) read(ctx context.Context) (bool, error) {
+	allowedRaw, err := g.rpc.ethCall(ctx, g.matching, allowedModulesSelector+encodeAddressArg(g.module))
+	if err != nil {
+		return false, fmt.Errorf("allowedModules: %w", err)
+	}
+	allowed, err := wordAt(allowedRaw, 0)
+	if err != nil {
+		return false, err
+	}
+	capRaw, err := g.rpc.ethCall(ctx, g.perp, totalPositionCapSelector+encodeAddressArg(g.srm))
+	if err != nil {
+		return false, fmt.Errorf("totalPositionCap: %w", err)
+	}
+	positionCap, err := wordAt(capRaw, 0)
+	if err != nil {
+		return false, err
+	}
+	return allowed.Sign() > 0 && positionCap.Sign() > 0, nil
+}
+
+const (
+	allowedModulesSelector   = "0x8ba5a0c2" // Matching.allowedModules(address)
+	totalPositionCapSelector = "0x745ab570" // PerpAsset.totalPositionCap(address)
+)

@@ -32,6 +32,8 @@ const (
 	sigGetMargin              = "0x623bb445" // getMargin(uint256,bool)
 	sigGetBalance             = "0x0806e640" // getBalance(uint256,address,uint256)
 	sigUnrealizedCash         = "0x7a4c2c3a" // getUnsettledAndUnrealizedCash(uint256)
+	sigAllowedModules         = "0x8ba5a0c2" // Matching.allowedModules(address)
+	sigTotalPositionCap       = "0x745ab570" // PerpAsset.totalPositionCap(address)
 
 	perpStateTTL = 10 * time.Second
 	perpUIScale  = 6
@@ -56,7 +58,12 @@ type perpMarketState struct {
 	TradeModule            string `json:"trade_module_address"`
 	QuoteAsset             string `json:"quote_asset_address"`
 	MarginManager          string `json:"margin_manager_address"`
-	UpdatedAt              int64  `json:"updated_at"`
+	// TradingEnabled is the chain's own answer, read each refresh: the perp module allowlisted on
+	// Matching and an OI cap above zero. Both are set only by the final enable action; until then
+	// the market is listed so quotes can rest, but the matcher does not cross it.
+	TradingEnabled bool   `json:"trading_enabled"`
+	PositionCap    string `json:"position_cap"`
+	UpdatedAt      int64  `json:"updated_at"`
 }
 
 type presentedPosition struct {
@@ -170,7 +177,22 @@ func (r *perpStateReader) marketState(ctx context.Context, market instruments.Me
 		return nil, perpRaw{}, err
 	}
 
+	allowedRaw, err := r.chain.ethCall(ctx, r.chain.matchingAddress, sigAllowedModules+addressArg(market.TradeModuleAddress))
+	if err != nil {
+		return nil, perpRaw{}, fmt.Errorf("allowed modules: %w", err)
+	}
+	allowed, err := signedWord(allowedRaw, 0)
+	if err != nil {
+		return nil, perpRaw{}, err
+	}
+	positionCap, err := r.word(ctx, perp, sigTotalPositionCap+addressArg(srm), 0)
+	if err != nil {
+		return nil, perpRaw{}, fmt.Errorf("position cap: %w", err)
+	}
+
 	state := &perpMarketState{
+		TradingEnabled:         allowed.Sign() > 0 && positionCap.Sign() > 0,
+		PositionCap:            e18String(positionCap),
 		MarkPrice:              e18String(mark),
 		IndexPrice:             e18String(index),
 		MarkPriceUI:            inverseString(mark),

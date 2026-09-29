@@ -23,6 +23,7 @@ type Engine struct {
 	backoff  *matchBackoff
 	funding  fundingChecker
 	margin   marginChecker
+	perpGate *perpTradingGate
 }
 
 const reconciliationTimeout = 5 * time.Second
@@ -36,6 +37,7 @@ func NewEngine(cfg config.Config, pool *pgxpool.Pool) *Engine {
 		backoff:  newMatchBackoff(),
 		funding:  newFundingChecker(cfg),
 		margin:   newMarginChecker(cfg),
+		perpGate: newPerpTradingGate(cfg),
 	}
 }
 
@@ -60,6 +62,10 @@ func (e *Engine) Run(ctx context.Context) error {
 			return ctx.Err()
 		case <-ticker.C:
 			for _, instrument := range e.registry.Enabled() {
+				// A perp not yet opened on chain is listed (so quotes can rest) but never crossed.
+				if instrument.IsPerpetual() && (e.perpGate == nil || !e.perpGate.Open(ctx)) {
+					continue
+				}
 				e.tickInstrument(ctx, instrument)
 			}
 		}

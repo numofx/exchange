@@ -98,6 +98,10 @@ func stubPerpRPC(t *testing.T, position *big.Int) *httptest.Server {
 			result = word(new(big.Int).Neg(e18Int(40)))
 		case sigGetMargin:
 			result = word(e18Int(1_540))
+		case sigAllowedModules:
+			result = word(big.NewInt(1))
+		case sigTotalPositionCap:
+			result = word(e18Int(50_000_000))
 		default:
 			t.Errorf("unexpected call %s", call.Data[:10])
 		}
@@ -146,6 +150,9 @@ func TestMarketsServesPerpStateWithTheFundingSignFlippedForTheUI(t *testing.T) {
 	}
 	if perp.Perp.MaxLeverage != "3" {
 		t.Fatalf("33.333%% IM is 3x, got %q", perp.Perp.MaxLeverage)
+	}
+	if !perp.Perp.TradingEnabled || perp.Perp.PositionCap != "50000000" {
+		t.Fatalf("an allowlisted module with a positive cap is open, got %+v", perp.Perp)
 	}
 	if perp.Perp.TradeModule != "0x2222222222222222222222222222222222222222" {
 		t.Fatal("clients sign perp orders for the perp module and must be told which it is")
