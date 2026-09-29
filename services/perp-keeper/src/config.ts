@@ -33,9 +33,20 @@ const envSchema = z.object({
   LOG_CHUNK_BLOCKS: z.coerce.bigint().default(10_000n),
 
   POLL_INTERVAL_MS: z.coerce.number().int().positive().default(15_000),
+  /**
+   * Serves GET /health with the last pass's time and outcome and whether this is a dry run, for the
+   * perp enable gate (propose_perp_enable_batch.py) to confirm a live keeper. Unset: no server.
+   */
+  HEALTH_PORT: z.coerce.number().int().positive().optional(),
+  HEALTH_HOST: z.string().default('127.0.0.1'),
   MIN_SOLVENT_DISCOUNT_BPS: z.coerce.bigint().default(200n),
   /** Smallest share of an account worth bidding on, as a percentage. */
   MIN_BID_PERCENT: z.coerce.number().positive().max(100).default(1),
+  /**
+   * Largest bid, in USD of margin it ties up (see KeeperRules.maxBidUsd). Unset: no cap. A launch
+   * value keeps one bad auction from taking the keeper's whole book in a single bid.
+   */
+  MAX_BID_USD: z.coerce.number().positive().optional().transform((value) => (value === undefined ? null : parseUnits(String(value), 18))),
 
   MIN_SECURITY_MODULE_USD: usd.default(1000),
   MIN_KEEPER_CASH_USD: usd.default(1000),

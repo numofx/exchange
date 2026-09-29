@@ -1,3 +1,5 @@
+import { createServer } from 'node:http';
+
 import { createAlerter } from './alert.js';
 import { createKeeperChain } from './chain.js';
 import { loadConfig } from './config.js';
@@ -16,14 +18,44 @@ async function main() {
 
   console.log(`[keeper] eoa=${chain.keeper.address} account=${config.KEEPER_ACCOUNT} dryRun=${config.DRY_RUN}`);
 
+  // What /health reports. A pass that throws is recorded as failed, so a keeper looping on an
+  // error reads as unhealthy rather than merely alive.
+  const health = { lastPassAt: 0, lastPassOk: false, passes: 0 };
+
   const tick = async () => {
     try {
       await runOnce(config, chain, alert);
+      health.lastPassOk = true;
     } catch (error) {
+      health.lastPassOk = false;
       console.error(`[keeper] ${(error as Error).stack ?? error}`);
       await alert('keeper-error', `keeper pass failed: ${(error as Error).message}`);
+    } finally {
+      health.lastPassAt = Math.floor(Date.now() / 1000);
+      health.passes += 1;
     }
   };
+
+  if (config.HEALTH_PORT !== undefined) {
+    createServer((request, response) => {
+      if (request.url !== '/health') {
+        response.writeHead(404).end();
+        return;
+      }
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          ...health,
+          dryRun: config.DRY_RUN,
+          keeperAccount: config.KEEPER_ACCOUNT.toString(),
+          keeperAddress: chain.keeper.address,
+          maxBidUsd: config.MAX_BID_USD?.toString() ?? null,
+          pollIntervalMs: config.POLL_INTERVAL_MS,
+        }),
+      );
+    }).listen(config.HEALTH_PORT, config.HEALTH_HOST);
+    console.log(`[keeper] health on http://${config.HEALTH_HOST}:${config.HEALTH_PORT}/health`);
+  }
 
   await tick();
   if (process.argv.includes('--once')) return;

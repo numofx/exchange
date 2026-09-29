@@ -5,7 +5,7 @@ import { decide, type AccountView } from './decide.js';
 import { assessHealth, fmt, type StackHealth } from './health.js';
 
 const E18 = 10n ** 18n;
-const rules = { minSolventDiscountBps: 200n, minBidPercent: E18 / 100n };
+const rules = { maxBidUsd: null, minSolventDiscountBps: 200n, minBidPercent: E18 / 100n };
 
 function account(overrides: Partial<AccountView>): AccountView {
   return {
@@ -141,6 +141,33 @@ describe('decide', () => {
     });
     const action = decide(view, 150n * E18, rules);
     assert.equal(action.kind === 'bid' && action.percent, E18 / 2n);
+  });
+
+  it('sizes a solvent bid down to the max bid, not away', () => {
+    const view = account({
+      mm: -50n * E18,
+      bm: -500n * E18,
+      mtm: 1_000n * E18,
+      auction: { ongoing: true, insolvent: false, reservedCash: 0n },
+      bidPrice: 500n * E18,
+      maxProportion: E18,
+    });
+    // 1,000 of margin per unit (500 price + 500 buffer); a $250 cap takes a quarter.
+    const action = decide(view, 20_000n * E18, { ...rules, maxBidUsd: 250n * E18 });
+    assert.equal(action.kind === 'bid' && action.percent, E18 / 4n);
+    assert.equal(action.kind === 'bid' && action.bidderCash, 250n * E18);
+  });
+
+  it('caps an insolvent bid by the margin of the share taken, though the payout means little cash moves', () => {
+    const view = account({
+      mm: -800n * E18,
+      mtm: -300n * E18,
+      auction: { ongoing: true, insolvent: true, reservedCash: 0n },
+      bidPrice: -700n * E18,
+    });
+    // |mm| 800 per unit; $200 cap = a quarter, even though the keeper would put up only $25 for it.
+    const action = decide(view, 20_000n * E18, { ...rules, maxBidUsd: 200n * E18 });
+    assert.equal(action.kind === 'bid' && action.percent, E18 / 4n);
   });
 
   it('declines a bid too small to be worth its gas', () => {

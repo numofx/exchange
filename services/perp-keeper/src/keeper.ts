@@ -13,6 +13,7 @@ export async function runOnce(config: Config, chain: KeeperChain, alert: Alerter
   const rules = {
     minSolventDiscountBps: config.MIN_SOLVENT_DISCOUNT_BPS,
     minBidPercent: BigInt(Math.round(config.MIN_BID_PERCENT * 1e16)),
+    maxBidUsd: config.MAX_BID_USD,
   };
 
   const accounts = await chain.discoverAccounts();

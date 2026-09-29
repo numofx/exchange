@@ -34,6 +34,13 @@ export type KeeperRules = {
   minSolventDiscountBps: bigint;
   /** Smallest share of an account worth a bid, 18dp; below this the gas is not worth it. */
   minBidPercent: bigint;
+  /**
+   * Largest bid, in USD (18dp) of margin tied up: for a solvent bid the cash committed (price plus
+   * buffer), for an insolvent one the maintenance margin of the share taken -- there the payout means
+   * little cash moves, but the whole share's risk does. A bid over it is sized down, not skipped: a
+   * later pass takes the next slice. Null for no cap.
+   */
+  maxBidUsd: bigint | null;
 };
 
 export type Action =
@@ -92,7 +99,7 @@ function decideSolventBid(account: AccountView, keeperCash: bigint, rules: Keepe
 
   const perUnit = bidPrice + abs(account.bm - account.auction.reservedCash);
   const affordable = perUnit === 0n ? ONE : (keeperCash * ONE) / perUnit;
-  const percent = min(maxProportion, affordable, ONE);
+  const percent = min(maxProportion, affordable, capToMaxBid(perUnit, rules), ONE);
   if (percent < rules.minBidPercent) {
     // Say which limit bound: an auction nearly sold out is routine, a keeper out of cash is an alarm.
     const note =
@@ -134,12 +141,20 @@ function decideInsolventBid(account: AccountView, keeperCash: bigint, rules: Kee
 
   const needPerUnit = abs(mm) > paid ? abs(mm) - paid : 0n;
   const affordable = needPerUnit === 0n ? ONE : (keeperCash * ONE) / needPerUnit;
-  const percent = min(affordable, ONE);
+  const percent = min(affordable, capToMaxBid(abs(mm), rules), ONE);
   if (percent < rules.minBidPercent) {
     return { kind: 'none', accountId, note: `keeper cash covers only ${percent} of the insolvent bid` };
   }
   // priceLimit is the most the keeper will PAY; here it is paid, so allow any payout down to zero.
   return { kind: 'bid', accountId, percent, priceLimit: 0n, insolvent: true, bidderCash: (needPerUnit * percent) / ONE };
+}
+
+/** The share of an account whose `perUnit` (USD per 100% of it) fits inside the max bid. */
+function capToMaxBid(perUnit: bigint, rules: KeeperRules): bigint {
+  if (rules.maxBidUsd === null || perUnit === 0n) {
+    return ONE;
+  }
+  return (rules.maxBidUsd * ONE) / perUnit;
 }
 
 function abs(value: bigint): bigint {

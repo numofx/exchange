@@ -28,6 +28,18 @@ fresh subaccount the keeper creates, funds with exactly that bid's requirement (
 Inherited positions stay in those bid accounts. The keeper does **not** close or hedge them — it
 alerts (`keeper-inventory`), and an operator or the market maker takes them from there.
 
+## Bid size and health
+
+`MAX_BID_USD` caps one bid by the margin it ties up: a solvent bid by its price plus the buffer
+margin it inherits, an insolvent one by the maintenance margin it takes on. The keeper bids a smaller
+share of the account instead. Unset means no cap. At launch, set it well under `KEEPER_ACCOUNT`'s
+cash so one bad auction cannot take the whole book in a single bid.
+
+`HEALTH_PORT` serves `GET /health` on `HEALTH_HOST` (default `127.0.0.1`), which reports the last
+pass's time and outcome, whether this is a dry run, and the keeper's account. The perp enable gate
+(`propose_perp_enable_batch.py`, via `KEEPER_HEALTH_URL`) refuses to open the market without a
+recent passing, non-dry-run keeper.
+
 ## Dry run by default
 
 `DRY_RUN=true` unless set otherwise: it reads, decides and simulates every action against the chain,
@@ -48,6 +60,8 @@ PERP=<perp>
 SECURITY_MODULE_ACCOUNT=<securityModuleAccount>
 START_BLOCK=<block the stack was deployed at>
 DRY_RUN=true
+MAX_BID_USD=2500
+HEALTH_PORT=9464
 ```
 
 Fund the keeper EOA with ETH for gas and `KEEPER_ACCOUNT` with the stack's cash (USDC deposited
