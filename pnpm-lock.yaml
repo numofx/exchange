@@ -98,6 +98,28 @@ importers:
         specifier: ^5.8.2
         version: 5.9.3
 
+  services/perp-keeper:
+    dependencies:
+      dotenv:
+        specifier: ^16.4.7
+        version: 16.6.1
+      viem:
+        specifier: ^2.23.5
+        version: 2.55.4(typescript@5.9.3)(zod@3.25.76)
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.3
+        version: 4.23.1
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
   services/rebalance:
     dependencies:
       '@aws-sdk/client-kms':

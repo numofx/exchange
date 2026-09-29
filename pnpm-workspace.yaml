@@ -3,3 +3,4 @@ packages:
   - 'services/execution'
   - 'services/rebalance'
   - 'services/perp-feeds'
+  - 'services/perp-keeper'
