@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+# The whole perp venue on your machine, launched the way mainnet will be:
+#
+#   BASE_RPC_URL=<archive-capable Base RPC> ./scripts/local-venue/up.sh
+#
+#  1. anvil forks Base as chain 31337 (nothing reads or writes the 8453 artifacts)
+#  2. the real deploy scripts put up the perp stack (cap 0) and its TradeModule (not allowlisted)
+#  3. the deploy batches run as the vault would run them (impersonated): acceptOwnership only
+#  4. Postgres, migrations, markets api + matcher, execution-service
+#  5. perp-feeds --local-fixed-price, the keeper (live, /health on), the SecurityModule seed, a quote
+#  6. propose_perp_enable_batch.py --local checks every launch gate and writes the enable actions;
+#     they are applied as the vault (impersonated) -- the step that opens the market
+#  7. a taker crosses the quote and the position is read back from /v1/positions
+#
+# Everything runs in the background with logs and pids under $LOCAL_VENUE_DIR (default
+# .local-venue/ at the repo root). ./scripts/local-venue/down.sh stops it all.
+set -euo pipefail
+: "${BASE_RPC_URL:?set BASE_RPC_URL (an archive-capable Base RPC to fork)}"
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/../.." && pwd)"
+DIR="${LOCAL_VENUE_DIR:-$ROOT/.local-venue}"
+mkdir -p "$DIR/logs" "$DIR/pids" "$DIR/bin"
+
+ANVIL_PORT=8600 PG_PORT=5544 API_PORT=8090 EXEC_PORT=8091 KEEPER_HEALTH_PORT=9464
+RPC="http://127.0.0.1:$ANVIL_PORT"
+INDEX_NGN_PER_USD="${INDEX_NGN_PER_USD:-1374}"
+DB="postgres://postgres@127.0.0.1:$PG_PORT/matching_backend?sslmode=disable"
+
+VAULT=0x1dcA42ab54Bd3862853A821F84B29BF65245F435
+MATCHING=0x9E90A9cD13d859Bd6a08168082FB1F6F7405F191
+DATA_SUBMITTER=0xe0C06DD245f1e8C8bC516c66C66e64648987F912
+SUB_ACCOUNTS=0x7019244E25FA416e6Ca2ed2F3cA25277aef72843
+# anvil's first default key: only ever used on this fork, as the deployer and the feed relayer
+DEPLOYER=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+key() { cast keccak "numo.local-venue.$1"; }
+FEED_SIGNER_KEY=$(key feed-signer)
+EXECUTOR_KEY=$(key executor)
+KEEPER_KEY=$(key keeper)
+
+step() { printf '\n== %s\n' "$*"; }
+start() { # start <name> <cmd...>: background, logged, pid recorded
+  local name=$1; shift
+  nohup "$@" >"$DIR/logs/$name.log" 2>&1 &
+  echo $! >"$DIR/pids/$name"
+}
+wait_for() { # wait_for <what> <cmd...>
+  local what=$1; shift
+  for _ in $(seq 1 60); do "$@" >/dev/null 2>&1 && return 0; sleep 1; done
+  echo "timed out waiting for $what (logs in $DIR/logs)" >&2; exit 1
+}
+as_vault() { cast send "$@" --from $VAULT --unlocked --rpc-url $RPC >/dev/null; }
+json() { python3 -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$@"; }
+
+"$HERE/down.sh" >/dev/null 2>&1 || true
+
+step "anvil: Base fork as chain 31337 on :$ANVIL_PORT"
+start anvil anvil --fork-url "$BASE_RPC_URL" --chain-id 31337 --port $ANVIL_PORT --silent
+wait_for anvil cast chain-id --rpc-url $RPC
+[ "$(cast chain-id --rpc-url $RPC)" = 31337 ] || { echo "not a local fork" >&2; exit 1; }
+
+step "deploy: perp stack (cap 0) and TradeModule (not allowlisted)"
+(cd "$ROOT/contracts/risk-core" && FEED_SIGNER=$(cast wallet address --private-key "$FEED_SIGNER_KEY") \
+  forge script test/e2e/DeployPerpStackForE2E.s.sol --sig "runE2E()" --rpc-url $RPC \
+  --private-key $DEPLOYER --broadcast --non-interactive >"$DIR/logs/deploy-stack.log" 2>&1)
+(cd "$ROOT/contracts/execution" && forge script test/e2e/DeployPerpModuleForE2E.s.sol --sig "runE2E()" \
+  --rpc-url $RPC --private-key $DEPLOYER --broadcast --non-interactive >"$DIR/logs/deploy-module.log" 2>&1)
+STACK="$ROOT/contracts/risk-core/cache/e2e-perp-stack.json"
+MODULE_JSON="$ROOT/contracts/execution/cache/e2e-perp-module.json"
+MODULE=$(json "$MODULE_JSON" tradePerp)
+
+step "vault: the deploy batches (acceptOwnership on every contract, nothing else)"
+cast rpc anvil_impersonateAccount $VAULT --rpc-url $RPC >/dev/null
+cast rpc anvil_setBalance $VAULT 0xDE0B6B3A7640000 --rpc-url $RPC >/dev/null
+for C in $(python3 -c "import json,sys;print(' '.join(json.load(open(sys.argv[1]))['owned']))" "$STACK") $MODULE; do
+  as_vault "$C" "acceptOwnership()"
+done
+# The local executor stands in for the venue's KMS key.
+EXECUTOR=$(cast wallet address --private-key "$EXECUTOR_KEY")
+as_vault $MATCHING "setTradeExecutor(address,bool)" "$EXECUTOR" true
+cast rpc anvil_setBalance "$EXECUTOR" 0xDE0B6B3A7640000 --rpc-url $RPC >/dev/null
+echo "cap=$(cast call "$(json "$STACK" perp)" 'totalPositionCap(address)(uint256)' "$(json "$STACK" srm)" --rpc-url $RPC)" \
+  "module allowed=$(cast call $MATCHING 'allowedModules(address)(bool)' "$MODULE" --rpc-url $RPC)"
+
+python3 - "$STACK" "$MODULE" "$DIR/venue.json" <<'PY'
+import json, sys
+stack = json.load(open(sys.argv[1]))
+stack["tradePerp"] = sys.argv[2]
+json.dump(stack, open(sys.argv[3], "w"), indent=2)
+PY
+V="$DIR/venue.json"
+PERP=$(json "$V" perp) CASH=$(json "$V" cash) SRM=$(json "$V" srm)
+
+step "postgres on :$PG_PORT, migrations"
+command -v pg_ctl >/dev/null || { echo "needs Postgres binaries (brew install postgresql)" >&2; exit 1; }
+[ -d "$DIR/pgdata" ] || initdb -D "$DIR/pgdata" -U postgres --auth=trust >/dev/null
+# TCP only: the socket path under a deep $DIR can exceed the 103-byte limit.
+pg_ctl -D "$DIR/pgdata" -o "-p $PG_PORT -c unix_socket_directories=''" -l "$DIR/logs/postgres.log" start >/dev/null
+wait_for postgres psql -h 127.0.0.1 -p $PG_PORT -U postgres -c 'select 1'
+dropdb -h 127.0.0.1 -p $PG_PORT -U postgres --if-exists matching_backend
+createdb -h 127.0.0.1 -p $PG_PORT -U postgres matching_backend
+(cd "$ROOT/services/markets" && DATABASE_URL=$DB go run ./cmd/migrate >"$DIR/logs/migrate.log" 2>&1)
+
+step "build: markets, execution, perp-feeds, perp-keeper"
+(cd "$ROOT/services/markets" && go build -o "$DIR/bin/markets-api" ./cmd/api && go build -o "$DIR/bin/markets-matcher" ./cmd/matcher)
+for S in execution perp-feeds perp-keeper; do (cd "$ROOT/services/$S" && pnpm run build >/dev/null); done
+
+cat >"$DIR/markets.env" <<ENV
+APP_ENV=dev
+API_ADDR=:$API_PORT
+DATABASE_URL=$DB
+CHAIN_RPC_URL=$RPC
+CHAIN_ID=31337
+MATCHING_ADDRESS=$MATCHING
+TRADE_MODULE_ADDRESS=0x12423B366F6F07130961900bE00d05Ea63Acd071
+QUOTE_ASSET_ADDRESS=0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84
+CNGN_SPOT_ASSET_ADDRESS=0x9d806fd040a719d27a8e5e77dc5ae0ed1e089493
+CNGN_PERP_ASSET_ADDRESS=$PERP
+CNGN_PERP_TRADE_MODULE_ADDRESS=$MODULE
+CNGN_PERP_CASH_ADDRESS=$CASH
+CNGN_PERP_SRM_ADDRESS=$SRM
+ENFORCE_MATCHING_CUSTODY=true
+EXECUTOR_URL=http://127.0.0.1:$EXEC_PORT/execute
+EXECUTOR_TIMEOUT=90s
+MATCHER_POLL_INTERVAL=500ms
+WS_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3111
+ENV
+
+step "services: execution :$EXEC_PORT, markets api :$API_PORT, matcher"
+(cd "$ROOT/services/execution" && RPC_URL=$RPC CHAIN_ID=31337 PRIVATE_KEY=$EXECUTOR_KEY MATCHING_ADDRESS=$MATCHING \
+  TRADE_MODULE_ADDRESS=0x12423B366F6F07130961900bE00d05Ea63Acd071 PERP_TRADE_MODULE_ADDRESS=$MODULE \
+  WITHDRAWAL_MODULE_ADDRESS=0x0a10AE2f5D2482cE1e43bC309D430B8861C2b5aB PORT=$EXEC_PORT HOST=127.0.0.1 \
+  DRY_RUN=false WAIT_FOR_RECEIPT=true start execution node dist/index.js)
+(set -a; . "$DIR/markets.env"; set +a; start markets-api "$DIR/bin/markets-api"; start markets-matcher "$DIR/bin/markets-matcher")
+wait_for execution curl -sf http://127.0.0.1:$EXEC_PORT/healthz
+wait_for "markets api" curl -sf http://127.0.0.1:$API_PORT/v1/markets
+
+step "perp-feeds --local-fixed-price=$INDEX_NGN_PER_USD"
+(cd "$ROOT/services/perp-feeds" && RPC_URL=$RPC CHAIN_ID=31337 FEED_SIGNER_KEY=$FEED_SIGNER_KEY RELAYER_KEY=$DEPLOYER \
+  DATA_SUBMITTER=$DATA_SUBMITTER PERP_ASSET=$PERP INDEX_FEED="$(json "$V" indexFeed)" MARK_FEED="$(json "$V" markFeed)" \
+  IMPACT_ASK_FEED="$(json "$V" impactAskFeed)" IMPACT_BID_FEED="$(json "$V" impactBidFeed)" \
+  start perp-feeds node dist/main.js --local-fixed-price="$INDEX_NGN_PER_USD")
+wait_for "index feed" cast call "$(json "$V" indexFeed)" "getSpot()(uint256,uint256)" --rpc-url $RPC
+
+VENUE="pnpm --dir $HERE exec tsx $HERE/venue.ts $DIR"
+step "keeper: funded account under the perp SRM, live, /health on :$KEEPER_HEALTH_PORT"
+# Opened by the keeper's own EOA (label "keeper" is KEEPER_KEY), so the keeper owns what it bids with.
+$VENUE account keeper 5000
+(cd "$ROOT/services/perp-keeper" && RPC_URL=$RPC CHAIN_ID=31337 KEEPER_KEY=$KEEPER_KEY \
+  KEEPER_ACCOUNT="$(json "$DIR/accounts.json" keeper)" DRY_RUN=false SUB_ACCOUNTS=$SUB_ACCOUNTS SRM=$SRM \
+  AUCTION="$(json "$V" auction)" CASH=$CASH PERP=$PERP SECURITY_MODULE_ACCOUNT="$(json "$V" securityModuleAccount)" \
+  START_BLOCK="$(json "$V" blockNumber)" POLL_INTERVAL_MS=5000 HEALTH_PORT=$KEEPER_HEALTH_PORT MAX_BID_USD=2500 \
+  start perp-keeper node dist/main.js)
+wait_for "keeper health" sh -c "curl -sf http://127.0.0.1:$KEEPER_HEALTH_PORT/health | grep -q '\"lastPassOk\":true'"
+
+step "security module seed, maker quote"
+$VENUE fund-sm 10000
+$VENUE account maker 20000
+$VENUE account taker 5000
+$VENUE quote
+
+step "enable: every launch gate, then the enable actions as the vault"
+ACTIONS="$DIR/enable-actions.json"
+(cd "$ROOT/contracts/risk-core" && RPC_URL=$RPC KEEPER_HEALTH_URL=http://127.0.0.1:$KEEPER_HEALTH_PORT/health \
+  MARKETS_URL=http://127.0.0.1:$API_PORT python3 scripts/ops/propose_perp_enable_batch.py --local \
+  --stack "$V" --module "$MODULE_JSON" --write "$ACTIONS")
+python3 -c "import json,sys;[print(a['to'], a['data']) for a in json.load(open(sys.argv[1]))]" "$ACTIONS" |
+  while read -r TO DATA; do cast send "$TO" "$DATA" --from $VAULT --unlocked --rpc-url $RPC >/dev/null; done
+echo "cap=$(cast call "$PERP" 'totalPositionCap(address)(uint256)' "$SRM" --rpc-url $RPC)" \
+  "module allowed=$(cast call $MATCHING 'allowedModules(address)(bool)' "$MODULE" --rpc-url $RPC)"
+wait_for "trading_enabled" sh -c "curl -sf http://127.0.0.1:$API_PORT/v1/markets | grep -q '\"trading_enabled\":true'"
+
+step "smoke: taker crosses the maker's offer"
+$VENUE cross
+
+cat <<DONE
+
+Local venue up. Point trading-app at it:
+  MARKETS_SERVICE_URL=http://127.0.0.1:$API_PORT
+  NEXT_PUBLIC_MARKETS_WS_URL=ws://127.0.0.1:$API_PORT/v1/ws
+  NEXT_PUBLIC_BASE_RPC_URL=$RPC
+(orders the app signs name chain 8453 in their domain; the local venue verifies against 31337)
+
+Logs: $DIR/logs    Stop: $HERE/down.sh
+DONE

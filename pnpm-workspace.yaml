@@ -4,3 +4,4 @@ packages:
   - 'services/rebalance'
   - 'services/perp-feeds'
   - 'services/perp-keeper'
+  - 'scripts/local-venue'
