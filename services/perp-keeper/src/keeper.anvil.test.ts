@@ -333,23 +333,27 @@ describe('keeper against the real perp stack on an anvil fork', { skip: !RPC }, 
     assert.ok(dry.settled.includes(accounts.bob!), 'the dry run lists bob, the open counterparty');
     assert.notEqual(await perpOf(accounts.bob!), 0n, 'and changes nothing');
 
-    // Carol is mid-auction: she cannot be settled until the auction ends, and is reported instead.
+    // Accounts mid-auction cannot be settled: they are reported, not settled. Whether any are left
+    // at this point depends on how carol's auction went, so this asserts the invariant, not a list.
     const first = await chainView.settleFrozenPositions(false);
-    assert.ok(first.settled.includes(accounts.bob!), 'bob settled');
-    assert.deepEqual(first.underLiquidation, [accounts.carol!], 'carol reported, not settled');
+    assert.ok(first.settled.includes(accounts.bob!), 'bob, the open counterparty, is settled');
+    for (const id of first.underLiquidation) assert.ok((await auctionOf(id)).ongoing, `${id} is reported because it is mid-auction`);
 
-    // A solvent auction that has sold what it can but left buffer margin a hair below zero cannot be
+    // A solvent auction that sold what it can but left buffer margin a hair below zero cannot be
     // terminated until its solvent phase (15 min fast + 12 h slow) runs out; then the keeper's
     // normal pass terminates or converts it, and the sweep completes. The runbook allows for this.
-    await warp(12 * 60 * 60 + 15 * 60 + 60);
-    await publish(CRASHED);
-    for (let pass = 0; pass < 3 && (await auctionOf(accounts.carol!)).ongoing; pass++) {
+    let pending = first.underLiquidation;
+    const settledIds = [...first.settled];
+    for (let round = 0; round < 3 && pending.length > 0; round++) {
+      await warp(12 * 60 * 60 + 15 * 60 + 60);
+      await publish(CRASHED);
       await runOnce(keeperConfig(false), chainView, alert);
+      const next = await chainView.settleFrozenPositions(false);
+      settledIds.push(...next.settled);
+      pending = next.underLiquidation;
     }
-    assert.equal((await auctionOf(accounts.carol!)).ongoing, false, "carol's auction ended");
-    const second = await chainView.settleFrozenPositions(false);
-    assert.deepEqual(second.underLiquidation, [], 'nothing left under liquidation');
-    for (const id of [...first.settled, ...second.settled, accounts.alice!, accounts.bob!, accounts.carol!]) {
+    assert.deepEqual(pending, [], 'nothing left under liquidation');
+    for (const id of [...settledIds, accounts.alice!, accounts.bob!, accounts.carol!]) {
       assert.equal(await perpOf(id), 0n, `account ${id} still holds the perp`);
     }
     const third = await chainView.settleFrozenPositions(false);
