@@ -17,6 +17,7 @@ import "../../src/feeds/LyraSpotFeed.sol";
 import "../../src/feeds/LyraSpotDiffFeed.sol";
 import "../../src/feeds/static/LyraStaticSpotFeed.sol";
 import {IManager} from "../../src/interfaces/IManager.sol";
+import {IBaseManager} from "../../src/interfaces/IBaseManager.sol";
 import {IBaseLyraFeed} from "../../src/interfaces/IBaseLyraFeed.sol";
 import {IDataReceiver} from "../../src/interfaces/IDataReceiver.sol";
 
@@ -178,6 +179,80 @@ contract CngnPerpStackFork is Test {
     vm.prank(bob);
     cash.withdraw(bobAcc, 1_000e6, bob);
     assertEq(IERC20Metadata(USDC).balanceOf(bob) - before, 1_000e6, "withdrawal must still pay");
+  }
+
+  // --- guardian pause -------------------------------------------------------------
+
+  address guardian = address(0x6a2d);
+
+  /// The guardian (a hot ops key) freezes every adjustment under this SRM, and it alone lifts the
+  /// pause: setAdjustmentsPaused is guardian-only in both directions, so not even the owner (the
+  /// vault) can unpause without first making itself guardian.
+  function testGuardianPauseFreezesTheStackAndOnlyTheGuardianLiftsIt() public {
+    srm.setGuardian(guardian);
+    _deposit(alice, aliceAcc, 5_000e6);
+    _deposit(bob, bobAcc, 5_000e6);
+
+    vm.prank(guardian);
+    srm.setAdjustmentsPaused(true);
+
+    vm.expectRevert(IBaseManager.BM_AdjustmentsPaused.selector);
+    subAccounts.submitTransfers(_perpTransfer(bobAcc, aliceAcc, 1e18), "");
+
+    deal(USDC, alice, 1e6);
+    vm.startPrank(alice);
+    IERC20Metadata(USDC).approve(address(cash), 1e6);
+    vm.expectRevert(IBaseManager.BM_AdjustmentsPaused.selector);
+    cash.deposit(aliceAcc, 1e6);
+    vm.expectRevert(IBaseManager.BM_AdjustmentsPaused.selector);
+    cash.withdraw(aliceAcc, 1e6, alice);
+    vm.stopPrank();
+
+    vm.expectRevert(IBaseManager.BM_GuardianOnly.selector);
+    srm.setAdjustmentsPaused(false); // the owner
+    vm.prank(address(0xbad));
+    vm.expectRevert(IBaseManager.BM_GuardianOnly.selector);
+    srm.setAdjustmentsPaused(false);
+
+    vm.prank(guardian);
+    srm.setAdjustmentsPaused(false);
+    _tradePerp(bobAcc, aliceAcc, 1e18);
+    assertEq(_perpBalance(aliceAcc), 1e18, "trading resumes once the guardian unpauses");
+  }
+
+  /// A pause also stops liquidation: the auction can be started, but a bid reverts, so an
+  /// insolvent account sits unliquidated (and its deficit can grow) until the pause is lifted.
+  function testGuardianPauseAlsoBlocksLiquidationBids() public {
+    srm.setGuardian(guardian);
+    _fundSecurityModule(5_000e6);
+    _openInsolvent();
+    vm.prank(guardian);
+    srm.setAdjustmentsPaused(true);
+
+    auction.startAuction(aliceAcc, 0);
+    vm.warp(block.timestamp + auction.getAuctionParams().insolventAuctionLength);
+    _setPrices(0.000432e18);
+    vm.prank(charlie);
+    vm.expectRevert(IBaseManager.BM_AdjustmentsPaused.selector);
+    auction.bid(aliceAcc, charlieAcc, 1e18, 0, 0);
+    assertEq(_perpBalance(aliceAcc), 10_000_000e18, "the position is still open");
+
+    vm.prank(guardian);
+    srm.setAdjustmentsPaused(false);
+    vm.prank(charlie);
+    auction.bid(aliceAcc, charlieAcc, 1e18, 0, 0);
+    assertEq(_perpBalance(aliceAcc), 0, "liquidation completes after the unpause");
+  }
+
+  function _perpTransfer(uint fromAcc, uint toAcc, int amount)
+    internal
+    view
+    returns (ISubAccounts.AssetTransfer[] memory transfers)
+  {
+    transfers = new ISubAccounts.AssetTransfer[](1);
+    transfers[0] = ISubAccounts.AssetTransfer({
+      fromAcc: fromAcc, toAcc: toAcc, asset: perp, subId: 0, amount: amount, assetData: bytes32(0)
+    });
   }
 
   // --- SecurityModule exposure at the launch cap ----------------------------------

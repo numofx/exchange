@@ -172,10 +172,15 @@ contract CngnPerpTradeModuleForkTest is Test {
   function _deployStackAsVault() internal {
     DeployCngnPerpStack stackScript = new DeployCngnPerpStack();
     DeployCngnPerpStack.Params memory params = DeployCngnPerpStack.Params({
-      subAccounts: address(subAccounts), usdc: USDC, vault: VAULT, feedSigner: feedSigner, perpOICap: 50_000_000e18
+      subAccounts: address(subAccounts),
+      usdc: USDC,
+      vault: VAULT,
+      feedSigner: feedSigner,
+      perpOICap: 50_000_000e18,
+      guardian: address(0x6a2d)
     });
     stack = stackScript.deployStack(params);
-    _runVaultBatch(stackScript.vaultActionsJson(stack), stackScript.ownedContracts(stack).length);
+    _runVaultBatch(stackScript.vaultActionsJson(stack, params.guardian), stackScript.vaultActionCount(stack));
   }
 
   function _deployModuleAsVault() internal {

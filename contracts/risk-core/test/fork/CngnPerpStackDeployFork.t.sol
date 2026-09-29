@@ -32,6 +32,7 @@ contract CngnPerpStackDeployFork is Test {
   address constant VAULT = 0x1dcA42ab54Bd3862853A821F84B29BF65245F435;
   address constant LEGACY_SRM = 0x3195Bd7e02d93982bCF8b34DF5B941fFCaE1E49b;
   address constant LEGACY_CASH = 0x6B232A2155Bd0C9bf741dB4cf8E7e8A0176A6fc6;
+  address constant GUARDIAN = address(0x6a2d);
 
   // Derived rather than memorable: well-known keys carry EIP-7702 delegations on Base.
   uint signerPk = uint(keccak256("cngn-perp-stack-deploy-fork-signer"));
@@ -53,7 +54,12 @@ contract CngnPerpStackDeployFork is Test {
 
     script = new DeployCngnPerpStack();
     params = DeployCngnPerpStack.Params({
-      subAccounts: SUB_ACCOUNTS, usdc: USDC, vault: VAULT, feedSigner: signer, perpOICap: 50_000_000e18
+      subAccounts: SUB_ACCOUNTS,
+      usdc: USDC,
+      vault: VAULT,
+      feedSigner: signer,
+      perpOICap: 50_000_000e18,
+      guardian: GUARDIAN
     });
     stack = script.deployStack(params);
   }
@@ -79,6 +85,17 @@ contract CngnPerpStackDeployFork is Test {
     vm.prank(address(script));
     vm.expectRevert();
     stack.perp.setTotalPositionCap(stack.srm, type(uint).max);
+  }
+
+  /// The guardian is the batch's last action, signed by the vault: before it the SRM has none.
+  function testVaultBatchGrantsTheGuardianLast() public {
+    assertEq(stack.srm.guardian(), address(0), "no guardian before the batch");
+    _executeVaultBatch();
+    assertEq(stack.srm.guardian(), GUARDIAN, "the batch sets the hot ops key as guardian");
+
+    string memory json = script.vaultActionsJson(stack, GUARDIAN);
+    string memory last = string.concat("[", vm.toString(script.vaultActionCount(stack) - 1), "]");
+    assertEq(vm.parseJsonAddress(json, string.concat(last, ".to")), address(stack.srm), "last action targets the srm");
   }
 
   function testLegacyStackIsUntouched() public view {
@@ -158,9 +175,8 @@ contract CngnPerpStackDeployFork is Test {
   }
 
   function _executeVaultBatch() internal {
-    string memory json = script.vaultActionsJson(stack);
-    address[] memory owned = script.ownedContracts(stack);
-    for (uint i = 0; i < owned.length; i++) {
+    string memory json = script.vaultActionsJson(stack, GUARDIAN);
+    for (uint i = 0; i < script.vaultActionCount(stack); i++) {
       string memory key = string.concat("[", vm.toString(i), "]");
       address to = vm.parseJsonAddress(json, string.concat(key, ".to"));
       bytes memory data = vm.parseJsonBytes(json, string.concat(key, ".data"));

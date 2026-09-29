@@ -27,7 +27,8 @@ contract DeployPerpStackForE2E is DeployCngnPerpStack {
       usdc: 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913,
       vault: 0x1dcA42ab54Bd3862853A821F84B29BF65245F435,
       feedSigner: vm.envAddress("FEED_SIGNER"),
-      perpOICap: 50_000_000e18
+      perpOICap: 50_000_000e18,
+      guardian: vm.envAddress("PERP_GUARDIAN")
     });
 
     vm.startBroadcast();
@@ -48,7 +49,13 @@ contract DeployPerpStackForE2E is DeployCngnPerpStack {
     vm.serializeUint(obj, "feeRecipientAccount", stack.feeRecipientAccount);
     vm.serializeUint(obj, "blockNumber", block.number);
     vm.serializeUint(obj, "launchOICap", params.perpOICap);
+    vm.serializeAddress(obj, "guardian", params.guardian);
     string memory json = vm.serializeAddress(obj, "owned", ownedContracts(stack));
     vm.writeJson(json, string.concat(vm.projectRoot(), "/cache/e2e-perp-stack.json"));
+    // The same vault batch the mainnet run writes, for the local venue to apply as the vault.
+    vm.writeFile(
+      string.concat(vm.projectRoot(), "/cache/e2e-perp-stack-vault-actions.json"),
+      vaultActionsJson(stack, params.guardian)
+    );
   }
 }

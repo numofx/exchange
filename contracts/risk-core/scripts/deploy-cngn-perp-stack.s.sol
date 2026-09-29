@@ -55,10 +55,18 @@ import "./config-mainnet.sol";
  * @dev OWNERSHIP. Everything is configured by the deployer first, then nominated to the vault
  *      (Ownable2Step: pendingOwner only). The vault must accept each; the calls are written to
  *      CNGN_PERP_STACK_VAULT_ACTIONS.json. After acceptance, every change is a vault transaction,
- *      which is why nothing is left for later here.
+ *      which is why nothing is left for later here. The one exception is the guardian: its last
+ *      action is srm.setGuardian(PERP_GUARDIAN), so the vault itself signs the grant of the only
+ *      power a hot key holds on this stack.
+ *
+ * @dev GUARDIAN. setAdjustmentsPaused(bool) is guardian-only and takes either value, so the
+ *      guardian can pause AND unpause; the vault cannot do either without first making itself
+ *      guardian. A pause reverts every SubAccounts adjustment on accounts under this SRM: trades,
+ *      peer transfers, deposits, withdrawals, and liquidation bids alike. It freezes the book; it
+ *      does not close it out. Rotating or removing the key is a vault setGuardian.
  *
  * Usage:
- *   PRIVATE_KEY=<deployer> FEED_SIGNER=<revived cNGN signer> \
+ *   PRIVATE_KEY=<deployer> FEED_SIGNER=<revived cNGN signer> PERP_GUARDIAN=<hot ops key> \
  *     forge script scripts/deploy-cngn-perp-stack.s.sol --rpc-url $BASE_RPC_URL --broadcast
  *
  * Optional env:
@@ -93,6 +101,9 @@ contract DeployCngnPerpStack is Utils {
     address vault;
     address feedSigner;
     uint perpOICap;
+    /// @dev Hot ops key set as the SRM's guardian by the vault batch: it can pause (and unpause)
+    ///      every adjustment on this stack without the vault. See the OWNERSHIP note.
+    address guardian;
   }
 
   struct Stack {
@@ -120,8 +131,9 @@ contract DeployCngnPerpStack is Utils {
     Stack memory stack = deployStack(params);
     vm.stopBroadcast();
 
+    if (params.guardian == vm.addr(deployerPrivateKey)) revert("PERP_GUARDIAN must not be the deployer");
     assertStack(stack, params, vm.addr(deployerPrivateKey));
-    _writeArtifacts(stack, params.perpOICap);
+    _writeArtifacts(stack, params);
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -133,6 +145,7 @@ contract DeployCngnPerpStack is Utils {
     params.usdc = vm.parseJsonAddress(_readDeploymentFile("shared"), ".usdc");
     params.feedSigner = vm.envAddress("FEED_SIGNER");
     params.perpOICap = vm.envOr("PERP_OI_CAP", DEFAULT_PERP_OI_CAP);
+    params.guardian = vm.envAddress("PERP_GUARDIAN");
 
     // The vault is pinned, then confirmed against the chain: if the legacy SRM has changed hands,
     // stop, rather than nominate a new stack to an address nobody re-verified.
@@ -145,6 +158,11 @@ contract DeployCngnPerpStack is Utils {
     if (IERC20Metadata(params.usdc).decimals() != 6) revert("usdc is not 6 decimals");
     if (params.feedSigner == address(0)) revert("FEED_SIGNER is zero");
     if (params.perpOICap == 0) revert("PERP_OI_CAP is zero");
+    if (params.guardian == address(0)) revert("PERP_GUARDIAN is zero");
+    // A separate key: the vault already holds every other power, and the feed signer is a hot key
+    // with a different job whose compromise must not also freeze the book.
+    if (params.guardian == params.vault) revert("PERP_GUARDIAN must not be the vault");
+    if (params.guardian == params.feedSigner) revert("PERP_GUARDIAN must not be the feed signer");
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -325,6 +343,8 @@ contract DeployCngnPerpStack is Utils {
     if (spot != address(stack.indexFeed)) revert("market index feed not set");
     if (!stack.perp.whitelistedManager(address(stack.srm))) revert("perp does not whitelist the srm");
     if (stack.perp.totalPositionCap(stack.srm) != 0) revert("perp must deploy closed (cap 0)");
+    // The guardian is granted by the vault batch, not the deployer.
+    if (stack.srm.guardian() != address(0)) revert("guardian must be unset until the vault batch");
   }
 
   function _marketFeeds(Stack memory stack) internal view returns (address spot, address fwd, address vol) {
@@ -344,7 +364,7 @@ contract DeployCngnPerpStack is Utils {
   // artifacts
   // ---------------------------------------------------------------------------------------------
 
-  function _writeArtifacts(Stack memory stack, uint launchCap) internal {
+  function _writeArtifacts(Stack memory stack, Params memory params) internal {
     string memory obj = "cngn-perp-stack";
     vm.serializeAddress(obj, "rateModel", address(stack.rateModel));
     vm.serializeAddress(obj, "cash", address(stack.cash));
@@ -359,32 +379,54 @@ contract DeployCngnPerpStack is Utils {
     vm.serializeAddress(obj, "impactBidFeed", address(stack.impactBidFeed));
     vm.serializeAddress(obj, "perp", address(stack.perp));
     vm.serializeUint(obj, "marketId", stack.marketId);
-    vm.serializeUint(obj, "launchOICap", launchCap);
+    vm.serializeUint(obj, "launchOICap", params.perpOICap);
+    vm.serializeAddress(obj, "guardian", params.guardian);
     vm.serializeUint(obj, "securityModuleAccount", stack.securityModule.accountId());
     string memory json = vm.serializeUint(obj, "feeRecipientAccount", stack.feeRecipientAccount);
     _writeToDeployments(ARTIFACT_NAME, json);
 
-    _writeToDeployments(VAULT_ACTIONS_NAME, vaultActionsJson(stack));
+    _writeToDeployments(VAULT_ACTIONS_NAME, vaultActionsJson(stack, params.guardian));
   }
 
-  /// @dev acceptOwnership on every nominated contract, in the recorded vault-action format.
-  function vaultActionsJson(Stack memory stack) public pure returns (string memory json) {
+  /// @dev acceptOwnership on every nominated contract, then srm.setGuardian(guardian) (which needs
+  ///      the vault to own the SRM first), in the recorded vault-action format. Nothing here opens
+  ///      the market: that is the separate enable action.
+  function vaultActionsJson(Stack memory stack, address guardian) public pure returns (string memory json) {
     address[] memory owned = ownedContracts(stack);
-    bytes memory data = abi.encodeWithSignature("acceptOwnership()");
+    bytes memory accept = abi.encodeWithSignature("acceptOwnership()");
     json = "[";
     for (uint i = 0; i < owned.length; i++) {
-      json = string.concat(
-        json,
-        i == 0 ? "" : ",",
-        '{"description":"acceptOwnership() [cNGN perp stack]","to":"',
-        vm.toString(owned[i]),
-        '","value":"0","data":"',
-        vm.toString(data),
-        '","digest":"',
-        vm.toString(keccak256(abi.encodePacked(owned[i], keccak256(data)))),
-        '"}'
-      );
+      json = string.concat(json, i == 0 ? "" : ",", _action("acceptOwnership() [cNGN perp stack]", owned[i], accept));
     }
-    json = string.concat(json, "]");
+    bytes memory setGuardian = abi.encodeWithSignature("setGuardian(address)", guardian);
+    json = string.concat(
+      json,
+      ",",
+      _action(
+        string.concat("srm.setGuardian(", vm.toString(guardian), ") [hot ops key: can pause/unpause adjustments]"),
+        address(stack.srm),
+        setGuardian
+      ),
+      "]"
+    );
+  }
+
+  /// @dev Every action the batch holds: one acceptOwnership per contract, plus the guardian.
+  function vaultActionCount(Stack memory stack) public pure returns (uint) {
+    return ownedContracts(stack).length + 1;
+  }
+
+  function _action(string memory description, address to, bytes memory data) internal pure returns (string memory) {
+    return string.concat(
+      '{"description":"',
+      description,
+      '","to":"',
+      vm.toString(to),
+      '","value":"0","data":"',
+      vm.toString(data),
+      '","digest":"',
+      vm.toString(keccak256(abi.encodePacked(to, keccak256(data)))),
+      '"}'
+    );
   }
 }
