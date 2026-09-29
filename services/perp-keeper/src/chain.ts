@@ -117,6 +117,8 @@ const GAS_HEADROOM_PCT = 150n;
 const subAccountsAbi = parseAbi([
   'function getBalance(uint256 accountId, address asset, uint256 subId) view returns (int256)',
   'function createAccount(address owner, address manager) returns (uint256)',
+  'function ownerOf(uint256 accountId) view returns (address)',
+  'function manager(uint256 accountId) view returns (address)',
   'function submitTransfer((uint256 fromAcc, uint256 toAcc, address asset, uint256 subId, int256 amount, bytes32 assetData) assetTransfer, bytes managerData) returns (uint256)',
   'event AccountCreated(address indexed owner, uint256 indexed accountId, address indexed manager)',
 ]);
@@ -160,6 +162,9 @@ export function createKeeperChain(config: Config) {
   const accounts = new Set<bigint>();
   /** Accounts the keeper itself owns under the SRM: its funding account and every bid account. */
   const ownAccounts = new Set<bigint>([config.KEEPER_ACCOUNT]);
+  // Bid accounts that were created but never bid from (funding or the bid itself failed): still
+  // cash-only, so still valid bidders. Reused before creating another.
+  const spareBidAccounts: bigint[] = [];
   let scannedTo = config.START_BLOCK - 1n;
 
   async function send(request: Parameters<typeof wallet.writeContract>[0]) {
@@ -184,6 +189,30 @@ export function createKeeperChain(config: Config) {
     } catch {
       return null;
     }
+  }
+
+  /** A fresh cash-only account under the SRM, owned by the keeper, to bid from. */
+  async function createAccount(): Promise<bigint> {
+    const created = await send({
+      account: keeper,
+      chain,
+      address: config.SUB_ACCOUNTS,
+      abi: subAccountsAbi,
+      functionName: 'createAccount',
+      args: [keeper.address, config.SRM],
+    });
+    const log = created.logs
+      .map((entry) => {
+        try {
+          return decodeEventLog({ abi: subAccountsAbi, data: entry.data, topics: entry.topics });
+        } catch {
+          return null;
+        }
+      })
+      .find((event) => event?.eventName === 'AccountCreated');
+    if (!log || log.eventName !== 'AccountCreated') throw new Error('createAccount emitted no AccountCreated');
+    ownAccounts.add(log.args.accountId);
+    return log.args.accountId;
   }
 
   return {
@@ -216,46 +245,58 @@ export function createKeeperChain(config: Config) {
     },
 
     /**
-     * A fresh account under the SRM, funded from the keeper's funding account, to bid from.
+     * An account under the SRM, funded from the keeper's funding account, to bid from.
      * DutchAuction only accepts a bidder holding nothing but cash (DA_InvalidBidderPortfolio), so a
-     * bid account is used once: afterwards it holds the inherited position, and the funding account
-     * stays cash-only and able to fund the next.
+     * bid account is used for one landed bid: afterwards it holds the inherited position, and the
+     * funding account stays cash-only and able to fund the next. A spare (never bid from) is reused
+     * first, so failed attempts do not leave an account behind each time.
      */
     async createBidAccount(cash: bigint): Promise<bigint> {
-      const created = await send({
-        account: keeper,
-        chain,
-        address: config.SUB_ACCOUNTS,
-        abi: subAccountsAbi,
-        functionName: 'createAccount',
-        args: [keeper.address, config.SRM],
-      });
-      const log = created.logs
-        .map((entry) => {
-          try {
-            return decodeEventLog({ abi: subAccountsAbi, data: entry.data, topics: entry.topics });
-          } catch {
-            return null;
-          }
-        })
-        .find((event) => event?.eventName === 'AccountCreated');
-      if (!log || log.eventName !== 'AccountCreated') throw new Error('createAccount emitted no AccountCreated');
-      const accountId = log.args.accountId;
-      ownAccounts.add(accountId);
-
-      await send({
-        account: keeper,
-        chain,
-        address: config.SUB_ACCOUNTS,
-        abi: subAccountsAbi,
-        functionName: 'submitTransfer',
-        args: [
-          { fromAcc: config.KEEPER_ACCOUNT, toAcc: accountId, asset: config.CASH, subId: 0n, amount: cash, assetData: pad('0x', { size: 32 }) },
-          '0x',
-        ],
-      });
+      const spare = spareBidAccounts.pop();
+      const accountId = spare ?? (await createAccount());
+      try {
+        await send({
+          account: keeper,
+          chain,
+          address: config.SUB_ACCOUNTS,
+          abi: subAccountsAbi,
+          functionName: 'submitTransfer',
+          args: [
+            { fromAcc: config.KEEPER_ACCOUNT, toAcc: accountId, asset: config.CASH, subId: 0n, amount: cash, assetData: pad('0x', { size: 32 }) },
+            '0x',
+          ],
+        });
+      } catch (error) {
+        spareBidAccounts.push(accountId);
+        throw error;
+      }
       return accountId;
     },
+
+    /** Returns a bid account whose bid did not land: it holds only cash, so it can bid again. */
+    releaseBidAccount(accountId: bigint): void {
+      spareBidAccounts.push(accountId);
+    },
+
+    /**
+     * The funding account must be the keeper's own and under this SRM. One opened through the app
+     * or SubAccountCreator is held by Matching, not the keeper EOA, and every bid-account funding
+     * transfer from it reverts (NotEnoughSubIdOrAssetAllowances). Checked each pass so /health, and
+     * with it the enable and index-step gates, fail on it.
+     */
+    async assertFundingAccount(): Promise<void> {
+      const [owner, manager] = await Promise.all([
+        client.readContract({ address: config.SUB_ACCOUNTS, abi: subAccountsAbi, functionName: 'ownerOf', args: [config.KEEPER_ACCOUNT] }),
+        client.readContract({ address: config.SUB_ACCOUNTS, abi: subAccountsAbi, functionName: 'manager', args: [config.KEEPER_ACCOUNT] }),
+      ]);
+      if (owner.toLowerCase() !== keeper.address.toLowerCase()) {
+        throw new Error(`KEEPER_ACCOUNT #${config.KEEPER_ACCOUNT} is owned by ${owner}, not the keeper ${keeper.address}: it cannot fund bids`);
+      }
+      if (manager.toLowerCase() !== config.SRM.toLowerCase()) {
+        throw new Error(`KEEPER_ACCOUNT #${config.KEEPER_ACCOUNT} is under ${manager}, not the perp SRM ${config.SRM}`);
+      }
+    },
+
 
     /** Everything decide() needs about one account. Throws if margin cannot be read (stale feeds). */
     async readAccount(accountId: bigint): Promise<AccountView> {

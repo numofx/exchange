@@ -16,6 +16,8 @@ export async function runOnce(config: Config, chain: KeeperChain, alert: Alerter
     maxBidUsd: config.MAX_BID_USD,
   };
 
+  // Throws (a failed pass, so /health fails) when the funding account cannot fund a bid.
+  await chain.assertFundingAccount();
   const accounts = await chain.discoverAccounts();
   const actions: Action[] = [];
   let keeperCash = await chain.keeperCash();
@@ -34,6 +36,7 @@ export async function runOnce(config: Config, chain: KeeperChain, alert: Alerter
       continue;
     }
 
+    let freshBidder: bigint | null = null;
     try {
       // A live bid goes from a fresh account funded for exactly this bid (plus 2% for the block it
       // lands in). A dry run simulates from the funding account, which is cash-only and so a valid
@@ -42,6 +45,7 @@ export async function runOnce(config: Config, chain: KeeperChain, alert: Alerter
         action.kind === 'bid' && !config.DRY_RUN
           ? await chain.createBidAccount((action.bidderCash * 102n) / 100n + 1n)
           : config.KEEPER_ACCOUNT;
+      if (action.kind === 'bid' && !config.DRY_RUN) freshBidder = bidder;
       const call = toCall(action, bidder);
       const { sent } = await chain.execute(call, config.DRY_RUN);
       console.log(`[keeper] #${accountId}: ${describe(action)} ${sent ? `tx=${sent}` : '(dry-run, simulated ok)'}`);
@@ -49,6 +53,8 @@ export async function runOnce(config: Config, chain: KeeperChain, alert: Alerter
       // A bid spends keeper cash; re-read before sizing the next one against a balance it no longer has.
       if (action.kind === 'bid' && sent) keeperCash = await chain.keeperCash();
     } catch (error) {
+      // Funded but not bid from: still cash-only, so the next bid can use it.
+      if (freshBidder !== null) chain.releaseBidAccount(freshBidder);
       await alert(`action-failed-${accountId}`, `${describe(action)} on account ${accountId} failed: ${(error as Error).message}`);
     }
   }

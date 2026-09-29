@@ -50,6 +50,13 @@ turning it off.
 
 Secrets from SSM (`/numo/keeper/keeper_key`); the rest in `/etc/numo/perp-keeper.env`:
 
+Create `KEEPER_ACCOUNT` from the keeper EOA directly on SubAccounts (`createAccount(keeper, srm)`,
+then `CashAsset.deposit`). An account opened through the app or SubAccountCreator is held by
+Matching, not the keeper, so every funding transfer to a bid account would revert
+(`NotEnoughSubIdOrAssetAllowances`). Each pass checks the owner and the manager, and fails the pass
+(and so `/health`) if either is wrong. Bid accounts that were created but never bid from are reused,
+not abandoned.
+
 ```bash
 KEEPER_ACCOUNT=<cash-only subaccount under the perp SRM, owned by the keeper EOA>
 SUB_ACCOUNTS=0x7019244E25FA416e6Ca2ed2F3cA25277aef72843
