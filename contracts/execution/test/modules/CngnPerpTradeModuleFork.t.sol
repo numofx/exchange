@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 pragma solidity ^0.8.18;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, console2} from "forge-std/Test.sol";
 
 import {Matching} from "src/Matching.sol";
 import {TradeModule, ITradeModule} from "src/modules/TradeModule.sol";
@@ -260,7 +260,11 @@ contract CngnPerpTradeModuleForkTest is Test {
     );
 
     vm.prank(tradeExecutor);
+    uint before = gasleft();
     matching.verifyAndMatch(actions, sigs, orderData);
+    // For the go-live funding sheet: what the executor pays per perp settlement (warm here; a real
+    // transaction also pays cold access, so the sheet doubles it).
+    console2.log("perp settlement gas (verifyAndMatch, one fill):", before - gasleft());
   }
 
   function _sign(uint accountId, bool isBid, address owner, uint pk, int price)

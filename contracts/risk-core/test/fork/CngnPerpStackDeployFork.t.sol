@@ -166,6 +166,38 @@ contract CngnPerpStackDeployFork is Test {
     _tradePerp(bobAcc, aliceAcc, 1e18);
   }
 
+  /// What perp-feeds' relayer pays per publish, through the live DataSubmitter, cold as a real
+  /// transaction: the index alone (every 5 minutes) and index plus mark and impacts (a mark tick).
+  /// Logged for the go-live funding sheet; bounded so a regression shows.
+  function testFeedPublishGas() public {
+    _executeVaultBatch();
+    bytes memory all = _feedUpdates(0.00072e18);
+    IBaseManager.ManagerData[] memory updates = abi.decode(all, (IBaseManager.ManagerData[]));
+    IBaseManager.ManagerData[] memory indexOnly = new IBaseManager.ManagerData[](1);
+    indexOnly[0] = updates[0];
+    IBaseManager.ManagerData[] memory diffsOnly = new IBaseManager.ManagerData[](3);
+    (diffsOnly[0], diffsOnly[1], diffsOnly[2]) = (updates[1], updates[2], updates[3]);
+
+    uint indexGas = _coldSubmit(abi.encode(indexOnly));
+    uint diffsGas = _coldSubmit(abi.encode(diffsOnly));
+    console2.log("feed publish gas: index", indexGas, "mark + impacts", diffsGas);
+    assertLt(indexGas, 150_000, "index publish");
+    assertLt(diffsGas, 300_000, "mark + impacts publish");
+  }
+
+  function _coldSubmit(bytes memory managerData) internal returns (uint used) {
+    address submitter = 0xe0C06DD245f1e8C8bC516c66C66e64648987F912;
+    vm.cool(submitter);
+    vm.cool(address(stack.indexFeed));
+    vm.cool(address(stack.markFeed));
+    vm.cool(address(stack.impactAskFeed));
+    vm.cool(address(stack.impactBidFeed));
+    uint before = gasleft();
+    (bool ok,) = submitter.call(abi.encodeWithSignature("submitData(bytes)", managerData));
+    used = before - gasleft();
+    assertTrue(ok, "submitData");
+  }
+
   // --- helpers ---------------------------------------------------------------------
 
   /// The cap half of the final enable action, as propose_perp_enable_batch.py emits it.
