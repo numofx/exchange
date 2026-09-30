@@ -20,8 +20,13 @@ Pager (one of; secrets from SSM via run-with-ssm-pager.sh):
 
 Other env: RPC_URL, KEEPER_HEALTH_URL, ALERT_WEBHOOK_URL (Slack mirror), PAGER_STATE_FILE
 (default ~/.numo-perp-pager.json), PAGE_PREFIX (e.g. "[REHEARSAL] ", prepended to every page),
-PAGER_HEARTBEAT_URL (optional dead-man's switch, e.g. healthchecks.io, pinged after every run that
-completes: if this script itself stops, that service pages). PUSHOVER_URL / PAGERDUTY_URL override
+PAGER_HEARTBEAT_URL: the dead-man's switch, REQUIRED. A healthchecks.io-style check URL, pinged
+after every run that completes and pages nothing that failed; its `/fail` endpoint
+(PAGER_HEARTBEAT_FAIL_URL overrides it) is pinged when a run fails, so the switch fires at once
+instead of after its grace period. If this script stops running at all -- the timer, the host,
+the RPC -- the pings stop, and that service pages you. Without a heartbeat URL the pager pages you
+about THAT, once a day. Each run's outcome is recorded in the state file (lastRunAt, lastRunOk),
+which the enable gate reads (propose_perp_enable_batch.py, gate "pager"). PUSHOVER_URL / PAGERDUTY_URL override
 the endpoints, for tests against a local capture server only.
 
   python3 scripts/ops/check_perp_pager.py                 one run
@@ -55,6 +60,7 @@ INDEX_HALT_SEC = 900
 MARK_HALT_SEC = 600
 IMPACT_HALT_SEC = 900
 REPAGE_SEC = 1800
+UNWATCHED_REPAGE_SEC = 86_400  # "no dead-man's switch" pages daily, not every half hour
 SM_PAYOUT_MIN = 1.0  # USD: below this a fall is rounding, not a payout
 
 SEL_SPOT_DIFF_DETAILS = "0xf8ff41bd"  # spotDiffDetails()
@@ -122,7 +128,8 @@ def step_state(state: dict, active: list[Condition], now: int) -> tuple[list[Con
   to_page = []
   for condition in active:
     entry = seen.get(condition.key)
-    if entry is None or now - entry["lastPagedAt"] >= REPAGE_SEC:
+    repage = UNWATCHED_REPAGE_SEC if condition.key == "pager-unwatched" else REPAGE_SEC
+    if entry is None or now - entry["lastPagedAt"] >= repage:
       to_page.append(condition)
       seen[condition.key] = {"since": entry["since"] if entry else now, "lastPagedAt": now}
   keys = {c.key for c in active}
@@ -187,7 +194,47 @@ def read_health(url: str | None) -> dict | None:
     return None
 
 
+def heartbeat_urls() -> tuple[str | None, str | None]:
+  """(success URL, failure URL). The failure URL defaults to healthchecks.io's `<check>/fail`."""
+  ok = os.environ.get("PAGER_HEARTBEAT_URL") or None
+  fail = os.environ.get("PAGER_HEARTBEAT_FAIL_URL") or (f"{ok.rstrip('/')}/fail" if ok else None)
+  return ok, fail
+
+
+def ping(url: str | None) -> None:
+  if not url:
+    return
+  try:
+    urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "numo-perp-pager/1"}), timeout=10).read()
+  except Exception as exc:  # noqa: BLE001
+    print(f"heartbeat ping failed ({url}): {exc}", file=sys.stderr)
+
+
+def state_path() -> Path:
+  return Path(os.environ.get("PAGER_STATE_FILE", Path.home() / ".numo-perp-pager.json"))
+
+
 def run(stack_path: Path) -> int:
+  """One pager run. Any exception is a failed run: the dead-man's switch is told at once."""
+  state_file = state_path()
+  state = json.loads(state_file.read_text()) if state_file.exists() else {}
+  ok_url, fail_url = heartbeat_urls()
+  try:
+    failures = check_and_page(stack_path, state)
+  except Exception as exc:  # noqa: BLE001
+    print(f"PAGER RUN FAILED: {exc}", file=sys.stderr)
+    mirror(f"{os.environ.get('PAGE_PREFIX', '')}perp pager run FAILED: {exc}")
+    failures = 1
+  state["lastRunAt"] = int(time.time())
+  state["lastRunOk"] = failures == 0
+  state["provider"] = os.environ.get("PAGER_PROVIDER", "")
+  state["heartbeatConfigured"] = ok_url is not None
+  state_file.write_text(json.dumps(state))
+  ping(ok_url if failures == 0 else fail_url)
+  return 1 if failures else 0
+
+
+def check_and_page(stack_path: Path, state: dict) -> int:
   url = os.environ["RPC_URL"]
   stack = json.loads(stack_path.read_text())
   now = head_timestamp(url)
@@ -206,11 +253,9 @@ def run(stack_path: Path) -> int:
                                   + stack["cash"].lower().removeprefix("0x").rjust(64, "0") + "0" * 64}, "latest"])
   sm_cash = int(sm_raw, 16) / 1e18
 
-  state_file = Path(os.environ.get("PAGER_STATE_FILE", Path.home() / ".numo-perp-pager.json"))
-  state = json.loads(state_file.read_text()) if state_file.exists() else {}
   previous_sm = state.get("smCash")
   active = [c for c in (feed_condition(ages), keeper_condition(health, now), insolvent_condition(health),
-                        sm_condition(previous_sm, sm_cash)) if c is not None]
+                        sm_condition(previous_sm, sm_cash), unwatched_condition(heartbeat_urls()[0])) if c is not None]
   to_page, resolved = step_state(state, active, now)
   state["smCash"] = sm_cash
 
@@ -228,16 +273,15 @@ def run(stack_path: Path) -> int:
       send_page(key, f"{key} cleared.", resolve=True)
     except Exception as exc:  # noqa: BLE001
       print(f"resolve notice failed for {key}: {exc}", file=sys.stderr)
-  state_file.write_text(json.dumps(state))
   print(f"ok: {len(active)} active ({', '.join(c.key for c in active) or 'none'}); SM ${sm_cash:,.2f}")
+  return failures
 
-  heartbeat = os.environ.get("PAGER_HEARTBEAT_URL")
-  if heartbeat and failures == 0:
-    try:
-      urllib.request.urlopen(heartbeat, timeout=10).read()
-    except Exception as exc:  # noqa: BLE001
-      print(f"heartbeat failed: {exc}", file=sys.stderr)
-  return 1 if failures else 0
+
+def unwatched_condition(heartbeat_url: str | None) -> Condition | None:
+  if heartbeat_url:
+    return None
+  return Condition("pager-unwatched", "USDCcNGN-PERP pager has no dead-man's switch (PAGER_HEARTBEAT_URL): "
+                   "if the pager itself stops, nothing will tell you.")
 
 
 def self_test() -> int:
@@ -276,6 +320,19 @@ def self_test() -> int:
   for selector, signature in [(SEL_GET_BALANCE, "getBalance(uint256,address,uint256)"),
                               (SEL_SPOT_DIFF_DETAILS, "spotDiffDetails()")]:
     assert selector == "0x" + keccak(signature.encode()).hex()[:8], signature
+  # The dead-man's switch: a missing heartbeat is its own page, daily; the failure URL follows
+  # healthchecks.io's convention unless overridden.
+  assert unwatched_condition(None).key == "pager-unwatched" and unwatched_condition("https://hc/x") is None
+  daily: dict = {}
+  unwatched = unwatched_condition(None)
+  assert step_state(daily, [unwatched], now)[0] == [unwatched]
+  assert step_state(daily, [unwatched], now + REPAGE_SEC)[0] == []
+  assert step_state(daily, [unwatched], now + UNWATCHED_REPAGE_SEC)[0] == [unwatched]
+  os.environ["PAGER_HEARTBEAT_URL"] = "https://hc-ping.com/abc/"
+  os.environ.pop("PAGER_HEARTBEAT_FAIL_URL", None)
+  assert heartbeat_urls() == ("https://hc-ping.com/abc/", "https://hc-ping.com/abc/fail")
+  os.environ.pop("PAGER_HEARTBEAT_URL")
+  assert heartbeat_urls() == (None, None)
   print("self-test ok")
   return 0
 
