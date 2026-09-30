@@ -114,6 +114,10 @@ resource "aws_ecs_task_definition" "markets" {
       { name = "SERVICE_MODE", value = "api" },
       { name = "API_ADDR", value = ":8080" },
       { name = "CNGN_SPOT_ASSET_ADDRESS", value = var.cngn_spot_asset_address },
+      { name = "CNGN_PERP_ASSET_ADDRESS", value = var.cngn_perp_asset_address },
+      { name = "CNGN_PERP_TRADE_MODULE_ADDRESS", value = var.cngn_perp_trade_module_address },
+      { name = "CNGN_PERP_CASH_ADDRESS", value = var.cngn_perp_cash_address },
+      { name = "CNGN_PERP_SRM_ADDRESS", value = var.cngn_perp_srm_address },
 
       # Every one of these was set on Railway and every one has a code default that
       # differs from it or is empty. Omitting them silently relaxed the service:
@@ -135,7 +139,7 @@ resource "aws_ecs_task_definition" "markets" {
       # Signed withdrawals (POST /v1/withdrawals): verified here, submitted by execution-service.
       # EXECUTOR_WITHDRAW_TIMEOUT must outlast execution-service's WITHDRAWAL_RECEIPT_TIMEOUT_MS (30s).
       { name = "WITHDRAWAL_MODULE_ADDRESS", value = var.withdrawal_module_address },
-      { name = "WITHDRAWAL_ASSET_ADDRESSES", value = "${var.quote_asset_address},${var.cngn_spot_asset_address}" },
+      { name = "WITHDRAWAL_ASSET_ADDRESSES", value = join(",", compact([var.quote_asset_address, var.cngn_spot_asset_address, var.cngn_perp_cash_address])) },
       { name = "EXECUTOR_WITHDRAW_URL", value = "http://execution-service.${var.internal_namespace}:8081/withdraw" },
       { name = "EXECUTOR_WITHDRAW_TIMEOUT", value = "45s" },
     ])
@@ -175,6 +179,10 @@ resource "aws_ecs_task_definition" "matcher" {
     environment = concat(local.chain_env, [
       { name = "SERVICE_MODE", value = "matcher" },
       { name = "CNGN_SPOT_ASSET_ADDRESS", value = var.cngn_spot_asset_address },
+      { name = "CNGN_PERP_ASSET_ADDRESS", value = var.cngn_perp_asset_address },
+      { name = "CNGN_PERP_TRADE_MODULE_ADDRESS", value = var.cngn_perp_trade_module_address },
+      { name = "CNGN_PERP_CASH_ADDRESS", value = var.cngn_perp_cash_address },
+      { name = "CNGN_PERP_SRM_ADDRESS", value = var.cngn_perp_srm_address },
       { name = "MATCHER_POLL_INTERVAL", value = var.matcher_poll_interval },
       # Must exceed execution-service's RECEIPT_TIMEOUT_MS (60s). See that setting.
       { name = "EXECUTOR_TIMEOUT", value = "90s" },
@@ -241,11 +249,14 @@ resource "aws_ecs_task_definition" "execution" {
       # DRY_RUN was unset on Railway and defaulted. Stated explicitly here so the
       # value is a decision rather than a default nobody chose.
       { name = "DRY_RUN", value = "false" },
+      # The USDCcNGN-PERP module, settled alongside TRADE_MODULE_ADDRESS. Empty: perp fills refused.
+      { name = "PERP_TRADE_MODULE_ADDRESS", value = var.cngn_perp_trade_module_address },
 
-      # Signed withdrawals (POST /withdraw). Only these two wrapped assets may be paid out, and
+      # Signed withdrawals (POST /withdraw). Only these assets may be paid out (the perp's cash too,
+      # once it is configured), and
       # markets-service's EXECUTOR_WITHDRAW_TIMEOUT (45s) must outlast the receipt wait.
       { name = "WITHDRAWAL_MODULE_ADDRESS", value = var.withdrawal_module_address },
-      { name = "WITHDRAWAL_ASSET_ADDRESSES", value = "${var.quote_asset_address},${var.cngn_spot_asset_address}" },
+      { name = "WITHDRAWAL_ASSET_ADDRESSES", value = join(",", compact([var.quote_asset_address, var.cngn_spot_asset_address, var.cngn_perp_cash_address])) },
       { name = "WITHDRAWAL_RECEIPT_TIMEOUT_MS", value = "30000" },
 
       # Settlement canary. Calls StandardManager.getMargin against a real subaccount on a

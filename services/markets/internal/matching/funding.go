@@ -278,6 +278,34 @@ func verifyQuoteAssetMatchesTradeModule(ctx context.Context, cfg config.Config) 
 	return nil
 }
 
+// verifyPerpQuoteAsset applies the same guard to the perp: its module must settle in the perp
+// stack's cash, the asset its SRM settles PnL and funding in. Split legs -- the price-vs-mark leg in
+// one asset, PnL in another -- are what this stack exists to avoid.
+func verifyPerpQuoteAsset(ctx context.Context, cfg config.Config) error {
+	if !cfg.PerpEnabled() || strings.TrimSpace(cfg.ChainRPCURL) == "" {
+		return nil
+	}
+	c := &chainFundingChecker{rpcURL: strings.TrimSpace(cfg.ChainRPCURL), httpClient: &http.Client{Timeout: 5 * time.Second}}
+	module := strings.ToLower(strings.TrimSpace(cfg.CNGNPerpTradeModuleAddress))
+	quote := strings.ToLower(strings.TrimSpace(cfg.CNGNPerpCashAddress))
+	raw, err := c.ethCall(ctx, module, quoteAssetSelector)
+	if err != nil {
+		slog.Warn("perp_quote_asset_pairing_unverified", "reason", "quoteAsset() call failed", "error", err.Error())
+		return nil
+	}
+	onChain, err := decodeAddressWord(raw)
+	if err != nil {
+		slog.Warn("perp_quote_asset_pairing_unverified", "reason", "undecodable quoteAsset()", "raw", raw)
+		return nil
+	}
+	if !strings.EqualFold(onChain, quote) {
+		return fmt.Errorf("%w: CNGN_PERP_CASH_ADDRESS is %s but perp TradeModule %s settles in %s",
+			ErrQuoteAssetMismatch, quote, module, onChain)
+	}
+	slog.Info("perp_quote_asset_pairing_verified", "quote_asset", quote, "trade_module", module)
+	return nil
+}
+
 func (c *chainFundingChecker) QuoteBalance(ctx context.Context, subaccountID string) (*big.Int, error) {
 	subaccountID = strings.TrimSpace(subaccountID)
 	if subaccountID == "" {

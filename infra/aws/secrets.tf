@@ -178,3 +178,35 @@ resource "aws_kms_alias" "rebalance" {
   name          = "alias/${var.name}-rebalance"
   target_key_id = aws_kms_key.rebalance[0].key_id
 }
+
+# ------------------------------------------------------------ perp guardian key
+#
+# PERP_GUARDIAN on the USDCcNGN-PERP stack: StandardManager.setAdjustmentsPaused(bool) is
+# guardian-only, in both directions, so this key -- and only this key -- can freeze every adjustment
+# on the perp's accounts without the vault's signers (contracts/risk-core/docs/cngn-perp-go-live.md,
+# "Guardian"). It is for exploits.
+#
+# Deliberately granted to NO service role: nothing running signs with it. An operator uses it from
+# an admin session (`cast send --aws`, AWS_KMS_KEY_ID set to this key), which is the break-glass
+# step. The vault grants the address with srm.setGuardian in the stack batch; rotating it is another
+# setGuardian, never a terraform destroy.
+resource "aws_kms_key" "perp_guardian" {
+  count                    = var.perp_guardian_kms_enabled ? 1 : 0
+  description              = "${var.name} USDCcNGN-PERP guardian key (secp256k1): pause/unpause only"
+  key_usage                = "SIGN_VERIFY"
+  customer_master_key_spec = "ECC_SECG_P256K1"
+  deletion_window_in_days  = 30
+  enable_key_rotation      = false
+  # The guardian's address is set on chain; deleting the key leaves the perp with a guardian no one
+  # can use. Retiring it is a vault setGuardian first, then removing this block.
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_kms_alias" "perp_guardian" {
+  count         = var.perp_guardian_kms_enabled ? 1 : 0
+  name          = "alias/${var.name}-perp-guardian"
+  target_key_id = aws_kms_key.perp_guardian[0].key_id
+}
+

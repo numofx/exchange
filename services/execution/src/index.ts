@@ -38,7 +38,12 @@ if (process.argv.includes('--healthcheck') || process.argv.includes('-healthchec
 }
 
 const config = loadConfig();
-const deploymentAddresses = loadDeploymentAddresses(config.chainId);
+// The deployment record is the fallback for addresses the environment does not name, so it is read
+// only when one is missing: a chain with no record (a local fork) runs fine on explicit addresses.
+const deploymentAddresses =
+  config.matchingAddress && config.tradeModuleAddress && config.withdrawalModuleAddress
+    ? { matching: config.matchingAddress, trade: config.tradeModuleAddress, withdrawal: config.withdrawalModuleAddress }
+    : loadDeploymentAddresses(config.chainId);
 const artifacts = loadContractArtifacts();
 
 const matchingAddress = config.matchingAddress ?? deploymentAddresses.matching;
@@ -56,6 +61,7 @@ const executor = await MatchExecutor.create(config, {
   matchingAbi: artifacts.matchingAbi,
   matchingAddress,
   tradeModuleAddress,
+  additionalTradeModules: config.perpTradeModuleAddress ? [config.perpTradeModuleAddress] : [],
   withdrawal,
 });
 

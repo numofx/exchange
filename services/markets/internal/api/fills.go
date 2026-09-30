@@ -134,7 +134,7 @@ func (s *Server) presentFills(items []orders.OwnerFill) []presentedFill {
 		// are opposite, and the aggressor's view would show the trader's buy as a sell.
 		var spotContract *spotOrderContractEcho
 		if isSpotContractInstrument(meta) {
-			spotContract, _ = deriveSpotOrderContractEchoFromEngine(item.OrderSide, item.Price, item.Size)
+			spotContract, _ = deriveSpotOrderContractEchoFromEngine(meta.OrderEntrySpec, item.OrderSide, item.Price, item.Size)
 		}
 
 		fee := ""

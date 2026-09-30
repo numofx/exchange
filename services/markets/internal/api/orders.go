@@ -137,7 +137,7 @@ func (r createOrderRequest) toParams(cfg config.Config) (orders.CreateOrderParam
 	}
 	if isSpotContractInstrument(instrument) {
 		var err error
-		side, r.LimitPrice, r.DesiredAmount, err = validateOrTranslateSpotUIIntent(r.OrderEntrySpec, r.UIIntent, side, r.LimitPrice, r.DesiredAmount)
+		side, r.LimitPrice, r.DesiredAmount, err = validateOrTranslateSpotUIIntent(instrument.OrderEntrySpec, r.OrderEntrySpec, r.UIIntent, side, r.LimitPrice, r.DesiredAmount)
 		if err != nil {
 			return orders.CreateOrderParams{}, err
 		}
@@ -145,7 +145,7 @@ func (r createOrderRequest) toParams(cfg config.Config) (orders.CreateOrderParam
 			return orders.CreateOrderParams{}, fmt.Errorf("side must be 'buy' or 'sell'")
 		}
 	} else if r.OrderEntrySpec != "" || r.UIIntent != nil {
-		return orders.CreateOrderParams{}, fmt.Errorf("order_entry_spec and ui_intent are only supported for the spot usdc/cngn contract")
+		return orders.CreateOrderParams{}, fmt.Errorf("order_entry_spec and ui_intent are only supported for the usdc/cngn spot and perp contracts")
 	}
 
 	converter, err := pricing.NewConverter(instrument)
@@ -180,7 +180,7 @@ func (r createOrderRequest) toParams(cfg config.Config) (orders.CreateOrderParam
 	if err := validateActionJSON(r.ActionJSON, ownerAddress, signerAddress, r.SubaccountID, r.Nonce); err != nil {
 		return orders.CreateOrderParams{}, err
 	}
-	if err := validateActionModule(r.ActionJSON, cfg.TradeModuleAddress); err != nil {
+	if err := validateActionModule(r.ActionJSON, tradeModuleFor(cfg, instrument)); err != nil {
 		return orders.CreateOrderParams{}, err
 	}
 	if cfg.EnforceActionDataInvariants {
@@ -487,6 +487,15 @@ func parsePositiveIntString(raw string, field string) (*big.Int, error) {
 //
 // Inert when TRADE_MODULE_ADDRESS is unset, so a dev or test environment is unaffected. In
 // production config.Load requires it -- see validateTradeModule.
+// tradeModuleFor is the module an order for this market must name: the market's own when it has one
+// (the perp settles through its own module, in its own cash), the process-wide one otherwise.
+func tradeModuleFor(cfg config.Config, instrument instruments.Metadata) string {
+	if module := strings.TrimSpace(instrument.TradeModuleAddress); module != "" {
+		return module
+	}
+	return cfg.TradeModuleAddress
+}
+
 func validateActionModule(raw json.RawMessage, tradeModuleAddress string) error {
 	expected := strings.ToLower(strings.TrimSpace(tradeModuleAddress))
 	if expected == "" {

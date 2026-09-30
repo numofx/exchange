@@ -1,0 +1,13 @@
+# Every minute: the index heartbeat is 20 minutes and the page fires at 15, so a minute's lag leaves
+# the operator ~4 minutes before the market halts.
+[Unit]
+Description=Numo USDCcNGN-PERP pager check every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=5s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

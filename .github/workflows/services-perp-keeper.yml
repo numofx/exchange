@@ -1,0 +1,53 @@
+# .github/workflows/services-perp-keeper.yml
+# The USDCcNGN-PERP liquidation keeper. The fork job deploys the real stack with risk-core's deploy
+# script onto an anvil fork of Base and liquidates against it; it needs the BASE_RPC_URL secret the
+# risk-core fork suites already use.
+name: services-perp-keeper
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'services/perp-keeper/**'
+      - 'contracts/risk-core/src/liquidation/**'
+      - 'contracts/risk-core/src/risk-managers/**'
+      - 'contracts/risk-core/scripts/deploy-cngn-perp-stack.s.sol'
+      - 'contracts/risk-core/test/e2e/**'
+      - 'pnpm-workspace.yaml'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/services-perp-keeper.yml'
+  pull_request:
+    paths:
+      - 'services/perp-keeper/**'
+      - 'contracts/risk-core/src/liquidation/**'
+      - 'contracts/risk-core/src/risk-managers/**'
+      - 'contracts/risk-core/scripts/deploy-cngn-perp-stack.s.sol'
+      - 'contracts/risk-core/test/e2e/**'
+      - 'pnpm-workspace.yaml'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/services-perp-keeper.yml'
+concurrency:
+  group: services-perp-keeper-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: foundry-rs/foundry-toolchain@v1
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter perp-keeper run check
+      - run: pnpm --filter perp-keeper run build
+      - run: pnpm --filter perp-keeper test
+      - run: forge build
+        working-directory: contracts/risk-core
+      - run: ./scripts/e2e.sh
+        working-directory: services/perp-keeper
+        env:
+          BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}

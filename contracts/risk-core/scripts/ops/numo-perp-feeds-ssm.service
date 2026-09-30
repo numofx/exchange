@@ -1,0 +1,29 @@
+# USDCcNGN-PERP price publishers (index, mark, impacts) on EC2 — keys pulled from SSM at start.
+# Revives the cNGN feed signer: the same /numo/feeds/* parameters run-with-ssm.sh exports
+# (RPC_URL, FEED_SIGNER_KEY, RELAYER_KEY, ALERT_WEBHOOK_URL). Fund the relayer BEFORE starting this.
+#
+# Non-secret config (feed addresses from CNGN_PERP_STACK.json) goes in /etc/numo/perp-feeds.env;
+# see services/perp-feeds/README.md for the full list.
+#
+# Install: (cd /home/ec2-user/exchange && pnpm install --filter perp-feeds && pnpm --filter perp-feeds build)
+#          cp scripts/ops/numo-perp-feeds-ssm.service /etc/systemd/system/numo-perp-feeds.service
+#          systemctl daemon-reload && systemctl enable --now numo-perp-feeds
+[Unit]
+Description=Numo USDCcNGN-PERP price publishers (Base mainnet, SSM secrets)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/home/ec2-user/exchange/services/perp-feeds
+EnvironmentFile=/etc/numo/perp-feeds.env
+ExecStart=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-ssm.sh /usr/bin/node dist/main.js
+Environment=AWS_REGION=us-east-1
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -74,3 +74,24 @@ func TestValidateFundingCheckAcceptsEitherQuoteVariable(t *testing.T) {
 		t.Fatal("neither variable set must be refused in production")
 	}
 }
+
+// The perp's four addresses are one deployment: any partial set is refused, in every environment.
+func TestPerpStackMustBeConfiguredWhole(t *testing.T) {
+	whole := Config{
+		CNGNPerpAssetAddress:       "0x3333333333333333333333333333333333333333",
+		CNGNPerpTradeModuleAddress: "0x2222222222222222222222222222222222222222",
+		CNGNPerpCashAddress:        "0x4444444444444444444444444444444444444444",
+		CNGNPerpSRMAddress:         "0x5555555555555555555555555555555555555555",
+	}
+	if err := whole.validatePerpStack(); err != nil {
+		t.Fatalf("a whole stack must be accepted: %v", err)
+	}
+	if err := (Config{}).validatePerpStack(); err != nil {
+		t.Fatalf("no perp at all must be accepted: %v", err)
+	}
+	partial := whole
+	partial.CNGNPerpSRMAddress = ""
+	if err := partial.validatePerpStack(); err == nil || !strings.Contains(err.Error(), "CNGN_PERP_SRM_ADDRESS") {
+		t.Fatalf("a stack without its SRM must be refused naming it, got %v", err)
+	}
+}

@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/numofx/matching-backend/internal/config"
+	"github.com/numofx/matching-backend/internal/instruments"
 )
 
 const (
@@ -76,5 +79,38 @@ func TestValidateActionModuleIsInertWhenUnconfigured(t *testing.T) {
 		if err := validateActionModule(actionForModule(cashQuoteModule), unset); err != nil {
 			t.Fatalf("unconfigured module must not reject, got: %v", err)
 		}
+	}
+}
+
+// The perp settles through its own TradeModule, quoted in its own stack's cash. Each market pins its
+// orders to its own module, so neither book can hold an order the other's module would settle.
+func TestTradeModuleForRoutesEachMarketToItsOwnModule(t *testing.T) {
+	const perpModule = "0x2222222222222222222222222222222222222222"
+	cfg := config.Config{
+		TradeModuleAddress:         wrappedQuoteModule,
+		CNGNSpotAssetAddress:       "0x9d806fd040a719d27a8e5e77dc5ae0ed1e089493",
+		CNGNPerpAssetAddress:       "0x3333333333333333333333333333333333333333",
+		CNGNPerpTradeModuleAddress: perpModule,
+		CNGNPerpCashAddress:        "0x4444444444444444444444444444444444444444",
+		CNGNPerpSRMAddress:         "0x5555555555555555555555555555555555555555",
+	}
+	registry := instruments.DefaultRegistry(cfg)
+	spot, _ := registry.BySymbol(instruments.CNGNSpotSymbol)
+	perp, ok := registry.BySymbol(instruments.CNGNPerpSymbol)
+	if !ok || !perp.Enabled {
+		t.Fatal("the perp must be enabled when its stack is configured")
+	}
+
+	if err := validateActionModule(actionForModule(perpModule), tradeModuleFor(cfg, perp)); err != nil {
+		t.Fatalf("a perp order naming the perp module must be accepted: %v", err)
+	}
+	if err := validateActionModule(actionForModule(wrappedQuoteModule), tradeModuleFor(cfg, perp)); err == nil {
+		t.Fatal("a perp order naming the spot module must be rejected: it would settle in the wrong cash")
+	}
+	if err := validateActionModule(actionForModule(perpModule), tradeModuleFor(cfg, spot)); err == nil {
+		t.Fatal("a spot order naming the perp module must be rejected")
+	}
+	if err := validateActionModule(actionForModule(wrappedQuoteModule), tradeModuleFor(cfg, spot)); err != nil {
+		t.Fatalf("spot is unchanged: its orders still name the process-wide module: %v", err)
 	}
 }

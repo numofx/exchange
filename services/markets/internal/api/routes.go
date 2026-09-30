@@ -17,6 +17,7 @@ func (s *Server) routes(integrations *integrationCache) chi.Router {
 	router.Get("/v1/integrations/trades", integrations.wrap(s.handleIntegrationTrades, "ticker_id", "limit", "before_trade_id"))
 	router.Get("/v1/orders", s.handleOrderHistory)
 	router.Get("/v1/fills", s.handleFills)
+	router.Get("/v1/positions", s.handlePositions)
 	router.Get("/v1/orders/{order_id}", s.handleGetOrderStatus)
 	router.Get("/debug/markets", s.handleMarketDiagnostics)
 	router.Post("/v1/orders", s.handleCreateOrder)

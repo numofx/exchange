@@ -1,0 +1,26 @@
+# USDCcNGN-PERP liquidation keeper on EC2 — its key pulled from SSM at start.
+# Non-secret config (stack addresses, KEEPER_ACCOUNT, START_BLOCK, DRY_RUN) goes in
+# /etc/numo/perp-keeper.env; see services/perp-keeper/README.md. Ships with DRY_RUN=true.
+#
+# Install: (cd /home/ec2-user/exchange && pnpm install --filter perp-keeper && pnpm --filter perp-keeper build)
+#          cp scripts/ops/numo-perp-keeper-ssm.service /etc/systemd/system/numo-perp-keeper.service
+#          systemctl daemon-reload && systemctl enable --now numo-perp-keeper
+[Unit]
+Description=Numo USDCcNGN-PERP liquidation keeper (Base mainnet, SSM secrets)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/home/ec2-user/exchange/services/perp-keeper
+EnvironmentFile=/etc/numo/perp-keeper.env
+ExecStart=/bin/bash -c 'export KEEPER_KEY="$(aws ssm get-parameter --name /numo/keeper/keeper_key --with-decryption --query Parameter.Value --output text --region "$AWS_REGION")" RPC_URL="$(aws ssm get-parameter --name /numo/feeds/rpc_url --with-decryption --query Parameter.Value --output text --region "$AWS_REGION")" ALERT_WEBHOOK_URL="$(aws ssm get-parameter --name /numo/feeds/alert_webhook_url --with-decryption --query Parameter.Value --output text --region "$AWS_REGION" 2>/dev/null || true)" && exec /usr/bin/node dist/main.js'
+Environment=AWS_REGION=us-east-1
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

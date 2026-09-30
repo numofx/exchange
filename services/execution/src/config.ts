@@ -17,6 +17,8 @@ const envSchema = z.object({
   CHAIN_ID: z.coerce.number().int().positive(),
   MATCHING_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
   TRADE_MODULE_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
+  // The USDCcNGN-PERP module, settled alongside TRADE_MODULE_ADDRESS. Unset: perp fills are refused.
+  PERP_TRADE_MODULE_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
   EXPECTED_ACTION_OWNER: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
   EXPECTED_ACTION_SIGNER: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
   DRY_RUN: z.union([z.literal('true'), z.literal('false')]).default('false'),
@@ -71,6 +73,7 @@ export type AppConfig = {
   chainId: number;
   matchingAddress?: `0x${string}`;
   tradeModuleAddress?: `0x${string}`;
+  perpTradeModuleAddress?: `0x${string}`;
   executorAddress: `0x${string}`;
   expectedActionOwner?: `0x${string}`;
   expectedActionSigner?: `0x${string}`;
@@ -126,6 +129,7 @@ export function loadConfig(): AppConfig {
     chainId: parsed.CHAIN_ID,
     matchingAddress: parsed.MATCHING_ADDRESS ? (parsed.MATCHING_ADDRESS as `0x${string}`) : undefined,
     tradeModuleAddress: parsed.TRADE_MODULE_ADDRESS ? (parsed.TRADE_MODULE_ADDRESS as `0x${string}`) : undefined,
+    perpTradeModuleAddress: parsed.PERP_TRADE_MODULE_ADDRESS ? (getAddress(parsed.PERP_TRADE_MODULE_ADDRESS) as `0x${string}`) : undefined,
     executorAddress,
     expectedActionOwner: parsed.EXPECTED_ACTION_OWNER ? (getAddress(parsed.EXPECTED_ACTION_OWNER) as `0x${string}`) : undefined,
     expectedActionSigner: parsed.EXPECTED_ACTION_SIGNER ? (getAddress(parsed.EXPECTED_ACTION_SIGNER) as `0x${string}`) : undefined,

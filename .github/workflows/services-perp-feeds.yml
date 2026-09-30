@@ -1,0 +1,47 @@
+# .github/workflows/services-perp-feeds.yml
+# The USDCcNGN-PERP price publishers. The anvil suite runs too: it deploys the real feed contracts
+# from risk-core and checks they accept what the service signs, so it needs forge and anvil.
+name: services-perp-feeds
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'services/perp-feeds/**'
+      - 'contracts/risk-core/src/feeds/**'
+      - 'contracts/risk-core/src/periphery/OracleDataSubmitter.sol'
+      - 'pnpm-workspace.yaml'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/services-perp-feeds.yml'
+  pull_request:
+    paths:
+      - 'services/perp-feeds/**'
+      - 'contracts/risk-core/src/feeds/**'
+      - 'contracts/risk-core/src/periphery/OracleDataSubmitter.sol'
+      - 'pnpm-workspace.yaml'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/services-perp-feeds.yml'
+concurrency:
+  group: services-perp-feeds-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: foundry-rs/foundry-toolchain@v1
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter perp-feeds run check
+      - run: pnpm --filter perp-feeds run build
+      - run: forge build src/feeds/LyraSpotFeed.sol src/feeds/LyraSpotDiffFeed.sol src/periphery/OracleDataSubmitter.sol
+        working-directory: contracts/risk-core
+      - run: |
+          anvil --port 8599 --silent &
+          sleep 2
+          ANVIL_RPC_URL=http://127.0.0.1:8599 pnpm --filter perp-feeds test

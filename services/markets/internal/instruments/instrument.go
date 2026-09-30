@@ -3,6 +3,16 @@ package instruments
 import "time"
 
 const (
+	ContractTypeSpot      = "spot"
+	ContractTypePerpetual = "perpetual"
+)
+
+// IsPerpetual reports whether the market is the perp, whose fills move margin, not balances.
+func (m Metadata) IsPerpetual() bool {
+	return m.ContractType == ContractTypePerpetual
+}
+
+const (
 	PricingModelLinear   = "linear"
 	PricingModelVariance = "variance"
 	PricingModelVol      = "volatility"
@@ -12,17 +22,17 @@ const (
 )
 
 type Metadata struct {
-	Symbol             string        `json:"symbol"`
-	AssetAddress       string        `json:"asset_address"`
-	SubID              string        `json:"sub_id"`
-	ContractType       string        `json:"contract_type,omitempty"`
-	SettlementType     string        `json:"settlement_type,omitempty"`
-	BaseAssetSymbol    string        `json:"base_asset_symbol,omitempty"`
-	QuoteAssetSymbol   string        `json:"quote_asset_symbol,omitempty"`
-	ExpiryTimestamp    int64         `json:"expiry_timestamp,omitempty"`
-	LastTradeTimestamp int64         `json:"last_trade_timestamp,omitempty"`
-	TickSize           string        `json:"tick_size"`
-	MinSize            string        `json:"min_size"`
+	Symbol             string `json:"symbol"`
+	AssetAddress       string `json:"asset_address"`
+	SubID              string `json:"sub_id"`
+	ContractType       string `json:"contract_type,omitempty"`
+	SettlementType     string `json:"settlement_type,omitempty"`
+	BaseAssetSymbol    string `json:"base_asset_symbol,omitempty"`
+	QuoteAssetSymbol   string `json:"quote_asset_symbol,omitempty"`
+	ExpiryTimestamp    int64  `json:"expiry_timestamp,omitempty"`
+	LastTradeTimestamp int64  `json:"last_trade_timestamp,omitempty"`
+	TickSize           string `json:"tick_size"`
+	MinSize            string `json:"min_size"`
 	// TakerFeeBps and MakerFeeBps are THE fee schedule for this market, in basis points of the
 	// quote notional. Everything downstream reads them from here: the matcher charges them, the
 	// funding check reserves them, and /v1/markets serves them so the UI never carries its own
@@ -48,7 +58,13 @@ type Metadata struct {
 	UIPriceToEngine    string        `json:"ui_price_to_engine,omitempty"`
 	UISizeToEngine     string        `json:"ui_size_to_engine,omitempty"`
 	FundingInterval    time.Duration `json:"-"`
-	Enabled            bool          `json:"enabled"`
+	// Where this market settles. Per market because the perp runs on its own stack: its orders name
+	// its own TradeModule, which settles in its own CashAsset, margined by its own SRM. Spot's are
+	// the process-wide TRADE_MODULE_ADDRESS / QUOTE_ASSET_ADDRESS, exactly as before.
+	TradeModuleAddress   string `json:"trade_module_address,omitempty"`
+	QuoteAssetAddress    string `json:"quote_asset_address,omitempty"`
+	MarginManagerAddress string `json:"margin_manager_address,omitempty"`
+	Enabled              bool   `json:"enabled"`
 }
 
 type Registry struct {

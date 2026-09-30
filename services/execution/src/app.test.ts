@@ -269,3 +269,30 @@ test('POST /withdraw forwards a valid withdrawal and returns its receipt', async
   assert.deepEqual(response.json(), { accepted: true, tx_hash: '0xabc', receipt_status: 'success', block_number: '42' });
   await app.close();
 });
+
+// USDCcNGN-PERP settles through its own module, quoted in its own stack's cash. The executor settles
+// it alongside the spot module, but never a request that mixes the two.
+test('assertPayloadConsistency accepts the perp module only when it is configured', () => {
+  const spotModule = '0x0000000000000000000000000000000000000009' as const;
+  const perpModule = '0x0000000000000000000000000000000000000002' as const;
+
+  assert.throws(() => assertPayloadConsistency(requestPayload, { tradeModuleAddress: spotModule }), /module_address mismatch/);
+  assert.doesNotThrow(() =>
+    assertPayloadConsistency(requestPayload, { tradeModuleAddress: spotModule, additionalTradeModules: [perpModule] }),
+  );
+});
+
+test('assertPayloadConsistency refuses a request whose actions span two allowed modules', () => {
+  const mixed: ExecuteMatchRequest = {
+    ...requestPayload,
+    actions: [requestPayload.actions[0]!, { ...requestPayload.actions[1]!, module: '0x0000000000000000000000000000000000000009' }],
+  };
+  assert.throws(
+    () =>
+      assertPayloadConsistency(mixed, {
+        tradeModuleAddress: '0x0000000000000000000000000000000000000009',
+        additionalTradeModules: ['0x0000000000000000000000000000000000000002'],
+      }),
+    /actions\[1\]\.module mismatch/,
+  );
+});

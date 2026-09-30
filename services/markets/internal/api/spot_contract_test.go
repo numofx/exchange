@@ -32,7 +32,7 @@ func TestSpotRegistryGating(t *testing.T) {
 
 func TestTranslateSpotUIIntentBuy(t *testing.T) {
 	// UI BUY 100 USDC @ 1600 cNGN/USDC -> engine SELL 160000 cNGN @ 1/1600 USDC per cNGN.
-	echo, err := translateSpotUIIntent(&spotOrderIntent{Side: "buy", Price: "1600", Size: "100"})
+	echo, err := translateSpotUIIntent(spotOrderEntrySpec, &spotOrderIntent{Side: "buy", Price: "1600", Size: "100"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestTranslateSpotUIIntentBuy(t *testing.T) {
 }
 
 func TestTranslateSpotUIIntentSell(t *testing.T) {
-	echo, err := translateSpotUIIntent(&spotOrderIntent{Side: "sell", Price: "1600", Size: "100"})
+	echo, err := translateSpotUIIntent(spotOrderEntrySpec, &spotOrderIntent{Side: "sell", Price: "1600", Size: "100"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,6 +66,7 @@ func TestTranslateSpotUIIntentSell(t *testing.T) {
 func TestValidateSpotUIIntentMismatch(t *testing.T) {
 	_, _, _, err := validateOrTranslateSpotUIIntent(
 		spotOrderEntrySpec,
+		spotOrderEntrySpec,
 		&spotOrderIntent{Side: "buy", Price: "1600", Size: "100"},
 		orders.SideBuy, // must be engine SELL after inversion
 		"",
@@ -73,5 +74,39 @@ func TestValidateSpotUIIntentMismatch(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(err.Error(), "side does not match") {
 		t.Fatalf("expected side mismatch error, got %v", err)
+	}
+}
+
+// The perp shares spot's translation -- USDC per cNGN on chain, cNGN per USDC on screen -- under its
+// own spec: a UI long of 100 USDC at 1,389 cNGN/USDC is an engine SELL of 138,900 cNGN at 1/1389.
+func TestPerpUIIntentTranslatesLikeSpotUnderItsOwnSpec(t *testing.T) {
+	echo, err := translateSpotUIIntent(instruments.PerpOrderEntrySpec, &spotOrderIntent{Side: "buy", Price: "1389", Size: "100"})
+	if err != nil {
+		t.Fatalf("translate: %v", err)
+	}
+	if echo.Spec != instruments.PerpOrderEntrySpec {
+		t.Fatalf("echo spec = %q, want the perp spec", echo.Spec)
+	}
+	if echo.EngineOrder.Side != string(orders.SideSell) {
+		t.Fatalf("UI long must be an engine SELL of the cNGN perp, got %q", echo.EngineOrder.Side)
+	}
+	if !decimalStringsMatch(echo.EngineOrder.Amount, "138900") {
+		t.Fatalf("engine amount = %q, want 138900 cNGN", echo.EngineOrder.Amount)
+	}
+}
+
+// An intent signed for one market's spec is refused on the other's, so a spot ticket cannot be
+// replayed as a perp order or the reverse.
+func TestUIIntentForAnotherMarketsSpecIsRefused(t *testing.T) {
+	_, _, _, err := validateOrTranslateSpotUIIntent(
+		instruments.PerpOrderEntrySpec,
+		spotOrderEntrySpec,
+		&spotOrderIntent{Side: "buy", Price: "1389", Size: "100"},
+		"",
+		"",
+		"",
+	)
+	if err == nil || !strings.Contains(err.Error(), "order_entry_spec must be") {
+		t.Fatalf("expected a spec mismatch, got %v", err)
 	}
 }
