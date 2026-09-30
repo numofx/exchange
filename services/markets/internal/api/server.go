@@ -39,6 +39,8 @@ type Server struct {
 	orderHistoryAuth wsauth.Verifier
 	// withdrawals serves POST /v1/withdrawals; nil when not fully configured, and the endpoint answers 503.
 	withdrawals *withdrawalService
+	// perp reads USDCcNGN-PERP's chain state for /v1/markets and /v1/positions; nil without a perp.
+	perp *perpStateReader
 }
 
 type marketPresentation struct {
@@ -74,6 +76,9 @@ type marketPresentation struct {
 	EngineSidePolicy   string `json:"engine_side_policy,omitempty"`
 	UIPriceToEngine    string `json:"ui_price_to_engine,omitempty"`
 	UISizeToEngine     string `json:"ui_size_to_engine,omitempty"`
+	// Perp is USDCcNGN-PERP's live state from chain; absent for spot, and absent for the perp when
+	// the chain could not be read (a client must treat that as unknown, not as zero).
+	Perp *perpMarketState `json:"perp,omitempty"`
 }
 
 type presentedOrder struct {
@@ -213,6 +218,7 @@ func NewServer(cfg config.Config, pool *pgxpool.Pool, registry *instruments.Regi
 		custody:     newCustodyChecker(cfg),
 		signatures:  signatures,
 		withdrawals: newWithdrawalService(cfg, signatures),
+		perp:        newPerpStateReader(cfg),
 		hub:         events.NewHub(pool, cfg, slog.Default()),
 		wsAuth:      wsauth.Verifier{Domain: cfg.WSAuthDomain, MaxTTL: cfg.WSAuthMaxTTL},
 		orderHistoryAuth: wsauth.Verifier{
@@ -316,7 +322,16 @@ func (s *Server) handleMarkets(w http.ResponseWriter, r *http.Request) {
 
 	response := make([]marketPresentation, 0, len(items))
 	for _, item := range items {
-		response = append(response, s.presentMarket(r.Context(), item))
+		presentation := s.presentMarket(r.Context(), item)
+		if item.IsPerpetual() && s.perp != nil {
+			state, _, err := s.perp.marketState(r.Context(), item)
+			if err != nil {
+				slog.Warn("read perp state", "market", item.Symbol, "error", err)
+			} else {
+				presentation.Perp = state
+			}
+		}
+		response = append(response, presentation)
 	}
 
 	writeJSON(w, http.StatusOK, response)

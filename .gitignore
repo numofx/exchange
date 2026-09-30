@@ -13,3 +13,6 @@ __pycache__/
 # Agent worktrees and local Claude settings: machine-local, never part of a change.
 # They are embedded git repos, so `git add -A` otherwise commits them as gitlinks.
 .claude/
+
+# scripts/local-venue state: Postgres data, logs, pids
+.local-venue/

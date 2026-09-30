@@ -28,6 +28,11 @@ export type ExecutorDependencies = {
   matchingAbi: Abi;
   matchingAddress: `0x${string}`;
   tradeModuleAddress: `0x${string}`;
+  /**
+   * Modules settled alongside the main one: the USDCcNGN-PERP module, which settles in its own
+   * stack's cash. A request may name any one of them, but every action in it must name that same one.
+   */
+  additionalTradeModules?: readonly `0x${string}`[];
   /** Signed withdrawals. Absent when this deployment does not accept them; `withdraw` then refuses. */
   withdrawal?: {
     moduleAddress: `0x${string}`;
@@ -113,6 +118,19 @@ export class MatchExecutor {
         return 'dry-run' as const;
       }
 
+      // The estimate runs against the latest block, the transaction lands in a later one, and the
+      // two can take different paths: the perp's CashAsset skips interest accrual when it was
+      // already touched this block -- as it was by the previous settlement -- and runs it in full a
+      // block later, ~48% more gas once anything is borrowed (CngnPerpStackFork
+      // .testDepositGasDependsOnWhetherTheCashWasTouchedThisBlock). An exact estimate then reverts
+      // out of gas on the next settlement.
+      const estimate = await this.publicClient.estimateContractGas({
+        account: this.account,
+        address: this.deps.matchingAddress,
+        abi: options.abi,
+        functionName: 'verifyAndMatch',
+        args,
+      });
       return this.walletClient.writeContract({
         account: this.account,
         address: this.deps.matchingAddress,
@@ -120,6 +138,7 @@ export class MatchExecutor {
         functionName: 'verifyAndMatch',
         args,
         chain: this.chain,
+        gas: withGasHeadroom(estimate),
       });
     });
   }
@@ -127,6 +146,7 @@ export class MatchExecutor {
   async execute(request: ExecuteMatchRequest): Promise<ExecuteMatchResponse> {
     assertPayloadConsistency(request, {
       tradeModuleAddress: this.deps.tradeModuleAddress,
+      additionalTradeModules: this.deps.additionalTradeModules,
       expectedActionOwner: this.config.expectedActionOwner,
       expectedActionSigner: this.config.expectedActionSigner,
     });
@@ -252,6 +272,7 @@ export function assertPayloadConsistency(
     | `0x${string}`
     | {
         tradeModuleAddress: `0x${string}`;
+        additionalTradeModules?: readonly `0x${string}`[];
         expectedActionOwner?: `0x${string}`;
         expectedActionSigner?: `0x${string}`;
       },
@@ -260,12 +281,16 @@ export function assertPayloadConsistency(
     typeof tradeModuleAddressOrExpectations === 'string'
       ? { tradeModuleAddress: tradeModuleAddressOrExpectations }
       : tradeModuleAddressOrExpectations;
-  const expected = getAddress(expectations.tradeModuleAddress);
+  const allowed = [expectations.tradeModuleAddress, ...(expectations.additionalTradeModules ?? [])].map((address) =>
+    getAddress(address),
+  );
   const moduleAddress = getAddress(request.module_address);
 
-  if (moduleAddress !== expected) {
-    throw new Error(`module_address mismatch: expected ${expected}, got ${moduleAddress}`);
+  if (!allowed.includes(moduleAddress)) {
+    throw new Error(`module_address mismatch: expected one of ${allowed.join(', ')}, got ${moduleAddress}`);
   }
+  // Every action names the request's own module: one fill never spans the spot and perp modules.
+  const expected = moduleAddress;
 
   for (const [index, action] of request.actions.entries()) {
     const actionModule = getAddress(action.module);
@@ -325,4 +350,17 @@ function encodeOrderData(request: ExecuteMatchRequest): `0x${string}` {
       },
     ],
   );
+}
+
+/** Gas headroom over the estimate, in percent: the same 50% the perp keeper sends with. */
+export const GAS_HEADROOM_PCT = 150n;
+/**
+ * And never less than this much over it. The accrual path costs a roughly fixed ~59k gas, not a
+ * share of the call, so a percentage alone is thinnest on the smallest transactions.
+ */
+export const GAS_HEADROOM_MIN = 100_000n;
+
+export function withGasHeadroom(estimate: bigint): bigint {
+  const scaled = (estimate * GAS_HEADROOM_PCT) / 100n;
+  return scaled > estimate + GAS_HEADROOM_MIN ? scaled : estimate + GAS_HEADROOM_MIN;
 }

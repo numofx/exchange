@@ -39,6 +39,22 @@ importers:
         specifier: ^5.8.2
         version: 5.9.3
 
+  scripts/local-venue:
+    dependencies:
+      viem:
+        specifier: ^2.23.5
+        version: 2.55.4(typescript@5.9.3)(zod@3.25.76)
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.3
+        version: 4.23.1
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
   services/execution:
     dependencies:
       '@aws-sdk/client-kms':
@@ -56,6 +72,53 @@ importers:
       fastify:
         specifier: ^5.2.1
         version: 5.10.0
+      viem:
+        specifier: ^2.23.5
+        version: 2.55.4(typescript@5.9.3)(zod@3.25.76)
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.3
+        version: 4.23.1
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  services/perp-feeds:
+    dependencies:
+      cngn-rate-picker:
+        specifier: 0.2.2
+        version: 0.2.2
+      dotenv:
+        specifier: ^16.4.7
+        version: 16.6.1
+      viem:
+        specifier: ^2.23.5
+        version: 2.55.4(typescript@5.9.3)(zod@3.25.76)
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.10
+        version: 22.20.1
+      tsx:
+        specifier: ^4.19.3
+        version: 4.23.1
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  services/perp-keeper:
+    dependencies:
+      dotenv:
+        specifier: ^16.4.7
+        version: 16.6.1
       viem:
         specifier: ^2.23.5
         version: 2.55.4(typescript@5.9.3)(zod@3.25.76)
@@ -1841,6 +1904,11 @@ packages:
     engines: {node: '>= 20.19.0'}
     dependencies:
       readdirp: 5.1.1
+    dev: false
+
+  /cngn-rate-picker@0.2.2:
+    resolution: {integrity: sha512-0FBJL/rV5c2OmPnmaFKQfh6kUPKcs3pxjxVJBFJDTcumTjItiIxDGtDhhvL5I0584gjhjGJM4uFgID7+G0IlSw==}
+    engines: {node: '>=18'}
     dev: false
 
   /combined-stream@1.0.8:
