@@ -43,6 +43,7 @@ function config() {
     PERP_ASSET: '0x00000000000000000000000000000000000000b2',
     INDEX_STATE_FILE: join(mkdtempSync(join(tmpdir(), 'perp-feeds-')), 'state.json'),
     INDEX_STATUS_FILE: join(mkdtempSync(join(tmpdir(), 'perp-feeds-status-')), 'status.json'),
+    SOURCE_RETRY_DELAY_MS: '0',
     ...feeds,
   });
 }
@@ -186,6 +187,29 @@ describe('index sample and the peg guard', () => {
     const status = JSON.parse(readFileSync(cfg.INDEX_STATUS_FILE, 'utf8'));
     assert.equal(status.pegGuardTripped, true);
     assert.match(status.sample.reason, /peg guard/);
+  });
+
+  it('retries a failed source once within the sample, and goes without it after a second failure', async () => {
+    const calls: Record<string, number> = { flaky: 0, dead: 0 };
+    const flaky = { name: 'flaky', read: async () => {
+      calls.flaky += 1;
+      if (calls.flaky === 1) throw new Error('api.textilecredit.com returned 502');
+      return { source: 'flaky', cngnPerUsdt: 1374 };
+    } };
+    const parity = async () => ({ buy: 0.9999, sell: 1.0001 });
+    const recovered = new IndexPublisher(config(), fakeChain({ index: null, diffs: {} }), [three[0], three[1], flaky], quiet, () => Number(HEAD) * 1000, parity);
+    await recovered.sample();
+    assert.equal(calls.flaky, 2);
+    assert.equal(recovered.samples().length, 1, 'one transient failure no longer costs the sample');
+
+    const dead = { name: 'dead', read: async () => {
+      calls.dead += 1;
+      throw new Error('api.textilecredit.com returned 502');
+    } };
+    const refused = new IndexPublisher(config(), fakeChain({ index: null, diffs: {} }), [three[0], three[1], dead], quiet, () => Number(HEAD) * 1000, parity);
+    await refused.sample();
+    assert.equal(calls.dead, 2, 'exactly one retry');
+    assert.equal(refused.samples().length, 0);
   });
 
   it('keeps sampling at parity when the tripwire is blind, and says so', async () => {
