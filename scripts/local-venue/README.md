@@ -16,7 +16,8 @@ BASE_RPC_URL=<archive-capable Base RPC> ./scripts/local-venue/up.sh
 3. starts Postgres, runs the migrations, and starts markets api and matcher and execution-service;
 4. starts `perp-feeds --local-fixed-price`, the keeper (live, with `/health` on), the SecurityModule
    seed and a two-sided maker quote;
-5. runs `propose_perp_enable_batch.py --local`, which checks every launch gate against the local
+5. runs the pager once against a local capture server (PagerDuty-shaped, with a heartbeat), since
+   the enable gate requires a live pager; then runs `propose_perp_enable_batch.py --local`, which checks every launch gate against the local
    services and writes the enable actions, then applies them as the vault;
 6. has a taker cross the quote, and reads the position back from `/v1/positions`.
 

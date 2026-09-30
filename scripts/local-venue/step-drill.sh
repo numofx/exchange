@@ -40,6 +40,8 @@ class H(http.server.BaseHTTPRequestHandler):
         body = self.rfile.read(int(self.headers["Content-Length"]))
         open(out, "a").write(body.decode() + "\n")
         self.send_response(202); self.end_headers()
+    def do_GET(self):  # the pager's dead-man's switch pings
+        self.send_response(200); self.end_headers()
     def log_message(self, *a): pass
 http.server.HTTPServer(("127.0.0.1", 9778), H).serve_forever()
 PY
@@ -47,7 +49,8 @@ CAPTURE=$!
 trap 'kill $CAPTURE 2>/dev/null || true' EXIT
 PAGER() { (cd "$ROOT/contracts/risk-core" && RPC_URL=$RPC KEEPER_HEALTH_URL="${1:-http://127.0.0.1:9464/health}" \
   PAGER_PROVIDER=pagerduty PAGERDUTY_URL=http://127.0.0.1:9778/ PAGERDUTY_ROUTING_KEY=local PAGE_PREFIX="[REHEARSAL] " \
-  PAGER_STATE_FILE="$DIR/pager-state.json" ALERT_WEBHOOK_URL= python3 scripts/ops/check_perp_pager.py --stack "$DIR/venue.json"); }
+  PAGER_STATE_FILE="$DIR/pager-state.json" PERP_INDEX_STATUS_FILE="$DIR/perp-index-status.json" PAGER_HEARTBEAT_URL=http://127.0.0.1:9778/hb \
+  ALERT_WEBHOOK_URL= python3 scripts/ops/check_perp_pager.py --stack "$DIR/venue.json"); }
 paged() { [ -f "$PAGES" ] && grep -c "\"event_action\": \"$1\".*$2" "$PAGES" || echo 0; }
 
 step "pager: quiet on a healthy market"

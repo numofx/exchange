@@ -1,9 +1,11 @@
 import { createAlerter } from './alert.js';
 import { createChain } from './chain.js';
 import { loadConfig } from './config.js';
-import { buildProviders, IndexPublisher } from './index-publisher.js';
+import { IndexPublisher } from './index-publisher.js';
+import { buildIndexSources } from './index-sources.js';
+import { fetchPegTicker, pegMid, pegReading } from './peg.js';
 import { acceptIndexStep, fetchKeeperHealth, parseStepArgs } from './index-step.js';
-import { assertRpcIsLocal, localSources, parseFixedPrice, parseLocalSources, publishFixedPrice } from './local-fixed-price.js';
+import { assertRpcIsLocal, localPegTicker, localSources, parseFixedPrice, parseLocalSources, publishFixedPrice } from './local-fixed-price.js';
 import { MarkPublisher } from './mark-publisher.js';
 
 /**
@@ -15,26 +17,39 @@ import { MarkPublisher } from './mark-publisher.js';
  * systemd restarting it is slower than the next tick.
  */
 /**
- * `--probe-sources`: asks every configured provider once and prints what each answered, and how
- * long it took. Signs and sends nothing. Run it on the host the publisher will run on: a source
- * reachable from a laptop may be geo-blocked from the ops box, and the reverse.
+ * `--probe-sources`: reads the peg tripwire and every source once and prints what each said (NGN
+ * per USDT, which the index takes as cNGN per USDT at parity). Signs and sends nothing. Run it
+ * on the host the publisher will run on: a source reachable from a laptop may be geo-blocked from
+ * the ops box, and the reverse.
  */
 async function probeSources(config: ReturnType<typeof loadConfig>) {
-  const providers = buildProviders(config);
+  const now = Date.now();
+  let peg;
+  try {
+    const mid = pegMid(await fetchPegTicker(config.QUIDAX_API_URL, AbortSignal.timeout(config.PROVIDER_TIMEOUT_MS)), config.PEG_MAX_SPREAD_BPS);
+    peg = mid.ok
+      ? pegReading([{ price: mid.mid, at: now }], now, { windowMs: config.PEG_TWAP_WINDOW_MS, maxSpreadBps: config.PEG_MAX_SPREAD_BPS, guardBps: config.PEG_GUARD_BPS })
+      : ({ state: 'blind', reason: mid.reason } as const);
+  } catch (error) {
+    peg = { state: 'blind', reason: (error as Error).message } as const;
+  }
+  console.log(peg.state === 'watching'
+    ? `tripwire     ok    cNGN at ${peg.ngnPerCngn} NGN (${peg.deviationBps.toFixed(1)}bps from parity${peg.tripped ? ', WOULD TRIP' : ''}); not a source`
+    : `tripwire     BLIND ${peg.reason} (the index continues at parity)`);
+  const sources = buildIndexSources(config);
   let answered = 0;
-  for (const provider of providers) {
+  for (const source of sources) {
     const started = Date.now();
     try {
-      const quote = await provider.getPriceInNgn({ signal: AbortSignal.timeout(config.PROVIDER_TIMEOUT_MS), fetch });
+      const reading = await source.read({ signal: AbortSignal.timeout(config.PROVIDER_TIMEOUT_MS), fetch });
       answered += 1;
-      console.log(`${provider.name.padEnd(12)} ok    ${quote.price} NGN/USDT  ${Date.now() - started}ms`);
+      console.log(`${source.name.padEnd(12)} ok    ${reading.cngnPerUsdt.toFixed(4)} NGN/USDT (= cNGN/USDT at parity)  ${Date.now() - started}ms`);
     } catch (error) {
-      console.log(`${provider.name.padEnd(12)} FAIL  ${(error as Error).message.slice(0, 140)}  ${Date.now() - started}ms`);
+      console.log(`${source.name.padEnd(12)} FAIL  ${(error as Error).message.slice(0, 160)}  ${Date.now() - started}ms`);
     }
   }
   const verdict = answered >= config.INDEX_MIN_SOURCES ? 'enough' : 'NOT ENOUGH: the index will refuse every sample';
-  console.log(`${answered} of ${providers.length} answered; the index needs ${config.INDEX_MIN_SOURCES} (${verdict})`);
-  if (!config.BLOCKRADAR_API_KEY) console.log('BLOCKRADAR_API_KEY is not set: Blockradar is not among the providers');
+  console.log(`${answered} of ${sources.length} sources answered; the index needs ${config.INDEX_MIN_SOURCES} (${verdict})`);
   if (answered < config.INDEX_MIN_SOURCES) process.exitCode = 1;
 }
 
@@ -65,8 +80,10 @@ async function main() {
 
   const localPrice = parseLocalSources(process.argv);
   if (localPrice !== null) await assertRpcIsLocal(config);
-  const providers = localPrice === null ? buildProviders(config) : localSources(localPrice);
-  const index = new IndexPublisher(config, chain, providers, alert);
+  const index =
+    localPrice === null
+      ? new IndexPublisher(config, chain, buildIndexSources(config), alert)
+      : new IndexPublisher(config, chain, localSources(localPrice), alert, Date.now, localPegTicker);
   await index.load();
 
   // One publish past the jump guard, then exit: the reopening procedure in the README.
