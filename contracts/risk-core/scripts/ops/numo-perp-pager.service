@@ -1,0 +1,14 @@
+# Pages the operator's phone for USDCcNGN-PERP conditions that may need the guardian: a feed halt,
+# an unhealthy keeper, a SecurityModule payout, an insolvent account (check_perp_pager.py). Mirrors
+# every page to Slack. KEEPER_HEALTH_URL comes from /etc/numo/perp-pager.env. Paired with
+# numo-perp-pager.timer.
+[Unit]
+Description=Numo USDCcNGN-PERP pager check
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/home/ec2-user/exchange/contracts/risk-core
+EnvironmentFile=/etc/numo/perp-pager.env
+ExecStart=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-ssm-pager.sh /usr/bin/python3 scripts/ops/check_perp_pager.py
+Environment=AWS_REGION=us-east-1
