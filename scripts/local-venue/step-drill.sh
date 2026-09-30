@@ -10,6 +10,8 @@
 #  4. the step with the keeper live is published once, and the audit log names who approved it
 #  5. restart the publisher at the new level; the keeper must liquidate the NGN long
 #  6. report what the SecurityModule paid, and whether any loss socialized
+#  7. the pager (check_perp_pager.py) against a local capture server: quiet at the start, pages an
+#     unreachable keeper, the insolvent account and the SecurityModule payout, and resolves
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
@@ -24,9 +26,40 @@ step() { printf '\n== %s\n' "$*"; }
 [ "$(cast chain-id --rpc-url $RPC)" = 31337 ] || { echo "not the local fork" >&2; exit 1; }
 
 INDEX_NOW=$(python3 -c "print(round(1e18 / $(cast call "$(json "$DIR/venue.json" indexFeed)" 'getSpot()(uint256,uint256)' --rpc-url $RPC | head -1 | cut -d' ' -f1)))")
-# A step of STEP_BPS in USD per NGN: NGN devalues, so NGN per USD rises by 1 / (1 - step).
+# A step of STEP_BPS in USDC per cNGN: NGN devalues, so cNGN per USDC rises by 1 / (1 - step).
 NEW_LEVEL=$(python3 -c "print(round($INDEX_NOW / (1 - $STEP_BPS / 10000)))")
-echo "index $INDEX_NOW -> $NEW_LEVEL NGN/USD (a ${STEP_BPS}bps fall in USD per NGN)"
+echo "index $INDEX_NOW -> $NEW_LEVEL cNGN/USDC (a ${STEP_BPS}bps fall in USDC per cNGN)"
+
+# The pager, pointed at a local capture server in PagerDuty's shape: nothing leaves the machine.
+PAGES="$DIR/pages.jsonl"; rm -f "$PAGES" "$DIR/pager-state.json"
+python3 - "$PAGES" <<'PY' >"$DIR/logs/page-capture.log" 2>&1 &
+import http.server, sys
+out = sys.argv[1]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        open(out, "a").write(body.decode() + "\n")
+        self.send_response(202); self.end_headers()
+    def log_message(self, *a): pass
+http.server.HTTPServer(("127.0.0.1", 9778), H).serve_forever()
+PY
+CAPTURE=$!
+trap 'kill $CAPTURE 2>/dev/null || true' EXIT
+PAGER() { (cd "$ROOT/contracts/risk-core" && RPC_URL=$RPC KEEPER_HEALTH_URL="${1:-http://127.0.0.1:9464/health}" \
+  PAGER_PROVIDER=pagerduty PAGERDUTY_URL=http://127.0.0.1:9778/ PAGERDUTY_ROUTING_KEY=local PAGE_PREFIX="[REHEARSAL] " \
+  PAGER_STATE_FILE="$DIR/pager-state.json" ALERT_WEBHOOK_URL= python3 scripts/ops/check_perp_pager.py --stack "$DIR/venue.json"); }
+paged() { [ -f "$PAGES" ] && grep -c "\"event_action\": \"$1\".*$2" "$PAGES" || echo 0; }
+
+step "pager: quiet on a healthy market"
+PAGER >/dev/null
+[ "$(paged trigger .)" = 0 ] || { echo "FAIL: the pager paged on a healthy market" >&2; cat "$PAGES" >&2; exit 1; }
+echo "ok: no pages"
+step "pager: keeper unreachable pages"
+PAGER http://127.0.0.1:9/health >/dev/null
+[ "$(paged trigger keeper-unhealthy)" = 1 ] || { echo "FAIL: no keeper-unhealthy page" >&2; exit 1; }
+PAGER >/dev/null
+[ "$(paged resolve keeper-unhealthy)" = 1 ] || { echo "FAIL: keeper-unhealthy did not resolve" >&2; exit 1; }
+echo "ok: paged, then resolved when the keeper answered again"
 
 step "fill the cap"
 $VENUE fill-cap
@@ -61,6 +94,30 @@ step "publisher back on at $NEW_LEVEL; keeper liquidates"
 (cd "$ROOT/services/perp-feeds" && set -a && . "$DIR/perp-feeds.env" && set +a && \
   exec node dist/main.js --local-fixed-price="$NEW_LEVEL") >"$DIR/logs/perp-feeds.log" 2>&1 &
 echo $! >"$DIR/pids/perp-feeds"
+# The pager runs alongside: it must page the insolvent account while it is open.
+for _ in $(seq 1 60); do
+  PAGER >/dev/null
+  [ "$(paged trigger insolvent-account)" -ge 1 ] && break
+  [ "$(pnpm --dir $HERE exec tsx $HERE/venue.ts $DIR report 2>/dev/null | grep -c "'ngn-long' .* 0 ")" -ge 1 ] && break
+  sleep 3
+done
 $VENUE wait-closed ngn-long 600
+# The keeper's next pass (every 5s here) is what clears the account from /health; give it a minute.
+for _ in $(seq 1 20); do
+  PAGER >/dev/null
+  [ "$(paged resolve insolvent-account)" -ge 1 ] && break
+  sleep 3
+done
+step "pager: what reached the capture server"
+python3 -c "
+import json, sys
+for line in open(sys.argv[1]):
+    e = json.loads(line)
+    print(e['event_action'], e['dedup_key'], (e.get('payload') or {}).get('summary', ''))" "$PAGES"
+[ "$(paged trigger insolvent-account)" -ge 1 ] || { echo "FAIL: the insolvent account was not paged" >&2; exit 1; }
+[ "$(paged trigger sm-payout)" -ge 1 ] || { echo "FAIL: the SecurityModule payout was not paged" >&2; exit 1; }
+[ "$(paged resolve insolvent-account)" -ge 1 ] || { echo "FAIL: the insolvent account did not resolve" >&2; exit 1; }
+grep -q '\[REHEARSAL\]' "$PAGES" || { echo "FAIL: pages were not prefixed" >&2; exit 1; }
+echo "ok: insolvent account and SecurityModule payout paged, insolvency resolved, every page prefixed"
 $VENUE report
 grep -E "bid|auction" "$DIR/logs/perp-keeper.log" | tail -12

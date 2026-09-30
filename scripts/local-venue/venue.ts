@@ -53,6 +53,9 @@ const WORST_FEE_RATE_E18 = 3n * 10n ** 15n;
 
 const abi = parseAbi([
   'function approve(address, uint256) returns (bool)',
+  'function transfer(address, uint256) returns (bool)',
+  'function balanceOf(address) view returns (uint256)',
+  'function decimals() view returns (uint8)',
   'function createAndDepositSubAccount(address baseAsset, uint256 initDeposit, address manager) returns (uint256)',
   'function donate(uint256 amount)',
   'function createAccount(address owner, address manager) returns (uint256)',
@@ -79,7 +82,29 @@ type Accounts = Record<string, string>;
 
 const [stateDir, command, ...args] = process.argv.slice(2);
 if (!stateDir || !command) throw new Error('usage: venue.ts <state-dir> <account|fund-sm|quote|cross> ...');
-const venue = JSON.parse(readFileSync(join(stateDir, 'venue.json'), 'utf8')) as Venue;
+// The perp stack's addresses. Absent in --spot-only runs, which deploy no perp: only the perp
+// commands read it, so a spot run never touches it.
+const venue = new Proxy({} as Venue, {
+  get(_target, key: string) {
+    const loaded = JSON.parse(readFileSync(join(stateDir!, 'venue.json'), 'utf8')) as Venue;
+    return loaded[key as keyof Venue];
+  },
+});
+
+/** What an order is signed for: the traded asset and the TradeModule that settles it. */
+type OrderMarket = { asset: Address; module: Address; label: string };
+const perpMarket = (): OrderMarket => ({ asset: getAddress(venue.perp), module: getAddress(venue.tradePerp), label: 'perp' });
+// Base mainnet spot, which the fork inherits: the cNGN escrow is the spot asset, the wrapped-quote
+// TradeModule settles it against wrapped USDC, and accounts live under the spot SRM.
+const SPOT = {
+  asset: getAddress('0x9d806fd040a719d27a8e5e77dc5ae0ed1e089493'),
+  module: getAddress('0x12423B366F6F07130961900bE00d05Ea63Acd071'),
+  wrappedUsdc: getAddress('0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84'),
+  cngnToken: getAddress('0x46C85152bFe9f96829aA94755D9f915F9B10EF5F'),
+  srm: getAddress('0x3195Bd7e02d93982bCF8b34DF5B941fFCaE1E49b'),
+  withdrawalModule: getAddress('0x0a10AE2f5D2482cE1e43bC309D430B8861C2b5aB'),
+};
+const spotMarket = (): OrderMarket => ({ asset: SPOT.asset, module: SPOT.module, label: 'spot' });
 const accountsFile = join(stateDir, 'accounts.json');
 
 const chain = defineChain({
@@ -93,6 +118,17 @@ const client = createPublicClient({ chain, transport: http(RPC) });
 const reported = await client.getChainId();
 if (reported !== LOCAL_CHAIN_ID) {
   throw new Error(`local venue only: ${RPC} is chain ${reported}, not ${LOCAL_CHAIN_ID}`);
+}
+
+/**
+ * Gas for a send: 1.5x the estimate and at least +100k, as every production sender into the perp
+ * stack does. The perp cash's interest accrual costs more in the block a transaction lands in than
+ * in the block it was estimated against; an exact estimate runs out of gas (it did, here, on a
+ * createAndDepositSubAccount: 413,685 used of 414,210).
+ */
+function withGasHeadroom(estimate: bigint): bigint {
+  const scaled = (estimate * 150n) / 100n;
+  return scaled > estimate + 100_000n ? scaled : estimate + 100_000n;
 }
 
 function keyFor(label: string) {
@@ -119,10 +155,11 @@ async function funded(label: string, usdc: bigint) {
 async function send(
   wallet: Awaited<ReturnType<typeof funded>>['wallet'],
   address: Address,
-  functionName: 'approve' | 'createAndDepositSubAccount' | 'donate' | 'createAccount' | 'deposit',
+  functionName: 'approve' | 'createAndDepositSubAccount' | 'donate' | 'createAccount' | 'deposit' | 'transfer',
   args: readonly unknown[],
 ) {
-  const hash = await wallet.writeContract({ address, abi, functionName, args } as never);
+  const estimate = await client.estimateContractGas({ address, abi, functionName, args, account: wallet.account } as never);
+  const hash = await wallet.writeContract({ address, abi, functionName, args, gas: withGasHeadroom(estimate) } as never);
   const receipt = await client.waitForTransactionReceipt({ hash });
   if (receipt.status !== 'success') throw new Error(`${functionName} reverted (${hash})`);
   return receipt;
@@ -183,7 +220,7 @@ async function fundSecurityModule(usdcWhole: bigint) {
   console.log(`security module seeded with $${usdcWhole}`);
 }
 
-/** The index as the UI shows it: NGN per USD, rounded to a whole naira. */
+/** The index as the UI shows it: cNGN per USDC, rounded to a whole naira. */
 async function uiIndex(): Promise<bigint> {
   const [usdPerNgn] = await client.readContract({ address: venue.indexFeed, abi, functionName: 'getSpot' });
   return (10n ** 18n + usdPerNgn / 2n) / usdPerNgn;
@@ -199,10 +236,10 @@ function nonce() {
 
 /**
  * A perp order in trading-app's envelope (buildSpotOrderEnvelope with the perp market override):
- * UI price NGN per USD and size in USD; the engine price is 1 / price and the engine side the
+ * UI price cNGN per USDC and size in USD; the engine price is 1 / price and the engine side the
  * opposite one. Whole-naira prices keep the arithmetic exact.
  */
-async function placeOrder(label: string, side: 'buy' | 'sell', uiPrice: bigint, uiSizeUsd: bigint) {
+async function placeOrder(label: string, side: 'buy' | 'sell', uiPrice: bigint, uiSizeUsd: bigint, market: OrderMarket = perpMarket()) {
   const account = keyFor(label);
   const subaccountId = readAccounts()[label];
   if (subaccountId === undefined) throw new Error(`no account for ${label}; run "account ${label}" first`);
@@ -214,7 +251,7 @@ async function placeOrder(label: string, side: 'buy' | 'sell', uiPrice: bigint, 
   const expiry = BigInt(Math.floor(Date.now() / 1000) + 86_400);
   const orderNonce = nonce();
   const owner = getAddress(account.address);
-  const module = getAddress(venue.tradePerp);
+  const module = market.module;
 
   const data = encodeAbiParameters(
     [
@@ -233,7 +270,7 @@ async function placeOrder(label: string, side: 'buy' | 'sell', uiPrice: bigint, 
     ],
     [
       {
-        asset: getAddress(venue.perp),
+        asset: market.asset,
         subId: 0n,
         limitPrice: enginePrice,
         desiredAmount: engineAmountWhole * 10n ** 18n,
@@ -275,13 +312,13 @@ async function placeOrder(label: string, side: 'buy' | 'sell', uiPrice: bigint, 
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       action_json: actionJson,
-      asset_address: getAddress(venue.perp),
+      asset_address: market.asset,
       desired_amount: engineAmountWhole.toString(),
       expiry: Number(expiry),
       filled_amount: '0',
       limit_price: formatUnits(enginePrice, 18),
       nonce: orderNonce.toString(),
-      order_id: `perp-${crypto.randomUUID()}`,
+      order_id: `${market.label}-${crypto.randomUUID()}`,
       owner_address: owner,
       recipient_id: subaccountId,
       side: engineSide,
@@ -293,8 +330,9 @@ async function placeOrder(label: string, side: 'buy' | 'sell', uiPrice: bigint, 
     }),
   });
   const body = await response.text();
-  console.log(`${label} ${side} $${uiSizeUsd} @ ${uiPrice} NGN/USD -> ${response.status} ${body.slice(0, 200)}`);
+  console.log(`${label} ${market.label} ${side} $${uiSizeUsd} @ ${uiPrice} cNGN/USDC -> ${response.status} ${body.slice(0, 200)}`);
   if (!response.ok) throw new Error(`order refused: ${response.status}`);
+  return (JSON.parse(body) as { order: { order_id: string } }).order.order_id;
 }
 
 async function waitForPosition(label: string) {
@@ -338,7 +376,7 @@ async function fillCap() {
   await placeOrder('ngn-short', 'buy', index, uiSize);
   await waitForPosition('ngn-long');
   const after = await client.readContract({ address: venue.perp, abi, functionName: 'totalPosition', args: [venue.srm] });
-  console.log(`OI ${after / 10n ** 18n} of cap ${cap / 10n ** 18n} NGN (each side $${uiSize} at ${index} NGN/USD)`);
+  console.log(`OI ${after / 10n ** 18n} of cap ${cap / 10n ** 18n} NGN (each side $${uiSize} at ${index} cNGN/USDC)`);
 }
 
 async function report() {
@@ -377,6 +415,160 @@ async function waitClosed(label: string, timeoutSec: number) {
   throw new Error(`${label} (#${id}) still open after ${timeoutSec}s: ${await balance(id, venue.perp)}`);
 }
 
+// --- spot regression: the live spot stack the fork inherits, with no perp anywhere -------------
+
+/** A spot trading account under the spot SRM holding `whole` USDC or cNGN, as the app opens one. */
+async function openSpotAccount(label: string, kind: 'usdc' | 'cngn', whole: bigint) {
+  let asset: Address;
+  let token: Address;
+  let amount: bigint;
+  const { account, wallet } = await funded(label, kind === 'usdc' ? whole * 10n ** 6n : 0n);
+  if (kind === 'usdc') {
+    asset = SPOT.wrappedUsdc;
+    token = USDC;
+    amount = whole * 10n ** 6n;
+  } else {
+    asset = SPOT.asset;
+    token = SPOT.cngnToken;
+    const decimals = await client.readContract({ address: token, abi, functionName: 'decimals' });
+    amount = whole * 10n ** BigInt(decimals);
+    // cNGN comes from the escrow's own holdings, impersonated: fork-only, and only to fund a trader.
+    await client.request({ method: 'anvil_impersonateAccount' as never, params: [SPOT.asset] as never });
+    await client.request({ method: 'anvil_setBalance' as never, params: [SPOT.asset, toHex(10n ** 18n)] as never });
+    const escrow = createWalletClient({ account: SPOT.asset, chain, transport: http(RPC) });
+    await send(escrow as never, token, 'transfer', [account.address, amount]);
+    await client.request({ method: 'anvil_stopImpersonatingAccount' as never, params: [SPOT.asset] as never });
+  }
+  await send(wallet, token, 'approve', [SUBACCOUNT_CREATOR, amount]);
+  const receipt = await send(wallet, SUBACCOUNT_CREATOR, 'createAndDepositSubAccount', [asset, amount, SPOT.srm]);
+  const event = receipt.logs
+    .filter((log) => log.address.toLowerCase() === MATCHING.toLowerCase())
+    .map((log) => {
+      try {
+        return decodeEventLog({ abi, data: log.data, topics: log.topics });
+      } catch {
+        return null;
+      }
+    })
+    .find((decoded) => decoded?.eventName === 'DepositedSubAccount');
+  if (event?.eventName !== 'DepositedSubAccount') throw new Error(`${label}: no DepositedSubAccount`);
+  const id = event.args.accountId.toString();
+  writeFileSync(accountsFile, JSON.stringify({ ...readAccounts(), [label]: id }, null, 2));
+  console.log(JSON.stringify({ label, address: account.address, subaccountId: id, [kind]: whole.toString() }));
+}
+
+async function spotBalances(label: string) {
+  const id = readAccounts()[label]!;
+  return { usdc: await balance(id, SPOT.wrappedUsdc), cngn: await balance(id, SPOT.asset) };
+}
+
+/**
+ * A resting UI sell of USDC, lifted by a UI buy, then checked against the spot fill contract
+ * (trading-app README): UI BUY -> dUSDC = +size, dcNGN = -(size x price); UI SELL the reverse. The
+ * taker pays the 25bps fee in USDC. Then the settlement transaction must carry the executor's gas
+ * headroom.
+ */
+async function spotCross(uiPrice: bigint, uiSize: bigint) {
+  const makerBefore = await spotBalances('usdc-maker');
+  const takerBefore = await spotBalances('cngn-taker');
+  const head = await client.getBlockNumber();
+  await placeOrder('usdc-maker', 'sell', uiPrice, uiSize, spotMarket());
+  await placeOrder('cngn-taker', 'buy', uiPrice, uiSize, spotMarket());
+
+  let makerAfter = makerBefore;
+  for (let attempt = 0; attempt < 60 && makerAfter.cngn === makerBefore.cngn; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    makerAfter = await spotBalances('usdc-maker');
+  }
+  const takerAfter = await spotBalances('cngn-taker');
+  const E18 = 10n ** 18n;
+  const usdc = uiSize * E18;
+  const cngn = uiSize * uiPrice * E18;
+  const delta = {
+    maker: { usdc: makerAfter.usdc - makerBefore.usdc, cngn: makerAfter.cngn - makerBefore.cngn },
+    taker: { usdc: takerAfter.usdc - takerBefore.usdc, cngn: takerAfter.cngn - takerBefore.cngn },
+  };
+  console.log('spot fill deltas (18dp):', JSON.stringify(delta, (_k, v) => (typeof v === 'bigint' ? v.toString() : v)));
+  const fee = (usdc * 30n) / 10_000n; // the signed bound; the charge is 25bps
+  const check = (ok: boolean, what: string) => {
+    if (!ok) throw new Error(`spot regression FAILED: ${what}`);
+    console.log(`ok: ${what}`);
+  };
+  // The engine price is 1/price rounded to 18dp, so the USDC leg can differ from size by that
+  // rounding times the cNGN amount: ~4e-15 USDC here. 1e-12 USDC (1e6 at 18dp) is ample and still exact.
+  const rounding = 1_000_000n;
+  const near = (a: bigint, b: bigint) => (a > b ? a - b : b - a) <= rounding;
+  check(near(delta.maker.usdc, -usdc), 'UI SELL: maker dUSDC = -size (to the engine price rounding)');
+  check(delta.maker.cngn === cngn, 'UI SELL: maker dcNGN = +size x price');
+  check(delta.taker.cngn === -cngn, 'UI BUY: taker dcNGN = -(size x price)');
+  check(delta.taker.usdc <= usdc + rounding && delta.taker.usdc >= usdc - fee, 'UI BUY: taker dUSDC = +size less the taker fee');
+
+  // The settlement: a verifyAndMatch to Matching since the orders went in, with headroom over its use.
+  let settled = false;
+  for (let n = head + 1n; n <= (await client.getBlockNumber()); n++) {
+    const block = await client.getBlock({ blockNumber: n, includeTransactions: true });
+    for (const tx of block.transactions) {
+      if (tx.to?.toLowerCase() !== MATCHING.toLowerCase() || !tx.input.startsWith('0x')) continue;
+      const receipt = await client.getTransactionReceipt({ hash: tx.hash });
+      console.log(`settlement ${tx.hash}: status ${receipt.status}, gas limit ${tx.gas}, used ${receipt.gasUsed}`);
+      check(receipt.status === 'success', 'the settlement succeeded');
+      check(tx.gas - receipt.gasUsed >= 90_000n, 'the executor sent it with gas headroom (limit >= used + ~100k)');
+      settled = true;
+    }
+  }
+  check(settled, 'found the settlement transaction');
+}
+
+/** A user-signed withdrawal of wrapped USDC back to the owner's wallet, through markets-service. */
+async function spotWithdraw(label: string, whole: bigint) {
+  const account = keyFor(label);
+  const subaccountId = readAccounts()[label]!;
+  const owner = getAddress(account.address);
+  const amount = whole * 10n ** 6n;
+  const data = encodeAbiParameters([{ type: 'address' }, { type: 'uint256' }], [SPOT.wrappedUsdc, amount]);
+  const expiry = BigInt(Math.floor(Date.now() / 1000) + 600);
+  const withdrawalNonce = nonce();
+  const signature = await account.signTypedData({
+    domain: { name: 'Matching', version: '1.0', chainId: LOCAL_CHAIN_ID, verifyingContract: MATCHING },
+    primaryType: 'Action',
+    types: {
+      Action: [
+        { name: 'subaccountId', type: 'uint256' },
+        { name: 'nonce', type: 'uint256' },
+        { name: 'module', type: 'address' },
+        { name: 'data', type: 'bytes' },
+        { name: 'expiry', type: 'uint256' },
+        { name: 'owner', type: 'address' },
+        { name: 'signer', type: 'address' },
+      ],
+    },
+    message: { subaccountId: BigInt(subaccountId), nonce: withdrawalNonce, module: SPOT.withdrawalModule, data, expiry, owner, signer: owner },
+  });
+  const before = await client.readContract({ address: USDC, abi, functionName: 'balanceOf', args: [owner] });
+  const response = await fetch(`${MARKETS}/v1/withdrawals`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      action: {
+        subaccount_id: subaccountId,
+        nonce: withdrawalNonce.toString(),
+        module: SPOT.withdrawalModule,
+        data,
+        expiry: expiry.toString(),
+        owner,
+        signer: owner,
+      },
+      signature,
+    }),
+  });
+  const body = await response.text();
+  console.log(`withdraw ${whole} USDC -> ${response.status} ${body.slice(0, 200)}`);
+  if (!response.ok) throw new Error(`spot regression FAILED: withdrawal refused (${response.status})`);
+  const after = await client.readContract({ address: USDC, abi, functionName: 'balanceOf', args: [owner] });
+  if (after - before !== amount) throw new Error(`spot regression FAILED: wallet received ${after - before}, want ${amount}`);
+  console.log(`ok: withdrawal paid ${whole} USDC to the owner's wallet`);
+}
+
 switch (command) {
   case 'account':
     await openAccount(args[0] ?? 'trader', BigInt(args[1] ?? '5000'));
@@ -400,6 +592,15 @@ switch (command) {
     await waitForPosition('taker');
     break;
   }
+  case 'spot-account':
+    await openSpotAccount(args[0] ?? 'trader', (args[1] ?? 'usdc') as 'usdc' | 'cngn', BigInt(args[2] ?? '1000'));
+    break;
+  case 'spot-cross':
+    await spotCross(BigInt(args[0] ?? '1374'), BigInt(args[1] ?? '100'));
+    break;
+  case 'spot-withdraw':
+    await spotWithdraw(args[0] ?? 'usdc-maker', BigInt(args[1] ?? '10'));
+    break;
   case 'fill-cap':
     await fillCap();
     break;

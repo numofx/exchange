@@ -20,6 +20,29 @@ BASE_RPC_URL=<archive-capable Base RPC> ./scripts/local-venue/up.sh
    services and writes the enable actions, then applies them as the vault;
 6. has a taker cross the quote, and reads the position back from `/v1/positions`.
 
+## Spot regression: `up.sh --spot-only`
+
+Runs markets-service and execution-service with **every perp variable unset**, as they run before
+the perp's Terraform vars exist (go-live checklist, step 2), and deploys no perp. It checks:
+- `/v1/markets` serves spot only;
+- a spot fill matches the fill contract, with the maker's legs exact and the taker paying 25 bps;
+- the executor sent the settlement with gas headroom;
+- a spot withdrawal pays out to the wallet.
+
+## Mainnet-fork rehearsal: `rehearse-mainnet.sh`
+
+The keeper's go-live rehearsal (checklist step 17). It forks Base after the stack is deployed and
+the keeper funded, serves the fork as **chain 31337**, and refuses to run on anything else. Then it
+opens the market, crashes the index, and runs the **production keeper build with its production
+env and key** until it has closed an insolvent account and cut a solvent one back above margin.
+
+Afterwards it checks that every keeper transaction is signed for 31337, and that the deployed feeds
+and Matching rebuild their EIP-712 domain for 31337. Alerts are prefixed `[REHEARSAL]` and go only
+to `REHEARSAL_ALERT_WEBHOOK_URL` if it is set. `rehearse.ts` holds the chain-side steps.
+
+To try it without a mainnet deployment, point `--fork-url` at a running `up.sh` venue and
+`--stack` / `--module` / `--keeper-env` at its files.
+
 ## Index-step drill
 
 `./scripts/local-venue/step-drill.sh [bps]` (default 4000) runs on top of `up.sh`. It fills the rest
@@ -30,6 +53,10 @@ procedure from `contracts/risk-core/docs/cngn-perp-go-live.md`:
 3. it publishes the step with the keeper live, and prints the audit record;
 4. it restarts the feeds at the new level and waits for the keeper to liquidate;
 5. it reports what the SecurityModule paid and whether anything socialized.
+
+It also runs the pager (`check_perp_pager.py`) against a local capture server. The pager must stay
+quiet on a healthy market, page an unreachable keeper, the insolvent account and the SecurityModule
+payout, and resolve them; every page is prefixed `[REHEARSAL]`.
 
 `perp-feeds --local-sources=<price>` stands three agreeing providers in for the real ones, so the
 drill runs the real sampling, TWAP and step code. It has the same 31337-only refusal as

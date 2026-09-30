@@ -14,7 +14,14 @@
 #
 # Everything runs in the background with logs and pids under $LOCAL_VENUE_DIR (default
 # .local-venue/ at the repo root). ./scripts/local-venue/down.sh stops it all.
+#
+#   up.sh --spot-only   the spot regression instead: no perp deployed, and every perp variable
+#                       unset on markets-service and execution-service, exactly as they run before the
+#                       perp's Terraform vars are set. A spot fill (checked against the fill contract)
+#                       and a spot withdrawal must go through.
 set -euo pipefail
+SPOT_ONLY=0
+[ "${1:-}" = "--spot-only" ] && SPOT_ONLY=1
 : "${BASE_RPC_URL:?set BASE_RPC_URL (an archive-capable Base RPC to fork)}"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -62,6 +69,14 @@ start anvil anvil --fork-url "$BASE_RPC_URL" --chain-id 31337 --port $ANVIL_PORT
 wait_for anvil cast chain-id --rpc-url $RPC
 [ "$(cast chain-id --rpc-url $RPC)" = 31337 ] || { echo "not a local fork" >&2; exit 1; }
 
+EXECUTOR=$(cast wallet address --private-key "$EXECUTOR_KEY")
+cast rpc anvil_impersonateAccount $VAULT --rpc-url $RPC >/dev/null
+cast rpc anvil_setBalance $VAULT 0xDE0B6B3A7640000 --rpc-url $RPC >/dev/null
+# The local executor stands in for the venue's KMS key.
+as_vault $MATCHING "setTradeExecutor(address,bool)" "$EXECUTOR" true
+cast rpc anvil_setBalance "$EXECUTOR" 0xDE0B6B3A7640000 --rpc-url $RPC >/dev/null
+
+if [ "$SPOT_ONLY" = 0 ]; then
 step "deploy: perp stack (cap 0) and TradeModule (not allowlisted)"
 (cd "$ROOT/contracts/risk-core" && FEED_SIGNER=$(cast wallet address --private-key "$FEED_SIGNER_KEY") PERP_GUARDIAN=$GUARDIAN \
   forge script test/e2e/DeployPerpStackForE2E.s.sol --sig "runE2E()" --rpc-url $RPC \
@@ -73,17 +88,11 @@ MODULE_JSON="$ROOT/contracts/execution/cache/e2e-perp-module.json"
 MODULE=$(json "$MODULE_JSON" tradePerp)
 
 step "vault: the deploy batches (acceptOwnership everywhere, then the SRM guardian; nothing opens the market)"
-cast rpc anvil_impersonateAccount $VAULT --rpc-url $RPC >/dev/null
-cast rpc anvil_setBalance $VAULT 0xDE0B6B3A7640000 --rpc-url $RPC >/dev/null
 # The stack batch exactly as the deploy script writes it for the vault, guardian included.
 python3 -c "import json,sys;[print(a['to'], a['data']) for a in json.load(open(sys.argv[1]))]" \
   "$ROOT/contracts/risk-core/cache/e2e-perp-stack-vault-actions.json" |
   while read -r TO DATA; do cast send "$TO" "$DATA" --from $VAULT --unlocked --rpc-url $RPC >/dev/null; done
 as_vault "$MODULE" "acceptOwnership()"
-# The local executor stands in for the venue's KMS key.
-EXECUTOR=$(cast wallet address --private-key "$EXECUTOR_KEY")
-as_vault $MATCHING "setTradeExecutor(address,bool)" "$EXECUTOR" true
-cast rpc anvil_setBalance "$EXECUTOR" 0xDE0B6B3A7640000 --rpc-url $RPC >/dev/null
 echo "cap=$(cast call "$(json "$STACK" perp)" 'totalPositionCap(address)(uint256)' "$(json "$STACK" srm)" --rpc-url $RPC)" \
   "module allowed=$(cast call $MATCHING 'allowedModules(address)(bool)' "$MODULE" --rpc-url $RPC)" \
   "guardian=$(cast call "$(json "$STACK" srm)" 'guardian()(address)' --rpc-url $RPC)"
@@ -96,6 +105,15 @@ json.dump(stack, open(sys.argv[3], "w"), indent=2)
 PY
 V="$DIR/venue.json"
 PERP=$(json "$V" perp) CASH=$(json "$V" cash) SRM=$(json "$V" srm)
+PERP_MARKETS_ENV="CNGN_PERP_ASSET_ADDRESS=$PERP
+CNGN_PERP_TRADE_MODULE_ADDRESS=$MODULE
+CNGN_PERP_CASH_ADDRESS=$CASH
+CNGN_PERP_SRM_ADDRESS=$SRM"
+PERP_EXEC_ENV="PERP_TRADE_MODULE_ADDRESS=$MODULE"
+else
+  step "spot only: no perp deployed, every perp variable left unset"
+  PERP_MARKETS_ENV="" PERP_EXEC_ENV=""
+fi
 
 step "postgres on :$PG_PORT, migrations"
 command -v pg_ctl >/dev/null || { echo "needs Postgres binaries (brew install postgresql)" >&2; exit 1; }
@@ -121,11 +139,10 @@ MATCHING_ADDRESS=$MATCHING
 TRADE_MODULE_ADDRESS=0x12423B366F6F07130961900bE00d05Ea63Acd071
 QUOTE_ASSET_ADDRESS=0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84
 CNGN_SPOT_ASSET_ADDRESS=0x9d806fd040a719d27a8e5e77dc5ae0ed1e089493
-CNGN_PERP_ASSET_ADDRESS=$PERP
-CNGN_PERP_TRADE_MODULE_ADDRESS=$MODULE
-CNGN_PERP_CASH_ADDRESS=$CASH
-CNGN_PERP_SRM_ADDRESS=$SRM
+$PERP_MARKETS_ENV
 ENFORCE_MATCHING_CUSTODY=true
+WITHDRAWAL_MODULE_ADDRESS=0x0a10AE2f5D2482cE1e43bC309D430B8861C2b5aB
+EXECUTOR_WITHDRAW_URL=http://127.0.0.1:$EXEC_PORT/withdraw
 EXECUTOR_URL=http://127.0.0.1:$EXEC_PORT/execute
 EXECUTOR_TIMEOUT=90s
 MATCHER_POLL_INTERVAL=500ms
@@ -134,12 +151,29 @@ ENV
 
 step "services: execution :$EXEC_PORT, markets api :$API_PORT, matcher"
 (cd "$ROOT/services/execution" && RPC_URL=$RPC CHAIN_ID=31337 PRIVATE_KEY=$EXECUTOR_KEY MATCHING_ADDRESS=$MATCHING \
-  TRADE_MODULE_ADDRESS=0x12423B366F6F07130961900bE00d05Ea63Acd071 PERP_TRADE_MODULE_ADDRESS=$MODULE \
-  WITHDRAWAL_MODULE_ADDRESS=0x0a10AE2f5D2482cE1e43bC309D430B8861C2b5aB PORT=$EXEC_PORT HOST=127.0.0.1 \
-  DRY_RUN=false WAIT_FOR_RECEIPT=true start execution node dist/index.js)
+  TRADE_MODULE_ADDRESS=0x12423B366F6F07130961900bE00d05Ea63Acd071 \
+  WITHDRAWAL_MODULE_ADDRESS=0x0a10AE2f5D2482cE1e43bC309D430B8861C2b5aB \
+  WITHDRAWAL_ASSET_ADDRESSES=0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84,0x9d806fd040a719d27a8e5e77dc5ae0ed1e089493 \
+  PORT=$EXEC_PORT HOST=127.0.0.1 DRY_RUN=false WAIT_FOR_RECEIPT=true start execution env $PERP_EXEC_ENV node dist/index.js)
 (set -a; . "$DIR/markets.env"; set +a; start markets-api "$DIR/bin/markets-api"; start markets-matcher "$DIR/bin/markets-matcher")
 wait_for execution curl -sf http://127.0.0.1:$EXEC_PORT/healthz
 wait_for "markets api" curl -sf http://127.0.0.1:$API_PORT/v1/markets
+
+VENUE="pnpm --dir $HERE exec tsx $HERE/venue.ts $DIR"
+if [ "$SPOT_ONLY" = 1 ]; then
+  step "spot regression: /v1/markets, a fill, a withdrawal"
+  curl -sf http://127.0.0.1:$API_PORT/v1/markets | python3 -c "
+import json, sys
+markets = [m['market'] for m in json.load(sys.stdin)]
+assert markets == ['USDCcNGN-SPOT'], f'expected spot only, got {markets}'
+print('ok: /v1/markets serves spot only:', markets)"
+  $VENUE spot-account usdc-maker usdc 1000
+  $VENUE spot-account cngn-taker cngn 200000
+  $VENUE spot-cross 1374 100
+  $VENUE spot-withdraw usdc-maker 10
+  printf '\nSpot regression passed. Logs: %s/logs    Stop: %s/down.sh\n' "$DIR" "$HERE"
+  exit 0
+fi
 
 step "perp-feeds --local-fixed-price=$INDEX_NGN_PER_USD"
 cat >"$DIR/perp-feeds.env" <<ENV
@@ -162,7 +196,6 @@ ENV
   start perp-feeds node dist/main.js --local-fixed-price="$INDEX_NGN_PER_USD")
 wait_for "index feed" cast call "$(json "$V" indexFeed)" "getSpot()(uint256,uint256)" --rpc-url $RPC
 
-VENUE="pnpm --dir $HERE exec tsx $HERE/venue.ts $DIR"
 step "keeper: funded account under the perp SRM, live, /health on :$KEEPER_HEALTH_PORT"
 # Created by the keeper's own EOA (label "keeper" is KEEPER_KEY) straight on SubAccounts, not through
 # SubAccountCreator: that parks the account in Matching, and the keeper could not fund bids from it.
