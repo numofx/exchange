@@ -65,9 +65,10 @@ import "./config-mainnet.sol";
  *      peer transfers, deposits, withdrawals, and liquidation bids alike. It freezes the book; it
  *      does not close it out. Rotating or removing the key is a vault setGuardian.
  *
- * Usage:
- *   PRIVATE_KEY=<deployer> FEED_SIGNER=<revived cNGN signer> PERP_GUARDIAN=<hot ops key> \
- *     forge script scripts/deploy-cngn-perp-stack.s.sol --rpc-url $BASE_RPC_URL --broadcast
+ * Usage (the deployer is forge's sender: a keystore account, never a key on the command line):
+ *   FEED_SIGNER=<revived cNGN signer> PERP_GUARDIAN=<hot ops key> \
+ *     forge script scripts/deploy-cngn-perp-stack.s.sol --rpc-url $BASE_RPC_URL \
+ *     --account numo-deployer --broadcast
  *
  * Optional env:
  *   PERP_OI_CAP   the cap the ENABLE action opens the market to, NGN 18dp (default 50,000,000). It
@@ -123,16 +124,25 @@ contract DeployCngnPerpStack is Utils {
     uint feeRecipientAccount;
   }
 
+  /// @dev Forge's placeholder sender when no --account, --private-key or --sender is given. A
+  ///      broadcast from it would sign nothing, and a simulation from it would nominate the vault
+  ///      from an address nobody holds; refuse rather than write artifacts for that.
+  address internal constant FORGE_DEFAULT_SENDER = 0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38;
+
   function run() external {
     Params memory params = _loadParams();
 
-    uint deployerPrivateKey = vm.envUint("PRIVATE_KEY");
-    vm.startBroadcast(deployerPrivateKey);
+    // The deployer is whatever forge was told to send from (--account <keystore> on mainnet), so
+    // the key never has to exist in an environment variable or a shell history.
+    address deployer = msg.sender;
+    if (deployer == FORGE_DEFAULT_SENDER) revert("run with --account <keystore> (or --private-key): no sender given");
+    if (params.guardian == deployer) revert("PERP_GUARDIAN must not be the deployer");
+
+    vm.startBroadcast();
     Stack memory stack = deployStack(params);
     vm.stopBroadcast();
 
-    if (params.guardian == vm.addr(deployerPrivateKey)) revert("PERP_GUARDIAN must not be the deployer");
-    assertStack(stack, params, vm.addr(deployerPrivateKey));
+    assertStack(stack, params, deployer);
     _writeArtifacts(stack, params);
   }
 

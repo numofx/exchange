@@ -37,9 +37,9 @@ import {Utils} from "./utils.sol";
  *      accepts ownership before anything else. This batch does only that: allowlisting the module on
  *      Matching opens the book, and is its own final, gated action (propose_perp_enable_batch.py).
  *
- * Usage:
- *   PRIVATE_KEY=<deployer> forge script scripts/deploy-cngn-perp-trade-module.s.sol \
- *     --rpc-url $BASE_RPC_URL --broadcast
+ * Usage (the deployer is forge's sender: a keystore account, never a key on the command line):
+ *   forge script scripts/deploy-cngn-perp-trade-module.s.sol --rpc-url $BASE_RPC_URL \
+ *     --account numo-deployer --broadcast
  */
 contract DeployCngnPerpTradeModule is Utils {
   string internal constant ARTIFACT_NAME = "CNGN_PERP_TRADE_MODULE";
@@ -58,12 +58,16 @@ contract DeployCngnPerpTradeModule is Utils {
     address vault;
   }
 
+  /// @dev Forge's placeholder sender when no --account, --private-key or --sender is given.
+  address internal constant FORGE_DEFAULT_SENDER = 0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38;
+
   function run() external {
     Params memory params = loadParams();
     assertPreconditions(params);
 
-    uint deployerPrivateKey = vm.envUint("PRIVATE_KEY");
-    vm.startBroadcast(deployerPrivateKey);
+    // The deployer is forge's sender (--account <keystore> on mainnet): no key in the environment.
+    if (msg.sender == FORGE_DEFAULT_SENDER) revert("run with --account <keystore> (or --private-key): no sender given");
+    vm.startBroadcast();
     TradeModule module = deployModule(params);
     vm.stopBroadcast();
 
