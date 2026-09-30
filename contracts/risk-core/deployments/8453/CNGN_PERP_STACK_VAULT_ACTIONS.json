@@ -1,0 +1,86 @@
+[
+  {
+    "description": "acceptOwnership() [cNGN perp stack]",
+    "to": "0xA74E49b4Ed7cb176bc02ef4D8a1A3240C9aD4272",
+    "value": "0",
+    "data": "0x79ba5097",
+    "digest": "0x1e7520073cab64bd332e4968382e23d8bd649ff9f3196399bcaacc4a225360da"
+  },
+  {
+    "description": "acceptOwnership() [cNGN perp stack]",
+    "to": "0xda5989f435507F8C3070Cd30B19f7607615599E5",
+    "value": "0",
+    "data": "0x79ba5097",
+    "digest": "0xa1f76282f9a27b736ff06032de7283a796af91eb9c3162a19001e425d7869181"
+  },
+  {
+    "description": "acceptOwnership() [cNGN perp stack]",
+    "to": "0xDE0423D0a1E15536265C9513d2e0c10DAb5835D4",
+    "value": "0",
+    "data": "0x79ba5097",
+    "digest": "0xd190c572d622e8f3c146e344d2240d0f85074072fb3fdee6fafc4109cb524431"
+  },
+  {
+    "description": "acceptOwnership() [cNGN perp stack]",
+    "to": "0x92A6F2f5EE253Db67a5980864195b7BC5A586530",
+    "value": "0",
+    "data": "0x79ba5097",
+    "digest": "0x10a504c5a1ba54f4bae0070cc80a9fd2908006e63342b0d12e61e161f12df389"
+  },
+  {
+    "description": "acceptOwnership() [cNGN perp stack]",
+    "to": "0xd07176B006cE8246e930d37b8bc44B1154f8c4cE",
+    "value": "0",
+    "data": "0x79ba5097",
+    "digest": "0x6401d20318f5d7eef0e0c96d73d998c6f9526b3246d72f397cf5c09a2a409f11"
+  },
+  {
+    "description": "acceptOwnership() [cNGN perp stack]",
+    "to": "0x7B52f41fa6E2CEC5416e68ED91F4C9899c94492B",
+    "value": "0",
+    "data": "0x79ba5097",
+    "digest": "0x9c840dcfd392fcede440a6ab6534ade067afb3ed2d314e36d38d11051d41d2fe"
+  },
+  {
+    "description": "acceptOwnership() [cNGN perp stack]",
+    "to": "0xFaC420d160C7c219A72DC676971670980bAC20a5",
+    "value": "0",
+    "data": "0x79ba5097",
+    "digest": "0x5650c27006ea58b1ed883f4764d8b104f27e1feb60a038fc6afd4c6f73800e65"
+  },
+  {
+    "description": "acceptOwnership() [cNGN perp stack]",
+    "to": "0x702636073742C30bE3592f07739785a2B80ad19B",
+    "value": "0",
+    "data": "0x79ba5097",
+    "digest": "0xf5e9e5dfaf8f100e86248ae70254ff953343fa4bf368e646ecf70b16ed10e077"
+  },
+  {
+    "description": "acceptOwnership() [cNGN perp stack]",
+    "to": "0xEbF529c35Eb468d2fD8f3110B9aEFcEDfAB742bB",
+    "value": "0",
+    "data": "0x79ba5097",
+    "digest": "0xa99f0ebeb737ddccf1d5eae4c69ca47f039409edf79a10a3d1721a0d052091ed"
+  },
+  {
+    "description": "acceptOwnership() [cNGN perp stack]",
+    "to": "0xD8880113Db44304dFD792c5161D79E6774D0B1fA",
+    "value": "0",
+    "data": "0x79ba5097",
+    "digest": "0xd6db8c7687b976ef61888399e02e1e976ec1f57ddcf3fcd130cc18cec611435c"
+  },
+  {
+    "description": "acceptOwnership() [cNGN perp stack]",
+    "to": "0xC74EfC8B4808803dBCF439E76Fde076d56625b8E",
+    "value": "0",
+    "data": "0x79ba5097",
+    "digest": "0x430c9c36ec9836a4b303d7d6c303962a4e03b56697b3cf745dd627996bbb93e1"
+  },
+  {
+    "description": "srm.setGuardian(0xDb7137Fc6e3437Bd6D8923A94b0af746Ea463C31) [hot ops key: can pause/unpause adjustments]",
+    "to": "0xDE0423D0a1E15536265C9513d2e0c10DAb5835D4",
+    "value": "0",
+    "data": "0x8a0dac4a000000000000000000000000db7137fc6e3437bd6d8923a94b0af746ea463c31",
+    "digest": "0x343b3c85efeb5fd716da8787aac30f1e7655ce7b1c1738b01a5411d570c38f73"
+  }
+]
