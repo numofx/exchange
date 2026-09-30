@@ -10,6 +10,8 @@ Slack webhook, so the channel has the same record.
   keeper-unhealthy   the keeper's /health is unreachable, in dry run, failing, or stale
   sm-payout          the SecurityModule's cash fell since the last run: it paid for a liquidation
   insolvent-account  the keeper's last pass saw an account below zero (mark-to-market < 0)
+  peg-guard          perp-feeds refused the index because cNGN left NGN parity by more than
+                     PEG_GUARD_BPS (read from its status file, PERP_INDEX_STATUS_FILE)
 
 Pager (one of; secrets from SSM via run-with-ssm-pager.sh):
   PAGER_PROVIDER=pushover     PUSHOVER_TOKEN, PUSHOVER_USER. Emergency priority: repeats every 60s
@@ -60,6 +62,9 @@ INDEX_HALT_SEC = 900
 MARK_HALT_SEC = 600
 IMPACT_HALT_SEC = 900
 REPAGE_SEC = 1800
+# perp-feeds writes its status every sample (a minute); older than this, it says nothing current.
+INDEX_STATUS_MAX_AGE_SEC = 600
+DEFAULT_INDEX_STATUS_FILE = "/home/ec2-user/exchange/services/perp-feeds/perp-index-status.json"
 UNWATCHED_REPAGE_SEC = 86_400  # "no dead-man's switch" pages daily, not every half hour
 SM_PAYOUT_MIN = 1.0  # USD: below this a fall is rounding, not a payout
 
@@ -114,6 +119,26 @@ def insolvent_condition(health: dict | None) -> Condition | None:
   if not accounts:
     return None
   return Condition("insolvent-account", f"USDCcNGN-PERP insolvent account(s) {', '.join(accounts)}: the SecurityModule will pay.")
+
+
+def peg_condition(status: dict | None, now_wall: float) -> Condition | None:
+  """A tripped peg guard in perp-feeds' last sample. A missing or stale status says nothing: a dead
+  publisher is the feed-halt page's job."""
+  if not status or now_wall - float(status.get("at", 0)) / 1000 > INDEX_STATUS_MAX_AGE_SEC:
+    return None
+  if not status.get("pegGuardTripped"):
+    return None
+  peg = status.get("peg") or {}
+  return Condition("peg-guard", f"USDCcNGN-PERP index HALTED by the peg guard: cNGN at {peg.get('ngnPerCngn')} NGN, "
+                   f"{float(peg.get('deviationBps', 0)):.0f}bps from parity. The index will not update until it returns.")
+
+
+def read_index_status() -> dict | None:
+  path = Path(os.environ.get("PERP_INDEX_STATUS_FILE", DEFAULT_INDEX_STATUS_FILE))
+  try:
+    return json.loads(path.read_text())
+  except Exception:  # noqa: BLE001
+    return None
 
 
 def sm_condition(previous: float | None, current: float) -> Condition | None:
@@ -255,7 +280,8 @@ def check_and_page(stack_path: Path, state: dict) -> int:
 
   previous_sm = state.get("smCash")
   active = [c for c in (feed_condition(ages), keeper_condition(health, now), insolvent_condition(health),
-                        sm_condition(previous_sm, sm_cash), unwatched_condition(heartbeat_urls()[0])) if c is not None]
+                        sm_condition(previous_sm, sm_cash), unwatched_condition(heartbeat_urls()[0]),
+                        peg_condition(read_index_status(), time.time())) if c is not None]
   to_page, resolved = step_state(state, active, now)
   state["smCash"] = sm_cash
 
@@ -320,6 +346,13 @@ def self_test() -> int:
   for selector, signature in [(SEL_GET_BALANCE, "getBalance(uint256,address,uint256)"),
                               (SEL_SPOT_DIFF_DETAILS, "spotDiffDetails()")]:
     assert selector == "0x" + keccak(signature.encode()).hex()[:8], signature
+  # The peg guard pages from perp-feeds' status; missing or stale status is silent (feed-halt covers it).
+  wall = 2_000_000_000.0
+  tripped = {"at": wall * 1000 - 60_000, "pegGuardTripped": True, "peg": {"ngnPerCngn": 0.985, "deviationBps": 150}}
+  assert peg_condition(tripped, wall).key == "peg-guard" and "150bps" in peg_condition(tripped, wall).message
+  assert peg_condition({**tripped, "pegGuardTripped": False}, wall) is None
+  assert peg_condition({**tripped, "at": (wall - INDEX_STATUS_MAX_AGE_SEC - 1) * 1000}, wall) is None
+  assert peg_condition(None, wall) is None
   # The dead-man's switch: a missing heartbeat is its own page, daily; the failure URL follows
   # healthchecks.io's convention unless overridden.
   assert unwatched_condition(None).key == "pager-unwatched" and unwatched_condition("https://hc/x") is None
