@@ -51,6 +51,30 @@ const envSchema = z.object({
   KEEPER_HEALTH_URL: z.string().url().optional().or(z.literal('')),
   INDEX_STATE_FILE: z.string().default('./perp-index-state.json'),
   BLOCKRADAR_API_KEY: z.string().optional().or(z.literal('')),
+  QUIDAX_API_URL: z.string().url().default('https://openapi.quidax.io/exchange-open-api/api/v1'),
+  /** Quidax usdtcngn counts toward INDEX_MIN_SOURCES only at this 24h volume (USDT); below, median only. */
+  INDEX_QUIDAX_MIN_VOLUME_USD: z.coerce.number().nonnegative().default(1_000),
+  /** Where each sample's source readings and peg state are written, for the pager's peg-guard page. */
+  INDEX_STATUS_FILE: z.string().default('./perp-index-status.json'),
+
+  // The cNGN/NGN peg (peg.ts): a TWAP of Quidax cngnngn book mids, the last good one standing for
+  // PEG_MAX_AGE_MS, and a guard that halts the index (and pages) past PEG_GUARD_BPS from parity.
+  PEG_TWAP_WINDOW_MS: z.coerce.number().int().positive().default(900_000),
+  PEG_MAX_AGE_MS: z.coerce.number().int().positive().default(900_000),
+  PEG_MAX_SPREAD_BPS: z.coerce.number().positive().default(50),
+  PEG_GUARD_BPS: z.coerce.number().positive().default(100),
+
+  // HyperFX (index-sources.ts, hyperfxSource): Base only, counts only when every rule passes.
+  HYPERFX_ENABLED: bool.default('true'),
+  HYPERFX_URL: z.string().url().default('https://orderbook.hyperfx.finance/mainnet/graphql'),
+  HYPERFX_BOOK: z.string().default('USDC-cNGN'),
+  HYPERFX_FILL_CHAIN: z.string().default('EVM-8453'),
+  HYPERFX_MIN_SIZE_USD: z.coerce.number().positive().default(1_000),
+  HYPERFX_MIN_SOLVERS: z.coerce.number().int().min(2).default(2),
+  HYPERFX_MAX_SPREAD_BPS: z.coerce.number().positive().default(50),
+  HYPERFX_TWAP_WINDOW_MS: z.coerce.number().int().positive().default(900_000),
+  HYPERFX_MIN_SNAPSHOTS: z.coerce.number().int().positive().default(2),
+  HYPERFX_MAX_LIVE_DEVIATION_BPS: z.coerce.number().positive().default(50),
   PROVIDER_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
 
   // Mark and impacts: checked every minute, published on a 10bps move or before half the 15-minute

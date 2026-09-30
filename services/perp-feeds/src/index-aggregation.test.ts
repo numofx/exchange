@@ -9,22 +9,22 @@ describe('aggregateSample', () => {
   it('takes the median of agreeing sources', () => {
     const result = aggregateSample(
       [
-        { source: 'quidax', ngnPerUsdt: 1374 },
-        { source: 'textile', ngnPerUsdt: 1371.87 },
-        { source: 'bybit-p2p', ngnPerUsdt: 1380 },
+        { source: 'quidax', cngnPerUsdt: 1374, counts: true },
+        { source: 'textile', cngnPerUsdt: 1371.87, counts: true },
+        { source: 'bybit-p2p', cngnPerUsdt: 1380, counts: true },
       ],
       rules,
     );
-    assert.deepEqual(result, { ok: true, median: 1374, sources: ['quidax', 'textile', 'bybit-p2p'] });
+    assert.deepEqual(result, { ok: true, median: 1374, sources: ['quidax', 'textile', 'bybit-p2p'], dropped: [] });
   });
 
   it('averages the middle pair for an even count', () => {
     const result = aggregateSample(
       [
-        { source: 'a', ngnPerUsdt: 1370 },
-        { source: 'b', ngnPerUsdt: 1372 },
-        { source: 'c', ngnPerUsdt: 1374 },
-        { source: 'd', ngnPerUsdt: 1376 },
+        { source: 'a', cngnPerUsdt: 1370, counts: true },
+        { source: 'b', cngnPerUsdt: 1372, counts: true },
+        { source: 'c', cngnPerUsdt: 1374, counts: true },
+        { source: 'd', cngnPerUsdt: 1376, counts: true },
       ],
       rules,
     );
@@ -34,8 +34,8 @@ describe('aggregateSample', () => {
   it('refuses too few sources', () => {
     const result = aggregateSample(
       [
-        { source: 'quidax', ngnPerUsdt: 1374 },
-        { source: 'textile', ngnPerUsdt: 1371.87 },
+        { source: 'quidax', cngnPerUsdt: 1374, counts: true },
+        { source: 'textile', cngnPerUsdt: 1371.87, counts: true },
       ],
       rules,
     );
@@ -46,13 +46,40 @@ describe('aggregateSample', () => {
   it('does not count a zero or non-finite quote as a source', () => {
     const result = aggregateSample(
       [
-        { source: 'a', ngnPerUsdt: 1374 },
-        { source: 'b', ngnPerUsdt: 0 },
-        { source: 'c', ngnPerUsdt: Number.NaN },
+        { source: 'a', cngnPerUsdt: 1374, counts: true },
+        { source: 'b', cngnPerUsdt: 0, counts: true },
+        { source: 'c', cngnPerUsdt: Number.NaN, counts: true },
       ],
       rules,
     );
     assert.equal(result.ok, false);
+  });
+
+  it('counts only counting sources toward the minimum, but keeps the others in the median', () => {
+    const quotes = [
+      { source: 'textile', cngnPerUsdt: 1372, counts: true },
+      { source: 'hyperfx', cngnPerUsdt: 1373, counts: true },
+      { source: 'quidax', cngnPerUsdt: 1380, counts: false },
+    ];
+    const short = aggregateSample(quotes, rules);
+    assert.equal(short.ok, false);
+    assert.match(!short.ok ? short.reason : '', /only 2 of 3 required counting sources answered \(also answered, not counted: quidax\)/);
+    const enough = aggregateSample([...quotes, { source: 'blockradar', cngnPerUsdt: 1374, counts: true }], rules);
+    // Median of all four (1372, 1373, 1374, 1380): the non-counting source still moves it.
+    assert.deepEqual(enough, { ok: true, median: 1373.5, sources: ['textile', 'hyperfx', 'quidax', 'blockradar'], dropped: [] });
+  });
+
+  it('drops a disagreeing non-counting source instead of letting it refuse the sample', () => {
+    const result = aggregateSample(
+      [
+        { source: 'textile', cngnPerUsdt: 1372, counts: true },
+        { source: 'hyperfx', cngnPerUsdt: 1373, counts: true },
+        { source: 'blockradar', cngnPerUsdt: 1374, counts: true },
+        { source: 'quidax', cngnPerUsdt: 1500, counts: false },
+      ],
+      rules,
+    );
+    assert.deepEqual(result, { ok: true, median: 1373, sources: ['textile', 'hyperfx', 'blockradar'], dropped: ['quidax=1500'] });
   });
 
   it('refuses the whole sample when one source disagrees, rather than dropping it', () => {
@@ -60,9 +87,9 @@ describe('aggregateSample', () => {
     // the signal (one venue broken, or the market moving faster than the sources can agree).
     const result = aggregateSample(
       [
-        { source: 'quidax', ngnPerUsdt: 1374 },
-        { source: 'textile', ngnPerUsdt: 1372 },
-        { source: 'bybit-p2p', ngnPerUsdt: 1450 },
+        { source: 'quidax', cngnPerUsdt: 1374, counts: true },
+        { source: 'textile', cngnPerUsdt: 1372, counts: true },
+        { source: 'bybit-p2p', cngnPerUsdt: 1450, counts: true },
       ],
       rules,
     );
@@ -85,7 +112,7 @@ describe('windowTwap', () => {
     const fresh = Array.from({ length: 10 }, (_, i) => ({ price: 1374, at: now - i * 60_000 }));
     const stale = Array.from({ length: 10 }, (_, i) => ({ price: 9999, at: now - 20 * 60_000 - i * 60_000 }));
     const result = windowTwap([...stale, ...fresh], now, window);
-    assert.deepEqual(result, { ok: true, ngnPerUsdt: 1374, samples: 10 });
+    assert.deepEqual(result, { ok: true, cngnPerUsdt: 1374, samples: 10 });
   });
 
   it('refuses to republish when every recent sample was refused, though older ones fill the window', () => {
@@ -105,7 +132,7 @@ describe('windowTwap', () => {
     const result = windowTwap(samples, now, window);
     // 1370 stood 9 minutes, 1400 stood the last 2: (1370*9 + 1400*2) / 11
     assert.ok(result.ok);
-    assert.ok(Math.abs((result.ok ? result.ngnPerUsdt : 0) - (1370 * 9 + 1400 * 2) / 11) < 1e-9);
+    assert.ok(Math.abs((result.ok ? result.cngnPerUsdt : 0) - (1370 * 9 + 1400 * 2) / 11) < 1e-9);
   });
 });
 

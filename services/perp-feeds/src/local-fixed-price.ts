@@ -1,4 +1,5 @@
-import type { RateProvider } from 'cngn-rate-picker';
+import type { IndexSource } from './index-sources.js';
+import type { PegTicker } from './peg.js';
 import { createPublicClient, http } from 'viem';
 
 import type { Chain } from './chain.js';
@@ -82,9 +83,12 @@ export function parseLocalSources(argv: string[]): number | null {
   return value;
 }
 
-export function localSources(ngnPerUsd: number): RateProvider[] {
+export function localSources(cngnPerUsdc: number): IndexSource[] {
   return ['local-a', 'local-b', 'local-c'].map((name) => ({
     name,
-    getPriceInNgn: async () => ({ price: ngnPerUsd }),
+    read: async () => ({ source: name, cngnPerUsdt: cngnPerUsdc, counts: true }),
   }));
 }
+
+/** The peg market for --local-sources: cNGN at parity, no network. */
+export const localPegTicker = async (): Promise<PegTicker> => ({ buy: 1, sell: 1 });

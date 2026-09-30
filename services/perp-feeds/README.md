@@ -13,20 +13,18 @@ Price publishers for `USDCcNGN-PERP`. One process, one feed signer, one relayer:
   without that depth reads as the index, so a thin book creates no funding premium. Published on a
   10 bps move or before 7 minutes have passed, whichever comes first.
 
-**What the index measures.** No source quotes cNGN/USDC. Checked against the providers' code and
-the venues' APIs on 2026-09-30:
+**What the index measures: cNGN.** Each source reports cNGN per USD stablecoin and whether it
+counts toward `INDEX_MIN_SOURCES` (`src/index-sources.ts`):
+- Quidax `usdtcngn` is direct, and counts only at `INDEX_QUIDAX_MIN_VOLUME_USD` of 24h volume.
+- Blockradar is direct.
+- HyperFX `USDC-cNGN` on Base is direct, and counts only when its rules pass: a 15-min snapshot
+  TWAP with ≥2 solvers and ≥$1k depth a side and a spread ≤50 bps, and a live check at $1k.
+- Textile and Bybit P2P quote fiat NGN, and are divided by the measured cNGN/NGN peg (`src/peg.ts`):
+  a 15-min TWAP of Quidax `cngnngn` book mids.
 
-| Source | Market | Quotes | Liquidity |
-| --- | --- | --- | --- |
-| Quidax (provider default) | `usdtcngn` | **cNGN** per USDT | thin: ~30 USDT a day |
-| Blockradar | cNGN/USDT benchmark | **cNGN** per USDT | needs `BLOCKRADAR_API_KEY` |
-| Textile | `USDT_NGN` | **fiat NGN** per USDT (Textile lists cNGN separately) | live |
-| Bybit P2P | USDT ads in NGN | **fiat NGN** per USDT | blocked from some hosts |
-
-The index therefore blends cNGN and fiat NGN per USDT, published as cNGN per USDC. That assumes
-**cNGN ≈ NGN** and **USDT ≈ USDC**. A cNGN depeg from NGN, or a USDT/USDC spread, moves the real
-market away from the index without moving the index, and funding and liquidations follow the index.
-(Quidax's `cngnngn` market, cNGN per NGN, trades at ~0.9999: the peg is observable, not just assumed.)
+Without a peg for 15 minutes the fiat sources drop out. Past 100 bps from parity the peg guard
+refuses the sample, and the status file (`INDEX_STATUS_FILE`) records it for the pager. USDT is
+still taken as USDC. The full table is in `contracts/risk-core/docs/cngn-perp-go-live.md`.
 
 The picker's own multi-source mode is not used: with `threshold > 1` it averages the first N
 successes weighted by fetch-time gaps and never compares them, which is neither a median nor a

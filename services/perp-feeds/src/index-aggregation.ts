@@ -1,5 +1,7 @@
 /**
- * The index: what one USD of stablecoin is worth in NGN, turned into the perp's USDC-per-cNGN price.
+ * The index: what one USD of stablecoin is worth in cNGN, turned into the perp's USDC-per-cNGN price.
+ * Sources quoting fiat NGN are converted to cNGN through the measured peg before they get here
+ * (index-sources.ts, peg.ts).
  *
  * Everything here is pure, so every refusal can be tested without a network. The publisher's job
  * is to fail closed: an index it is not sure of is worse than no index, because a stale feed halts
@@ -12,41 +14,62 @@
  */
 import { timeWeightedAverage, withinWindow, type PricePoint } from 'cngn-rate-picker';
 
+/** One source's reading: cNGN per 1 USD stablecoin, and whether it counts (index-sources.ts). */
 export type SourceQuote = {
   /** Provider name, e.g. "quidax". */
   source: string;
-  /** NGN per 1 USDT, as the provider reported it. */
-  ngnPerUsdt: number;
+  cngnPerUsdt: number;
+  /** Toward the minimum. A non-counting source (a thin market) is in the median, but can neither
+   *  make up the numbers nor veto a sample. */
+  counts: boolean;
 };
 
 export type SampleRules = {
-  /** Fewest sources a sample may be built from. */
+  /** Fewest COUNTING sources a sample may be built from. */
   minSources: number;
   /** Largest distance any source may sit from the median, in bps of the median. */
   maxSourceDeviationBps: number;
 };
 
 export type SampleResult =
-  | { ok: true; median: number; sources: string[] }
+  | { ok: true; median: number; sources: string[]; dropped: string[] }
   | { ok: false; reason: string };
 
-/** Median of the sources' NGN-per-USDT, refused when too few answered or any one disagrees. */
+/**
+ * Median of the readings, refused when too few COUNTING sources answered or a counting one
+ * disagrees. A non-counting source that disagrees is dropped from the median and noted; it cannot
+ * refuse the sample (a thin market's stale print must not halt the index).
+ */
 export function aggregateSample(quotes: SourceQuote[], rules: SampleRules): SampleResult {
-  const valid = quotes.filter((quote) => Number.isFinite(quote.ngnPerUsdt) && quote.ngnPerUsdt > 0);
-  if (valid.length < rules.minSources) {
-    return { ok: false, reason: `only ${valid.length} of ${rules.minSources} required sources answered` };
+  const valid = quotes.filter((quote) => Number.isFinite(quote.cngnPerUsdt) && quote.cngnPerUsdt > 0);
+  const counting = valid.filter((quote) => quote.counts);
+  if (counting.length < rules.minSources) {
+    const others = valid.filter((quote) => !quote.counts).map((quote) => quote.source);
+    return {
+      ok: false,
+      reason: `only ${counting.length} of ${rules.minSources} required counting sources answered` +
+        (others.length > 0 ? ` (also answered, not counted: ${others.join(', ')})` : ''),
+    };
   }
 
-  const median = medianOf(valid.map((quote) => quote.ngnPerUsdt));
-  const outliers = valid.filter((quote) => deviationBps(quote.ngnPerUsdt, median) > rules.maxSourceDeviationBps);
+  const firstMedian = medianOf(valid.map((quote) => quote.cngnPerUsdt));
+  const droppedQuotes = valid.filter((quote) => !quote.counts && deviationBps(quote.cngnPerUsdt, firstMedian) > rules.maxSourceDeviationBps);
+  const kept = valid.filter((quote) => !droppedQuotes.includes(quote));
+  const median = medianOf(kept.map((quote) => quote.cngnPerUsdt));
+  const outliers = kept.filter((quote) => deviationBps(quote.cngnPerUsdt, median) > rules.maxSourceDeviationBps);
   if (outliers.length > 0) {
     const detail = outliers
-      .map((quote) => `${quote.source}=${quote.ngnPerUsdt} (${deviationBps(quote.ngnPerUsdt, median).toFixed(0)}bps)`)
+      .map((quote) => `${quote.source}=${quote.cngnPerUsdt} (${deviationBps(quote.cngnPerUsdt, median).toFixed(0)}bps)`)
       .join(', ');
     return { ok: false, reason: `sources disagree with median ${median}: ${detail}` };
   }
 
-  return { ok: true, median, sources: valid.map((quote) => quote.source) };
+  return {
+    ok: true,
+    median,
+    sources: kept.map((quote) => quote.source),
+    dropped: droppedQuotes.map((quote) => `${quote.source}=${quote.cngnPerUsdt}`),
+  };
 }
 
 export type WindowRules = {
@@ -61,7 +84,7 @@ export type WindowRules = {
   maxNewestAgeMs: number;
 };
 
-export type TwapResult = { ok: true; ngnPerUsdt: number; samples: number } | { ok: false; reason: string };
+export type TwapResult = { ok: true; cngnPerUsdt: number; samples: number } | { ok: false; reason: string };
 
 /**
  * Time-weighted average of the accepted samples in the trailing window. A window with too few
@@ -84,7 +107,7 @@ export function windowTwap(samples: PricePoint[], nowMs: number, rules: WindowRu
   if (twap === null || !Number.isFinite(twap) || twap <= 0) {
     return { ok: false, reason: 'window TWAP is not a positive number' };
   }
-  return { ok: true, ngnPerUsdt: twap, samples: inWindow.length };
+  return { ok: true, cngnPerUsdt: twap, samples: inWindow.length };
 }
 
 export type JumpRules = {

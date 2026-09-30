@@ -66,7 +66,7 @@ export type StepRules = {
   maxStepBps: number;
 };
 
-export type StepPlan = { next: bigint; previous: bigint; twapNgnPerUsdt: number; stepBps: number; samples: number };
+export type StepPlan = { next: bigint; previous: bigint; twapCngnPerUsdt: number; stepBps: number; samples: number };
 
 /** Every check that does not need the network: the sources, the operator's level, the step size. */
 export function planIndexStep(args: {
@@ -93,13 +93,13 @@ export function planIndexStep(args: {
   });
   if (!twap.ok) return { ok: false, reason: `the sources do not support a publish: ${twap.reason}` };
 
-  const next = toUsdPerNgn(twap.ngnPerUsdt);
+  const next = toUsdPerNgn(twap.cngnPerUsdt);
   const confirmed = toUsdPerNgn(request.levelNgnPerUsd);
   const mismatch = Math.abs(stepBps(next, confirmed));
   if (mismatch > rules.matchBps) {
     return {
       ok: false,
-      reason: `the sources' TWAP (${twap.ngnPerUsdt.toFixed(2)} cNGN/USDC) is ${mismatch}bps from the confirmed ${request.levelNgnPerUsd} (limit ${rules.matchBps}bps)`,
+      reason: `the sources' TWAP (${twap.cngnPerUsdt.toFixed(2)} cNGN/USDC) is ${mismatch}bps from the confirmed ${request.levelNgnPerUsd} (limit ${rules.matchBps}bps)`,
     };
   }
 
@@ -110,7 +110,7 @@ export function planIndexStep(args: {
   if (Math.abs(step) > rules.maxStepBps) {
     return { ok: false, reason: `a ${step}bps step is over INDEX_STEP_MAX_BPS (${rules.maxStepBps}bps)` };
   }
-  return { ok: true, next, previous: args.onChain, twapNgnPerUsdt: twap.ngnPerUsdt, stepBps: step, samples: twap.samples };
+  return { ok: true, next, previous: args.onChain, twapCngnPerUsdt: twap.cngnPerUsdt, stepBps: step, samples: twap.samples };
 }
 
 export type StepDeps = {
@@ -160,7 +160,7 @@ export async function acceptIndexStep(deps: StepDeps): Promise<{ tx: string | nu
     approvedBy: request.approvedBy,
     reason: request.reason,
     confirmedNgnPerUsd: request.levelNgnPerUsd,
-    twapNgnPerUsdt: plan.twapNgnPerUsdt,
+    twapCngnPerUsdt: plan.twapCngnPerUsdt,
     samples: plan.samples,
     previousUsdPerNgn: plan.previous.toString(),
     nextUsdPerNgn: plan.next.toString(),
@@ -171,7 +171,7 @@ export async function acceptIndexStep(deps: StepDeps): Promise<{ tx: string | nu
   };
   // Recorded before anything is sent: an approval that fails to land is still an approval made.
   await audit({ ...record, status: 'approved' });
-  console.log(`[index-step] approved by ${request.approvedBy}: ${plan.stepBps}bps to ${plan.twapNgnPerUsdt.toFixed(2)} cNGN/USDC (${request.reason})`);
+  console.log(`[index-step] approved by ${request.approvedBy}: ${plan.stepBps}bps to ${plan.twapCngnPerUsdt.toFixed(2)} cNGN/USDC (${request.reason})`);
 
   if (config.DRY_RUN) {
     await audit({ ...record, status: 'dry-run' });
@@ -192,7 +192,7 @@ export async function acceptIndexStep(deps: StepDeps): Promise<{ tx: string | nu
   await audit({ ...record, status: 'published', tx });
   await deps.alert(
     'index-step',
-    `index STEP published: ${plan.stepBps}bps to ${plan.twapNgnPerUsdt.toFixed(2)} cNGN/USDC, approved by ${request.approvedBy} (${request.reason}) tx=${tx}`,
+    `index STEP published: ${plan.stepBps}bps to ${plan.twapCngnPerUsdt.toFixed(2)} cNGN/USDC, approved by ${request.approvedBy} (${request.reason}) tx=${tx}`,
   );
   console.log(`[index-step] published ${plan.next} tx=${tx}`);
   return { tx, plan };

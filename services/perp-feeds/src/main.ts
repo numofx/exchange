@@ -1,9 +1,11 @@
 import { createAlerter } from './alert.js';
 import { createChain } from './chain.js';
 import { loadConfig } from './config.js';
-import { buildProviders, IndexPublisher } from './index-publisher.js';
+import { IndexPublisher } from './index-publisher.js';
+import { buildIndexSources } from './index-sources.js';
+import { fetchPegTicker, pegMid, pegReading } from './peg.js';
 import { acceptIndexStep, fetchKeeperHealth, parseStepArgs } from './index-step.js';
-import { assertRpcIsLocal, localSources, parseFixedPrice, parseLocalSources, publishFixedPrice } from './local-fixed-price.js';
+import { assertRpcIsLocal, localPegTicker, localSources, parseFixedPrice, parseLocalSources, publishFixedPrice } from './local-fixed-price.js';
 import { MarkPublisher } from './mark-publisher.js';
 
 /**
@@ -15,27 +17,41 @@ import { MarkPublisher } from './mark-publisher.js';
  * systemd restarting it is slower than the next tick.
  */
 /**
- * `--probe-sources`: asks every configured provider once and prints what each answered, and how
- * long it took. Signs and sends nothing. Run it on the host the publisher will run on: a source
- * reachable from a laptop may be geo-blocked from the ops box, and the reverse.
+ * `--probe-sources`: reads the peg and every configured source once and prints what each said, in
+ * cNGN per USDT, whether it counts toward the minimum, and why not. Signs and sends nothing. Run it
+ * on the host the publisher will run on: a source reachable from a laptop may be geo-blocked from
+ * the ops box, and the reverse.
  */
 async function probeSources(config: ReturnType<typeof loadConfig>) {
-  const providers = buildProviders(config);
-  let answered = 0;
-  for (const provider of providers) {
+  const now = Date.now();
+  let peg;
+  try {
+    const mid = pegMid(await fetchPegTicker(config.QUIDAX_API_URL, AbortSignal.timeout(config.PROVIDER_TIMEOUT_MS)), config.PEG_MAX_SPREAD_BPS);
+    peg = mid.ok
+      ? pegReading([{ price: mid.mid, at: now }], now, { windowMs: config.PEG_TWAP_WINDOW_MS, maxAgeMs: config.PEG_MAX_AGE_MS, maxSpreadBps: config.PEG_MAX_SPREAD_BPS, guardBps: config.PEG_GUARD_BPS })
+      : ({ ok: false, reason: mid.reason } as const);
+  } catch (error) {
+    peg = { ok: false, reason: (error as Error).message } as const;
+  }
+  console.log(peg.ok
+    ? `peg          ok    ${peg.ngnPerCngn} NGN/cNGN (${peg.deviationBps.toFixed(1)}bps from parity${peg.guardTripped ? ', GUARD WOULD TRIP' : ''})`
+    : `peg          FAIL  ${peg.reason} (the fiat sources drop out without it)`);
+  const sources = buildIndexSources(config);
+  let counting = 0;
+  for (const source of sources) {
     const started = Date.now();
     try {
-      const quote = await provider.getPriceInNgn({ signal: AbortSignal.timeout(config.PROVIDER_TIMEOUT_MS), fetch });
-      answered += 1;
-      console.log(`${provider.name.padEnd(12)} ok    ${quote.price} NGN/USDT  ${Date.now() - started}ms`);
+      const reading = await source.read({ signal: AbortSignal.timeout(config.PROVIDER_TIMEOUT_MS), fetch, peg });
+      if (reading.counts) counting += 1;
+      console.log(`${source.name.padEnd(12)} ok    ${reading.cngnPerUsdt.toFixed(4)} cNGN/USDT  ${reading.counts ? 'counts' : 'NOT COUNTED'}  ${reading.note ?? ''}  ${Date.now() - started}ms`);
     } catch (error) {
-      console.log(`${provider.name.padEnd(12)} FAIL  ${(error as Error).message.slice(0, 140)}  ${Date.now() - started}ms`);
+      console.log(`${source.name.padEnd(12)} FAIL  ${(error as Error).message.slice(0, 160)}  ${Date.now() - started}ms`);
     }
   }
-  const verdict = answered >= config.INDEX_MIN_SOURCES ? 'enough' : 'NOT ENOUGH: the index will refuse every sample';
-  console.log(`${answered} of ${providers.length} answered; the index needs ${config.INDEX_MIN_SOURCES} (${verdict})`);
-  if (!config.BLOCKRADAR_API_KEY) console.log('BLOCKRADAR_API_KEY is not set: Blockradar is not among the providers');
-  if (answered < config.INDEX_MIN_SOURCES) process.exitCode = 1;
+  const verdict = counting >= config.INDEX_MIN_SOURCES ? 'enough' : 'NOT ENOUGH: the index will refuse every sample';
+  console.log(`${counting} counting of ${sources.length} sources; the index needs ${config.INDEX_MIN_SOURCES} (${verdict})`);
+  if (!config.BLOCKRADAR_API_KEY) console.log('BLOCKRADAR_API_KEY is not set: Blockradar is not among the sources');
+  if (counting < config.INDEX_MIN_SOURCES) process.exitCode = 1;
 }
 
 async function main() {
@@ -65,8 +81,10 @@ async function main() {
 
   const localPrice = parseLocalSources(process.argv);
   if (localPrice !== null) await assertRpcIsLocal(config);
-  const providers = localPrice === null ? buildProviders(config) : localSources(localPrice);
-  const index = new IndexPublisher(config, chain, providers, alert);
+  const index =
+    localPrice === null
+      ? new IndexPublisher(config, chain, buildIndexSources(config), alert)
+      : new IndexPublisher(config, chain, localSources(localPrice), alert, Date.now, localPegTicker);
   await index.load();
 
   // One publish past the jump guard, then exit: the reopening procedure in the README.
