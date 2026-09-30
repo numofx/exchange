@@ -149,27 +149,29 @@ variable "cngn_spot_asset_address" {
   default = "0x9D806fD040a719D27a8E5E77dc5aE0ED1e089493"
 }
 
-# USDCcNGN-PERP, on its own stack (risk-core CNGN_PERP_STACK.json, execution
-# CNGN_PERP_TRADE_MODULE.json). All four or none: markets-service refuses a partial set at boot.
-# Empty keeps the perp off; spot is unaffected either way.
+# USDCcNGN-PERP, on its own stack, live on Base since 2026-09-30. The defaults ARE the deployed
+# contracts (risk-core deployments/8453/CNGN_PERP_STACK.json, execution
+# deployments/8453/CNGN_PERP_TRADE_MODULE.json): public addresses, committed so that an apply from a
+# fresh clone can never plan the perp off. All four or none: markets-service refuses a partial set
+# at boot. Setting all four to "" is how the perp is switched off; spot is unaffected either way.
 variable "cngn_perp_asset_address" {
   type    = string
-  default = ""
+  default = "0xC74EfC8B4808803dBCF439E76Fde076d56625b8E" # PerpAsset
 }
 
 variable "cngn_perp_trade_module_address" {
   type    = string
-  default = ""
+  default = "0xDea968188598BA0E3F58A56C0fdfF338C74F699f" # TradeModule (perp)
 }
 
 variable "cngn_perp_cash_address" {
   type    = string
-  default = ""
+  default = "0xA74E49b4Ed7cb176bc02ef4D8a1A3240C9aD4272" # CashAsset (the perp's USDC cash)
 }
 
 variable "cngn_perp_srm_address" {
   type    = string
-  default = ""
+  default = "0xDE0423D0a1E15536265C9513d2e0c10DAb5835D4" # StandardManager (perp SRM)
 }
 
 variable "matcher_poll_interval" {
