@@ -1,0 +1,9 @@
+[
+  {
+    "description": "module.acceptOwnership() [custody only; the book stays closed until the separate enable action]",
+    "to": "0xDea968188598BA0E3F58A56C0fdfF338C74F699f",
+    "value": "0",
+    "data": "0x79ba5097",
+    "digest": "0x6749adb664daec0c55469efcea92fb43a436073b41c9ba8e55bffb276b17b64e"
+  }
+]
