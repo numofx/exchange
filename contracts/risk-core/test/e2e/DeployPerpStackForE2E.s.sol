@@ -38,6 +38,10 @@ contract DeployPerpStackForE2E is DeployCngnPerpStack {
     string memory obj = "e2e";
     vm.serializeAddress(obj, "cash", address(stack.cash));
     vm.serializeAddress(obj, "srm", address(stack.srm));
+    // Named as the mainnet artifact names them, so the vault-review renderer can name every target.
+    vm.serializeAddress(obj, "srmViewer", address(stack.viewer));
+    vm.serializeAddress(obj, "stableFeed", address(stack.stableFeed));
+    vm.serializeAddress(obj, "rateModel", address(stack.rateModel));
     vm.serializeAddress(obj, "auction", address(stack.auction));
     vm.serializeAddress(obj, "securityModule", address(stack.securityModule));
     vm.serializeAddress(obj, "indexFeed", address(stack.indexFeed));

@@ -30,9 +30,14 @@ contract DeployPerpModuleForE2E is DeployCngnPerpTradeModule {
     vm.stopBroadcast();
 
     assertModule(module, params);
+    vm.serializeAddress("e2e", "matching", params.matching);
     vm.writeJson(
       vm.serializeAddress("e2e", "tradePerp", address(module)),
       string.concat(vm.projectRoot(), "/cache/e2e-perp-module.json")
+    );
+    // The same vault batch the mainnet run writes, for the review renderer and the local venue.
+    vm.writeFile(
+      string.concat(vm.projectRoot(), "/cache/e2e-perp-module-vault-actions.json"), vaultActionsJson(module, params)
     );
   }
 }
