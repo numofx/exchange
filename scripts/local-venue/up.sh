@@ -190,6 +190,7 @@ IMPACT_BID_FEED=$(json "$V" impactBidFeed)
 MARKETS_SERVICE_URL=http://127.0.0.1:$API_PORT
 INDEX_STATE_FILE=$DIR/perp-index-state.json
 INDEX_STEP_AUDIT_FILE=$DIR/perp-index-steps.jsonl
+INDEX_STATUS_FILE=$DIR/perp-index-status.json
 KEEPER_HEALTH_URL=http://127.0.0.1:$KEEPER_HEALTH_PORT/health
 ENV
 (cd "$ROOT/services/perp-feeds" && set -a && . "$DIR/perp-feeds.env" && set +a && \
@@ -231,7 +232,7 @@ start pager-capture python3 "$DIR/capture.py" "$DIR/pager-capture.log" 9780
 wait_for "pager capture" curl -sf http://127.0.0.1:9780/ready
 PAGER_ENV="RPC_URL=$RPC KEEPER_HEALTH_URL=http://127.0.0.1:$KEEPER_HEALTH_PORT/health PAGER_PROVIDER=pagerduty
 PAGERDUTY_URL=http://127.0.0.1:9780/page PAGERDUTY_ROUTING_KEY=local PAGER_HEARTBEAT_URL=http://127.0.0.1:9780/hb
-PAGE_PREFIX=[LOCAL] PAGER_STATE_FILE=$DIR/pager-state.json ALERT_WEBHOOK_URL="
+PAGE_PREFIX=[LOCAL] PAGER_STATE_FILE=$DIR/pager-state.json PERP_INDEX_STATUS_FILE=$DIR/perp-index-status.json ALERT_WEBHOOK_URL="
 rm -f "$DIR/pager-state.json"
 (cd "$ROOT/contracts/risk-core" && env $PAGER_ENV python3 scripts/ops/check_perp_pager.py --stack "$V")
 grep -q "GET /hb " "$DIR/pager-capture.log" || { echo "the pager did not ping its dead-man's switch" >&2; exit 1; }
