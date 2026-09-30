@@ -21,6 +21,8 @@ Gates, all read live and all required (re-checked before EACH action is proposed
             cap (cap / 2 cNGN at the live index), and never less than --min-sm-cash
   quoter    the perp book on markets-service has a bid and an ask, each with >= --min-quote-usd of
             depth within 2% of the index (optionally from --quoter-owner)
+  pager     check_perp_pager.py ran successfully within 3 minutes (its state file, PAGER_STATE_FILE),
+            with a real provider and a dead-man's switch: nothing opens the market that cannot page you
 
 It NEVER signs, executes or broadcasts. Without --propose it prints the gate report and the sheet.
 With --propose each action goes to the MPCVault app for a human to approve, one at a time.
@@ -283,6 +285,25 @@ def gate_quoter(rpc_url: str, v: Venue, markets_url: str, min_usd: float, owner:
   return Gate("quoter", True, f"two-sided within {QUOTE_BAND:.0%}: bids ${depth['bids']:,.0f}, asks ${depth['asks']:,.0f}")
 
 
+PAGER_MAX_AGE_SEC = 180
+
+
+def gate_pager(state_file: Path, now: float | None = None) -> Gate:
+  if not state_file.exists():
+    return Gate("pager", False, f"no pager state at {state_file}: is numo-perp-pager.timer running?")
+  state = json.loads(state_file.read_text())
+  age = int((now if now is not None else time.time()) - int(state.get("lastRunAt", 0)))
+  if age > PAGER_MAX_AGE_SEC:
+    return Gate("pager", False, f"last pager run {age}s ago (limit {PAGER_MAX_AGE_SEC}s)")
+  if not state.get("lastRunOk"):
+    return Gate("pager", False, "the last pager run failed")
+  if state.get("provider") not in ("pushover", "pagerduty"):
+    return Gate("pager", False, f"PAGER_PROVIDER is {state.get('provider')!r}: nothing can page your phone")
+  if not state.get("heartbeatConfigured"):
+    return Gate("pager", False, "no dead-man's switch (PAGER_HEARTBEAT_URL): a dead pager would go unnoticed")
+  return Gate("pager", True, f"ran {age}s ago via {state['provider']}, dead-man's switch set")
+
+
 def run_gates(rpc_url: str, v: Venue, args, vault: str) -> list[Gate]:
   return [
     gate_custody(rpc_url, v, vault),
@@ -290,6 +311,7 @@ def run_gates(rpc_url: str, v: Venue, args, vault: str) -> list[Gate]:
     gate_keeper(rpc_url, v, os.environ.get("KEEPER_HEALTH_URL", ""), args.min_keeper_cash, args.min_keeper_eth),
     gate_security_module(rpc_url, v, args.min_sm_cash),
     gate_quoter(rpc_url, v, os.environ.get("MARKETS_URL", "https://api.numofx.com"), args.min_quote_usd, args.quoter_owner),
+    gate_pager(Path(os.environ.get("PAGER_STATE_FILE", Path.home() / ".numo-perp-pager.json"))),
   ]
 
 
@@ -324,7 +346,18 @@ def self_test() -> int:
   # 50M cNGN cap at 1374 cNGN/USDC: 25M cNGN a side is $18,195, a third of it $6,065.
   assert round(sm_seed_required(50_000_000 * 10**18, 1 / 1374, 5_000)) == 6065
   assert sm_seed_required(1 * 10**18, 1 / 1374, 5_000) == 5_000
-  print("self-test ok: selectors match their `cast sig` values; seed rule sized")
+  import tempfile
+  with tempfile.TemporaryDirectory() as tmp:
+    state = Path(tmp) / "pager.json"
+    assert not gate_pager(state).ok
+    good = {"lastRunAt": 1_000, "lastRunOk": True, "provider": "pushover", "heartbeatConfigured": True}
+    state.write_text(json.dumps(good))
+    assert gate_pager(state, now=1_060).ok
+    assert not gate_pager(state, now=1_000 + PAGER_MAX_AGE_SEC + 1).ok
+    for broken in ({"lastRunOk": False}, {"provider": ""}, {"heartbeatConfigured": False}):
+      state.write_text(json.dumps({**good, **broken}))
+      assert not gate_pager(state, now=1_060).ok, broken
+  print("self-test ok: selectors match their `cast sig` values; seed rule sized; pager gate")
   return 0
 
 

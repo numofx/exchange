@@ -9,6 +9,10 @@
  *   tsx venue.ts <state-dir> account <label> <usdc>   open a perp account (createAndDepositSubAccount)
  *   tsx venue.ts <state-dir> keeper-account <usdc>     the keeper's funding account: created by and owned by
  *                                                       the keeper EOA (not through Matching), then deposited
+ *   tsx venue.ts <state-dir> spot-account <label> <usdc|cngn> <whole>   spot account under the spot SRM
+ *   tsx venue.ts <state-dir> spot-deposit <label> <usdc|cngn> <whole>   add to an existing spot account
+ *   tsx venue.ts <state-dir> spot-quote <label> <buy|sell> <price> <usd> rest a spot order
+ *   tsx venue.ts <state-dir> spot-cross [price] [usd] / spot-withdraw <label> <usdc>   spot regression
  *   tsx venue.ts <state-dir> fund-sm <usdc>            donate to the stack's SecurityModule
  *   tsx venue.ts <state-dir> quote                      maker rests a bid and an ask 0.5% around the index
  *   tsx venue.ts <state-dir> cross                      taker lifts the maker's offer; waits for the position
@@ -457,6 +461,33 @@ async function openSpotAccount(label: string, kind: 'usdc' | 'cngn', whole: bigi
   console.log(JSON.stringify({ label, address: account.address, subaccountId: id, [kind]: whole.toString() }));
 }
 
+/** Deposits `whole` USDC or cNGN into an existing spot account, as the app's existing-account path does. */
+async function spotDeposit(label: string, kind: 'usdc' | 'cngn', whole: bigint) {
+  const id = readAccounts()[label];
+  if (id === undefined) throw new Error(`no account for ${label}`);
+  const { account, wallet } = await funded(label, kind === 'usdc' ? whole * 10n ** 6n : 0n);
+  let asset: Address;
+  let token: Address;
+  let amount: bigint;
+  if (kind === 'usdc') {
+    asset = SPOT.wrappedUsdc;
+    token = USDC;
+    amount = whole * 10n ** 6n;
+  } else {
+    asset = SPOT.asset;
+    token = SPOT.cngnToken;
+    amount = whole * 10n ** BigInt(await client.readContract({ address: token, abi, functionName: 'decimals' }));
+    await client.request({ method: 'anvil_impersonateAccount' as never, params: [SPOT.asset] as never });
+    await client.request({ method: 'anvil_setBalance' as never, params: [SPOT.asset, toHex(10n ** 18n)] as never });
+    const escrow = createWalletClient({ account: SPOT.asset, chain, transport: http(RPC) });
+    await send(escrow as never, token, 'transfer', [account.address, amount]);
+    await client.request({ method: 'anvil_stopImpersonatingAccount' as never, params: [SPOT.asset] as never });
+  }
+  await send(wallet, token, 'approve', [asset, amount]);
+  await send(wallet, asset, 'deposit', [BigInt(id), amount]);
+  console.log(`${label} (#${id}) +${whole} ${kind}`);
+}
+
 async function spotBalances(label: string) {
   const id = readAccounts()[label]!;
   return { usdc: await balance(id, SPOT.wrappedUsdc), cngn: await balance(id, SPOT.asset) };
@@ -594,6 +625,12 @@ switch (command) {
   }
   case 'spot-account':
     await openSpotAccount(args[0] ?? 'trader', (args[1] ?? 'usdc') as 'usdc' | 'cngn', BigInt(args[2] ?? '1000'));
+    break;
+  case 'spot-deposit':
+    await spotDeposit(args[0] ?? 'trader', (args[1] ?? 'cngn') as 'usdc' | 'cngn', BigInt(args[2] ?? '1000'));
+    break;
+  case 'spot-quote':
+    await placeOrder(args[0] ?? 'trader', (args[1] ?? 'buy') as 'buy' | 'sell', BigInt(args[2] ?? '1374'), BigInt(args[3] ?? '10'), spotMarket());
     break;
   case 'spot-cross':
     await spotCross(BigInt(args[0] ?? '1374'), BigInt(args[1] ?? '100'));

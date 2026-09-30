@@ -18,8 +18,9 @@ across three accounts.
 **Before anything (blocking)**
 
 1. **Index sources.** On the ops host: `node dist/main.js --probe-sources` (perp-feeds). It must
-   report at least 3 answering. As of 2026-09-29 only 2 do (Bybit P2P blocked, no Blockradar key):
-   set `BLOCKRADAR_API_KEY` or confirm Bybit answers from the host.
+   report all 3 fiat sources answering and the peg tripwire watching near parity (see Index sources
+   below). That is exactly 3, with no spare: from the ops host, Bybit P2P above all must answer
+   (it failed DNS from a developer machine once on 2026-09-30, then answered).
 2. **Code live, spot first.** The new markets-service and execution-service must carry spot
    unchanged before anything perp is switched on.
    - **Regression, before deploying:** `scripts/local-venue/up.sh --spot-only` passes on the commit
@@ -47,9 +48,14 @@ across three accounts.
      so the next `apply` does not redeploy the bad one.
    - Merge numofx/trading-app#103 (its ticket stays closed until `trading_enabled`) and
      numofx/market-maker#26.
-3. **Pager.**
+3. **Pager and its dead-man's switch.**
+   - Create a heartbeat check (healthchecks.io or equivalent) with period 1 minute and grace
+     5 minutes, and route its alert to your phone (its Pushover or PagerDuty integration). If the
+     pager stops running (the timer, the host, the RPC), the pings stop and this check pages you. A
+     failed run pings `<check>/fail` and pages at once.
    - Put the pager secrets in SSM under `/numo/pager/`: `provider` (`pushover` or `pagerduty`), its
-     keys, and optionally `heartbeat_url`.
+     keys, and `heartbeat_url` (**required**: without it the pager pages you once a day about that,
+     and the enable gate refuses).
    - Run `scripts/ops/run-with-ssm-pager.sh python3 scripts/ops/check_perp_pager.py --test-page`
      and **confirm your phone received it**. A 2xx from the pager API is not delivery.
    - The timer goes on in step 14, once there are feeds to watch.
@@ -65,7 +71,8 @@ across three accounts.
    and `PERP_GUARDIAN=<the KMS address>`. `PERP_OI_CAP` defaults to 50,000,000 cNGN.
 7. Broadcast `deploy-cngn-perp-trade-module.s.sol`.
 8. Commit the deployment artifacts (`CNGN_PERP_STACK*.json`, `CNGN_PERP_TRADE_MODULE*.json`).
-9. **Render the review file:** `python3 scripts/ops/render_perp_vault_review.py` writes
+9. **Requires the follow-up exchange PR (the index rework and the pager's dead-man's switch) to
+   be merged first.** Then **render the review file:** `python3 scripts/ops/render_perp_vault_review.py` writes
    `deployments/8453/CNGN_PERP_VAULT_REVIEW.md` with every action of all three batches: target,
    function, decoded arguments, purpose and digest. Every row is checked by re-encoding the
    calldata and recomputing the digest. Read it before signing anything, and match each digest in
@@ -91,7 +98,8 @@ across three accounts.
     - Fund the feed relayer (`0xC9F1…0FDc`) **0.05 ETH** and start perp-feeds live. Measured per
       publish: index 46k gas, mark + impacts 120k gas. That is ~0.0003 ETH a day typical and 0.0013
       worst case (a mark every minute), so 0.05 ETH lasts more than a month at worst.
-    - Put `KEEPER_HEALTH_URL=http://127.0.0.1:9464/health` in `/etc/numo/perp-pager.env`, then
+    - Put `KEEPER_HEALTH_URL=http://127.0.0.1:9464/health` in `/etc/numo/perp-pager.env`
+      (`PERP_INDEX_STATUS_FILE` defaults to perp-feeds' status file on the ops box), then
       `systemctl enable --now numo-perp-pager.timer`.
     - It will page "keeper unhealthy" until step 18, which confirms the page path end to end.
 15. **Keeper funding** (before the rehearsal, which uses this account).
@@ -161,6 +169,7 @@ The gates step 21 checks:
 | keeper | Its last pass succeeded recently and it is not in dry run. The keeper EOA owns its funding account, which is under the perp SRM, holds only cash and has enough of it. It has gas. |
 | sm | The SecurityModule holds at least the seed rule. |
 | quoter | The book is two-sided, with at least $1k within 2% of the index on each side. |
+| pager | `check_perp_pager.py` ran successfully within 3 minutes, with a real provider and a dead-man's switch. |
 
 ## SecurityModule seed
 
@@ -262,6 +271,7 @@ and tells you when it clears.
 | feed halt | The index, mark or an impact feed is past its warn age. At 20 minutes (index) the market halts itself: no trades, no liquidations. | Check perp-feeds is running, its relayer has gas, and `--probe-sources` shows 3 sources. If the jump guard stopped it, follow the index-step procedure. | Only if the feeds are publishing *wrong* prices (a compromised signer). A stale feed already stops the market. |
 | keeper unhealthy | `/health` is unreachable, in dry run, or failing. Nothing is liquidating. | Restart the keeper. Check its funding account's cash and its gas. | No: a pause also blocks the liquidations you need. |
 | SecurityModule payout | The SecurityModule paid for a liquidation. | Expected after an insolvent liquidation. Check it still meets the seed rule and top it up if not. | Only if the payouts are not explained by liquidations (an exploit). |
+| peg guard | cNGN is more than 100 bps from NGN parity on Quidax's peg market, so perp-feeds refuses to update the index. It halts when the index goes stale. | Check `cngnngn` on Quidax and cNGN news. If cNGN has really depegged, the index cannot follow it; treat it as a step (index-step procedure, or settlement if over 50%). | Only if the depeg comes from an exploit. |
 | insolvent account | An account is below zero. The keeper should be auctioning it, and the SecurityModule will pay. | Watch the keeper take it. If several go at once, consider **cap = current OI** (below). | Only if it is the result of an exploit. |
 
 ## Emergency levers
@@ -390,16 +400,34 @@ approver, no audit record and no keeper check.
 
 ## Index sources
 
-**What the index measures.** The sources do not quote cNGN/USDC. Quidax (`usdtngn`), Textile
-(`USDT_NGN`) and Bybit P2P quote **fiat NGN per USDT**; only Blockradar quotes **cNGN** (per USDT).
-The index is therefore NGN per USDT, published as if it were cNGN per USDC. That assumes
-**cNGN ≈ NGN** and **USDT ≈ USDC**. A cNGN depeg from NGN, or a USDT/USDC spread, moves the real
-market away from the index without moving the index, and funding and liquidations follow the index.
+**What the index measures: fiat NGN per USD stablecoin, taken as cNGN at redemption parity.**
+cNGN's price is held by redemption (1 cNGN redeems for 1 NGN), not by trading, so the deep fiat
+NGN/USDT markets are the right basis, and the thin cNGN trading markets are not. Every source is a
+fiat venue (`services/perp-feeds/src/index-sources.ts`); its NGN per USDT is used as cNGN per USDT
+with no conversion.
 
-The index needs 3 agreeing sources. As of 2026-09-29, from a developer machine:
-- Quidax and Textile answer.
-- Bybit P2P times out, which looks like a regional block.
-- Blockradar is not configured (`BLOCKRADAR_API_KEY` unset).
+| Source | Market | 2026-09-30 |
+| --- | --- | --- |
+| Quidax | `usdtngn` (fiat NGN) | 1368.22 |
+| Textile | `USDT_NGN` (Textile Credit FX feed) | 1368.82 |
+| Bybit P2P | USDT ads in NGN, fraud-filtered | 1367.50 |
 
-Before step 14, either set `BLOCKRADAR_API_KEY` or confirm with `--probe-sources` that Bybit answers
-from the ops host.
+A sample is their median, refused unless all 3 answer and each sits within 150 bps of it. There
+are **exactly 3, with no spare**: one venue failing halts the index once it goes stale. Textile's
+`USDC_NGN` is the same venue as its `USDT_NGN`, so it is not a fourth source. Binance P2P has no
+official API. USDT is taken as USDC, which the perp settles in.
+
+**The peg tripwire** (`peg.ts`) is not a source, and it converts nothing. It watches whether cNGN
+still sits at NGN parity: a 15-minute TWAP of Quidax `cngnngn` book mids, sampled every minute (the
+market trades too rarely for a trade TWAP: 27 of 300 hours to 2026-09-30), from books no wider
+than 50 bps.
+- **Tripped** (more than 100 bps from parity): every sample is refused, so the index halts once it
+  goes stale, and the pager pages "peg guard". The index cannot follow a real depeg; handle it as a
+  step (index-step procedure, or settlement if over 50%).
+- **Blind** (no good peg sample in 15 minutes): the index carries on at parity, because redemption
+  does not depend on Quidax. perp-feeds alerts `peg-blind` to the alert channel (not the pager) and
+  the status file (`INDEX_STATUS_FILE`) records `peg.state: "blind"`.
+
+The direct cNGN markets (Quidax `usdtcngn`, the Blockradar benchmark, HyperFX `USDC-cNGN` on Base)
+are not sources: they measure cNGN trading, which is thin (Quidax `usdtcngn` ~30 USDT/day, HyperFX
+one solver a side). Their readers were built and removed in exchange#83; the history has them.

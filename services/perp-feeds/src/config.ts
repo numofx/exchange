@@ -50,7 +50,15 @@ const envSchema = z.object({
   INDEX_STEP_AUDIT_FILE: z.string().default('./perp-index-steps.jsonl'),
   KEEPER_HEALTH_URL: z.string().url().optional().or(z.literal('')),
   INDEX_STATE_FILE: z.string().default('./perp-index-state.json'),
-  BLOCKRADAR_API_KEY: z.string().optional().or(z.literal('')),
+  QUIDAX_API_URL: z.string().url().default('https://openapi.quidax.io/exchange-open-api/api/v1'),
+  /** Where each sample's source readings and tripwire state are written, for the pager's peg-guard page. */
+  INDEX_STATUS_FILE: z.string().default('./perp-index-status.json'),
+
+  // The peg tripwire (peg.ts): a TWAP of Quidax cngnngn book mids over PEG_TWAP_WINDOW_MS. Past
+  // PEG_GUARD_BPS from parity every sample is refused and the pager pages; it is not a source.
+  PEG_TWAP_WINDOW_MS: z.coerce.number().int().positive().default(900_000),
+  PEG_MAX_SPREAD_BPS: z.coerce.number().positive().default(50),
+  PEG_GUARD_BPS: z.coerce.number().positive().default(100),
   PROVIDER_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
 
   // Mark and impacts: checked every minute, published on a 10bps move or before half the 15-minute

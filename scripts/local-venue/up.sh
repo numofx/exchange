@@ -62,7 +62,7 @@ json() { python3 -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv
 
 "$HERE/down.sh" >/dev/null 2>&1 || true
 # A fresh fork every run: nothing from the last one (account labels, index samples, step audit) applies.
-rm -f "$DIR/accounts.json" "$DIR/venue.json" "$DIR/perp-index-state.json" "$DIR/perp-index-steps.jsonl" "$DIR/enable-actions.json"
+rm -f "$DIR/accounts.json" "$DIR/venue.json" "$DIR/perp-index-state.json" "$DIR/perp-index-steps.jsonl" "$DIR/enable-actions.json" "$DIR/pager-capture.log"
 
 step "anvil: Base fork as chain 31337 on :$ANVIL_PORT"
 start anvil anvil --fork-url "$BASE_RPC_URL" --chain-id 31337 --port $ANVIL_PORT --silent
@@ -190,6 +190,7 @@ IMPACT_BID_FEED=$(json "$V" impactBidFeed)
 MARKETS_SERVICE_URL=http://127.0.0.1:$API_PORT
 INDEX_STATE_FILE=$DIR/perp-index-state.json
 INDEX_STEP_AUDIT_FILE=$DIR/perp-index-steps.jsonl
+INDEX_STATUS_FILE=$DIR/perp-index-status.json
 KEEPER_HEALTH_URL=http://127.0.0.1:$KEEPER_HEALTH_PORT/health
 ENV
 (cd "$ROOT/services/perp-feeds" && set -a && . "$DIR/perp-feeds.env" && set +a && \
@@ -213,9 +214,33 @@ $VENUE account maker 20000
 $VENUE account taker 5000
 $VENUE quote
 
+step "pager: one run against a local capture server (the enable gate requires a live pager)"
+# PagerDuty's shape and a heartbeat endpoint, both captured locally: nothing leaves the machine.
+cat >"$DIR/capture.py" <<'PY'
+import http.server, sys
+out = sys.argv[1]
+class H(http.server.BaseHTTPRequestHandler):
+    def _log(self, body):
+        open(out, "a").write(f"{self.command} {self.path} {body}\n")
+        self.send_response(200); self.end_headers()
+    def do_POST(self): self._log(self.rfile.read(int(self.headers["Content-Length"])).decode())
+    def do_GET(self): self._log("")
+    def log_message(self, *a): pass
+http.server.HTTPServer(("127.0.0.1", int(sys.argv[2])), H).serve_forever()
+PY
+start pager-capture python3 "$DIR/capture.py" "$DIR/pager-capture.log" 9780
+wait_for "pager capture" curl -sf http://127.0.0.1:9780/ready
+PAGER_ENV="RPC_URL=$RPC KEEPER_HEALTH_URL=http://127.0.0.1:$KEEPER_HEALTH_PORT/health PAGER_PROVIDER=pagerduty
+PAGERDUTY_URL=http://127.0.0.1:9780/page PAGERDUTY_ROUTING_KEY=local PAGER_HEARTBEAT_URL=http://127.0.0.1:9780/hb
+PAGE_PREFIX=[LOCAL] PAGER_STATE_FILE=$DIR/pager-state.json PERP_INDEX_STATUS_FILE=$DIR/perp-index-status.json ALERT_WEBHOOK_URL="
+rm -f "$DIR/pager-state.json"
+(cd "$ROOT/contracts/risk-core" && env $PAGER_ENV python3 scripts/ops/check_perp_pager.py --stack "$V")
+grep -q "GET /hb " "$DIR/pager-capture.log" || { echo "the pager did not ping its dead-man's switch" >&2; exit 1; }
+
 step "enable: every launch gate, then the enable actions as the vault"
 ACTIONS="$DIR/enable-actions.json"
 (cd "$ROOT/contracts/risk-core" && RPC_URL=$RPC KEEPER_HEALTH_URL=http://127.0.0.1:$KEEPER_HEALTH_PORT/health \
+  PAGER_STATE_FILE="$DIR/pager-state.json" \
   MARKETS_URL=http://127.0.0.1:$API_PORT python3 scripts/ops/propose_perp_enable_batch.py --local \
   --stack "$V" --module "$MODULE_JSON" --write "$ACTIONS")
 python3 -c "import json,sys;[print(a['to'], a['data']) for a in json.load(open(sys.argv[1]))]" "$ACTIONS" |

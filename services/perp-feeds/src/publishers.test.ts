@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import type { RateProvider } from 'cngn-rate-picker';
 import { keccak256, toHex, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
@@ -43,6 +42,7 @@ function config() {
     DATA_SUBMITTER: '0x00000000000000000000000000000000000000b1',
     PERP_ASSET: '0x00000000000000000000000000000000000000b2',
     INDEX_STATE_FILE: join(mkdtempSync(join(tmpdir(), 'perp-feeds-')), 'state.json'),
+    INDEX_STATUS_FILE: join(mkdtempSync(join(tmpdir(), 'perp-feeds-status-')), 'status.json'),
     ...feeds,
   });
 }
@@ -125,7 +125,7 @@ describe('index refresh', () => {
   const nowMs = Number(HEAD) * 1000;
 
   function publisher(chain: Chain, samples: { price: number; at: number }[]) {
-    const index = new IndexPublisher(config(), chain, [] as RateProvider[], quiet, () => nowMs);
+    const index = new IndexPublisher(config(), chain, [], quiet, () => nowMs);
     (index as unknown as { state: { samples: typeof samples; lastPublished: string | null } }).state = {
       samples,
       lastPublished: toUsdPerNgn(1374).toString(),
@@ -155,3 +155,58 @@ describe('index refresh', () => {
     assert.equal(chain.submitted.length, 0);
   });
 });
+
+describe('index sample and the peg guard', () => {
+  const three = ['a', 'b', 'c'].map((name) => ({ name, read: async () => ({ source: name, cngnPerUsdt: 1374 }) }));
+
+  it('accepts a sample at parity and writes what it saw', async () => {
+    const cfg = config();
+    const index = new IndexPublisher(cfg, fakeChain({ index: null, diffs: {} }), three, quiet, () => Number(HEAD) * 1000, async () => ({ buy: 0.9999, sell: 1.0001 }));
+    await index.sample();
+    assert.equal(index.samples().length, 1);
+    const status = JSON.parse(readFileSync(cfg.INDEX_STATUS_FILE, 'utf8'));
+    assert.equal(status.pegGuardTripped, false);
+    assert.equal(status.sample.ok, true);
+  });
+
+  it('refuses the sample, alerts, and records the trip when cNGN leaves parity', async () => {
+    const cfg = config();
+    const alerts: string[] = [];
+    const index = new IndexPublisher(
+      cfg,
+      fakeChain({ index: null, diffs: {} }),
+      three,
+      async (key) => void alerts.push(key),
+      () => Number(HEAD) * 1000,
+      async () => ({ buy: 0.984, sell: 0.985 }),
+    );
+    await index.sample();
+    assert.equal(index.samples().length, 0, 'no sample taken past the peg guard');
+    assert.deepEqual(alerts, ['peg-guard']);
+    const status = JSON.parse(readFileSync(cfg.INDEX_STATUS_FILE, 'utf8'));
+    assert.equal(status.pegGuardTripped, true);
+    assert.match(status.sample.reason, /peg guard/);
+  });
+
+  it('keeps sampling at parity when the tripwire is blind, and says so', async () => {
+    const cfg = config();
+    const alerts: string[] = [];
+    const index = new IndexPublisher(
+      cfg,
+      fakeChain({ index: null, diffs: {} }),
+      three,
+      async (key) => void alerts.push(key),
+      () => Number(HEAD) * 1000,
+      async () => {
+        throw new Error('Quidax cngnngn ticker HTTP 503');
+      },
+    );
+    await index.sample();
+    assert.equal(index.samples().length, 1, 'a blind tripwire is not a reason to stop the index');
+    assert.deepEqual(alerts, ['peg-blind']);
+    const status = JSON.parse(readFileSync(cfg.INDEX_STATUS_FILE, 'utf8'));
+    assert.equal(status.pegGuardTripped, false);
+    assert.equal(status.peg.state, 'blind');
+  });
+});
+

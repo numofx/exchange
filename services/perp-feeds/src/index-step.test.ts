@@ -96,6 +96,7 @@ describe('acceptIndexStep', () => {
       IMPACT_ASK_FEED: '0x00000000000000000000000000000000000000a3',
       IMPACT_BID_FEED: '0x00000000000000000000000000000000000000a4',
       INDEX_STATE_FILE: join(mkdtempSync(join(tmpdir(), 'index-step-')), 'state.json'),
+      INDEX_STATUS_FILE: join(mkdtempSync(join(tmpdir(), 'perp-feeds-status-')), 'status.json'),
     });
     const run = () =>
       acceptIndexStep({

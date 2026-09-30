@@ -10,7 +10,7 @@
  * Skipped without ANVIL_RPC_URL.
  */
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { before, describe, it } from 'node:test';
@@ -29,7 +29,7 @@ import {
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
-import type { RateProvider } from 'cngn-rate-picker';
+import type { IndexSource } from './index-sources.js';
 
 import { createChain } from './chain.js';
 import { loadConfig } from './config.js';
@@ -94,18 +94,19 @@ describe('publishers against real feed contracts on anvil', { skip: !RPC }, () =
       IMPACT_ASK_FEED: feeds.ask,
       IMPACT_BID_FEED: feeds.bid,
       INDEX_STATE_FILE: join(tmpdir(), `perp-index-${Date.now()}-${Math.random()}.json`),
+      INDEX_STATUS_FILE: join(mkdtempSync(join(tmpdir(), 'perp-feeds-status-')), 'status.json'),
       INDEX_MIN_WINDOW_SAMPLES: '3',
       ...overrides,
     });
   }
 
-  function fixedProviders(ngnPerUsdt: number[]): RateProvider[] {
-    return ngnPerUsdt.map((price, i) => ({
+  function fixedProviders(cngnPerUsdt: number[]): IndexSource[] {
+    return cngnPerUsdt.map((price, i) => ({
       name: `fixed-${i}`,
-      asset: 'USDT',
-      getPriceInNgn: async () => ({ price }),
+      read: async () => ({ source: `fixed-${i}`, cngnPerUsdt: price }),
     }));
   }
+  const parity = async () => ({ buy: 1, sell: 1 });
 
   before(async () => {
     feeds.submitter = await deploy('OracleDataSubmitter.sol', 'OracleDataSubmitter');
@@ -128,7 +129,7 @@ describe('publishers against real feed contracts on anvil', { skip: !RPC }, () =
   it('publishes an index the LyraSpotFeed accepts, inverted to USDC per cNGN', async () => {
     const cfg = config();
     const clock = { now: Date.now() };
-    const publisher = new IndexPublisher(cfg, createChain(cfg), fixedProviders([1374, 1372, 1376]), async () => {}, () => clock.now);
+    const publisher = new IndexPublisher(cfg, createChain(cfg), fixedProviders([1374, 1372, 1376]), async () => {}, () => clock.now, parity);
     for (let i = 0; i < 3; i++) {
       await publisher.sample();
       clock.now += 60_000;
@@ -142,7 +143,7 @@ describe('publishers against real feed contracts on anvil', { skip: !RPC }, () =
   it('refuses to publish when the sources disagree, leaving the chain untouched', async () => {
     const cfg = config();
     const before = await publicClient.readContract({ address: feeds.index, abi: ownerAbi, functionName: 'getSpot' });
-    const publisher = new IndexPublisher(cfg, createChain(cfg), fixedProviders([1374, 1372, 1500]), async () => {}, () => Date.now());
+    const publisher = new IndexPublisher(cfg, createChain(cfg), fixedProviders([1374, 1372, 1500]), async () => {}, () => Date.now(), parity);
     for (let i = 0; i < 3; i++) await publisher.sample();
     await publisher.publish();
     const after = await publicClient.readContract({ address: feeds.index, abi: ownerAbi, functionName: 'getSpot' });

@@ -1,5 +1,7 @@
 /**
- * The index: what one USD of stablecoin is worth in NGN, turned into the perp's USDC-per-cNGN price.
+ * The index: what one USD of stablecoin is worth in cNGN, turned into the perp's USDC-per-cNGN price.
+ * The sources are fiat NGN per USDT, taken at cNGN's NGN redemption parity (index-sources.ts); the
+ * peg tripwire (peg.ts) halts the index when that parity breaks.
  *
  * Everything here is pure, so every refusal can be tested without a network. The publisher's job
  * is to fail closed: an index it is not sure of is worse than no index, because a stale feed halts
@@ -12,11 +14,11 @@
  */
 import { timeWeightedAverage, withinWindow, type PricePoint } from 'cngn-rate-picker';
 
+/** One source's reading: cNGN per 1 USD stablecoin (index-sources.ts). */
 export type SourceQuote = {
   /** Provider name, e.g. "quidax". */
   source: string;
-  /** NGN per 1 USDT, as the provider reported it. */
-  ngnPerUsdt: number;
+  cngnPerUsdt: number;
 };
 
 export type SampleRules = {
@@ -30,18 +32,18 @@ export type SampleResult =
   | { ok: true; median: number; sources: string[] }
   | { ok: false; reason: string };
 
-/** Median of the sources' NGN-per-USDT, refused when too few answered or any one disagrees. */
+/** Median of the sources' cNGN-per-USDT, refused when too few answered or any one disagrees. */
 export function aggregateSample(quotes: SourceQuote[], rules: SampleRules): SampleResult {
-  const valid = quotes.filter((quote) => Number.isFinite(quote.ngnPerUsdt) && quote.ngnPerUsdt > 0);
+  const valid = quotes.filter((quote) => Number.isFinite(quote.cngnPerUsdt) && quote.cngnPerUsdt > 0);
   if (valid.length < rules.minSources) {
     return { ok: false, reason: `only ${valid.length} of ${rules.minSources} required sources answered` };
   }
 
-  const median = medianOf(valid.map((quote) => quote.ngnPerUsdt));
-  const outliers = valid.filter((quote) => deviationBps(quote.ngnPerUsdt, median) > rules.maxSourceDeviationBps);
+  const median = medianOf(valid.map((quote) => quote.cngnPerUsdt));
+  const outliers = valid.filter((quote) => deviationBps(quote.cngnPerUsdt, median) > rules.maxSourceDeviationBps);
   if (outliers.length > 0) {
     const detail = outliers
-      .map((quote) => `${quote.source}=${quote.ngnPerUsdt} (${deviationBps(quote.ngnPerUsdt, median).toFixed(0)}bps)`)
+      .map((quote) => `${quote.source}=${quote.cngnPerUsdt} (${deviationBps(quote.cngnPerUsdt, median).toFixed(0)}bps)`)
       .join(', ');
     return { ok: false, reason: `sources disagree with median ${median}: ${detail}` };
   }
@@ -61,7 +63,7 @@ export type WindowRules = {
   maxNewestAgeMs: number;
 };
 
-export type TwapResult = { ok: true; ngnPerUsdt: number; samples: number } | { ok: false; reason: string };
+export type TwapResult = { ok: true; cngnPerUsdt: number; samples: number } | { ok: false; reason: string };
 
 /**
  * Time-weighted average of the accepted samples in the trailing window. A window with too few
@@ -84,7 +86,7 @@ export function windowTwap(samples: PricePoint[], nowMs: number, rules: WindowRu
   if (twap === null || !Number.isFinite(twap) || twap <= 0) {
     return { ok: false, reason: 'window TWAP is not a positive number' };
   }
-  return { ok: true, ngnPerUsdt: twap, samples: inWindow.length };
+  return { ok: true, cngnPerUsdt: twap, samples: inWindow.length };
 }
 
 export type JumpRules = {
@@ -119,9 +121,8 @@ export function stepBps(to: bigint, from: bigint): number {
 }
 
 /**
- * NGN per USDT to the perp's denomination: USDC per cNGN, 18dp. The sources quote fiat NGN per USDT
- * (Blockradar alone quotes cNGN), so this assumes cNGN ~ NGN and USDT ~ USDC: a cNGN depeg or a
- * USDT/USDC spread moves the market away from the index without moving the index.
+ * cNGN per USDT to the perp's denomination: USDC per cNGN, 18dp. The sources are fiat NGN per USDT
+ * at redemption parity, so this takes USDT ~ USDC; a cNGN depeg is the peg tripwire's to catch.
  */
 export function toUsdPerNgn(ngnPerUsdt: number): bigint {
   if (!Number.isFinite(ngnPerUsdt) || ngnPerUsdt <= 0) {
