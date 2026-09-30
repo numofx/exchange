@@ -5,8 +5,9 @@ meet; and the operator procedures the running market needs: the guardian, the ca
 a real index step, and settling one that is too large to reopen. Every step here can be
 rehearsed first on `scripts/local-venue/up.sh`, and the index step on `step-drill.sh`.
 
-Nothing in this runbook broadcasts or signs by itself. Deploys run from the deployer key. Vault
-actions go through MPCVault, and a human approves each one.
+Nothing in this runbook broadcasts or signs by itself. Deploys are signed by the deployer from a
+forge keystore account (`--account numo-deployer`); the key is never put on a command line or in
+an environment variable. Vault actions go through MPCVault, and a human approves each one.
 
 ## Go-live checklist
 
@@ -67,9 +68,22 @@ across three accounts.
 **Deploy**
 
 5. Fund the deployer **0.005 ETH**. The deploy is 77 transactions, 33.0M gas, ~0.0002 ETH today.
-6. Broadcast `deploy-cngn-perp-stack.s.sol` with `FEED_SIGNER=0xdA1976E83D54B76D0c794B35262228960a1a918f`
-   and `PERP_GUARDIAN=<the KMS address>`. `PERP_OI_CAP` defaults to 50,000,000 cNGN.
-7. Broadcast `deploy-cngn-perp-trade-module.s.sol`.
+   The deployer's key lives in a forge keystore named `numo-deployer`
+   (`cast wallet import numo-deployer --interactive`, once; `cast wallet address --account
+   numo-deployer` must print the deployer). Both deploy scripts refuse to run without a sender.
+6. Broadcast the stack, from `contracts/risk-core`:
+   ```bash
+   FEED_SIGNER=0xdA1976E83D54B76D0c794B35262228960a1a918f PERP_GUARDIAN=<the KMS address> \
+     forge script scripts/deploy-cngn-perp-stack.s.sol --rpc-url $BASE_RPC_URL \
+     --account numo-deployer --broadcast
+   ```
+   `FEED_SIGNER` must be what `/numo/feeds/feed_signer_key` derives to (checked 2026-09-30).
+   `PERP_OI_CAP` defaults to 50,000,000 cNGN.
+7. Broadcast the module, from `contracts/execution`:
+   ```bash
+   forge script scripts/deploy-cngn-perp-trade-module.s.sol --rpc-url $BASE_RPC_URL \
+     --account numo-deployer --broadcast
+   ```
 8. Commit the deployment artifacts (`CNGN_PERP_STACK*.json`, `CNGN_PERP_TRADE_MODULE*.json`).
 9. **Requires the follow-up exchange PR (the index rework and the pager's dead-man's switch) to
    be merged first.** Then **render the review file:** `python3 scripts/ops/render_perp_vault_review.py` writes
