@@ -18,9 +18,9 @@ across three accounts.
 **Before anything (blocking)**
 
 1. **Index sources.** On the ops host: `node dist/main.js --probe-sources` (perp-feeds). It must
-   report at least 3 **counting** sources and a peg near parity (see Index sources below). From a
-   developer machine on 2026-09-30 only 1 counted. Set `BLOCKRADAR_API_KEY` and confirm Bybit P2P
-   answers from the host: even then it is exactly 3, with no spare.
+   report all 3 fiat sources answering and the peg tripwire watching near parity (see Index sources
+   below). That is exactly 3, with no spare: from the ops host, Bybit P2P above all must answer
+   (it failed DNS from a developer machine once on 2026-09-30, then answered).
 2. **Code live, spot first.** The new markets-service and execution-service must carry spot
    unchanged before anything perp is switched on.
    - **Regression, before deploying:** `scripts/local-venue/up.sh --spot-only` passes on the commit
@@ -400,38 +400,34 @@ approver, no audit record and no keeper check.
 
 ## Index sources
 
-**What the index measures: cNGN, not NGN.** Every source reports **cNGN per USD stablecoin**
-(`services/perp-feeds/src/index-sources.ts`). A source counts toward the minimum of 3 only as below.
+**What the index measures: fiat NGN per USD stablecoin, taken as cNGN at redemption parity.**
+cNGN's price is held by redemption (1 cNGN redeems for 1 NGN), not by trading, so the deep fiat
+NGN/USDT markets are the right basis, and the thin cNGN trading markets are not. Every source is a
+fiat venue (`services/perp-feeds/src/index-sources.ts`); its NGN per USDT is used as cNGN per USDT
+with no conversion.
 
-| Source | Market | How it becomes cNGN | Counts |
-| --- | --- | --- | --- |
-| Quidax | `usdtcngn` | direct | only at $1k+ of 24h volume; otherwise in the median but not counted, and dropped (never a veto) if it disagrees. Today: ~30 USDT/day |
-| Blockradar | cNGN/USDT benchmark | direct | yes (needs `BLOCKRADAR_API_KEY`) |
-| HyperFX | `USDC-cNGN` on Base (`EVM-8453`) | direct: 15-min TWAP of the mid over bookHistory snapshots with ≥2 solvers, ≥$1k depth a side and spread ≤50 bps; the live best rates at $1k must also have ≥2 solvers a side and a mid within 50 bps of that TWAP | yes, when every rule passes. Today: one solver, so no |
-| Textile | `USDT_NGN` (fiat) | ÷ the measured peg | yes, while the peg is available |
-| Bybit P2P | USDT ads in fiat NGN | ÷ the measured peg | yes, while the peg is available |
+| Source | Market | 2026-09-30 |
+| --- | --- | --- |
+| Quidax | `usdtngn` (fiat NGN) | 1368.22 |
+| Textile | `USDT_NGN` (Textile Credit FX feed) | 1368.82 |
+| Bybit P2P | USDT ads in NGN, fraud-filtered | 1367.50 |
 
-**The peg** (`peg.ts`) is how many NGN one cNGN is worth. It is Quidax `cngnngn`, from its book mid
-sampled every minute (the market trades too rarely for a trade TWAP: 27 of 300 hours to
-2026-09-30), and taken as a 15-minute TWAP.
-- If the peg market stops answering, the last good peg stands for 15 minutes. After that the peg is
-  unavailable, the fiat sources drop out, and the index halts unless 3 direct sources remain.
-- **Peg guard:** if the peg is more than 100 bps from parity, the sample is refused (so the index
-  halts), and the pager pages "peg guard".
+A sample is their median, refused unless all 3 answer and each sits within 150 bps of it. There
+are **exactly 3, with no spare**: one venue failing halts the index once it goes stale. Textile's
+`USDC_NGN` is the same venue as its `USDT_NGN`, so it is not a fourth source. Binance P2P has no
+official API. USDT is taken as USDC, which the perp settles in.
 
-USDT and USDC are still taken as equal: HyperFX quotes USDC, the others USDT.
+**The peg tripwire** (`peg.ts`) is not a source, and it converts nothing. It watches whether cNGN
+still sits at NGN parity: a 15-minute TWAP of Quidax `cngnngn` book mids, sampled every minute (the
+market trades too rarely for a trade TWAP: 27 of 300 hours to 2026-09-30), from books no wider
+than 50 bps.
+- **Tripped** (more than 100 bps from parity): every sample is refused, so the index halts once it
+  goes stale, and the pager pages "peg guard". The index cannot follow a real depeg; handle it as a
+  step (index-step procedure, or settlement if over 50%).
+- **Blind** (no good peg sample in 15 minutes): the index carries on at parity, because redemption
+  does not depend on Quidax. perp-feeds alerts `peg-blind` to the alert channel (not the pager) and
+  the status file (`INDEX_STATUS_FILE`) records `peg.state: "blind"`.
 
-The index needs 3 agreeing **counting** sources. `--probe-sources` from a developer machine on
-2026-09-30 found only 1:
-- the peg is at parity;
-- Textile counts, converted through the peg;
-- Quidax answers but isn't counted (29.68 USDT of volume);
-- Bybit P2P doesn't resolve (DNS);
-- HyperFX fails (one solver per side);
-- Blockradar has no key.
-
-From the ops host, with Bybit reachable and Blockradar keyed, that is exactly 3, with no spare: one
-source failing halts the index.
-
-Before step 14, either set `BLOCKRADAR_API_KEY` or confirm with `--probe-sources` that Bybit answers
-from the ops host.
+The direct cNGN markets (Quidax `usdtcngn`, the Blockradar benchmark, HyperFX `USDC-cNGN` on Base)
+are not sources: they measure cNGN trading, which is thin (Quidax `usdtcngn` ~30 USDT/day, HyperFX
+one solver a side). Their readers were built and removed in exchange#83; the history has them.

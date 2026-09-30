@@ -31,8 +31,7 @@ describe('--local-sources', () => {
   it('stands in three agreeing providers, and is off without the flag', async () => {
     assert.equal(parseLocalSources(['--local-sources=2290']), 2290);
     assert.equal(parseLocalSources(['--once']), null);
-    const peg = { ok: false as const, reason: 'unused' };
-    const readings = await Promise.all(localSources(2290).map((source) => source.read({ signal: new AbortController().signal, fetch, peg })));
-    assert.deepEqual(readings.map((r) => [r.cngnPerUsdt, r.counts]), [[2290, true], [2290, true], [2290, true]]);
+    const readings = await Promise.all(localSources(2290).map((source) => source.read({ signal: new AbortController().signal, fetch })));
+    assert.deepEqual(readings.map((r) => r.cngnPerUsdt), [2290, 2290, 2290]);
   });
 });

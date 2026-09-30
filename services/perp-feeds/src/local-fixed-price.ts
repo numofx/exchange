@@ -86,7 +86,7 @@ export function parseLocalSources(argv: string[]): number | null {
 export function localSources(cngnPerUsdc: number): IndexSource[] {
   return ['local-a', 'local-b', 'local-c'].map((name) => ({
     name,
-    read: async () => ({ source: name, cngnPerUsdt: cngnPerUsdc, counts: true }),
+    read: async () => ({ source: name, cngnPerUsdt: cngnPerUsdc }),
   }));
 }
 

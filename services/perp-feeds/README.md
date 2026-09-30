@@ -2,9 +2,9 @@
 
 Price publishers for `USDCcNGN-PERP`. One process, one feed signer, one relayer:
 
-- **Index.** Every minute, each USDT/NGN provider from
-  [`cngn-rate-picker`](https://github.com/wrappedcbdc/cngn-rate-picker) (Quidax, Textile, Bybit P2P,
-  and Blockradar when `BLOCKRADAR_API_KEY` is set) is queried. A sample is the **median**, and is
+- **Index.** Every minute, three fiat USDT/NGN providers from
+  [`cngn-rate-picker`](https://github.com/wrappedcbdc/cngn-rate-picker) (Quidax `usdtngn`, Textile,
+  Bybit P2P) are queried. A sample is the **median**, and is
   refused if fewer than 3 sources answer or any source sits more than 150 bps from the median. Every
   5 minutes the 15-minute **time-weighted average** of accepted samples is inverted to USDC per cNGN,
   refused if it would move the on-chain index more than 300 bps, then signed and pushed.
@@ -13,18 +13,15 @@ Price publishers for `USDCcNGN-PERP`. One process, one feed signer, one relayer:
   without that depth reads as the index, so a thin book creates no funding premium. Published on a
   10 bps move or before 7 minutes have passed, whichever comes first.
 
-**What the index measures: cNGN.** Each source reports cNGN per USD stablecoin and whether it
-counts toward `INDEX_MIN_SOURCES` (`src/index-sources.ts`):
-- Quidax `usdtcngn` is direct, and counts only at `INDEX_QUIDAX_MIN_VOLUME_USD` of 24h volume.
-- Blockradar is direct.
-- HyperFX `USDC-cNGN` on Base is direct, and counts only when its rules pass: a 15-min snapshot
-  TWAP with ≥2 solvers and ≥$1k depth a side and a spread ≤50 bps, and a live check at $1k.
-- Textile and Bybit P2P quote fiat NGN, and are divided by the measured cNGN/NGN peg (`src/peg.ts`):
-  a 15-min TWAP of Quidax `cngnngn` book mids.
+**What the index measures: fiat NGN, at cNGN's redemption parity.** cNGN is held at 1 NGN by
+redemption, not by trading, so each source's fiat NGN per USDT is used as cNGN per USDT unconverted
+(`src/index-sources.ts`). There are exactly 3 sources and no spare.
 
-Without a peg for 15 minutes the fiat sources drop out. Past 100 bps from parity the peg guard
-refuses the sample, and the status file (`INDEX_STATUS_FILE`) records it for the pager. USDT is
-still taken as USDC. The full table is in `contracts/risk-core/docs/cngn-perp-go-live.md`.
+**The peg tripwire** (`src/peg.ts`) is not a source: a 15-min TWAP of Quidax `cngnngn` book mids.
+Past 100 bps from parity it refuses every sample and the status file (`INDEX_STATUS_FILE`) records
+`pegGuardTripped` for the pager. With no peg sample in 15 minutes it is blind: the index carries on
+at parity and a `peg-blind` alert fires. USDT is taken as USDC. The full section is in
+`contracts/risk-core/docs/cngn-perp-go-live.md`.
 
 The picker's own multi-source mode is not used: with `threshold > 1` it averages the first N
 successes weighted by fetch-time gaps and never compares them, which is neither a median nor a
@@ -75,7 +72,6 @@ MARK_FEED=<markFeed>
 IMPACT_ASK_FEED=<impactAskFeed>
 IMPACT_BID_FEED=<impactBidFeed>
 INDEX_STATE_FILE=/var/lib/numo/perp-index-state.json
-# BLOCKRADAR_API_KEY=...   # a fourth source; needed if Bybit P2P is unreachable from the host
 ```
 
 Then install `contracts/risk-core/scripts/ops/numo-perp-feeds-ssm.service`. Dry run first:

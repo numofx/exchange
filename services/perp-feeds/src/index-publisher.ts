@@ -13,7 +13,7 @@ import { fetchPegTicker, pegMid, pegReading, type PegReading, type PegTicker } f
 type IndexState = {
   /** Accepted samples: the median cNGN per USDT, when it was taken. */
   samples: PricePoint[];
-  /** Good cNGN/NGN peg samples (NGN per cNGN, book mid), for the peg TWAP. */
+  /** Good cNGN/NGN peg samples (NGN per cNGN, book mid), for the tripwire's TWAP. */
   pegSamples?: PricePoint[];
   /** Last index this process got onto the chain, USDC per cNGN 18dp, as a decimal string. */
   lastPublished: string | null;
@@ -73,12 +73,11 @@ export class IndexPublisher {
     await rename(tmp, this.config.INDEX_STATE_FILE);
   }
 
-  /** Samples the cNGN/NGN peg once; a bad or failed read just leaves the last good samples standing. */
+  /** Samples the peg tripwire once; a bad or failed read just leaves the last good samples standing. */
   private async samplePeg(): Promise<PegReading> {
     const at = this.now();
     const rules = {
       windowMs: this.config.PEG_TWAP_WINDOW_MS,
-      maxAgeMs: this.config.PEG_MAX_AGE_MS,
       maxSpreadBps: this.config.PEG_MAX_SPREAD_BPS,
       guardBps: this.config.PEG_GUARD_BPS,
     };
@@ -97,18 +96,23 @@ export class IndexPublisher {
   }
 
   /**
-   * One sample: the peg first (the fiat sources need it), then every source in parallel, each
-   * reporting cNGN per USDT; a source that throws or times out is simply absent. A tripped peg
-   * guard refuses the sample outright: cNGN has left its NGN parity, and the operator is paged.
+   * One sample: the peg tripwire, then every source in parallel, each reporting cNGN per USDT at
+   * redemption parity; a source that throws or times out is simply absent. A tripped wire refuses
+   * the sample outright (cNGN has left its NGN parity) and the operator is paged. A blind wire (the
+   * peg market not answering) does not stop the index: the parity it checks does not depend on it.
    */
   async sample(): Promise<void> {
     const peg = await this.samplePeg();
+    if (peg.state === 'blind') {
+      console.warn(`[index] peg tripwire blind: ${peg.reason}`);
+      await this.alert('peg-blind', `peg tripwire blind (index continues at parity): ${peg.reason}`);
+    }
     const readings = await Promise.all(
       this.sources.map(async (source): Promise<SourceReading | { source: string; failed: string }> => {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), this.config.PROVIDER_TIMEOUT_MS);
         try {
-          return await source.read({ signal: controller.signal, fetch, peg });
+          return await source.read({ signal: controller.signal, fetch });
         } catch (error) {
           console.warn(`[index] ${source.name} absent: ${(error as Error).message}`);
           return { source: source.name, failed: (error as Error).message };
@@ -121,18 +125,18 @@ export class IndexPublisher {
 
     const at = this.now();
     let outcome: { ok: true; median: number } | { ok: false; reason: string };
-    if (peg.ok && peg.guardTripped) {
+    if (peg.state === 'watching' && peg.tripped) {
       outcome = { ok: false, reason: `peg guard: cNGN at ${peg.ngnPerCngn.toFixed(6)} NGN is ${peg.deviationBps.toFixed(0)}bps from parity (limit ${this.config.PEG_GUARD_BPS}bps)` };
       await this.alert('peg-guard', `index HALTED by the peg guard: ${outcome.reason}`);
     } else {
       const result = aggregateSample(
-        answered.map((r) => ({ source: r.source, cngnPerUsdt: r.cngnPerUsdt, counts: r.counts })),
+        answered.map((r) => ({ source: r.source, cngnPerUsdt: r.cngnPerUsdt })),
         { minSources: this.config.INDEX_MIN_SOURCES, maxSourceDeviationBps: this.config.INDEX_MAX_SOURCE_DEVIATION_BPS },
       );
       outcome = result;
       if (result.ok) {
         this.state.samples = [...this.state.samples.filter((p) => p.at >= at - this.config.INDEX_TWAP_WINDOW_MS), { price: result.median, at }];
-        console.log(`[index] sample ${result.median} cNGN/USDT from ${result.sources.join(', ')}${result.dropped.length ? ` (dropped ${result.dropped.join(', ')})` : ''}`);
+        console.log(`[index] sample ${result.median} cNGN/USDT from ${result.sources.join(', ')}`);
       } else {
         console.warn(`[index] sample refused: ${result.reason}`);
         await this.alert('index-sample-refused', `index sample refused: ${result.reason}`);
@@ -151,10 +155,11 @@ export class IndexPublisher {
   ): Promise<void> {
     const status = {
       at,
-      peg: peg.ok
-        ? { ok: true, ngnPerCngn: peg.ngnPerCngn, deviationBps: peg.deviationBps, ageSec: Math.round(peg.ageMs / 1000), samples: peg.samples }
-        : { ok: false, reason: peg.reason },
-      pegGuardTripped: peg.ok && peg.guardTripped,
+      peg:
+        peg.state === 'watching'
+          ? { state: 'watching', ngnPerCngn: peg.ngnPerCngn, deviationBps: peg.deviationBps, samples: peg.samples }
+          : { state: 'blind', reason: peg.reason },
+      pegGuardTripped: peg.state === 'watching' && peg.tripped,
       sources: readings,
       sample: outcome.ok ? { ok: true, cngnPerUsdt: outcome.median } : { ok: false, reason: outcome.reason },
     };

@@ -103,7 +103,7 @@ describe('publishers against real feed contracts on anvil', { skip: !RPC }, () =
   function fixedProviders(cngnPerUsdt: number[]): IndexSource[] {
     return cngnPerUsdt.map((price, i) => ({
       name: `fixed-${i}`,
-      read: async () => ({ source: `fixed-${i}`, cngnPerUsdt: price, counts: true }),
+      read: async () => ({ source: `fixed-${i}`, cngnPerUsdt: price }),
     }));
   }
   const parity = async () => ({ buy: 1, sell: 1 });

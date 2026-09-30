@@ -9,22 +9,22 @@ describe('aggregateSample', () => {
   it('takes the median of agreeing sources', () => {
     const result = aggregateSample(
       [
-        { source: 'quidax', cngnPerUsdt: 1374, counts: true },
-        { source: 'textile', cngnPerUsdt: 1371.87, counts: true },
-        { source: 'bybit-p2p', cngnPerUsdt: 1380, counts: true },
+        { source: 'quidax', cngnPerUsdt: 1374 },
+        { source: 'textile', cngnPerUsdt: 1371.87 },
+        { source: 'bybit-p2p', cngnPerUsdt: 1380 },
       ],
       rules,
     );
-    assert.deepEqual(result, { ok: true, median: 1374, sources: ['quidax', 'textile', 'bybit-p2p'], dropped: [] });
+    assert.deepEqual(result, { ok: true, median: 1374, sources: ['quidax', 'textile', 'bybit-p2p'] });
   });
 
   it('averages the middle pair for an even count', () => {
     const result = aggregateSample(
       [
-        { source: 'a', cngnPerUsdt: 1370, counts: true },
-        { source: 'b', cngnPerUsdt: 1372, counts: true },
-        { source: 'c', cngnPerUsdt: 1374, counts: true },
-        { source: 'd', cngnPerUsdt: 1376, counts: true },
+        { source: 'a', cngnPerUsdt: 1370 },
+        { source: 'b', cngnPerUsdt: 1372 },
+        { source: 'c', cngnPerUsdt: 1374 },
+        { source: 'd', cngnPerUsdt: 1376 },
       ],
       rules,
     );
@@ -34,52 +34,25 @@ describe('aggregateSample', () => {
   it('refuses too few sources', () => {
     const result = aggregateSample(
       [
-        { source: 'quidax', cngnPerUsdt: 1374, counts: true },
-        { source: 'textile', cngnPerUsdt: 1371.87, counts: true },
+        { source: 'quidax', cngnPerUsdt: 1374 },
+        { source: 'textile', cngnPerUsdt: 1371.87 },
       ],
       rules,
     );
     assert.equal(result.ok, false);
-    assert.match(!result.ok ? result.reason : '', /only 2 of 3/);
+    assert.match(!result.ok ? result.reason : '', /only 2 of 3 required sources/);
   });
 
   it('does not count a zero or non-finite quote as a source', () => {
     const result = aggregateSample(
       [
-        { source: 'a', cngnPerUsdt: 1374, counts: true },
-        { source: 'b', cngnPerUsdt: 0, counts: true },
-        { source: 'c', cngnPerUsdt: Number.NaN, counts: true },
+        { source: 'a', cngnPerUsdt: 1374 },
+        { source: 'b', cngnPerUsdt: 0 },
+        { source: 'c', cngnPerUsdt: Number.NaN },
       ],
       rules,
     );
     assert.equal(result.ok, false);
-  });
-
-  it('counts only counting sources toward the minimum, but keeps the others in the median', () => {
-    const quotes = [
-      { source: 'textile', cngnPerUsdt: 1372, counts: true },
-      { source: 'hyperfx', cngnPerUsdt: 1373, counts: true },
-      { source: 'quidax', cngnPerUsdt: 1380, counts: false },
-    ];
-    const short = aggregateSample(quotes, rules);
-    assert.equal(short.ok, false);
-    assert.match(!short.ok ? short.reason : '', /only 2 of 3 required counting sources answered \(also answered, not counted: quidax\)/);
-    const enough = aggregateSample([...quotes, { source: 'blockradar', cngnPerUsdt: 1374, counts: true }], rules);
-    // Median of all four (1372, 1373, 1374, 1380): the non-counting source still moves it.
-    assert.deepEqual(enough, { ok: true, median: 1373.5, sources: ['textile', 'hyperfx', 'quidax', 'blockradar'], dropped: [] });
-  });
-
-  it('drops a disagreeing non-counting source instead of letting it refuse the sample', () => {
-    const result = aggregateSample(
-      [
-        { source: 'textile', cngnPerUsdt: 1372, counts: true },
-        { source: 'hyperfx', cngnPerUsdt: 1373, counts: true },
-        { source: 'blockradar', cngnPerUsdt: 1374, counts: true },
-        { source: 'quidax', cngnPerUsdt: 1500, counts: false },
-      ],
-      rules,
-    );
-    assert.deepEqual(result, { ok: true, median: 1373, sources: ['textile', 'hyperfx', 'blockradar'], dropped: ['quidax=1500'] });
   });
 
   it('refuses the whole sample when one source disagrees, rather than dropping it', () => {
@@ -87,9 +60,9 @@ describe('aggregateSample', () => {
     // the signal (one venue broken, or the market moving faster than the sources can agree).
     const result = aggregateSample(
       [
-        { source: 'quidax', cngnPerUsdt: 1374, counts: true },
-        { source: 'textile', cngnPerUsdt: 1372, counts: true },
-        { source: 'bybit-p2p', cngnPerUsdt: 1450, counts: true },
+        { source: 'quidax', cngnPerUsdt: 1374 },
+        { source: 'textile', cngnPerUsdt: 1372 },
+        { source: 'bybit-p2p', cngnPerUsdt: 1450 },
       ],
       rules,
     );

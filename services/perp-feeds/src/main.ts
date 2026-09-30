@@ -17,8 +17,8 @@ import { MarkPublisher } from './mark-publisher.js';
  * systemd restarting it is slower than the next tick.
  */
 /**
- * `--probe-sources`: reads the peg and every configured source once and prints what each said, in
- * cNGN per USDT, whether it counts toward the minimum, and why not. Signs and sends nothing. Run it
+ * `--probe-sources`: reads the peg tripwire and every source once and prints what each said (NGN
+ * per USDT, which the index takes as cNGN per USDT at parity). Signs and sends nothing. Run it
  * on the host the publisher will run on: a source reachable from a laptop may be geo-blocked from
  * the ops box, and the reverse.
  */
@@ -28,30 +28,29 @@ async function probeSources(config: ReturnType<typeof loadConfig>) {
   try {
     const mid = pegMid(await fetchPegTicker(config.QUIDAX_API_URL, AbortSignal.timeout(config.PROVIDER_TIMEOUT_MS)), config.PEG_MAX_SPREAD_BPS);
     peg = mid.ok
-      ? pegReading([{ price: mid.mid, at: now }], now, { windowMs: config.PEG_TWAP_WINDOW_MS, maxAgeMs: config.PEG_MAX_AGE_MS, maxSpreadBps: config.PEG_MAX_SPREAD_BPS, guardBps: config.PEG_GUARD_BPS })
-      : ({ ok: false, reason: mid.reason } as const);
+      ? pegReading([{ price: mid.mid, at: now }], now, { windowMs: config.PEG_TWAP_WINDOW_MS, maxSpreadBps: config.PEG_MAX_SPREAD_BPS, guardBps: config.PEG_GUARD_BPS })
+      : ({ state: 'blind', reason: mid.reason } as const);
   } catch (error) {
-    peg = { ok: false, reason: (error as Error).message } as const;
+    peg = { state: 'blind', reason: (error as Error).message } as const;
   }
-  console.log(peg.ok
-    ? `peg          ok    ${peg.ngnPerCngn} NGN/cNGN (${peg.deviationBps.toFixed(1)}bps from parity${peg.guardTripped ? ', GUARD WOULD TRIP' : ''})`
-    : `peg          FAIL  ${peg.reason} (the fiat sources drop out without it)`);
+  console.log(peg.state === 'watching'
+    ? `tripwire     ok    cNGN at ${peg.ngnPerCngn} NGN (${peg.deviationBps.toFixed(1)}bps from parity${peg.tripped ? ', WOULD TRIP' : ''}); not a source`
+    : `tripwire     BLIND ${peg.reason} (the index continues at parity)`);
   const sources = buildIndexSources(config);
-  let counting = 0;
+  let answered = 0;
   for (const source of sources) {
     const started = Date.now();
     try {
-      const reading = await source.read({ signal: AbortSignal.timeout(config.PROVIDER_TIMEOUT_MS), fetch, peg });
-      if (reading.counts) counting += 1;
-      console.log(`${source.name.padEnd(12)} ok    ${reading.cngnPerUsdt.toFixed(4)} cNGN/USDT  ${reading.counts ? 'counts' : 'NOT COUNTED'}  ${reading.note ?? ''}  ${Date.now() - started}ms`);
+      const reading = await source.read({ signal: AbortSignal.timeout(config.PROVIDER_TIMEOUT_MS), fetch });
+      answered += 1;
+      console.log(`${source.name.padEnd(12)} ok    ${reading.cngnPerUsdt.toFixed(4)} NGN/USDT (= cNGN/USDT at parity)  ${Date.now() - started}ms`);
     } catch (error) {
       console.log(`${source.name.padEnd(12)} FAIL  ${(error as Error).message.slice(0, 160)}  ${Date.now() - started}ms`);
     }
   }
-  const verdict = counting >= config.INDEX_MIN_SOURCES ? 'enough' : 'NOT ENOUGH: the index will refuse every sample';
-  console.log(`${counting} counting of ${sources.length} sources; the index needs ${config.INDEX_MIN_SOURCES} (${verdict})`);
-  if (!config.BLOCKRADAR_API_KEY) console.log('BLOCKRADAR_API_KEY is not set: Blockradar is not among the sources');
-  if (counting < config.INDEX_MIN_SOURCES) process.exitCode = 1;
+  const verdict = answered >= config.INDEX_MIN_SOURCES ? 'enough' : 'NOT ENOUGH: the index will refuse every sample';
+  console.log(`${answered} of ${sources.length} sources answered; the index needs ${config.INDEX_MIN_SOURCES} (${verdict})`);
+  if (answered < config.INDEX_MIN_SOURCES) process.exitCode = 1;
 }
 
 async function main() {

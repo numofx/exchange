@@ -157,7 +157,7 @@ describe('index refresh', () => {
 });
 
 describe('index sample and the peg guard', () => {
-  const three = ['a', 'b', 'c'].map((name) => ({ name, read: async () => ({ source: name, cngnPerUsdt: 1374, counts: true }) }));
+  const three = ['a', 'b', 'c'].map((name) => ({ name, read: async () => ({ source: name, cngnPerUsdt: 1374 }) }));
 
   it('accepts a sample at parity and writes what it saw', async () => {
     const cfg = config();
@@ -186,6 +186,27 @@ describe('index sample and the peg guard', () => {
     const status = JSON.parse(readFileSync(cfg.INDEX_STATUS_FILE, 'utf8'));
     assert.equal(status.pegGuardTripped, true);
     assert.match(status.sample.reason, /peg guard/);
+  });
+
+  it('keeps sampling at parity when the tripwire is blind, and says so', async () => {
+    const cfg = config();
+    const alerts: string[] = [];
+    const index = new IndexPublisher(
+      cfg,
+      fakeChain({ index: null, diffs: {} }),
+      three,
+      async (key) => void alerts.push(key),
+      () => Number(HEAD) * 1000,
+      async () => {
+        throw new Error('Quidax cngnngn ticker HTTP 503');
+      },
+    );
+    await index.sample();
+    assert.equal(index.samples().length, 1, 'a blind tripwire is not a reason to stop the index');
+    assert.deepEqual(alerts, ['peg-blind']);
+    const status = JSON.parse(readFileSync(cfg.INDEX_STATUS_FILE, 'utf8'));
+    assert.equal(status.pegGuardTripped, false);
+    assert.equal(status.peg.state, 'blind');
   });
 });
 

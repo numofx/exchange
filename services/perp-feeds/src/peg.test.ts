@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 
 import { pegMid, pegReading } from './peg.js';
 
-const rules = { windowMs: 15 * 60_000, maxAgeMs: 15 * 60_000, maxSpreadBps: 50, guardBps: 100 };
+const rules = { windowMs: 15 * 60_000, maxSpreadBps: 50, guardBps: 100 };
 const now = 1_000_000_000;
 
 describe('pegMid', () => {
@@ -18,21 +18,18 @@ describe('pegMid', () => {
 });
 
 describe('pegReading', () => {
-  it('is a time-weighted average of the sampled mids, not the last one', () => {
+  it('watches a time-weighted average of the sampled mids, not the last one', () => {
     const reading = pegReading([{ price: 1.0, at: now - 10 * 60_000 }, { price: 1.004, at: now - 60_000 }], now, rules);
-    assert.ok(reading.ok);
+    assert.equal(reading.state, 'watching');
     // 1.0 stood 9 minutes, 1.004 the last 1: (9 x 1.0 + 1 x 1.004) / 10
-    assert.ok(reading.ok && Math.abs(reading.ngnPerCngn - 1.0004) < 1e-12);
-    assert.ok(reading.ok && !reading.guardTripped);
+    assert.ok(reading.state === 'watching' && Math.abs(reading.ngnPerCngn - 1.0004) < 1e-12 && !reading.tripped);
   });
-  it('lets the last good peg stand for 15 minutes, then reports it unavailable', () => {
-    assert.ok(pegReading([{ price: 1, at: now - 14 * 60_000 }], now, rules).ok);
-    const stale = pegReading([{ price: 1, at: now - 16 * 60_000 }], now, rules);
-    assert.equal(stale.ok, false);
-    assert.match(!stale.ok ? stale.reason : '', /peg unavailable/);
-  });
-  it('trips the guard past 100bps from parity', () => {
+  it('trips past 100bps from parity', () => {
     const reading = pegReading([{ price: 0.985, at: now - 60_000 }], now, rules);
-    assert.ok(reading.ok && reading.guardTripped && reading.deviationBps > 100);
+    assert.ok(reading.state === 'watching' && reading.tripped && reading.deviationBps > 100);
+  });
+  it('is blind, not tripped, with no sample in the window', () => {
+    const reading = pegReading([{ price: 0.9, at: now - 16 * 60_000 }], now, rules);
+    assert.equal(reading.state, 'blind');
   });
 });

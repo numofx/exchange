@@ -1,7 +1,7 @@
 /**
  * The index: what one USD of stablecoin is worth in cNGN, turned into the perp's USDC-per-cNGN price.
- * Sources quoting fiat NGN are converted to cNGN through the measured peg before they get here
- * (index-sources.ts, peg.ts).
+ * The sources are fiat NGN per USDT, taken at cNGN's NGN redemption parity (index-sources.ts); the
+ * peg tripwire (peg.ts) halts the index when that parity breaks.
  *
  * Everything here is pure, so every refusal can be tested without a network. The publisher's job
  * is to fail closed: an index it is not sure of is worse than no index, because a stale feed halts
@@ -14,49 +14,33 @@
  */
 import { timeWeightedAverage, withinWindow, type PricePoint } from 'cngn-rate-picker';
 
-/** One source's reading: cNGN per 1 USD stablecoin, and whether it counts (index-sources.ts). */
+/** One source's reading: cNGN per 1 USD stablecoin (index-sources.ts). */
 export type SourceQuote = {
   /** Provider name, e.g. "quidax". */
   source: string;
   cngnPerUsdt: number;
-  /** Toward the minimum. A non-counting source (a thin market) is in the median, but can neither
-   *  make up the numbers nor veto a sample. */
-  counts: boolean;
 };
 
 export type SampleRules = {
-  /** Fewest COUNTING sources a sample may be built from. */
+  /** Fewest sources a sample may be built from. */
   minSources: number;
   /** Largest distance any source may sit from the median, in bps of the median. */
   maxSourceDeviationBps: number;
 };
 
 export type SampleResult =
-  | { ok: true; median: number; sources: string[]; dropped: string[] }
+  | { ok: true; median: number; sources: string[] }
   | { ok: false; reason: string };
 
-/**
- * Median of the readings, refused when too few COUNTING sources answered or a counting one
- * disagrees. A non-counting source that disagrees is dropped from the median and noted; it cannot
- * refuse the sample (a thin market's stale print must not halt the index).
- */
+/** Median of the sources' cNGN-per-USDT, refused when too few answered or any one disagrees. */
 export function aggregateSample(quotes: SourceQuote[], rules: SampleRules): SampleResult {
   const valid = quotes.filter((quote) => Number.isFinite(quote.cngnPerUsdt) && quote.cngnPerUsdt > 0);
-  const counting = valid.filter((quote) => quote.counts);
-  if (counting.length < rules.minSources) {
-    const others = valid.filter((quote) => !quote.counts).map((quote) => quote.source);
-    return {
-      ok: false,
-      reason: `only ${counting.length} of ${rules.minSources} required counting sources answered` +
-        (others.length > 0 ? ` (also answered, not counted: ${others.join(', ')})` : ''),
-    };
+  if (valid.length < rules.minSources) {
+    return { ok: false, reason: `only ${valid.length} of ${rules.minSources} required sources answered` };
   }
 
-  const firstMedian = medianOf(valid.map((quote) => quote.cngnPerUsdt));
-  const droppedQuotes = valid.filter((quote) => !quote.counts && deviationBps(quote.cngnPerUsdt, firstMedian) > rules.maxSourceDeviationBps);
-  const kept = valid.filter((quote) => !droppedQuotes.includes(quote));
-  const median = medianOf(kept.map((quote) => quote.cngnPerUsdt));
-  const outliers = kept.filter((quote) => deviationBps(quote.cngnPerUsdt, median) > rules.maxSourceDeviationBps);
+  const median = medianOf(valid.map((quote) => quote.cngnPerUsdt));
+  const outliers = valid.filter((quote) => deviationBps(quote.cngnPerUsdt, median) > rules.maxSourceDeviationBps);
   if (outliers.length > 0) {
     const detail = outliers
       .map((quote) => `${quote.source}=${quote.cngnPerUsdt} (${deviationBps(quote.cngnPerUsdt, median).toFixed(0)}bps)`)
@@ -64,12 +48,7 @@ export function aggregateSample(quotes: SourceQuote[], rules: SampleRules): Samp
     return { ok: false, reason: `sources disagree with median ${median}: ${detail}` };
   }
 
-  return {
-    ok: true,
-    median,
-    sources: kept.map((quote) => quote.source),
-    dropped: droppedQuotes.map((quote) => `${quote.source}=${quote.cngnPerUsdt}`),
-  };
+  return { ok: true, median, sources: valid.map((quote) => quote.source) };
 }
 
 export type WindowRules = {
@@ -142,10 +121,8 @@ export function stepBps(to: bigint, from: bigint): number {
 }
 
 /**
- * NGN per USDT to the perp's denomination: USDC per cNGN, 18dp. Quidax and Blockradar quote cNGN
- * per USDT; Textile and Bybit P2P quote fiat NGN per USDT. So this assumes cNGN ~ NGN and
- * USDT ~ USDC: a cNGN depeg or a USDT/USDC spread moves the market away from the index without
- * moving the index.
+ * cNGN per USDT to the perp's denomination: USDC per cNGN, 18dp. The sources are fiat NGN per USDT
+ * at redemption parity, so this takes USDT ~ USDC; a cNGN depeg is the peg tripwire's to catch.
  */
 export function toUsdPerNgn(ngnPerUsdt: number): bigint {
   if (!Number.isFinite(ngnPerUsdt) || ngnPerUsdt <= 0) {
