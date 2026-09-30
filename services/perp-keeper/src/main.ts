@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { createAlerter } from './alert.js';
 import { createKeeperChain } from './chain.js';
 import { loadConfig } from './config.js';
-import { runOnce } from './keeper.js';
+import { runOnce, type PassSummary } from './keeper.js';
 
 /**
  * USDCcNGN-PERP liquidation keeper: watches every account under the perp SRM, starts auctions on
@@ -14,17 +14,34 @@ import { runOnce } from './keeper.js';
 async function main() {
   const config = loadConfig();
   const chain = createKeeperChain(config);
-  const alert = createAlerter(config.ALERT_WEBHOOK_URL || undefined);
+  const alert = createAlerter(config.ALERT_WEBHOOK_URL || undefined, undefined, undefined, undefined, config.ALERT_PREFIX);
+
+  // The RPC must be the chain CHAIN_ID names: a keeper configured for a fork must not reach Base,
+  // and one configured for Base must not quietly run against a fork.
+  const rpcChainId = await chain.rpcChainId();
+  if (rpcChainId !== config.CHAIN_ID) {
+    throw new Error(`RPC_URL is chain ${rpcChainId} but CHAIN_ID is ${config.CHAIN_ID}: refusing to start`);
+  }
 
   console.log(`[keeper] eoa=${chain.keeper.address} account=${config.KEEPER_ACCOUNT} dryRun=${config.DRY_RUN}`);
 
   // What /health reports. A pass that throws is recorded as failed, so a keeper looping on an
   // error reads as unhealthy rather than merely alive.
-  const health = { lastPassAt: 0, lastPassOk: false, passes: 0 };
+  const health = {
+    lastPassAt: 0,
+    lastPassOk: false,
+    passes: 0,
+    // From the last pass that read them: the pager (check_perp_pager.py) pages on any insolvent one.
+    liquidatableAccounts: [] as string[],
+    insolventAccounts: [] as string[],
+  };
 
   const tick = async () => {
     try {
-      await runOnce(config, chain, alert);
+      const summary: PassSummary = { liquidatable: [], insolvent: [] };
+      await runOnce(config, chain, alert, summary);
+      health.liquidatableAccounts = summary.liquidatable.map(String);
+      health.insolventAccounts = summary.insolvent.map(String);
       health.lastPassOk = true;
     } catch (error) {
       health.lastPassOk = false;

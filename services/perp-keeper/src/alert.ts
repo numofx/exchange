@@ -10,10 +10,13 @@ export function createAlerter(
   cooldownMs = 15 * 60_000,
   now: () => number = Date.now,
   fetchImpl: typeof fetch = fetch,
+  /** Prepended to every alert: "[REHEARSAL] " when the mainnet-fork rehearsal runs this build. */
+  prefix = '',
 ): Alerter {
   const lastSent = new Map<string, number>();
 
   return async (key, message) => {
+    message = `${prefix}${message}`;
     console.error(`[alert] ${key}: ${message}`);
     const previous = lastSent.get(key);
     if (previous !== undefined && now() - previous < cooldownMs) return;

@@ -380,6 +380,11 @@ export function createKeeperChain(config: Config) {
       return { settled, underLiquidation };
     },
 
+    /** The chain id the RPC itself reports, for the startup check against CHAIN_ID. */
+    async rpcChainId(): Promise<number> {
+      return client.getChainId();
+    },
+
     async keeperCash(): Promise<bigint> {
       return balance(config.KEEPER_ACCOUNT, config.CASH);
     },

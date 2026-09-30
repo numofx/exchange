@@ -15,6 +15,8 @@ const envSchema = z.object({
   /** Subaccount under the perp SRM, funded with the stack's cash, that bids. */
   KEEPER_ACCOUNT: z.coerce.bigint(),
   ALERT_WEBHOOK_URL: z.string().url().optional().or(z.literal('')),
+  /** Prepended to every alert, e.g. "[REHEARSAL] " (scripts/local-venue/rehearse-mainnet.sh). */
+  ALERT_PREFIX: z.string().default(''),
   /**
    * On by default. Dry run reads everything, decides everything and SIMULATES every transaction
    * against the chain, then sends nothing. Turn it off only once its decisions have been watched.

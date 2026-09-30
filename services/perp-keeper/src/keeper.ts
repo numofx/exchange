@@ -9,7 +9,15 @@ import { assessHealth, fmt } from './health.js';
  * that cannot be read is an alert, not a skip — an unreadable margin is usually a stale feed, and a
  * stale feed means liquidations are frozen along with trading.
  */
-export async function runOnce(config: Config, chain: KeeperChain, alert: Alerter): Promise<Action[]> {
+/** What one pass saw, for /health and the pager: accounts under maintenance margin, and under water. */
+export type PassSummary = { liquidatable: bigint[]; insolvent: bigint[] };
+
+export async function runOnce(
+  config: Config,
+  chain: KeeperChain,
+  alert: Alerter,
+  summary: PassSummary = { liquidatable: [], insolvent: [] },
+): Promise<Action[]> {
   const rules = {
     minSolventDiscountBps: config.MIN_SOLVENT_DISCOUNT_BPS,
     minBidPercent: BigInt(Math.round(config.MIN_BID_PERCENT * 1e16)),
@@ -25,7 +33,10 @@ export async function runOnce(config: Config, chain: KeeperChain, alert: Alerter
   for (const accountId of accounts) {
     let action: Action;
     try {
-      action = decide(await chain.readAccount(accountId), keeperCash, rules);
+      const view = await chain.readAccount(accountId);
+      if (view.mm < 0n) summary.liquidatable.push(accountId);
+      if (view.mtm < 0n) summary.insolvent.push(accountId);
+      action = decide(view, keeperCash, rules);
     } catch (error) {
       await alert('margin-unreadable', `cannot read margin for account ${accountId} (stale feed?): ${(error as Error).message}`);
       continue;

@@ -70,7 +70,7 @@ export function assessHealth(health: StackHealth, rules: HealthRules): HealthAle
   if (health.keeperPerpPosition !== 0n) {
     alerts.push({
       key: 'keeper-inventory',
-      message: `keeper holds ${fmt(health.keeperPerpPosition)} NGN of perp inherited from liquidations: close or hedge it`,
+      message: `keeper holds ${fmt(health.keeperPerpPosition)} cNGN of perp inherited from liquidations: close or hedge it`,
     });
   }
   if (health.keeperAccountsUnderMargin.length > 0) {

@@ -40,6 +40,18 @@ pass's time and outcome, whether this is a dry run, and the keeper's account. Th
 (`propose_perp_enable_batch.py`, via `KEEPER_HEALTH_URL`) refuses to open the market without a
 recent passing, non-dry-run keeper.
 
+## Health, alerts and chain
+
+`/health` also lists the last pass's `liquidatableAccounts` and `insolventAccounts`. The pager
+(`contracts/risk-core/scripts/ops/check_perp_pager.py`) pages your phone on any insolvent account,
+and on the keeper itself being unreachable, in dry run, or stale.
+
+`ALERT_PREFIX` is prepended to every alert. The mainnet-fork rehearsal sets `[REHEARSAL] `.
+
+At startup the keeper asks its RPC for the chain id and refuses to run unless it equals `CHAIN_ID`.
+A keeper configured for a fork cannot reach Base, and one configured for Base cannot run against a
+fork.
+
 ## Dry run by default
 
 `DRY_RUN=true` unless set otherwise: it reads, decides and simulates every action against the chain,
