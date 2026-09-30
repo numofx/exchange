@@ -18,8 +18,9 @@ across three accounts.
 **Before anything (blocking)**
 
 1. **Index sources.** On the ops host: `node dist/main.js --probe-sources` (perp-feeds). It must
-   report at least 3 answering. As of 2026-09-29 only 2 do (Bybit P2P blocked, no Blockradar key):
-   set `BLOCKRADAR_API_KEY` or confirm Bybit answers from the host.
+   report at least 3 **counting** sources and a peg near parity (see Index sources below). From a
+   developer machine on 2026-09-30 only 1 counted. Set `BLOCKRADAR_API_KEY` and confirm Bybit P2P
+   answers from the host: even then it is exactly 3, with no spare.
 2. **Code live, spot first.** The new markets-service and execution-service must carry spot
    unchanged before anything perp is switched on.
    - **Regression, before deploying:** `scripts/local-venue/up.sh --spot-only` passes on the commit
@@ -97,7 +98,8 @@ across three accounts.
     - Fund the feed relayer (`0xC9F1…0FDc`) **0.05 ETH** and start perp-feeds live. Measured per
       publish: index 46k gas, mark + impacts 120k gas. That is ~0.0003 ETH a day typical and 0.0013
       worst case (a mark every minute), so 0.05 ETH lasts more than a month at worst.
-    - Put `KEEPER_HEALTH_URL=http://127.0.0.1:9464/health` in `/etc/numo/perp-pager.env`, then
+    - Put `KEEPER_HEALTH_URL=http://127.0.0.1:9464/health` in `/etc/numo/perp-pager.env`
+      (`PERP_INDEX_STATUS_FILE` defaults to perp-feeds' status file on the ops box), then
       `systemctl enable --now numo-perp-pager.timer`.
     - It will page "keeper unhealthy" until step 18, which confirms the page path end to end.
 15. **Keeper funding** (before the rehearsal, which uses this account).
@@ -269,6 +271,7 @@ and tells you when it clears.
 | feed halt | The index, mark or an impact feed is past its warn age. At 20 minutes (index) the market halts itself: no trades, no liquidations. | Check perp-feeds is running, its relayer has gas, and `--probe-sources` shows 3 sources. If the jump guard stopped it, follow the index-step procedure. | Only if the feeds are publishing *wrong* prices (a compromised signer). A stale feed already stops the market. |
 | keeper unhealthy | `/health` is unreachable, in dry run, or failing. Nothing is liquidating. | Restart the keeper. Check its funding account's cash and its gas. | No: a pause also blocks the liquidations you need. |
 | SecurityModule payout | The SecurityModule paid for a liquidation. | Expected after an insolvent liquidation. Check it still meets the seed rule and top it up if not. | Only if the payouts are not explained by liquidations (an exploit). |
+| peg guard | cNGN is more than 100 bps from NGN parity on Quidax's peg market, so perp-feeds refuses to update the index. It halts when the index goes stale. | Check `cngnngn` on Quidax and cNGN news. If cNGN has really depegged, the index cannot follow it; treat it as a step (index-step procedure, or settlement if over 50%). | Only if the depeg comes from an exploit. |
 | insolvent account | An account is below zero. The keeper should be auctioning it, and the SecurityModule will pay. | Watch the keeper take it. If several go at once, consider **cap = current OI** (below). | Only if it is the result of an exploit. |
 
 ## Emergency levers
@@ -397,25 +400,38 @@ approver, no audit record and no keeper check.
 
 ## Index sources
 
-**What the index measures.** No source quotes cNGN/USDC. Checked against the providers' code and
-the venues' APIs on 2026-09-30:
+**What the index measures: cNGN, not NGN.** Every source reports **cNGN per USD stablecoin**
+(`services/perp-feeds/src/index-sources.ts`). A source counts toward the minimum of 3 only as below.
 
-| Source | Market | Quotes | Liquidity |
+| Source | Market | How it becomes cNGN | Counts |
 | --- | --- | --- | --- |
-| Quidax (provider default) | `usdtcngn` | **cNGN** per USDT | thin: ~30 USDT a day |
-| Blockradar | cNGN/USDT benchmark | **cNGN** per USDT | needs `BLOCKRADAR_API_KEY` |
-| Textile | `USDT_NGN` | **fiat NGN** per USDT (Textile lists cNGN separately) | live |
-| Bybit P2P | USDT ads in NGN | **fiat NGN** per USDT | blocked from some hosts |
+| Quidax | `usdtcngn` | direct | only at $1k+ of 24h volume; otherwise in the median but not counted, and dropped (never a veto) if it disagrees. Today: ~30 USDT/day |
+| Blockradar | cNGN/USDT benchmark | direct | yes (needs `BLOCKRADAR_API_KEY`) |
+| HyperFX | `USDC-cNGN` on Base (`EVM-8453`) | direct: 15-min TWAP of the mid over bookHistory snapshots with ≥2 solvers, ≥$1k depth a side and spread ≤50 bps; the live best rates at $1k must also have ≥2 solvers a side and a mid within 50 bps of that TWAP | yes, when every rule passes. Today: one solver, so no |
+| Textile | `USDT_NGN` (fiat) | ÷ the measured peg | yes, while the peg is available |
+| Bybit P2P | USDT ads in fiat NGN | ÷ the measured peg | yes, while the peg is available |
 
-The index therefore blends cNGN and fiat NGN per USDT, published as cNGN per USDC. That assumes
-**cNGN ≈ NGN** and **USDT ≈ USDC**. A cNGN depeg from NGN, or a USDT/USDC spread, moves the real
-market away from the index without moving the index, and funding and liquidations follow the index.
-(Quidax's `cngnngn` market, cNGN per NGN, trades at ~0.9999: the peg is observable, not just assumed.)
+**The peg** (`peg.ts`) is how many NGN one cNGN is worth. It is Quidax `cngnngn`, from its book mid
+sampled every minute (the market trades too rarely for a trade TWAP: 27 of 300 hours to
+2026-09-30), and taken as a 15-minute TWAP.
+- If the peg market stops answering, the last good peg stands for 15 minutes. After that the peg is
+  unavailable, the fiat sources drop out, and the index halts unless 3 direct sources remain.
+- **Peg guard:** if the peg is more than 100 bps from parity, the sample is refused (so the index
+  halts), and the pager pages "peg guard".
 
-The index needs 3 agreeing sources. As of 2026-09-29, from a developer machine:
-- Quidax and Textile answer.
-- Bybit P2P times out, which looks like a regional block.
-- Blockradar is not configured (`BLOCKRADAR_API_KEY` unset).
+USDT and USDC are still taken as equal: HyperFX quotes USDC, the others USDT.
+
+The index needs 3 agreeing **counting** sources. `--probe-sources` from a developer machine on
+2026-09-30 found only 1:
+- the peg is at parity;
+- Textile counts, converted through the peg;
+- Quidax answers but isn't counted (29.68 USDT of volume);
+- Bybit P2P doesn't resolve (DNS);
+- HyperFX fails (one solver per side);
+- Blockradar has no key.
+
+From the ops host, with Bybit reachable and Blockradar keyed, that is exactly 3, with no spare: one
+source failing halts the index.
 
 Before step 14, either set `BLOCKRADAR_API_KEY` or confirm with `--probe-sources` that Bybit answers
 from the ops host.
