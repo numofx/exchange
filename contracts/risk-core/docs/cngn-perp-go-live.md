@@ -47,9 +47,14 @@ across three accounts.
      so the next `apply` does not redeploy the bad one.
    - Merge numofx/trading-app#103 (its ticket stays closed until `trading_enabled`) and
      numofx/market-maker#26.
-3. **Pager.**
+3. **Pager and its dead-man's switch.**
+   - Create a heartbeat check (healthchecks.io or equivalent) with period 1 minute and grace
+     5 minutes, and route its alert to your phone (its Pushover or PagerDuty integration). If the
+     pager stops running (the timer, the host, the RPC), the pings stop and this check pages you. A
+     failed run pings `<check>/fail` and pages at once.
    - Put the pager secrets in SSM under `/numo/pager/`: `provider` (`pushover` or `pagerduty`), its
-     keys, and optionally `heartbeat_url`.
+     keys, and `heartbeat_url` (**required**: without it the pager pages you once a day about that,
+     and the enable gate refuses).
    - Run `scripts/ops/run-with-ssm-pager.sh python3 scripts/ops/check_perp_pager.py --test-page`
      and **confirm your phone received it**. A 2xx from the pager API is not delivery.
    - The timer goes on in step 14, once there are feeds to watch.
@@ -65,7 +70,8 @@ across three accounts.
    and `PERP_GUARDIAN=<the KMS address>`. `PERP_OI_CAP` defaults to 50,000,000 cNGN.
 7. Broadcast `deploy-cngn-perp-trade-module.s.sol`.
 8. Commit the deployment artifacts (`CNGN_PERP_STACK*.json`, `CNGN_PERP_TRADE_MODULE*.json`).
-9. **Render the review file:** `python3 scripts/ops/render_perp_vault_review.py` writes
+9. **Requires the follow-up exchange PR (the index rework and the pager's dead-man's switch) to
+   be merged first.** Then **render the review file:** `python3 scripts/ops/render_perp_vault_review.py` writes
    `deployments/8453/CNGN_PERP_VAULT_REVIEW.md` with every action of all three batches: target,
    function, decoded arguments, purpose and digest. Every row is checked by re-encoding the
    calldata and recomputing the digest. Read it before signing anything, and match each digest in
@@ -161,6 +167,7 @@ The gates step 21 checks:
 | keeper | Its last pass succeeded recently and it is not in dry run. The keeper EOA owns its funding account, which is under the perp SRM, holds only cash and has enough of it. It has gas. |
 | sm | The SecurityModule holds at least the seed rule. |
 | quoter | The book is two-sided, with at least $1k within 2% of the index on each side. |
+| pager | `check_perp_pager.py` ran successfully within 3 minutes, with a real provider and a dead-man's switch. |
 
 ## SecurityModule seed
 
@@ -390,11 +397,20 @@ approver, no audit record and no keeper check.
 
 ## Index sources
 
-**What the index measures.** The sources do not quote cNGN/USDC. Quidax (`usdtngn`), Textile
-(`USDT_NGN`) and Bybit P2P quote **fiat NGN per USDT**; only Blockradar quotes **cNGN** (per USDT).
-The index is therefore NGN per USDT, published as if it were cNGN per USDC. That assumes
+**What the index measures.** No source quotes cNGN/USDC. Checked against the providers' code and
+the venues' APIs on 2026-09-30:
+
+| Source | Market | Quotes | Liquidity |
+| --- | --- | --- | --- |
+| Quidax (provider default) | `usdtcngn` | **cNGN** per USDT | thin: ~30 USDT a day |
+| Blockradar | cNGN/USDT benchmark | **cNGN** per USDT | needs `BLOCKRADAR_API_KEY` |
+| Textile | `USDT_NGN` | **fiat NGN** per USDT (Textile lists cNGN separately) | live |
+| Bybit P2P | USDT ads in NGN | **fiat NGN** per USDT | blocked from some hosts |
+
+The index therefore blends cNGN and fiat NGN per USDT, published as cNGN per USDC. That assumes
 **cNGN ≈ NGN** and **USDT ≈ USDC**. A cNGN depeg from NGN, or a USDT/USDC spread, moves the real
 market away from the index without moving the index, and funding and liquidations follow the index.
+(Quidax's `cngnngn` market, cNGN per NGN, trades at ~0.9999: the peg is observable, not just assumed.)
 
 The index needs 3 agreeing sources. As of 2026-09-29, from a developer machine:
 - Quidax and Textile answer.

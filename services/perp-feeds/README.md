@@ -13,11 +13,20 @@ Price publishers for `USDCcNGN-PERP`. One process, one feed signer, one relayer:
   without that depth reads as the index, so a thin book creates no funding premium. Published on a
   10 bps move or before 7 minutes have passed, whichever comes first.
 
-**What the index measures.** The sources do not quote cNGN/USDC. Quidax (`usdtngn`), Textile
-(`USDT_NGN`) and Bybit P2P quote **fiat NGN per USDT**; only Blockradar quotes **cNGN** (per USDT).
-The index is therefore NGN per USDT, published as if it were cNGN per USDC. That assumes
+**What the index measures.** No source quotes cNGN/USDC. Checked against the providers' code and
+the venues' APIs on 2026-09-30:
+
+| Source | Market | Quotes | Liquidity |
+| --- | --- | --- | --- |
+| Quidax (provider default) | `usdtcngn` | **cNGN** per USDT | thin: ~30 USDT a day |
+| Blockradar | cNGN/USDT benchmark | **cNGN** per USDT | needs `BLOCKRADAR_API_KEY` |
+| Textile | `USDT_NGN` | **fiat NGN** per USDT (Textile lists cNGN separately) | live |
+| Bybit P2P | USDT ads in NGN | **fiat NGN** per USDT | blocked from some hosts |
+
+The index therefore blends cNGN and fiat NGN per USDT, published as cNGN per USDC. That assumes
 **cNGN ≈ NGN** and **USDT ≈ USDC**. A cNGN depeg from NGN, or a USDT/USDC spread, moves the real
 market away from the index without moving the index, and funding and liquidations follow the index.
+(Quidax's `cngnngn` market, cNGN per NGN, trades at ~0.9999: the peg is observable, not just assumed.)
 
 The picker's own multi-source mode is not used: with `threshold > 1` it averages the first N
 successes weighted by fetch-time gaps and never compares them, which is neither a median nor a

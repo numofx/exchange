@@ -119,9 +119,10 @@ export function stepBps(to: bigint, from: bigint): number {
 }
 
 /**
- * NGN per USDT to the perp's denomination: USDC per cNGN, 18dp. The sources quote fiat NGN per USDT
- * (Blockradar alone quotes cNGN), so this assumes cNGN ~ NGN and USDT ~ USDC: a cNGN depeg or a
- * USDT/USDC spread moves the market away from the index without moving the index.
+ * NGN per USDT to the perp's denomination: USDC per cNGN, 18dp. Quidax and Blockradar quote cNGN
+ * per USDT; Textile and Bybit P2P quote fiat NGN per USDT. So this assumes cNGN ~ NGN and
+ * USDT ~ USDC: a cNGN depeg or a USDT/USDC spread moves the market away from the index without
+ * moving the index.
  */
 export function toUsdPerNgn(ngnPerUsdt: number): bigint {
   if (!Number.isFinite(ngnPerUsdt) || ngnPerUsdt <= 0) {
