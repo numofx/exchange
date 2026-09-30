@@ -95,6 +95,10 @@ across three accounts.
 13. Top up the executor (`0xF68ebcC8…678703`) by **0.02 ETH**. A perp settlement is ~1.6M gas,
     ~0.00001 ETH: about 2,000 settlements.
 14. **Feeds and pager on.**
+    - The ops box has Node v22.23.3 (CI's major version; official build, SHA-256 checked) in
+      `/opt/node-v22.23.3-linux-x64`, linked as `/usr/bin/node`, `npm`, `npx` and `pnpm` (8.7.3,
+      the repo's `packageManager`), installed 2026-09-30. Build per the service files' `Install:`
+      lines.
     - Fund the feed relayer (`0xC9F1…0FDc`) **0.05 ETH** and start perp-feeds live. Measured per
       publish: index 46k gas, mark + impacts 120k gas. That is ~0.0003 ETH a day typical and 0.0013
       worst case (a mark every minute), so 0.05 ETH lasts more than a month at worst.
@@ -268,7 +272,7 @@ and tells you when it clears.
 
 | Page | What it means | First response | Pause? |
 | --- | --- | --- | --- |
-| feed halt | The index, mark or an impact feed is past its warn age. At 20 minutes (index) the market halts itself: no trades, no liquidations. | Check perp-feeds is running, its relayer has gas, and `--probe-sources` shows 3 sources. If the jump guard stopped it, follow the index-step procedure. | Only if the feeds are publishing *wrong* prices (a compromised signer). A stale feed already stops the market. |
+| feed halt | The index or an impact feed is more than 16 minutes old, or the mark more than 10. At 20 minutes (index) the market halts itself: no trades, no liquidations. Two refused publishes in a row reach 15 minutes without halting anything, so the page waits for a third. | Check perp-feeds is running, its relayer has gas, and `--probe-sources` shows 3 sources. If the jump guard stopped it, follow the index-step procedure. | Only if the feeds are publishing *wrong* prices (a compromised signer). A stale feed already stops the market. |
 | keeper unhealthy | `/health` is unreachable, in dry run, or failing. Nothing is liquidating. | Restart the keeper. Check its funding account's cash and its gas. | No: a pause also blocks the liquidations you need. |
 | SecurityModule payout | The SecurityModule paid for a liquidation. | Expected after an insolvent liquidation. Check it still meets the seed rule and top it up if not. | Only if the payouts are not explained by liquidations (an exploit). |
 | peg guard | cNGN is more than 100 bps from NGN parity on Quidax's peg market, so perp-feeds refuses to update the index. It halts when the index goes stale. | Check `cngnngn` on Quidax and cNGN news. If cNGN has really depegged, the index cannot follow it; treat it as a step (index-step procedure, or settlement if over 50%). | Only if the depeg comes from an exploit. |

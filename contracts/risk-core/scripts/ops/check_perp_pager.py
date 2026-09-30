@@ -5,7 +5,7 @@ Run every minute (numo-perp-pager.timer). Each condition pages once when it star
 REPAGE_SEC while it lasts, and sends a resolved notice when it clears. Every page is mirrored to the
 Slack webhook, so the channel has the same record.
 
-  feed-halt          the index, mark or an impact feed is past its warn age (index 900s of a 1200s
+  feed-halt          the index, mark or an impact feed is past its warn age (index 960s of a 1200s
                      heartbeat): a stale index halts trading AND liquidations
   keeper-unhealthy   the keeper's /health is unreachable, in dry run, failing, or stale
   sm-payout          the SecurityModule's cash fell since the last run: it paid for a liquidation
@@ -57,10 +57,12 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 STACK_ARTIFACT = ROOT / "deployments" / "8453" / "CNGN_PERP_STACK.json"
 SUB_ACCOUNTS = "0x7019244E25FA416e6Ca2ed2F3cA25277aef72843"
 
-# Warn ages, seconds, against heartbeats of 1200 (index), 900 (mark) and 1200 (impacts).
-INDEX_HALT_SEC = 900
+# Warn ages, seconds, against heartbeats of 1200 (index), 900 (mark) and 1200 (impacts). 16 minutes,
+# not 15: a publish is due every 5, and two refused in a row (a Textile 502 run) reach exactly 15
+# (replay of 2026-09-27..30), which is not yet a halt.
+INDEX_HALT_SEC = 960
 MARK_HALT_SEC = 600
-IMPACT_HALT_SEC = 900
+IMPACT_HALT_SEC = 960
 REPAGE_SEC = 1800
 # perp-feeds writes its status every sample (a minute); older than this, it says nothing current.
 INDEX_STATUS_MAX_AGE_SEC = 600
@@ -313,7 +315,10 @@ def unwatched_condition(heartbeat_url: str | None) -> Condition | None:
 def self_test() -> int:
   now = 1_000_000
   assert feed_condition({"index": 60, "mark": 60, "impact ask": 60, "impact bid": 60}) is None
-  assert feed_condition({"index": 901, "mark": 60, "impact ask": 60, "impact bid": 60}).key == "feed-halt"
+  # Two refused publishes (15 min) is not a page; 16 is.
+  assert feed_condition({"index": 900, "mark": 60, "impact ask": 60, "impact bid": 60}) is None
+  assert feed_condition({"index": 961, "mark": 60, "impact ask": 60, "impact bid": 60}).key == "feed-halt"
+  assert feed_condition({"index": 60, "mark": 60, "impact ask": 961, "impact bid": 60}).key == "feed-halt"
   assert "unreadable" in feed_condition({"index": None, "mark": 60, "impact ask": 60, "impact bid": 60}).message
   live = {"dryRun": False, "lastPassOk": True, "lastPassAt": now - 10, "pollIntervalMs": 15_000}
   assert keeper_condition(live, now) is None

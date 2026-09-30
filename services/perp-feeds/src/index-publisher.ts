@@ -95,9 +95,21 @@ export class IndexPublisher {
     return pegReading(this.state.pegSamples ?? [], at, rules);
   }
 
+  private async readSource(source: IndexSource): Promise<SourceReading> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.config.PROVIDER_TIMEOUT_MS);
+    try {
+      return await source.read({ signal: controller.signal, fetch });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   /**
    * One sample: the peg tripwire, then every source in parallel, each reporting cNGN per USDT at
-   * redemption parity; a source that throws or times out is simply absent. A tripped wire refuses
+   * redemption parity. A source that throws or times out is retried once after
+   * SOURCE_RETRY_DELAY_MS, then is absent: with exactly 3 sources and no spare, one transient 502
+   * would otherwise cost the whole sample (Textile failed ~6% of reads over 2026-09-27..30). A tripped wire refuses
    * the sample outright (cNGN has left its NGN parity) and the operator is paged. A blind wire (the
    * peg market not answering) does not stop the index: the parity it checks does not depend on it.
    */
@@ -109,15 +121,17 @@ export class IndexPublisher {
     }
     const readings = await Promise.all(
       this.sources.map(async (source): Promise<SourceReading | { source: string; failed: string }> => {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), this.config.PROVIDER_TIMEOUT_MS);
         try {
-          return await source.read({ signal: controller.signal, fetch });
-        } catch (error) {
-          console.warn(`[index] ${source.name} absent: ${(error as Error).message}`);
-          return { source: source.name, failed: (error as Error).message };
-        } finally {
-          clearTimeout(timer);
+          return await this.readSource(source);
+        } catch (first) {
+          console.warn(`[index] ${source.name} failed, retrying once: ${(first as Error).message}`);
+          await new Promise((resolve) => setTimeout(resolve, this.config.SOURCE_RETRY_DELAY_MS));
+          try {
+            return await this.readSource(source);
+          } catch (error) {
+            console.warn(`[index] ${source.name} absent: ${(error as Error).message}`);
+            return { source: source.name, failed: (error as Error).message };
+          }
         }
       }),
     );

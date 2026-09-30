@@ -80,8 +80,8 @@ Then install `contracts/risk-core/scripts/ops/numo-perp-feeds-ssm.service`. Dry 
 DRY_RUN=true node dist/main.js --once
 ```
 
-The index needs `INDEX_MIN_WINDOW_SAMPLES` (10) accepted samples before its first publish, so the
-first index lands ~10 minutes after a cold start. Samples persist in `INDEX_STATE_FILE`, so a
+The index needs `INDEX_MIN_WINDOW_SAMPLES` (5) accepted samples before its first publish, so the
+first index lands ~5 minutes after a cold start. Samples persist in `INDEX_STATE_FILE`, so a
 restart does not wait again.
 
 ## Tests

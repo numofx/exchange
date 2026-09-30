@@ -34,7 +34,7 @@ const envSchema = z.object({
   INDEX_SAMPLE_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
   INDEX_PUBLISH_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
   INDEX_TWAP_WINDOW_MS: z.coerce.number().int().positive().default(900_000),
-  INDEX_MIN_WINDOW_SAMPLES: z.coerce.number().int().positive().default(10),
+  INDEX_MIN_WINDOW_SAMPLES: z.coerce.number().int().positive().default(5),
   /** Three missed samples: past this, the index is not republished from older ones. */
   INDEX_MAX_SAMPLE_AGE_MS: z.coerce.number().int().positive().default(180_000),
   INDEX_MIN_SOURCES: z.coerce.number().int().min(3).default(3),
@@ -60,6 +60,8 @@ const envSchema = z.object({
   PEG_MAX_SPREAD_BPS: z.coerce.number().positive().default(50),
   PEG_GUARD_BPS: z.coerce.number().positive().default(100),
   PROVIDER_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
+  /** Wait before a failed source's one retry within a sample. */
+  SOURCE_RETRY_DELAY_MS: z.coerce.number().int().nonnegative().default(3_000),
 
   // Mark and impacts: checked every minute, published on a 10bps move or before half the 15-minute
   // mark heartbeat has passed, whichever is first.
