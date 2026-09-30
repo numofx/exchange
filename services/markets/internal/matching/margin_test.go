@@ -17,7 +17,7 @@ import (
 
 var (
 	perpE18   = new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
-	perpMark  = big.NewInt(720_000_000_000_000) // 0.00072 USD per NGN
+	perpMark  = big.NewInt(720_000_000_000_000) // 0.00072 USDC per cNGN
 	perpIMReq = big.NewInt(333_330_000_000_000_000)
 )
 
@@ -25,7 +25,7 @@ func usd(n int64) *big.Int       { return new(big.Int).Mul(big.NewInt(n), perpE1
 func ngn(n int64) *big.Int       { return new(big.Int).Mul(big.NewInt(n), perpE18) }
 func negate(v *big.Int) *big.Int { return new(big.Int).Neg(v) }
 
-// 10M NGN at 0.00072 is $7,200 of notional and $2,400 of initial margin at 33.333%.
+// 10M cNGN at 0.00072 is $7,200 of notional and $2,400 of initial margin at 33.333%.
 func TestPerpFillNeedsOnlyInitialMarginNotNotional(t *testing.T) {
 	side := perpSide{ImSurplus: usd(2_500), Position: big.NewInt(0), Delta: ngn(10_000_000), Fee: big.NewInt(0)}
 	if ok, _ := perpFillCheck(side, perpMark, perpMark, perpIMReq); !ok {

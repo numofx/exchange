@@ -110,7 +110,7 @@ describe('windowTwap', () => {
 });
 
 describe('checkJump', () => {
-  const last = 727_802_037_845_705n; // ~1374 NGN/USD
+  const last = 727_802_037_845_705n; // ~1374 cNGN/USDC
   const rules = { maxJumpBps: 300 };
 
   it('lets a move inside the band through', () => {
@@ -128,7 +128,7 @@ describe('checkJump', () => {
 });
 
 describe('toUsdPerNgn', () => {
-  it('inverts NGN per USDT into USD per NGN at 18dp', () => {
+  it('inverts NGN per USDT into USDC per cNGN at 18dp', () => {
     // 1 / 1374 = 0.000727802037845705...
     const value = toUsdPerNgn(1374);
     assert.equal(value, 727_802_037_845_705n);

@@ -55,10 +55,10 @@ func DefaultRegistry(cfg config.Config) *Registry {
 			Enabled:            strings.TrimSpace(cfg.CNGNSpotAssetAddress) != "",
 		},
 		{
-			// The perp is denominated on chain in USD per NGN (~0.00072), sized in NGN, so PnL lands
-			// in USD cash with no conversion. The venue shows it the way it shows spot: NGN per USD,
-			// sized in USD notional, with the side flipped -- a UI long is long USD, which is short
-			// the NGN perp. Same translation as spot, so one ticket reads both markets.
+			// The perp is denominated on chain in USDC per cNGN (~0.00072), sized in cNGN, so PnL lands
+			// in USDC cash with no conversion. The venue shows it the way it shows spot: cNGN per USDC,
+			// sized in USDC notional, with the side flipped -- a UI long is long USDC, which is short
+			// the cNGN perp. Same translation as spot, so one ticket reads both markets.
 			Symbol:               CNGNPerpSymbol,
 			AssetAddress:         strings.ToLower(strings.TrimSpace(cfg.CNGNPerpAssetAddress)),
 			SubID:                "0",
@@ -82,8 +82,8 @@ func DefaultRegistry(cfg config.Config) *Registry {
 			OrderEntrySpec:       PerpOrderEntrySpec,
 			UIPriceUnit:          "cNGN per USDC",
 			UISizeUnit:           "USDC notional",
-			UISideMeaning:        "BUY (long) gains when USD strengthens against NGN; SELL (short) gains when NGN strengthens. A UI long is a short of the on-chain NGN perp.",
-			EnginePriceUnit:      "USD per NGN",
+			UISideMeaning:        "BUY (long) gains when USD strengthens against NGN; SELL (short) gains when NGN strengthens. A UI long is a short of the on-chain cNGN perp.",
+			EnginePriceUnit:      "USDC per cNGN",
 			EngineAmountUnit:     "NGN contracts",
 			EngineSidePolicy:     "invert_ui_side",
 			UIPriceToEngine:      "engine_price = 1 / ui_price",

@@ -56,7 +56,7 @@ type perpSide struct {
 }
 
 // perpFillCheck is the arithmetic, kept pure so every case is testable without a chain.
-// fillPrice and mark are USD per NGN at 18dp; imReq is 18dp (0.33333e18 = 33.333%).
+// fillPrice and mark are USDC per cNGN at 18dp; imReq is 18dp (0.33333e18 = 33.333%).
 func perpFillCheck(side perpSide, fillPrice, mark, imReq *big.Int) (ok bool, surplusAfter *big.Int) {
 	newPosition := new(big.Int).Add(side.Position, side.Delta)
 	if reducesOnly(side.Position, newPosition) {

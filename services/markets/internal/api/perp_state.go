@@ -18,8 +18,8 @@ import (
 // USDCcNGN-PERP's live state, read from its own stack on chain: mark, index, funding, open interest
 // and margin rates for /v1/markets, and per-account positions for /v1/positions.
 //
-// Everything is served in both orientations. The engine prices the perp in USD per NGN; the venue
-// shows NGN per USD with the side flipped. Funding is the one place the flip bites: the chain's rate
+// Everything is served in both orientations. The engine prices the perp in USDC per cNGN; the venue
+// shows cNGN per USDC with the side flipped. Funding is the one place the flip bites: the chain's rate
 // is paid by NGN-perp LONGS, which are the venue's SHORTS, so ui_long_funding_rate_1h is its negation.
 
 const (
@@ -320,7 +320,7 @@ func (r *perpStateReader) position(ctx context.Context, market instruments.Metad
 
 	uiSide := "short"
 	if size.Sign() < 0 {
-		// short the NGN perp = long USD, the venue's long
+		// short the cNGN perp = long USDC, the venue's long
 		uiSide = "long"
 	}
 	notional := new(big.Rat).SetFrac(new(big.Int).Mul(new(big.Int).Abs(size), raw.index), new(big.Int).Mul(perpE18, perpE18))
@@ -408,7 +408,7 @@ func formatSignedE18(value *big.Int, scale int) string {
 	return formatDecimal(rat, scale)
 }
 
-// inverseString is 1/price for an 18dp engine price: NGN per USD from USD per NGN.
+// inverseString is 1/price for an 18dp engine price: cNGN per USDC from USDC per cNGN.
 func inverseString(price *big.Int) string {
 	if price.Sign() <= 0 {
 		return ""

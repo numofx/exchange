@@ -15,7 +15,7 @@ import (
 
 func e18Int(whole int64) *big.Int { return new(big.Int).Mul(big.NewInt(whole), perpE18) }
 
-// A UI long of $7,200 is a SHORT of 10M NGN at 0.00072. With $1,540 of maintenance surplus and a
+// A UI long of $7,200 is a SHORT of 10M cNGN at 0.00072. With $1,540 of maintenance surplus and a
 // 20% MM, it is liquidated when USD falls far enough against NGN: the engine price must RISE.
 func TestLiquidationPriceForAUILongIsAboveTheMarkInEngineTerms(t *testing.T) {
 	mark := big.NewInt(720_000_000_000_000)
@@ -143,7 +143,7 @@ func TestMarketsServesPerpStateWithTheFundingSignFlippedForTheUI(t *testing.T) {
 		t.Fatalf("the perp and its chain state must be served, got %s", recorder.Body.String())
 	}
 	if perp.Perp.MarkPriceUI != "1388.888889" {
-		t.Fatalf("mark in NGN per USD = %q, want 1388.888889", perp.Perp.MarkPriceUI)
+		t.Fatalf("mark in cNGN per USDC = %q, want 1388.888889", perp.Perp.MarkPriceUI)
 	}
 	if !strings.HasPrefix(perp.Perp.UILongFunding1h, "-") || strings.HasPrefix(perp.Perp.FundingRate1h, "-") {
 		t.Fatalf("NGN longs pay a positive rate, so the venue's long receives it: %+v", perp.Perp)
@@ -177,11 +177,11 @@ func TestPositionsReportsAnNGNShortAsTheVenuesLong(t *testing.T) {
 	}
 	got := body.Positions[0]
 	if got.UISide != "long" || got.UISize != "7200" {
-		t.Fatalf("10M NGN short at 0.00072 is a $7,200 UI long, got %+v", got)
+		t.Fatalf("10M cNGN short at 0.00072 is a $7,200 UI long, got %+v", got)
 	}
 	// USD must weaken for a USD long to be liquidated: its liquidation price sits below the mark.
 	if got.LiquidationPriceUI != "1178.781925" {
-		t.Fatalf("liquidation price = %q, want 1178.781925 NGN/USD (below the 1388.89 mark)", got.LiquidationPriceUI)
+		t.Fatalf("liquidation price = %q, want 1178.781925 cNGN/USDC (below the 1388.89 mark)", got.LiquidationPriceUI)
 	}
 }
 

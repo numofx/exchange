@@ -35,7 +35,7 @@ contract CngnPerpTradeModuleForkTest is Test {
   address constant VAULT = 0x1dcA42ab54Bd3862853A821F84B29BF65245F435;
   address constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
 
-  /// USD per NGN; 10M NGN is $7,200 of notional.
+  /// USDC per cNGN; 10M cNGN is $7,200 of notional.
   int constant PRICE = 0.00072e18;
   uint constant SIZE = 10_000_000e18;
 

@@ -40,8 +40,8 @@ import "./config-mainnet.sol";
  *      test/fork/CngnPerpStackFork.t.sol is the phase-0 evidence that the insolvency path works on
  *      a stack shaped like this one; CngnPerpStackDeployFork.t.sol runs THIS script's deployment.
  *
- * @dev DENOMINATION. The perp is priced in USD per NGN (~0.00072) and sized in NGN (1e18 = 1 NGN),
- *      so PnL lands in USD cash with no conversion. The venue displays the inverse (NGN per USD)
+ * @dev DENOMINATION. The perp is priced in USDC per cNGN (~0.00072) and sized in cNGN (1e18 = 1 cNGN),
+ *      so PnL lands in USDC cash with no conversion. The venue displays the inverse (cNGN per USDC)
  *      with long/short flipped; that translation lives in markets-service, not here.
  *
  * @dev FEEDS. The index is a LyraSpotFeed signed by FEED_SIGNER — the revived cNGN signer, fed by
@@ -71,7 +71,7 @@ import "./config-mainnet.sol";
  *
  * Optional env:
  *   PERP_OI_CAP   the cap the ENABLE action opens the market to, NGN 18dp (default 50,000,000). It
- *                 sums |position| over BOTH sides, so 50M allows 25M NGN of OI (≈ $18k at 0.00072).
+ *                 sums |position| over BOTH sides, so 50M allows 25M cNGN of OI (≈ $18k at 0.00072).
  *                 The stack itself deploys with a cap of 0: closed to every path, not just Matching.
  */
 contract DeployCngnPerpStack is Utils {

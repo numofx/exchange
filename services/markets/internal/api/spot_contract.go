@@ -43,7 +43,7 @@ type spotOrderContractEcho struct {
 
 // isSpotContractInstrument reports whether the market is quoted in the inverted UI orientation:
 // price in cNGN per USDC, size in USDC notional, side flipped against the engine. Spot and the perp
-// both are -- the perp is USD per NGN on chain -- so one translation serves both, keyed on the
+// both are -- the perp is USDC per cNGN on chain -- so one translation serves both, keyed on the
 // market's own order_entry_spec. (The name predates the perp; every caller wants this predicate.)
 func isSpotContractInstrument(instrument instruments.Metadata) bool {
 	switch instrument.OrderEntrySpec {
@@ -155,7 +155,7 @@ func deriveSpotContractFromTrade(trade orders.TradeFill, instrument instruments.
 }
 
 // deriveSpotOrderContractEchoFromEngine presents an engine order in UI terms. For the perp the
-// balance_delta is the change in USD/NGN exposure a fill opens, not a token movement: the same
+// balance_delta is the change in USDC/cNGN exposure a fill opens, not a token movement: the same
 // numbers, since the translation is the same, but nothing is delivered.
 func deriveSpotOrderContractEchoFromEngine(spec string, engineSide orders.Side, enginePrice string, engineAmount string) (*spotOrderContractEcho, error) {
 	if engineSide != orders.SideBuy && engineSide != orders.SideSell {

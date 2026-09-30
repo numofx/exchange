@@ -129,7 +129,7 @@ def check_perp_feeds(url: str) -> list[str]:
     if age > PERP_INDEX_WARN_SEC:
       problems.append(f"perp index feed {stack['indexFeed']} STALE: last update {age}s ago (warn {PERP_INDEX_WARN_SEC}s)")
     else:
-      print(f"ok: perp index age {age}s price {price:.8f} USD/NGN")
+      print(f"ok: perp index age {age}s price {price:.8f} USDC/cNGN")
   except Exception as exc:
     problems.append(f"perp index feed CHECK FAILED: {exc}")
 

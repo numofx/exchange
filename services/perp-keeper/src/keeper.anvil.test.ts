@@ -79,7 +79,7 @@ async function signedUpdate(kind: 'LyraSpotFeed' | 'LyraSpotDiffFeed', feed: Add
 }
 
 const E18 = 10n ** 18n;
-const INDEX = 720_000_000_000_000n; // 0.00072 USD per NGN
+const INDEX = 720_000_000_000_000n; // 0.00072 USDC per cNGN
 const CRASHED = 432_000_000_000_000n; // -40%
 const SIZE = 10_000_000n * E18;
 
@@ -271,7 +271,7 @@ describe('keeper against the real perp stack on an anvil fork', { skip: !RPC }, 
     await write(operator, USDC, 'approve', [stack.securityModule, 5_000n * 10n ** 6n]);
     await write(operator, stack.securityModule, 'donate', [5_000n * 10n ** 6n]);
 
-    // Bob shorts to alice and to carol: 10M NGN ($7,200) each.
+    // Bob shorts to alice and to carol: 10M cNGN ($7,200) each.
     await write(operator, SUB_ACCOUNTS, 'submitTransfers', [
       [
         { fromAcc: accounts.bob, toAcc: accounts.alice, asset: stack.perp, subId: 0n, amount: SIZE, assetData: pad('0x', { size: 32 }) },

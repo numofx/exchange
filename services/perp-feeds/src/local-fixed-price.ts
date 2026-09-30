@@ -7,7 +7,7 @@ import { encodeManagerData, encodeSpotData, encodeSpotDiffData, signFeedUpdate }
 import { toUsdPerNgn } from './index-aggregation.js';
 
 /**
- * `--local-fixed-price=<NGN per USD>`: publishes a constant index, with mark and impacts at zero
+ * `--local-fixed-price=<cNGN per USDC>`: publishes a constant index, with mark and impacts at zero
  * diff, and nothing else. It exists so the local venue (scripts/local-venue) has live feeds without
  * rate-picker sources or a book, and it skips every guard the real publishers apply -- which is why
  * it refuses to run anywhere but a local anvil.
@@ -38,7 +38,7 @@ export function parseFixedPrice(argv: string[]): number | null {
   if (flag === undefined) return null;
   const value = Number(flag.split('=')[1]);
   if (!Number.isFinite(value) || value <= 0) {
-    throw new Error(`--local-fixed-price needs a positive NGN-per-USD value, e.g. --local-fixed-price=1374 (got ${flag})`);
+    throw new Error(`--local-fixed-price needs a positive cNGN-per-USDC value, e.g. --local-fixed-price=1374 (got ${flag})`);
   }
   return value;
 }
@@ -64,11 +64,11 @@ export async function publishFixedPrice(config: Config, chain: Chain, ngnPerUsd:
     ),
   ]);
   const tx = await chain.submit(encodeManagerData(updates));
-  console.log(`[local-fixed-price] published index ${index} (${ngnPerUsd} NGN/USD), zero diffs, tx=${tx}`);
+  console.log(`[local-fixed-price] published index ${index} (${ngnPerUsd} cNGN/USDC), zero diffs, tx=${tx}`);
 }
 
 /**
- * `--local-sources=<NGN per USD>`: three providers that all answer that price, in place of the real
+ * `--local-sources=<cNGN per USDC>`: three providers that all answer that price, in place of the real
  * ones, so the local venue can drive the REAL index publisher (sampling, TWAP, jump guard, the
  * index-step procedure) without the network. Same refusal as --local-fixed-price: 31337 only.
  */
@@ -77,7 +77,7 @@ export function parseLocalSources(argv: string[]): number | null {
   if (flag === undefined) return null;
   const value = Number(flag.split('=')[1]);
   if (!Number.isFinite(value) || value <= 0) {
-    throw new Error(`--local-sources needs a positive NGN-per-USD value, e.g. --local-sources=2290 (got ${flag})`);
+    throw new Error(`--local-sources needs a positive cNGN-per-USDC value, e.g. --local-sources=2290 (got ${flag})`);
   }
   return value;
 }

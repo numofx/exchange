@@ -1,5 +1,5 @@
 /**
- * The index: what one USD of stablecoin is worth in NGN, turned into the perp's USD-per-NGN price.
+ * The index: what one USD of stablecoin is worth in NGN, turned into the perp's USDC-per-cNGN price.
  *
  * Everything here is pure, so every refusal can be tested without a network. The publisher's job
  * is to fail closed: an index it is not sure of is worse than no index, because a stale feed halts
@@ -119,8 +119,9 @@ export function stepBps(to: bigint, from: bigint): number {
 }
 
 /**
- * NGN per USDT to the perp's denomination: USD per NGN, 18dp. USDT stands in for USD; a USDT depeg
- * moves this index with it, which is the risk the venue already carries by settling in stablecoin.
+ * NGN per USDT to the perp's denomination: USDC per cNGN, 18dp. The sources quote fiat NGN per USDT
+ * (Blockradar alone quotes cNGN), so this assumes cNGN ~ NGN and USDT ~ USDC: a cNGN depeg or a
+ * USDT/USDC spread moves the market away from the index without moving the index.
  */
 export function toUsdPerNgn(ngnPerUsdt: number): bigint {
   if (!Number.isFinite(ngnPerUsdt) || ngnPerUsdt <= 0) {

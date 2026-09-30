@@ -125,7 +125,7 @@ describe('publishers against real feed contracts on anvil', { skip: !RPC }, () =
     await publicClient.request({ method: 'evm_mine' as never, params: [] as never });
   });
 
-  it('publishes an index the LyraSpotFeed accepts, inverted to USD per NGN', async () => {
+  it('publishes an index the LyraSpotFeed accepts, inverted to USDC per cNGN', async () => {
     const cfg = config();
     const clock = { now: Date.now() };
     const publisher = new IndexPublisher(cfg, createChain(cfg), fixedProviders([1374, 1372, 1376]), async () => {}, () => clock.now);

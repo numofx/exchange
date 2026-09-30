@@ -150,7 +150,7 @@ contract CngnPerpStackDeployFork is Test {
     _tradePerp(bobAcc, aliceAcc, 1e18);
   }
 
-  /// The cap counts |position| on BOTH sides: 50M allows 25M NGN of open interest.
+  /// The cap counts |position| on BOTH sides: 50M allows 25M cNGN of open interest.
   function testLowOICapStopsOversizedPositions() public {
     _executeVaultBatch();
     _enableCap();

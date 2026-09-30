@@ -25,7 +25,7 @@ export function buildProviders(config: Config): RateProvider[] {
 type IndexState = {
   /** Accepted samples: the median NGN per USDT, when it was taken. */
   samples: PricePoint[];
-  /** Last index this process got onto the chain, USD per NGN 18dp, as a decimal string. */
+  /** Last index this process got onto the chain, USDC per cNGN 18dp, as a decimal string. */
   lastPublished: string | null;
 };
 
@@ -113,7 +113,7 @@ export class IndexPublisher {
     await this.save();
   }
 
-  /** Publishes the window TWAP, inverted to USD per NGN, if every guard passes. */
+  /** Publishes the window TWAP, inverted to USDC per cNGN, if every guard passes. */
   async publish(): Promise<void> {
     const twap = windowTwap(this.state.samples, this.now(), {
       windowMs: this.config.INDEX_TWAP_WINDOW_MS,

@@ -18,7 +18,7 @@ Gates, all read live and all required (re-checked before EACH action is proposed
             funding account is owned by the keeper EOA, sits under the perp SRM, holds only cash, and holds >= --min-keeper-cash;
             its EOA holds >= --min-keeper-eth for gas
   sm        the security module's account holds at least a third of ONE side's notional at the launch
-            cap (cap / 2 NGN at the live index), and never less than --min-sm-cash
+            cap (cap / 2 cNGN at the live index), and never less than --min-sm-cash
   quoter    the perp book on markets-service has a bid and an ask, each with >= --min-quote-usd of
             depth within 2% of the index (optionally from --quoter-owner)
 
@@ -240,7 +240,7 @@ def gate_keeper(rpc_url: str, v: Venue, health_url: str, min_cash: float, min_et
 
 def sm_seed_required(launch_cap: int, index_usd_per_ngn: float, floor: float) -> float:
   """The seed rule (docs/cngn-perp-go-live.md): at least a third of ONE side's notional at the cap
-  being opened. The cap sums both sides, so one side is cap / 2 NGN. A third is the initial margin
+  being opened. The cap sums both sides, so one side is cap / 2 cNGN. A third is the initial margin
   on that side; the fork test (testSecurityModuleLossFromIndexJumpAtFullCap) shows the worst-case
   SecurityModule payout reaching it at a ~50% index jump."""
   one_side_usd = (launch_cap / 2 / 1e18) * index_usd_per_ngn
@@ -321,7 +321,7 @@ def self_test() -> int:
   for name, want in pinned.items():
     got = selector(name)
     assert got == want, f"{name}: {got} != {want}"
-  # 50M NGN cap at 1374 NGN/USD: 25M NGN a side is $18,195, a third of it $6,065.
+  # 50M cNGN cap at 1374 cNGN/USDC: 25M cNGN a side is $18,195, a third of it $6,065.
   assert round(sm_seed_required(50_000_000 * 10**18, 1 / 1374, 5_000)) == 6065
   assert sm_seed_required(1 * 10**18, 1 / 1374, 5_000) == 5_000
   print("self-test ok: selectors match their `cast sig` values; seed rule sized")

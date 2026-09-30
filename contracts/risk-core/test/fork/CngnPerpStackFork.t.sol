@@ -28,9 +28,9 @@ import {Config} from "../../scripts/config-mainnet.sol";
  *
  * Deploys, onto a Base fork, the stack the perp would run on: a CashAsset backed by real Base
  * USDC with borrowing enabled, its own SRM, viewer, SecurityModule and DutchAuction, and a
- * PerpAsset priced in USD per NGN. It reuses the live SubAccounts, because Matching is bound to
+ * PerpAsset priced in USDC per cNGN. It reuses the live SubAccounts, because Matching is bound to
  * it, and touches nothing else on chain: the legacy SRM and its unbacked CashAsset are never
- * called. Parameters come from config-mainnet.sol (NGN perp margin, auction, rate model).
+ * called. Parameters come from config-mainnet.sol (cNGN perp margin, auction, rate model).
  *
  * What must hold before this stack is worth deploying:
  *   1. a winner is paid in real USDC, not in cash that cannot be redeemed;
@@ -45,7 +45,7 @@ contract CngnPerpStackFork is Test {
   address constant SUB_ACCOUNTS = 0x7019244E25FA416e6Ca2ed2F3cA25277aef72843;
   address constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
 
-  /// USD per NGN, the perp's denomination: ~1,389 NGN per USD.
+  /// USDC per cNGN, the perp's denomination: ~1,389 cNGN per USDC.
   uint96 constant INDEX_PRICE = 0.00072e18;
 
   // Derived, not a memorable constant: well-known keys like 0xC0FFEE carry EIP-7702 delegations
@@ -92,7 +92,7 @@ contract CngnPerpStackFork is Test {
     _deposit(alice, aliceAcc, 3_000e6);
     _deposit(bob, bobAcc, 3_000e6);
 
-    // Bob longs 10M NGN ($7,200 notional); alice takes the short.
+    // Bob longs 10M cNGN ($7,200 notional); alice takes the short.
     _tradePerp(aliceAcc, bobAcc, 10_000_000e18);
 
     // NGN strengthens 10%: bob is up $720.
@@ -192,11 +192,11 @@ contract CngnPerpStackFork is Test {
     _deposit(alice, aliceAcc, 2_500e6);
     _deposit(bob, bobAcc, 10_000e6);
     _deposit(charlie, charlieAcc, 10_000e6);
-    _tradePerp(bobAcc, aliceAcc, 10_000_000e18); // alice long 10M NGN ($7,200)
+    _tradePerp(bobAcc, aliceAcc, 10_000_000e18); // alice long 10M cNGN ($7,200)
 
     // The venue is closed first by disallowing the module on Matching (not modelled here: this stack
     // has no Matching). The cap is NOT cut yet -- see testCapBelowOpenInterestFreezesPositionHolders.
-    // Put the confirmed level on the feeds (a 60% fall in USD per NGN) and freeze the perp there.
+    // Put the confirmed level on the feeds (a 60% fall in USDC per cNGN) and freeze the perp there.
     _setPrices(0.000288e18);
     perp.disable();
     assertEq(uint(perp.frozenPerpPrice()), 0.000288e18, "frozen at the confirmed level");
@@ -414,7 +414,7 @@ contract CngnPerpStackFork is Test {
 
   // --- SecurityModule exposure at the launch cap ----------------------------------
 
-  /// The launch cap, 50M NGN, counts both sides: 25M long against 25M short.
+  /// The launch cap, 50M cNGN, counts both sides: 25M long against 25M short.
   int constant CAP_SIDE = 25_000_000e18;
 
   /**
@@ -489,7 +489,7 @@ contract CngnPerpStackFork is Test {
 
   // --- scenario helpers ------------------------------------------------------------
 
-  /// Alice longs 10M NGN on $2,500, just over the 33% IM, then NGN falls 40%.
+  /// Alice longs 10M cNGN on $2,500, just over the 33% IM, then NGN falls 40%.
   function _openInsolvent() internal {
     _deposit(alice, aliceAcc, 2_500e6);
     _deposit(bob, bobAcc, 10_000e6);

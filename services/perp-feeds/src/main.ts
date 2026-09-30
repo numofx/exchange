@@ -8,7 +8,7 @@ import { MarkPublisher } from './mark-publisher.js';
 
 /**
  * The USDCcNGN-PERP price publishers: the index (rate-picker sources → median → 15-minute TWAP →
- * inverted to USD per NGN) and the mark and impact prices (the venue's own perp book, anchored to
+ * inverted to USDC per cNGN) and the mark and impact prices (the venue's own perp book, anchored to
  * that index). One process, one signer, one relayer to fund.
  *
  * Every loop swallows its own errors and runs again: a crashed publisher is a halted market, and

@@ -77,8 +77,8 @@ func TestValidateSpotUIIntentMismatch(t *testing.T) {
 	}
 }
 
-// The perp shares spot's translation -- USD per NGN on chain, NGN per USD on screen -- under its
-// own spec: a UI long of 100 USDC at 1,389 NGN/USD is an engine SELL of 138,900 NGN at 1/1389.
+// The perp shares spot's translation -- USDC per cNGN on chain, cNGN per USDC on screen -- under its
+// own spec: a UI long of 100 USDC at 1,389 cNGN/USDC is an engine SELL of 138,900 cNGN at 1/1389.
 func TestPerpUIIntentTranslatesLikeSpotUnderItsOwnSpec(t *testing.T) {
 	echo, err := translateSpotUIIntent(instruments.PerpOrderEntrySpec, &spotOrderIntent{Side: "buy", Price: "1389", Size: "100"})
 	if err != nil {
@@ -88,10 +88,10 @@ func TestPerpUIIntentTranslatesLikeSpotUnderItsOwnSpec(t *testing.T) {
 		t.Fatalf("echo spec = %q, want the perp spec", echo.Spec)
 	}
 	if echo.EngineOrder.Side != string(orders.SideSell) {
-		t.Fatalf("UI long must be an engine SELL of the NGN perp, got %q", echo.EngineOrder.Side)
+		t.Fatalf("UI long must be an engine SELL of the cNGN perp, got %q", echo.EngineOrder.Side)
 	}
 	if !decimalStringsMatch(echo.EngineOrder.Amount, "138900") {
-		t.Fatalf("engine amount = %q, want 138900 NGN", echo.EngineOrder.Amount)
+		t.Fatalf("engine amount = %q, want 138900 cNGN", echo.EngineOrder.Amount)
 	}
 }
 

@@ -109,8 +109,8 @@ refuses to boot:
 
 Set them on the API **and** the matcher, and set `PERP_TRADE_MODULE_ADDRESS` on execution-service.
 
-- **Orientation.** On chain the perp is USD per NGN, sized in NGN. The venue shows it like spot:
-  NGN per USD, sized in USD notional, side flipped — a UI long is a short of the NGN perp. Orders
+- **Orientation.** On chain the perp is USDC per cNGN, sized in cNGN. The venue shows it like spot:
+  cNGN per USDC, sized in USDC notional, side flipped — a UI long is a short of the cNGN perp. Orders
   use `order_entry_spec: "usdc_cngn_perp_v1"` with the same `ui_intent` translation as spot, and an
   intent signed for one market's spec is refused on the other's.
 - **Module.** A perp order must name the perp module; a spot order the spot module. The matcher

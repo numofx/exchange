@@ -6,12 +6,18 @@ Price publishers for `USDCcNGN-PERP`. One process, one feed signer, one relayer:
   [`cngn-rate-picker`](https://github.com/wrappedcbdc/cngn-rate-picker) (Quidax, Textile, Bybit P2P,
   and Blockradar when `BLOCKRADAR_API_KEY` is set) is queried. A sample is the **median**, and is
   refused if fewer than 3 sources answer or any source sits more than 150 bps from the median. Every
-  5 minutes the 15-minute **time-weighted average** of accepted samples is inverted to USD per NGN,
+  5 minutes the 15-minute **time-weighted average** of accepted samples is inverted to USDC per cNGN,
   refused if it would move the on-chain index more than 300 bps, then signed and pushed.
 - **Mark and impacts.** Every minute, the perp book from markets-service gives the mark (book mid)
   and impact prices (average fill for $1,000 each side), each clamped to the index ± 200 bps. A side
   without that depth reads as the index, so a thin book creates no funding premium. Published on a
   10 bps move or before 7 minutes have passed, whichever comes first.
+
+**What the index measures.** The sources do not quote cNGN/USDC. Quidax (`usdtngn`), Textile
+(`USDT_NGN`) and Bybit P2P quote **fiat NGN per USDT**; only Blockradar quotes **cNGN** (per USDT).
+The index is therefore NGN per USDT, published as if it were cNGN per USDC. That assumes
+**cNGN ≈ NGN** and **USDT ≈ USDC**. A cNGN depeg from NGN, or a USDT/USDC spread, moves the real
+market away from the index without moving the index, and funding and liquidations follow the index.
 
 The picker's own multi-source mode is not used: with `threshold > 1` it averages the first N
 successes weighted by fetch-time gaps and never compares them, which is neither a median nor a
@@ -40,7 +46,7 @@ sources stopped agreeing is not republished. `src/publishers.test.ts` pins both.
 
 ## Local only: `--local-fixed-price`
 
-`node dist/main.js --local-fixed-price=1374` publishes a constant index (1374 NGN per USD) with zero
+`node dist/main.js --local-fixed-price=1374` publishes a constant index (1374 cNGN per USDC) with zero
 mark and impact diffs, every `MARK_INTERVAL_MS`, and nothing else. It skips every guard above, so it
 asks the RPC for its chain id and refuses unless both that and `CHAIN_ID` are 31337; Base (8453) and
 Base Sepolia (84532) are refused by name. It exists for `scripts/local-venue`.

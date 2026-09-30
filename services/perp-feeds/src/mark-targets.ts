@@ -9,12 +9,12 @@
  *  - Any side without that depth reads as the index. A missing side is then no premium in either
  *    direction, rather than a funding rate conjured from one resting order.
  *
- * Every price is USD per NGN at 18dp, the perp's engine denomination.
+ * Every price is USDC per cNGN at 18dp, the perp's engine denomination.
  */
 
 export type BookSide = 'buy' | 'sell';
 
-/** One resting order, in engine terms: price in USD per NGN, amount in NGN. */
+/** One resting order, in engine terms: price in USDC per cNGN, amount in NGN. */
 export type RestingOrder = {
   side: BookSide;
   price: bigint;

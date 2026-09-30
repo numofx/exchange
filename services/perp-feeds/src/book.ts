@@ -14,7 +14,7 @@ type PresentedOrder = {
 type BookResponse = { bids?: PresentedOrder[]; asks?: PresentedOrder[] };
 
 /**
- * The perp's resting orders from markets-service, in engine terms (USD per NGN, NGN amounts). The
+ * The perp's resting orders from markets-service, in engine terms (USDC per cNGN, NGN amounts). The
  * book endpoint returns engine prices and amounts as decimals, the same shape spot's raw fields
  * have; the perp has no display inversion at this layer.
  */

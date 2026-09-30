@@ -29,7 +29,7 @@ import { stepBps, toUsdPerNgn, windowTwap } from './index-aggregation.js';
  */
 
 export type StepRequest = {
-  /** The level the operator confirmed, NGN per USD. */
+  /** The level the operator confirmed, cNGN per USDC. */
   levelNgnPerUsd: number;
   approvedBy: string;
   reason: string;
@@ -80,7 +80,7 @@ export function planIndexStep(args: {
   if (request.approvedBy.trim() === '') return { ok: false, reason: 'an approver is required (--approved-by)' };
   if (request.reason.trim() === '') return { ok: false, reason: 'a reason is required (--reason)' };
   if (!Number.isFinite(request.levelNgnPerUsd) || request.levelNgnPerUsd <= 0) {
-    return { ok: false, reason: `--level must be a positive NGN-per-USD value (got ${request.levelNgnPerUsd})` };
+    return { ok: false, reason: `--level must be a positive cNGN-per-USDC value (got ${request.levelNgnPerUsd})` };
   }
   if (args.onChain === null) {
     return { ok: false, reason: 'no reference index (chain stale and nothing published by this host): a first publish needs no override' };
@@ -99,7 +99,7 @@ export function planIndexStep(args: {
   if (mismatch > rules.matchBps) {
     return {
       ok: false,
-      reason: `the sources' TWAP (${twap.ngnPerUsdt.toFixed(2)} NGN/USD) is ${mismatch}bps from the confirmed ${request.levelNgnPerUsd} (limit ${rules.matchBps}bps)`,
+      reason: `the sources' TWAP (${twap.ngnPerUsdt.toFixed(2)} cNGN/USDC) is ${mismatch}bps from the confirmed ${request.levelNgnPerUsd} (limit ${rules.matchBps}bps)`,
     };
   }
 
@@ -171,7 +171,7 @@ export async function acceptIndexStep(deps: StepDeps): Promise<{ tx: string | nu
   };
   // Recorded before anything is sent: an approval that fails to land is still an approval made.
   await audit({ ...record, status: 'approved' });
-  console.log(`[index-step] approved by ${request.approvedBy}: ${plan.stepBps}bps to ${plan.twapNgnPerUsdt.toFixed(2)} NGN/USD (${request.reason})`);
+  console.log(`[index-step] approved by ${request.approvedBy}: ${plan.stepBps}bps to ${plan.twapNgnPerUsdt.toFixed(2)} cNGN/USDC (${request.reason})`);
 
   if (config.DRY_RUN) {
     await audit({ ...record, status: 'dry-run' });
@@ -192,13 +192,13 @@ export async function acceptIndexStep(deps: StepDeps): Promise<{ tx: string | nu
   await audit({ ...record, status: 'published', tx });
   await deps.alert(
     'index-step',
-    `index STEP published: ${plan.stepBps}bps to ${plan.twapNgnPerUsdt.toFixed(2)} NGN/USD, approved by ${request.approvedBy} (${request.reason}) tx=${tx}`,
+    `index STEP published: ${plan.stepBps}bps to ${plan.twapNgnPerUsdt.toFixed(2)} cNGN/USDC, approved by ${request.approvedBy} (${request.reason}) tx=${tx}`,
   );
   console.log(`[index-step] published ${plan.next} tx=${tx}`);
   return { tx, plan };
 }
 
-/** `--accept-index-step --level=<NGN/USD> --approved-by=<name> --reason=<text>`, or null without the flag. */
+/** `--accept-index-step --level=<cNGN/USDC> --approved-by=<name> --reason=<text>`, or null without the flag. */
 export function parseStepArgs(argv: string[]): StepRequest | null {
   if (!argv.includes('--accept-index-step')) return null;
   const value = (name: string) => argv.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3) ?? '';

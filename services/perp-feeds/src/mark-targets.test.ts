@@ -5,10 +5,10 @@ import { averageFill, clamp, computeMarkTargets, toSpotDiff, type RestingOrder }
 import { needsUpdate } from './mark-publisher.js';
 
 const E18 = 10n ** 18n;
-const INDEX = 720_000_000_000_000n; // 0.00072 USD per NGN
+const INDEX = 720_000_000_000_000n; // 0.00072 USDC per cNGN
 const rules = { maxBasisBps: 200n, impactNotional: 1_000n * E18 };
 
-/** A resting order at `price` (18dp USD/NGN) worth `usd` of notional. */
+/** A resting order at `price` (18dp USDC/cNGN) worth `usd` of notional. */
 function order(side: 'buy' | 'sell', price: bigint, usd: bigint): RestingOrder {
   return { side, price, remaining: (usd * E18 * E18) / price };
 }
