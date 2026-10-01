@@ -76,6 +76,7 @@ UNWATCHED_REPAGE_SEC = 86_400  # "no dead-man's switch" pages daily, not every h
 SM_PAYOUT_MIN = 1.0  # USD: below this a fall is rounding, not a payout
 
 SEL_SPOT_DIFF_DETAILS = "0xf8ff41bd"  # spotDiffDetails()
+NEVER_PUBLISHED = -1  # a feed whose last-update timestamp is 0: not stale, never written
 SEL_TOTAL_POSITION_CAP = "0x745ab570"  # totalPositionCap(address) -- `cast sig`, pinned in --self-test
 # Gas watch. Burn is measured as the balance 24h ago minus now (a top-up in between reads as no
 # burn, which then falls back to the floor). Floors are two days at the worst case measured in the
@@ -107,19 +108,21 @@ def head_block(url: str) -> tuple[int, int]:
 
 def index_age(url: str, feed: str, now: int) -> int:
   word = int(rpc(url, "eth_getStorageAt", [feed, SPOT_DETAIL_SLOT, "latest"]), 16)
-  return now - ((word >> 160) & 0xFFFFFFFFFFFFFFFF)
+  ts = (word >> 160) & 0xFFFFFFFFFFFFFFFF
+  return now - ts if ts else NEVER_PUBLISHED
 
 
 def diff_age(url: str, feed: str, now: int) -> int:
   raw = rpc(url, "eth_call", [{"to": feed, "data": SEL_SPOT_DIFF_DETAILS}, "latest"])[2:]
-  return now - int(raw[128:192], 16)
+  ts = int(raw[128:192], 16)
+  return now - ts if ts else NEVER_PUBLISHED
 
 
 def feed_condition(ages: dict[str, int | None]) -> Condition | None:
   """ages: feed name -> seconds since its last update, None when unreadable."""
   limits = {"index": INDEX_HALT_SEC, "mark": MARK_HALT_SEC, "impact ask": IMPACT_HALT_SEC, "impact bid": IMPACT_HALT_SEC}
-  late = [f"{name} {'unreadable' if age is None else f'{age}s old'}" for name, age in ages.items()
-          if age is None or age > limits[name]]
+  late = [f"{name} {'unreadable' if age is None else 'never published' if age == NEVER_PUBLISHED else f'{age}s old'}"
+          for name, age in ages.items() if age is None or age == NEVER_PUBLISHED or age > limits[name]]
   if not late:
     return None
   return Condition("feed-halt", f"USDCcNGN-PERP feed halt: {', '.join(late)}. A stale index halts trading and liquidations.")
@@ -409,6 +412,8 @@ def self_test() -> int:
   assert feed_condition({"index": 961, "mark": 60, "impact ask": 60, "impact bid": 60}).key == "feed-halt"
   assert feed_condition({"index": 60, "mark": 60, "impact ask": 961, "impact bid": 60}).key == "feed-halt"
   assert "unreadable" in feed_condition({"index": None, "mark": 60, "impact ask": 60, "impact bid": 60}).message
+  never = feed_condition({"index": NEVER_PUBLISHED, "mark": 60, "impact ask": 60, "impact bid": 60})
+  assert never.key == "feed-halt" and "index never published" in never.message and "s old" not in never.message
   live = {"dryRun": False, "lastPassOk": True, "lastPassAt": now - 10, "pollIntervalMs": 15_000}
   assert keeper_condition(live, now) is None
   assert keeper_condition(None, now).key == "keeper-unhealthy"
