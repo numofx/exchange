@@ -10,6 +10,8 @@ Slack webhook, so the channel has the same record.
   keeper-unhealthy   the keeper's /health is unreachable, in dry run, failing, or stale. Armed once
                      the keeper has reported healthy at least once, or the market is open (cap > 0):
                      before that, a keeper that is not running yet is not a page.
+  sm-seed            the SecurityModule's cash is under the seed rule: a sixth of one side's notional
+                     at the cap (totalPositionCap / 2 at the index). The next insolvency may socialize.
   oi-vs-keeper       one side's open interest, in USD at the index, is 3x or more the keeper's bid
                      account cash (KEEPER_ACCOUNT): the keeper could not margin the positions it may
                      have to take. Slack-only warning at 2x.
@@ -86,6 +88,7 @@ SEL_GET_SPOT = "0x2b37269c"  # getSpot() on the index feed: USDC per cNGN, 18dp
 # One side's OI notional against the keeper's cash. The keeper must hold maintenance margin (20%)
 # for what it inherits in an auction and may carry several accounts at once, so 3x is where a full
 # side could no longer be taken in one go; 2x is the warning to top up (runbook: keeper collateral).
+SM_SEED_FRACTION = 6  # the seed rule: SecurityModule cash >= one side at the cap / 6 (runbook)
 OI_KEEPER_WARN_X = 2.0
 OI_KEEPER_PAGE_X = 3.0
 OI_WARN_REPEAT_SEC = 6 * 3600
@@ -190,6 +193,22 @@ def gas_warning(name: str, balance: float, burn_per_day: float) -> str | None:
   if burn_per_day <= 0 or balance / burn_per_day >= GAS_WARN_DAYS:
     return None
   return f"USDCcNGN-PERP {name} gas runway {balance / burn_per_day:.1f} days ({balance:.5f} ETH at {burn_per_day:.5f}/day): top up this week."
+
+
+def sm_seed_condition(sm_cash_usd: float, one_side_at_cap_usd: float) -> Condition | None:
+  required = one_side_at_cap_usd / SM_SEED_FRACTION
+  if sm_cash_usd >= required:
+    return None
+  return Condition("sm-seed", f"USDCcNGN-PERP SecurityModule holds ${sm_cash_usd:,.0f}, under the seed rule's ${required:,.0f} "
+                   f"(a sixth of one side at the cap): the next insolvency can socialize. Donate, or set cap = current OI.")
+
+
+def read_one_side_at_cap(url: str, stack: dict) -> float:
+  """One side's notional at the cap, USD at the index: totalPositionCap(srm) / 2 x getSpot()."""
+  srm_word = stack["srm"].lower().removeprefix("0x").rjust(64, "0")
+  cap = int(rpc(url, "eth_call", [{"to": stack["perp"], "data": SEL_TOTAL_POSITION_CAP + srm_word}, "latest"]), 16)
+  spot = int(rpc(url, "eth_call", [{"to": stack["indexFeed"], "data": SEL_GET_SPOT}, "latest"])[2:66], 16)
+  return (cap / 2) / 1e18 * (spot / 1e18)
 
 
 def oi_condition(one_side_usd: float, keeper_cash_usd: float) -> Condition | None:
@@ -439,10 +458,19 @@ def check_and_page(stack_path: Path, state: dict) -> int:
   else:
     print("oi: KEEPER_ACCOUNT unset, not watched")
 
+  seed = None
+  try:
+    one_side_at_cap = read_one_side_at_cap(url, stack)
+    if one_side_at_cap > 0:  # cap 0 = market closed: the seed rule is the enable gate's job until then
+      seed = sm_seed_condition(sm_cash, one_side_at_cap)
+    print(f"sm seed: ${sm_cash:,.0f} vs a sixth of one side at the cap ${one_side_at_cap / SM_SEED_FRACTION:,.0f}")
+  except Exception as exc:  # noqa: BLE001
+    print(f"sm seed: unreadable ({str(exc)[:80]})")
+
   previous_sm = state.get("smCash")
   active = [c for c in (feed_condition(ages), keeper_condition(health, now, armed), insolvent_condition(health),
                         sm_condition(previous_sm, sm_cash), unwatched_condition(heartbeat_urls()[0]),
-                        peg_condition(read_index_status(), time.time()), oi, *gas) if c is not None]
+                        peg_condition(read_index_status(), time.time()), seed, oi, *gas) if c is not None]
   to_page, resolved = step_state(state, active, now)
   state["smCash"] = sm_cash
 
@@ -496,6 +524,9 @@ def self_test() -> int:
   assert gas_condition("executor", 0.0019, 0.0, 0.002) is not None and "unknown burn" in gas_condition("executor", 0.0019, 0.0, 0.002).message
   assert gas_condition("executor", 0.0079, 0.00003, 0.002) is None
   assert gas_warning("relayer", 0.015, 0.0013) is None and "runway 5.0 days" in gas_warning("relayer", 0.0065, 0.0013)
+  # Seed rule: a sixth of one side at the cap ($18,382 a side -> $3,064); under it pages.
+  assert sm_seed_condition(3_250, 18_382) is None
+  assert sm_seed_condition(3_000, 18_382).key == "sm-seed" and "$3,064" in sm_seed_condition(3_000, 18_382).message
   # OI against the keeper's cash: warning from 2x, page from 3x, page at any OI with no cash.
   assert oi_condition(9_999, 5_000) is None and oi_warning(9_999, 5_000) is None
   assert "2.2x" in oi_warning(11_000, 5_000) and oi_condition(11_000, 5_000) is None
