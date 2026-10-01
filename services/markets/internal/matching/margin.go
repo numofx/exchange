@@ -382,10 +382,21 @@ func (g *perpTradingGate) read(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return allowed.Sign() > 0 && positionCap.Sign() > 0, nil
+	pausedRaw, err := g.rpc.ethCall(ctx, g.srm, adjustmentsPausedSelector)
+	if err != nil {
+		return false, fmt.Errorf("adjustmentsPaused: %w", err)
+	}
+	paused, err := wordAt(pausedRaw, 0)
+	if err != nil {
+		return false, err
+	}
+	// A guardian pause reverts every settlement; crossing orders into it would only queue
+	// failures for the executor to retry.
+	return allowed.Sign() > 0 && positionCap.Sign() > 0 && paused.Sign() == 0, nil
 }
 
 const (
-	allowedModulesSelector   = "0x8ba5a0c2" // Matching.allowedModules(address)
-	totalPositionCapSelector = "0x745ab570" // PerpAsset.totalPositionCap(address)
+	allowedModulesSelector    = "0x8ba5a0c2" // Matching.allowedModules(address)
+	totalPositionCapSelector  = "0x745ab570" // PerpAsset.totalPositionCap(address)
+	adjustmentsPausedSelector = "0xac06ba05" // BaseManager.adjustmentsPaused()
 )

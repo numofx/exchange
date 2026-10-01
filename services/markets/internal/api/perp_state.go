@@ -34,6 +34,7 @@ const (
 	sigUnrealizedCash         = "0x7a4c2c3a" // getUnsettledAndUnrealizedCash(uint256)
 	sigAllowedModules         = "0x8ba5a0c2" // Matching.allowedModules(address)
 	sigTotalPositionCap       = "0x745ab570" // PerpAsset.totalPositionCap(address)
+	sigAdjustmentsPaused      = "0xac06ba05" // BaseManager.adjustmentsPaused(): the SRM guardian's pause
 
 	perpStateTTL = 10 * time.Second
 	perpUIScale  = 6
@@ -59,11 +60,18 @@ type perpMarketState struct {
 	QuoteAsset             string `json:"quote_asset_address"`
 	MarginManager          string `json:"margin_manager_address"`
 	// TradingEnabled is the chain's own answer, read each refresh: the perp module allowlisted on
-	// Matching and an OI cap above zero. Both are set only by the final enable action; until then
-	// the market is listed so quotes can rest, but the matcher does not cross it.
+	// Matching, an OI cap above zero, and the SRM not paused. The first two are set only by the
+	// final enable action; until then the market is listed so quotes can rest, but the matcher does
+	// not cross it. Paused is the guardian's pause on the SRM: every adjustment on the perp's
+	// accounts reverts while it holds (trades, deposits, withdrawals, liquidation bids), so the
+	// market reads as not trading and the API refuses new perp orders rather than resting them.
 	TradingEnabled bool   `json:"trading_enabled"`
+	Paused         bool   `json:"paused"`
 	PositionCap    string `json:"position_cap"`
-	UpdatedAt      int64  `json:"updated_at"`
+	// enabledOnChain is the enable action's half of TradingEnabled (module allowed, cap above
+	// zero), kept apart so a pause re-read over a cached state can recompute the whole.
+	enabledOnChain bool
+	UpdatedAt      int64 `json:"updated_at"`
 }
 
 type presentedPosition struct {
@@ -134,7 +142,23 @@ func (r *perpStateReader) marketState(ctx context.Context, market instruments.Me
 	cached, ok := r.cache[key]
 	r.mu.Unlock()
 	if ok && r.now().Sub(cached.at) < perpStateTTL {
-		return cached.state, cached.raw, nil
+		// The cached prices and margins are fine for ten seconds; the guardian's pause is not. It
+		// flips with one transaction and the listing must say so at once, so it is re-read on every
+		// hit and laid over a copy of the cached state when it differs.
+		paused, err := r.paused(ctx, strings.ToLower(market.MarginManagerAddress))
+		if err != nil {
+			return nil, perpRaw{}, err
+		}
+		if paused == cached.state.Paused {
+			return cached.state, cached.raw, nil
+		}
+		state := *cached.state
+		state.Paused = paused
+		state.TradingEnabled = cached.state.enabledOnChain && !paused
+		r.mu.Lock()
+		r.cache[key] = cachedPerpState{state: &state, raw: cached.raw, at: cached.at}
+		r.mu.Unlock()
+		return &state, cached.raw, nil
 	}
 
 	perp := strings.ToLower(market.AssetAddress)
@@ -189,9 +213,15 @@ func (r *perpStateReader) marketState(ctx context.Context, market instruments.Me
 	if err != nil {
 		return nil, perpRaw{}, fmt.Errorf("position cap: %w", err)
 	}
+	paused, err := r.paused(ctx, srm)
+	if err != nil {
+		return nil, perpRaw{}, err
+	}
 
 	state := &perpMarketState{
-		TradingEnabled:         allowed.Sign() > 0 && positionCap.Sign() > 0,
+		TradingEnabled:         allowed.Sign() > 0 && positionCap.Sign() > 0 && !paused,
+		Paused:                 paused,
+		enabledOnChain:         allowed.Sign() > 0 && positionCap.Sign() > 0,
 		PositionCap:            e18String(positionCap),
 		MarkPrice:              e18String(mark),
 		IndexPrice:             e18String(index),
@@ -218,6 +248,22 @@ func (r *perpStateReader) marketState(ctx context.Context, market instruments.Me
 	r.cache[key] = cachedPerpState{state: state, raw: raw, at: r.now()}
 	r.mu.Unlock()
 	return state, raw, nil
+}
+
+// paused reads the SRM guardian's pause flag, uncached: it is the one input that changes by a
+// single transaction and must be answered as it is, both on the market listing and when an order
+// arrives.
+func (r *perpStateReader) paused(ctx context.Context, srm string) (bool, error) {
+	raw, err := r.word(ctx, srm, sigAdjustmentsPaused, 0)
+	if err != nil {
+		return false, fmt.Errorf("adjustments paused: %w", err)
+	}
+	return raw.Sign() > 0, nil
+}
+
+// Paused reports whether the perp market's SRM is paused right now, for the order handler.
+func (r *perpStateReader) Paused(ctx context.Context, market instruments.Metadata) (bool, error) {
+	return r.paused(ctx, strings.ToLower(market.MarginManagerAddress))
 }
 
 // account reads the subaccount's cash and margin on the perp's stack. Surpluses are the SRM's own:

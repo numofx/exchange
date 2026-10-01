@@ -66,6 +66,13 @@ func word(v *big.Int) string {
 	return fmt.Sprintf("%064x", new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), 256), v))
 }
 
+// stubPaused is what the stub answers for the SRM's adjustmentsPaused(): 0 unless a test pauses it.
+// stubCap is the OI cap it serves, in whole cNGN: 50M unless a test closes the market.
+var (
+	stubPaused int64
+	stubCap    int64 = 50_000_000
+)
+
 func stubPerpRPC(t *testing.T, position *big.Int) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -101,7 +108,9 @@ func stubPerpRPC(t *testing.T, position *big.Int) *httptest.Server {
 		case sigAllowedModules:
 			result = word(big.NewInt(1))
 		case sigTotalPositionCap:
-			result = word(e18Int(50_000_000))
+			result = word(e18Int(stubCap))
+		case sigAdjustmentsPaused:
+			result = word(big.NewInt(stubPaused))
 		default:
 			t.Errorf("unexpected call %s", call.Data[:10])
 		}
@@ -205,4 +214,64 @@ func TestPositionsRequiresASubaccount(t *testing.T) {
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", recorder.Code)
 	}
+}
+
+// The guardian's pause is served as its own flag and turns trading_enabled off; lifting it turns
+// it back on. The reader caches the rest of the state, but the pause is read fresh every time.
+func TestMarketsReportsTheGuardianPause(t *testing.T) {
+	rpc := stubPerpRPC(t, big.NewInt(0))
+	defer rpc.Close()
+	srv := perpServer(t, rpc.URL)
+	read := func() (bool, bool) {
+		rec := httptest.NewRecorder()
+		srv.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/v1/markets", nil))
+		var markets []struct {
+			Market string `json:"market"`
+			Perp   *struct {
+				TradingEnabled bool `json:"trading_enabled"`
+				Paused         bool `json:"paused"`
+			} `json:"perp"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &markets); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		for _, m := range markets {
+			if m.Market == "USDCcNGN-PERP" && m.Perp != nil {
+				return m.Perp.TradingEnabled, m.Perp.Paused
+			}
+		}
+		t.Fatalf("no perp block in %s", rec.Body.String())
+		return false, false
+	}
+	stubPaused = 0
+	if enabled, paused := read(); !enabled || paused {
+		t.Fatalf("open market: trading_enabled=%v paused=%v", enabled, paused)
+	}
+	stubPaused = 1
+	if enabled, paused := read(); enabled || !paused {
+		t.Fatalf("paused market: trading_enabled=%v paused=%v", enabled, paused)
+	}
+	stubPaused = 0
+	if enabled, paused := read(); !enabled || paused {
+		t.Fatalf("unpaused market: trading_enabled=%v paused=%v", enabled, paused)
+	}
+}
+
+// A pause lifted on a market that was never enabled does not open it: the cached state remembers
+// which half of trading_enabled the enable action still owes.
+func TestLiftingAPauseDoesNotOpenAClosedMarket(t *testing.T) {
+	rpc := stubPerpRPC(t, big.NewInt(0))
+	defer rpc.Close()
+	stubCap = 0
+	defer func() { stubCap = 50_000_000 }()
+	srv := perpServer(t, rpc.URL)
+	for _, step := range []int64{1, 0} {
+		stubPaused = step
+		rec := httptest.NewRecorder()
+		srv.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/v1/markets", nil))
+		if strings.Contains(rec.Body.String(), `"trading_enabled":true`) {
+			t.Fatalf("paused=%d on a cap-0 market read as enabled: %s", step, rec.Body.String())
+		}
+	}
+	stubPaused = 0
 }
