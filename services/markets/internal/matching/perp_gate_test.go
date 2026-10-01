@@ -13,6 +13,10 @@ import (
 )
 
 func gateRPC(t *testing.T, allowed, positionCap int64, fail bool) *httptest.Server {
+	return gateRPCPaused(t, allowed, positionCap, 0, fail)
+}
+
+func gateRPCPaused(t *testing.T, allowed, positionCap, paused int64, fail bool) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if fail {
@@ -30,6 +34,9 @@ func gateRPC(t *testing.T, allowed, positionCap int64, fail bool) *httptest.Serv
 		value := allowed
 		if strings.HasPrefix(strings.ToLower(call.Data), totalPositionCapSelector) {
 			value = positionCap
+		}
+		if strings.HasPrefix(strings.ToLower(call.Data), adjustmentsPausedSelector) {
+			value = paused
 		}
 		_, _ = w.Write([]byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"result":"0x%064x"}`, value)))
 	}))
@@ -62,6 +69,15 @@ func TestPerpGateOpensOnlyWithModuleAndCap(t *testing.T) {
 			t.Errorf("%s: open = %v, want %v", tc.name, got, tc.want)
 		}
 		srv.Close()
+	}
+}
+
+// The guardian's pause closes the gate on its own: enabled, capped, and paused is not open.
+func TestPerpGateClosesWhileTheGuardianPauseHolds(t *testing.T) {
+	srv := gateRPCPaused(t, 1, 50, 1, false)
+	defer srv.Close()
+	if gateFor(srv.URL).Open(context.Background()) {
+		t.Fatal("a paused SRM must read as closed")
 	}
 }
 

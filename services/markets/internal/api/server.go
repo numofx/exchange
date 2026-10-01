@@ -562,6 +562,10 @@ func (s *Server) handleMarketDiagnostics(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, response)
 }
 
+// tradingPausedError is what a perp order gets while the SRM guardian's pause holds. The leading
+// token is stable so clients can map it; the rest is for a human reading the raw response.
+const tradingPausedError = "trading_paused: the venue has paused USDCcNGN-PERP; open positions stay as they are and orders resume when the pause lifts"
+
 func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 	var req createOrderRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -592,6 +596,19 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// A paused perp cannot settle anything: an order accepted now would rest as phantom depth
+	// until the pause lifts. Refuse it with a reason the ticket can show. A closed (never enabled)
+	// perp still takes resting orders: the enable gate needs a book before it opens the market.
+	if instrument, ok := s.instruments.ByAssetAndSubID(strings.ToLower(params.AssetAddress), params.SubID); ok && instrument.IsPerpetual() && s.perp != nil {
+		paused, err := s.perp.Paused(r.Context(), instrument)
+		if err != nil {
+			slog.Warn("order_submit_pause_unreadable", "order_id", params.OrderID, "error", err)
+		} else if paused {
+			slog.Info("order_submit_rejected_paused", "order_id", params.OrderID, "market", instrument.Symbol)
+			writeJSON(w, http.StatusConflict, map[string]string{"error": tradingPausedError})
+			return
+		}
+	}
 	order, err := s.orders.Create(r.Context(), params)
 	if err != nil {
 		// A post-only order that would cross is a rejection the caller asked for, not a failure.
