@@ -1,0 +1,17 @@
+[
+  {
+    "description": "perp.setTotalPositionCap(srm, 50,000,000 NGN) [opens every path, bounded]",
+    "to": "0xC74EfC8B4808803dBCF439E76Fde076d56625b8E",
+    "value": "0",
+    "data": "0x40a557bd000000000000000000000000de0423d0a1e15536265c9513d2e0c10dab5835d4000000000000000000000000000000000000000000295be96e64066972000000",
+    "digest": "0x0ad282fd4472be5072fcdb1566d1fd76898179482a57d3a9e5fa28bf78cd8ede"
+  },
+  {
+    "description": "matching.setAllowedModule(perpTradeModule, true) [opens the venue]",
+    "to": "0x9E90A9cD13d859Bd6a08168082FB1F6F7405F191",
+    "value": "0",
+    "data": "0xb1b62825000000000000000000000000dea968188598ba0e3f58a56c0fdff338c74f699f0000000000000000000000000000000000000000000000000000000000000001",
+    "digest": "0xcd88a11493bb464face11ab4b8655fba60907f2f599251e46c57828b5773ff30"
+  }
+]
+	
