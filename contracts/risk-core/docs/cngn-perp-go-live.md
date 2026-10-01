@@ -102,7 +102,9 @@ across three accounts.
 
 12. Set the `cngn_perp_*` Terraform vars from the artifacts, `terraform apply`, and redeploy
     markets-service and execution-service.
-    - `/v1/markets` then lists `USDCcNGN-PERP` with `trading_enabled: false`.
+    - `/v1/markets` then lists `USDCcNGN-PERP`. Its `perp` block (with `trading_enabled: false`)
+      appears once the index feed has published (step 14); until then markets-service logs a
+      `read perp state … BLF_DataTooOld` warning per request and serves the entry without it.
     - Watch spot for an hour, with the step 2 checks.
     - **Rollback** here is to unset the perp vars and redeploy. The perp is closed, so nothing
       depends on them yet.
@@ -116,17 +118,22 @@ across three accounts.
     - Fund the feed relayer (`0xC9F1…0FDc`) **0.05 ETH** and start perp-feeds live. Measured per
       publish: index 46k gas, mark + impacts 120k gas. That is ~0.0003 ETH a day typical and 0.0013
       worst case (a mark every minute), so 0.05 ETH lasts more than a month at worst.
-    - Put `KEEPER_HEALTH_URL=http://127.0.0.1:9464/health` in `/etc/numo/perp-pager.env`
-      (`PERP_INDEX_STATUS_FILE` defaults to perp-feeds' status file on the ops box), then
-      `systemctl enable --now numo-perp-pager.timer`.
-    - It will page "keeper unhealthy" until step 18, which confirms the page path end to end.
+    - `/etc/numo/perp-pager.env` holds `KEEPER_HEALTH_URL=http://127.0.0.1:9464/health`,
+      `PERP_INDEX_STATUS_FILE` (perp-feeds' status file, `/var/lib/numo/perp-index-status.json`) and
+      `PAGER_STATE_FILE`; then `systemctl enable --now numo-perp-pager.timer`. On the ops box the
+      perp units run from the clean checkout `/home/ec2-user/exchange-perp`, not `~/exchange`.
+    - The "keeper unhealthy" page is armed only once the keeper has reported healthy once, or the
+      market is open (cap > 0): no page for a keeper that is not installed yet. From here the pager
+      also pages **low gas** on the executor and relayer (under 2 days of measured burn, or under
+      the floor), and warns in Slack under 7 days.
 15. **Keeper funding** (before the rehearsal, which uses this account).
     - Fund the keeper EOA **0.02 ETH**. The gate needs 0.005; a full liquidation cycle is ~3M gas.
     - From the keeper EOA, directly on SubAccounts: `createAccount(keeperEOA, perpSRM)`, approve
       USDC to the perp cash, then `CashAsset.deposit(account, 10_000e6)` for **$10,000 USDC**.
       Not through the app or SubAccountCreator: that parks the account in Matching, where the
       keeper cannot move its cash, and every bid fails. The keeper and the gate both refuse it.
-    - Put `KEEPER_ACCOUNT`, `MAX_BID_USD=2500` and `HEALTH_PORT=9464` in `/etc/numo/perp-keeper.env`.
+    - Put `KEEPER_ACCOUNT`, `MAX_BID_USD=2500` and `HEALTH_PORT=9464` in `/etc/numo/perp-keeper.env`,
+      and `KEEPER_EOA=<the keeper EOA>` in `/etc/numo/perp-pager.env` so the pager watches its gas too.
     - Why $10k: the largest single account at the cap is one full side ($18,195). Taking it needs its
       maintenance margin in the bid account (~$3.6k), and the keeper carries what it inherits until
       it is unwound. In the 40% drill it tied up $2,070.
@@ -155,7 +162,8 @@ across three accounts.
     - the deployed feeds and Matching are checked to rebuild their EIP-712 domain for 31337 (the
       keeper itself signs no typed data);
     - every alert is prefixed `[REHEARSAL]`, and alerts go only to the test channel if one is given.
-18. **Keeper live:** `DRY_RUN=false`. The pager's "keeper unhealthy" page resolves.
+18. **Keeper live:** `DRY_RUN=false`. The pager sees it healthy and arms "keeper unhealthy" from
+    then on (a page if it ever stops); the step-16 dry run paged nothing, by design.
 19. **SecurityModule:** approve USDC to the SecurityModule, then `donate(8_000e6)` for
     **$8,000 USDC**. The rule below needs $6,065 at 1374 cNGN/USDC. $8,000 still meets it if
     cNGN strengthens to 1,042 per USDC.
@@ -287,7 +295,8 @@ and tells you when it clears.
 | Page | What it means | First response | Pause? |
 | --- | --- | --- | --- |
 | feed halt | The index or an impact feed is more than 16 minutes old, or the mark more than 10. At 20 minutes (index) the market halts itself: no trades, no liquidations. Two refused publishes in a row reach 15 minutes without halting anything, so the page waits for a third. | Check perp-feeds is running, its relayer has gas, and `--probe-sources` shows 3 sources. If the jump guard stopped it, follow the index-step procedure. | Only if the feeds are publishing *wrong* prices (a compromised signer). A stale feed already stops the market. |
-| keeper unhealthy | `/health` is unreachable, in dry run, or failing. Nothing is liquidating. | Restart the keeper. Check its funding account's cash and its gas. | No: a pause also blocks the liquidations you need. |
+| keeper unhealthy | `/health` is unreachable, in dry run, or failing. Nothing is liquidating. Armed once the keeper has ever reported healthy, or the market is open. | Restart the keeper. Check its funding account's cash and its gas. | No: a pause also blocks the liquidations you need. |
+| low gas | The executor, relayer or keeper EOA holds under 2 days of its measured 24h burn, or under its floor (0.002 / 0.003 / 0.005 ETH). Slack warns under 7 days. Measured 2026-10-01: executor ~0.00003 ETH/day (6 settlements), relayer 0.0003 typical / 0.0013 worst, keeper ~0 idle. | Top it up. The relayer stopping halts the market within 20 minutes; the executor stopping fails every fill; the keeper stopping leaves liquidations to no one. | No. |
 | SecurityModule payout | The SecurityModule paid for a liquidation. | Expected after an insolvent liquidation. Check it still meets the seed rule and top it up if not. | Only if the payouts are not explained by liquidations (an exploit). |
 | peg guard | cNGN is more than 100 bps from NGN parity on Quidax's peg market, so perp-feeds refuses to update the index. It halts when the index goes stale. | Check `cngnngn` on Quidax and cNGN news. If cNGN has really depegged, the index cannot follow it; treat it as a step (index-step procedure, or settlement if over 50%). | Only if the depeg comes from an exploit. |
 | insolvent account | An account is below zero. The keeper should be auctioning it, and the SecurityModule will pay. | Watch the keeper take it. If several go at once, consider **cap = current OI** (below). | Only if it is the result of an exploit. |

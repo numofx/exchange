@@ -1,5 +1,5 @@
-# Every minute: the index heartbeat is 20 minutes and the page fires at 15, so a minute's lag leaves
-# the operator ~4 minutes before the market halts.
+# Every minute: the index heartbeat is 20 minutes and the page fires at 16, so a minute's lag leaves
+# the operator ~3 minutes before the market halts.
 [Unit]
 Description=Numo USDCcNGN-PERP pager check every minute
 
