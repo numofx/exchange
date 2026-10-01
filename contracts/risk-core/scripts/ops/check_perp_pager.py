@@ -400,12 +400,20 @@ def check_and_page(stack_path: Path, state: dict) -> int:
 
   if keeper_healthy(health, now):
     state["keeperSeenAt"] = now
-  armed = state.get("keeperSeenAt") is not None or market_open(url, stack)
+  try:
+    armed = state.get("keeperSeenAt") is not None or market_open(url, stack)
+  except Exception as exc:  # noqa: BLE001
+    print(f"market_open unreadable ({str(exc)[:80]}); keeper page stays as it was")
+    armed = state.get("keeperSeenAt") is not None
 
   gas = []
   warned = state.setdefault("gasWarnedAt", {})
   for name, address, floor in gas_watch():
-    balance, burn = read_gas(url, number, address)
+    try:
+      balance, burn = read_gas(url, number, address)
+    except Exception as exc:  # noqa: BLE001
+      print(f"gas {name}: unreadable ({str(exc)[:80]})")
+      continue
     gas.append(gas_condition(name, balance, burn, floor))
     warning = gas_warning(name, balance, burn)
     if warning and gas[-1] is None and time.time() - warned.get(name, 0) >= GAS_WARN_REPEAT_SEC:
@@ -413,16 +421,21 @@ def check_and_page(stack_path: Path, state: dict) -> int:
       warned[name] = time.time()
     print(f"gas {name}: {balance:.5f} ETH, burn {burn:.5f}/day, floor {floor}")
 
+  # Every secondary read is fenced: a stale index makes getSpot() revert, and a pager that dies on
+  # that would never send the feed-halt page it exists for (2026-10-01, the first stale index).
   oi = None
   keeper_account = os.environ.get("KEEPER_ACCOUNT", "").strip()
   if keeper_account:
-    one_side_usd, keeper_cash = read_oi_and_keeper(url, stack, int(keeper_account))
-    oi = oi_condition(one_side_usd, keeper_cash)
-    warning = oi_warning(one_side_usd, keeper_cash)
-    if warning and time.time() - state.get("oiWarnedAt", 0) >= OI_WARN_REPEAT_SEC:
-      mirror(f"{os.environ.get('PAGE_PREFIX', '')}{warning}")
-      state["oiWarnedAt"] = time.time()
-    print(f"oi: one side ${one_side_usd:,.0f} vs keeper #{keeper_account} cash ${keeper_cash:,.0f}")
+    try:
+      one_side_usd, keeper_cash = read_oi_and_keeper(url, stack, int(keeper_account))
+      oi = oi_condition(one_side_usd, keeper_cash)
+      warning = oi_warning(one_side_usd, keeper_cash)
+      if warning and time.time() - state.get("oiWarnedAt", 0) >= OI_WARN_REPEAT_SEC:
+        mirror(f"{os.environ.get('PAGE_PREFIX', '')}{warning}")
+        state["oiWarnedAt"] = time.time()
+      print(f"oi: one side ${one_side_usd:,.0f} vs keeper #{keeper_account} cash ${keeper_cash:,.0f}")
+    except Exception as exc:  # noqa: BLE001
+      print(f"oi: unreadable ({str(exc)[:80]}); feed-halt covers a stale index")
   else:
     print("oi: KEEPER_ACCOUNT unset, not watched")
 
