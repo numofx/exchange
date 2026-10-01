@@ -4,7 +4,7 @@
 # back without touching the other's book.
 #
 # It starts with desired_count 0. The account id is only known once the MM EOA has opened and
-# funded it (createAndDepositSubAccount(perpCash, 12,500e6, perpSRM)); set mm_perp_subaccount_id
+# funded it (createAndDepositSubAccount(perpCash, 4,000e6, perpSRM)); set mm_perp_subaccount_id
 # and desired_count_market_maker_perp = 1 in the operator-local counts.auto.tfvars together.
 
 variable "mm_perp_subaccount_id" {
@@ -69,14 +69,15 @@ resource "aws_ecs_task_definition" "market_maker_perp" {
       { name = "MM_SUBACCOUNT_ID", value = var.mm_perp_subaccount_id },
       { name = "MM_RECIPIENT_ID", value = var.mm_perp_subaccount_id },
 
-      # Runbook step 20: $1,000 a rung, 1.5x leverage (the SRM allows 3x), inventory bounded at
-      # +/- $15,000 so the bot never carries more than one side at the launch cap; at 1.5x the
-      # $12,500 of cash carries $18,750 gross. Sizes and inventory are USDC on the perp.
+      # Runbook step 20 (launch size): $4,000 of cash, 1.5x leverage (the SRM allows 3x), so
+      # $6,000 gross, and inventory bounded at +/- $6,000 to match. Three $1,000 rungs a side rest
+      # $3,000 inside the enable gate's 2% band (it needs $1,000). Sizes and inventory are USDC on
+      # the perp. Capital and these limits go up with the OI cap (runbook: Market-maker capital).
       { name = "MM_PERP_MAX_LEVERAGE", value = "1.5" },
       { name = "MM_PERP_QUOTE_WHILE_CLOSED", value = tostring(var.mm_perp_quote_while_closed) },
       { name = "MM_ORDER_SIZE", value = "1000" },
-      { name = "MM_MAX_LONG_INVENTORY", value = "15000" },
-      { name = "MM_MAX_SHORT_INVENTORY", value = "-15000" },
+      { name = "MM_MAX_LONG_INVENTORY", value = "6000" },
+      { name = "MM_MAX_SHORT_INVENTORY", value = "-6000" },
       { name = "MM_QUOTE_LEVELS", value = "3" },
       { name = "MM_HALF_SPREAD_BPS", value = "25" },
       { name = "MM_LEVEL_SPREAD_STEP_BPS", value = "25" },

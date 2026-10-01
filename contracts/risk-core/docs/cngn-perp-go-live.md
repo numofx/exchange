@@ -174,15 +174,24 @@ across three accounts.
     by the vault (`withdraw(amount, recipient)`, owner-only); there is no `deposit()` and no shares
     on the deployed contract, so who sends the donation does not matter.
 20. **Market maker:**
-    - Open its perp account under the perp SRM with **$12,500 USDC**. This goes through the app's
-      `/perp` "Deposit margin" or `createAndDepositSubAccount(perpCash, 12_500e6, perpSRM)`, which
-      is right for the MM: its orders go through Matching.
-    - Run market-maker#26 with `MM_MARKET_SYMBOL=USDCcNGN-PERP`,
-      `MM_TRADE_MODULE_ADDRESS=<perp module>`, `MM_SUBACCOUNT_ID`, `MM_PERP_MAX_LEVERAGE=1.5`,
-      `MM_PERP_QUOTE_WHILE_CLOSED=true`, `MM_ORDER_SIZE=1000` and `MM_MAX_LONG_INVENTORY=15000` /
-      `MM_MAX_SHORT_INVENTORY=-15000`.
-    - Confirm it rests at least $1k each side within 2% of the index.
-    - Why $12,500: at 1.5x the MM can carry $18,750 gross, one full side at the launch cap.
+    - Open its perp account under the perp SRM with **$4,000 USDC**: from the MM EOA,
+      `USDC.approve(SubAccountCreator, 4_000e6)` then
+      `createAndDepositSubAccount(perpCash, 4_000e6, perpSRM)`, exactly what the app's `/perp`
+      "Deposit margin" does. The account ends up held by Matching, which is right for the MM: its
+      orders go through Matching. (The MM key stays in AWS: run it on the ops box with a temporary,
+      immediately-deleted read grant on `/numo/exchange/mm_private_key`, or from a wallet that
+      holds the key.)
+    - Run the `market-maker-perp` ECS service (`infra/aws/market-maker-perp.tf`): set
+      `mm_perp_subaccount_id` and `desired_count_market_maker_perp = 1` in `counts.auto.tfvars`
+      and apply. It quotes `USDCcNGN-PERP` with `MM_PERP_MAX_LEVERAGE=1.5`,
+      `MM_PERP_QUOTE_WHILE_CLOSED=true`, `MM_ORDER_SIZE=1000`, three rungs at 25/50/75 bps, and
+      `MM_MAX_LONG_INVENTORY=6000` / `MM_MAX_SHORT_INVENTORY=-6000`.
+    - Confirm it rests at least $1k each side within 2% of the index (three $1,000 rungs rest
+      $3,000 a side inside the band).
+    - Why $4,000 and ±$6,000: at 1.5x the cash carries $6,000 gross, and the inventory limit
+      equals that, so a run of fills on one side stops the bot at exactly what its margin can
+      hold. One full side at the launch cap is ~$18k, so the MM is not sized to absorb a whole
+      side on its own at launch; see "Market-maker capital" below.
 
 **Enable** (MPCVault; opens the market)
 
@@ -226,6 +235,16 @@ ratio before any cap increase**, not just the amount.
 
 **Raising the cap is a new launch** for this rule: top the SecurityModule up to a sixth of the new
 side first (or a larger fraction, per the paragraph above).
+
+## Market-maker capital
+
+**The perp maker's cash and inventory limits go up with the OI cap.** At launch it runs $4,000 of
+cash at 1.5x, inventory ±$6,000: about a third of one side at the 50M cNGN cap. Its quotes are
+what lets a liquidation be unwound and what keeps the mark near the index, so when the cap is
+raised, raise the maker's deposit (`createAndDepositSubAccount` again, or a `deposit` to its
+account) and `MM_MAX_LONG_INVENTORY` / `MM_MAX_SHORT_INVENTORY` (1.5x the cash) with it, in the
+same change as the SecurityModule seed and the keeper collateral. A cap the maker cannot quote
+across is a cap the book cannot clear.
 
 ## Keeper collateral
 
