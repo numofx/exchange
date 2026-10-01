@@ -91,14 +91,14 @@ OI_KEEPER_PAGE_X = 3.0
 OI_WARN_REPEAT_SEC = 6 * 3600
 # Gas watch. Burn is measured as the balance 24h ago minus now (a top-up in between reads as no
 # burn, which then falls back to the floor). Floors are two days at the worst case measured in the
-# runbook: relayer 0.0013/day (a mark a minute), executor ~0.00001 per settlement, keeper two full
-# liquidation cycles. `GAS_WATCH` overrides: "name=0xaddr:floorEth,...". `KEEPER_EOA` adds the keeper.
+# runbook: relayer 0.0013/day (a mark a minute), executor ~0.00001 per settlement, keeper ~100 full
+# liquidation cycles (3M gas ≈ 0.00002 ETH each). `GAS_WATCH` overrides: "name=0xaddr:floorEth,...". `KEEPER_EOA` adds the keeper.
 BLOCKS_PER_DAY = 43_200  # Base, 2s blocks
 GAS_PAGE_DAYS = 2.0
 GAS_WARN_DAYS = 7.0
 GAS_WARN_REPEAT_SEC = 6 * 3600
 DEFAULT_GAS_WATCH = "executor=0xF68ebcC8934B068655E1A4367Ba6C0e564678703:0.002,relayer=0xC9F1FfdEd29f7051538ad3a72729C3d07F920FDc:0.003"
-KEEPER_GAS_FLOOR_ETH = 0.005
+KEEPER_GAS_FLOOR_ETH = 0.002  # ~100 liquidation cycles at 3M gas and Base gas prices; the keeper idles at ~0 burn
 SEL_GET_BALANCE = "0x0806e640"  # getBalance(uint256,address,uint256) -- `cast sig`, pinned in --self-test
 
 
