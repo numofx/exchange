@@ -371,7 +371,7 @@ def main() -> int:
   ap.add_argument("--write", type=Path, help="write the actions here (default: the 8453 artifact)")
   ap.add_argument("--min-sm-cash", type=float, default=5_000)
   ap.add_argument("--min-keeper-cash", type=float, default=5_000)  # the step-15 funding; see "Keeper collateral" in the runbook
-  ap.add_argument("--min-keeper-eth", type=float, default=0.005)
+  ap.add_argument("--min-keeper-eth", type=float, default=0.002)  # ~100 liquidation cycles; same floor as the pager and MIN_KEEPER_ETH
   ap.add_argument("--min-quote-usd", type=float, default=1_000)
   ap.add_argument("--quoter-owner", help="require the quotes to come from this owner address")
   args = ap.parse_args()
