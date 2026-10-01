@@ -380,6 +380,9 @@ def main() -> int:
     return self_test()
 
   load_env_file(Path.home() / ".numo-mark-keeper.env")
+  # The pager unit gets its state-file path from /etc/numo/perp-pager.env; read the same file so the
+  # gate looks where the pager writes, not at a home-directory default nobody configured.
+  load_env_file(Path("/etc/numo/perp-pager.env"))
   rpc_url = os.environ.get("RPC_URL") or os.environ.get("BASE_RPC_URL", "")
   if not rpc_url:
     raise SystemExit("RPC_URL (or BASE_RPC_URL) is required")
