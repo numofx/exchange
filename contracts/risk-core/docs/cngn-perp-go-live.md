@@ -129,14 +129,18 @@ across three accounts.
 15. **Keeper funding** (before the rehearsal, which uses this account).
     - Fund the keeper EOA **0.02 ETH**. The gate needs 0.005; a full liquidation cycle is ~3M gas.
     - From the keeper EOA, directly on SubAccounts: `createAccount(keeperEOA, perpSRM)`, approve
-      USDC to the perp cash, then `CashAsset.deposit(account, 10_000e6)` for **$10,000 USDC**.
+      USDC to the perp cash, then `CashAsset.deposit(account, 5_000e6)` for **$5,000 USDC**
+      (`scripts/local-venue`-style one-shot from the ops box, keeper key from SSM).
       Not through the app or SubAccountCreator: that parks the account in Matching, where the
       keeper cannot move its cash, and every bid fails. The keeper and the gate both refuse it.
-    - Put `KEEPER_ACCOUNT`, `MAX_BID_USD=2500` and `HEALTH_PORT=9464` in `/etc/numo/perp-keeper.env`,
-      and `KEEPER_EOA=<the keeper EOA>` in `/etc/numo/perp-pager.env` so the pager watches its gas too.
-    - Why $10k: the largest single account at the cap is one full side ($18,195). Taking it needs its
-      maintenance margin in the bid account (~$3.6k), and the keeper carries what it inherits until
-      it is unwound. In the 40% drill it tied up $2,070.
+    - Put `KEEPER_ACCOUNT`, `MAX_BID_USD=1500` and `HEALTH_PORT=9464` in `/etc/numo/perp-keeper.env`,
+      and `KEEPER_EOA=<the keeper EOA>` plus `KEEPER_ACCOUNT` in `/etc/numo/perp-pager.env` so the
+      pager watches its gas and its cash against open interest.
+    - Why $5,000 and a $1,500 bid cap: the keeper must hold maintenance margin (20%) for whatever it
+      inherits in an auction, and carries it until unwound; $5k margins up to ~$25k of inherited
+      notional, and the bid cap keeps one account from taking it all in one bite (the largest
+      account at the cap, one full side ≈ $18k, then takes a few auction rounds). In the 40% drill
+      the keeper tied up $2,070. The collateral rule below says when this must grow.
 16. **Keeper smoke, ~10 minutes of `DRY_RUN=true` on the real config.** A closed market has nothing
     to liquidate, so this proves only that the keeper is wired:
     - `/health` shows `lastPassOk: true` and `dryRun: true`;
@@ -212,6 +216,23 @@ it.
 
 **Raising the cap is a new launch** for this rule: top the SecurityModule up to a third of the new
 side first.
+
+## Keeper collateral
+
+**The keeper's bid account must hold at least a third of ONE side's notional at the cap**, the same
+shape as the seed rule, for the same reason: a third is what it takes to margin and carry that side
+if it has to be taken over.
+
+```text
+keeper cash >= (cap / 2 cNGN) × index (USDC per cNGN) / 3
+```
+
+At the 50M cNGN launch cap and 1362 cNGN/USDC one side is $18,350, so the rule asks **$6,117**; the
+$5,000 funded at step 15 is a deliberate shortfall accepted at launch, which the pager covers: it
+Slack-warns when one side's live OI passes 2x the keeper's cash ($10k) and pages at 3x ($15k, 82% of
+the side at the cap). **Before any cap increase, top the keeper account up to a third of the new
+side**, exactly as for the SecurityModule; the enable gate's `--min-keeper-cash` (default $5,000)
+is only the floor under it.
 
 Why a third: it is the initial margin on that side. In
 `CngnPerpStackFork.testSecurityModuleLossFromIndexJumpAtFullCap`, the whole long side sits in one
@@ -296,6 +317,7 @@ and tells you when it clears.
 | --- | --- | --- | --- |
 | feed halt | The index or an impact feed is more than 16 minutes old, or the mark more than 10. At 20 minutes (index) the market halts itself: no trades, no liquidations. Two refused publishes in a row reach 15 minutes without halting anything, so the page waits for a third. | Check perp-feeds is running, its relayer has gas, and `--probe-sources` shows 3 sources. If the jump guard stopped it, follow the index-step procedure. | Only if the feeds are publishing *wrong* prices (a compromised signer). A stale feed already stops the market. |
 | keeper unhealthy | `/health` is unreachable, in dry run, or failing. Nothing is liquidating. Armed once the keeper has ever reported healthy, or the market is open. | Restart the keeper. Check its funding account's cash and its gas. | No: a pause also blocks the liquidations you need. |
+| OI vs keeper | One side's open interest (at the index) is 3x or more the keeper bid account's cash; Slack warns from 2x. The keeper could not margin what a liquidation hands it. | Top up the keeper account (`CashAsset.deposit`), or **cap = current OI** until it is topped up. | No. |
 | low gas | The executor, relayer or keeper EOA holds under 2 days of its measured 24h burn, or under its floor (0.002 / 0.003 / 0.005 ETH). Slack warns under 7 days. Measured 2026-10-01: executor ~0.00003 ETH/day (6 settlements), relayer 0.0003 typical / 0.0013 worst, keeper ~0 idle. | Top it up. The relayer stopping halts the market within 20 minutes; the executor stopping fails every fill; the keeper stopping leaves liquidations to no one. | No. |
 | SecurityModule payout | The SecurityModule paid for a liquidation. | Expected after an insolvent liquidation. Check it still meets the seed rule and top it up if not. | Only if the payouts are not explained by liquidations (an exploit). |
 | peg guard | cNGN is more than 100 bps from NGN parity on Quidax's peg market, so perp-feeds refuses to update the index. It halts when the index goes stale. | Check `cngnngn` on Quidax and cNGN news. If cNGN has really depegged, the index cannot follow it; treat it as a step (index-step procedure, or settlement if over 50%). | Only if the depeg comes from an exploit. |
