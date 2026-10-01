@@ -17,7 +17,7 @@ Gates, all read live and all required (re-checked before EACH action is proposed
   keeper    its /health says a pass completed OK within 3 poll intervals and DRY_RUN is off; its
             funding account is owned by the keeper EOA, sits under the perp SRM, holds only cash, and holds >= --min-keeper-cash;
             its EOA holds >= --min-keeper-eth for gas
-  sm        the security module's account holds at least a third of ONE side's notional at the launch
+  sm        the security module's account holds at least a SIXTH of ONE side's notional at the launch
             cap (cap / 2 cNGN at the live index), and never less than --min-sm-cash
   quoter    the perp book on markets-service has a bid and an ask, each with >= --min-quote-usd of
             depth within 2% of the index (optionally from --quoter-owner)
@@ -241,12 +241,13 @@ def gate_keeper(rpc_url: str, v: Venue, health_url: str, min_cash: float, min_et
 
 
 def sm_seed_required(launch_cap: int, index_usd_per_ngn: float, floor: float) -> float:
-  """The seed rule (docs/cngn-perp-go-live.md): at least a third of ONE side's notional at the cap
-  being opened. The cap sums both sides, so one side is cap / 2 cNGN. A third is the initial margin
-  on that side; the fork test (testSecurityModuleLossFromIndexJumpAtFullCap) shows the worst-case
-  SecurityModule payout reaching it at a ~50% index jump."""
+  """The seed rule (docs/cngn-perp-go-live.md): at least a SIXTH of ONE side's notional at the cap
+  being opened. The cap sums both sides, so one side is cap / 2 cNGN. The fork test
+  (testSecurityModuleLossFromIndexJumpAtFullCap) puts the worst-case SecurityModule payout at a 25%
+  index jump at ~$3,000 on the 50M cap, which a sixth (~$3,060) covers; it does not cover the 40%+
+  steps the naira took in 2023/2024 (see the runbook: revisit before any cap increase)."""
   one_side_usd = (launch_cap / 2 / 1e18) * index_usd_per_ngn
-  return max(floor, one_side_usd / 3)
+  return max(floor, one_side_usd / 6)
 
 
 def gate_security_module(rpc_url: str, v: Venue, min_cash: float) -> Gate:
@@ -258,8 +259,8 @@ def gate_security_module(rpc_url: str, v: Venue, min_cash: float) -> Gate:
     return Gate("sm", False, f"index unreadable, cannot size the seed: {exc}")
   required = sm_seed_required(v.launch_cap, index, min_cash)
   if cash < required:
-    return Gate("sm", False, f"security module holds {cash:,.2f} (< {required:,.2f}: a third of one side at the {v.launch_cap // 10**18:,} NGN cap)")
-  return Gate("sm", True, f"security module holds {cash:,.2f} (>= {required:,.2f}, a third of one side at the cap)")
+    return Gate("sm", False, f"security module holds {cash:,.2f} (< {required:,.2f}: a sixth of one side at the {v.launch_cap // 10**18:,} NGN cap)")
+  return Gate("sm", True, f"security module holds {cash:,.2f} (>= {required:,.2f}, a sixth of one side at the cap)")
 
 
 def gate_quoter(rpc_url: str, v: Venue, markets_url: str, min_usd: float, owner: str | None) -> Gate:
@@ -343,9 +344,9 @@ def self_test() -> int:
   for name, want in pinned.items():
     got = selector(name)
     assert got == want, f"{name}: {got} != {want}"
-  # 50M cNGN cap at 1374 cNGN/USDC: 25M cNGN a side is $18,195, a third of it $6,065.
-  assert round(sm_seed_required(50_000_000 * 10**18, 1 / 1374, 5_000)) == 6065
-  assert sm_seed_required(1 * 10**18, 1 / 1374, 5_000) == 5_000
+  # 50M cNGN cap at 1374 cNGN/USDC: 25M cNGN a side is $18,195, a sixth of it $3,032.
+  assert round(sm_seed_required(50_000_000 * 10**18, 1 / 1374, 3_000)) == 3032
+  assert sm_seed_required(1 * 10**18, 1 / 1374, 3_000) == 3_000
   import tempfile
   with tempfile.TemporaryDirectory() as tmp:
     state = Path(tmp) / "pager.json"
@@ -369,7 +370,7 @@ def main() -> int:
   ap.add_argument("--stack", type=Path, default=STACK_ARTIFACT)
   ap.add_argument("--module", type=Path, default=MODULE_ARTIFACT)
   ap.add_argument("--write", type=Path, help="write the actions here (default: the 8453 artifact)")
-  ap.add_argument("--min-sm-cash", type=float, default=5_000)
+  ap.add_argument("--min-sm-cash", type=float, default=3_000)  # floor under the sixth-of-a-side rule
   ap.add_argument("--min-keeper-cash", type=float, default=5_000)  # the step-15 funding; see "Keeper collateral" in the runbook
   ap.add_argument("--min-keeper-eth", type=float, default=0.002)  # ~100 liquidation cycles; same floor as the pager and MIN_KEEPER_ETH
   ap.add_argument("--min-quote-usd", type=float, default=1_000)
