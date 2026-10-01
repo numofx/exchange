@@ -10,6 +10,9 @@ Slack webhook, so the channel has the same record.
   keeper-unhealthy   the keeper's /health is unreachable, in dry run, failing, or stale. Armed once
                      the keeper has reported healthy at least once, or the market is open (cap > 0):
                      before that, a keeper that is not running yet is not a page.
+  oi-vs-keeper       one side's open interest, in USD at the index, is 3x or more the keeper's bid
+                     account cash (KEEPER_ACCOUNT): the keeper could not margin the positions it may
+                     have to take. Slack-only warning at 2x.
   low-gas-<name>     an EOA the venue burns gas from (executor, relayer, keeper) holds less than 2
                      days of its own measured burn, or less than its floor. A Slack-only warning goes
                      out under 7 days.
@@ -78,6 +81,14 @@ SM_PAYOUT_MIN = 1.0  # USD: below this a fall is rounding, not a payout
 SEL_SPOT_DIFF_DETAILS = "0xf8ff41bd"  # spotDiffDetails()
 NEVER_PUBLISHED = -1  # a feed whose last-update timestamp is 0: not stale, never written
 SEL_TOTAL_POSITION_CAP = "0x745ab570"  # totalPositionCap(address) -- `cast sig`, pinned in --self-test
+SEL_TOTAL_POSITION = "0xa9578774"  # totalPosition(address): |position| summed over BOTH sides
+SEL_GET_SPOT = "0x2b37269c"  # getSpot() on the index feed: USDC per cNGN, 18dp
+# One side's OI notional against the keeper's cash. The keeper must hold maintenance margin (20%)
+# for what it inherits in an auction and may carry several accounts at once, so 3x is where a full
+# side could no longer be taken in one go; 2x is the warning to top up (runbook: keeper collateral).
+OI_KEEPER_WARN_X = 2.0
+OI_KEEPER_PAGE_X = 3.0
+OI_WARN_REPEAT_SEC = 6 * 3600
 # Gas watch. Burn is measured as the balance 24h ago minus now (a top-up in between reads as no
 # burn, which then falls back to the floor). Floors are two days at the worst case measured in the
 # runbook: relayer 0.0013/day (a mark a minute), executor ~0.00001 per settlement, keeper two full
@@ -179,6 +190,36 @@ def gas_warning(name: str, balance: float, burn_per_day: float) -> str | None:
   if burn_per_day <= 0 or balance / burn_per_day >= GAS_WARN_DAYS:
     return None
   return f"USDCcNGN-PERP {name} gas runway {balance / burn_per_day:.1f} days ({balance:.5f} ETH at {burn_per_day:.5f}/day): top up this week."
+
+
+def oi_condition(one_side_usd: float, keeper_cash_usd: float) -> Condition | None:
+  if keeper_cash_usd <= 0:
+    return Condition("oi-vs-keeper", f"USDCcNGN-PERP keeper bid account holds no cash while one side's OI is ${one_side_usd:,.0f}: nothing can take a liquidation.")
+  ratio = one_side_usd / keeper_cash_usd
+  if ratio < OI_KEEPER_PAGE_X:
+    return None
+  return Condition("oi-vs-keeper", f"USDCcNGN-PERP one-side OI ${one_side_usd:,.0f} is {ratio:.1f}x the keeper's ${keeper_cash_usd:,.0f} cash "
+                   f"(page at {OI_KEEPER_PAGE_X:.0f}x): top the keeper account up, or set cap = current OI.")
+
+
+def oi_warning(one_side_usd: float, keeper_cash_usd: float) -> str | None:
+  """Slack-only, from 2x up to the page."""
+  if keeper_cash_usd <= 0 or one_side_usd / keeper_cash_usd < OI_KEEPER_WARN_X or one_side_usd / keeper_cash_usd >= OI_KEEPER_PAGE_X:
+    return None
+  return f"USDCcNGN-PERP one-side OI ${one_side_usd:,.0f} is {one_side_usd / keeper_cash_usd:.1f}x the keeper's ${keeper_cash_usd:,.0f} cash: top it up before 3x pages."
+
+
+def read_oi_and_keeper(url: str, stack: dict, keeper_account: int) -> tuple[float, float]:
+  """(one side's OI in USD at the index, keeper account cash in USD)."""
+  srm_word = stack["srm"].lower().removeprefix("0x").rjust(64, "0")
+  total = int(rpc(url, "eth_call", [{"to": stack["perp"], "data": SEL_TOTAL_POSITION + srm_word}, "latest"]), 16)
+  spot = int(rpc(url, "eth_call", [{"to": stack["indexFeed"], "data": SEL_GET_SPOT}, "latest"])[2:66], 16)
+  one_side_usd = (total / 2) / 1e18 * (spot / 1e18)
+  raw = rpc(url, "eth_call", [{"to": SUB_ACCOUNTS, "data": SEL_GET_BALANCE + f"{keeper_account:064x}"
+                               + stack["cash"].lower().removeprefix("0x").rjust(64, "0") + "0" * 64}, "latest"])
+  cash = int(raw, 16)
+  cash = cash - 2**256 if cash >= 2**255 else cash
+  return one_side_usd, cash / 1e18
 
 
 def read_gas(url: str, head_block: int, address: str) -> tuple[float, float]:
@@ -372,10 +413,23 @@ def check_and_page(stack_path: Path, state: dict) -> int:
       warned[name] = time.time()
     print(f"gas {name}: {balance:.5f} ETH, burn {burn:.5f}/day, floor {floor}")
 
+  oi = None
+  keeper_account = os.environ.get("KEEPER_ACCOUNT", "").strip()
+  if keeper_account:
+    one_side_usd, keeper_cash = read_oi_and_keeper(url, stack, int(keeper_account))
+    oi = oi_condition(one_side_usd, keeper_cash)
+    warning = oi_warning(one_side_usd, keeper_cash)
+    if warning and time.time() - state.get("oiWarnedAt", 0) >= OI_WARN_REPEAT_SEC:
+      mirror(f"{os.environ.get('PAGE_PREFIX', '')}{warning}")
+      state["oiWarnedAt"] = time.time()
+    print(f"oi: one side ${one_side_usd:,.0f} vs keeper #{keeper_account} cash ${keeper_cash:,.0f}")
+  else:
+    print("oi: KEEPER_ACCOUNT unset, not watched")
+
   previous_sm = state.get("smCash")
   active = [c for c in (feed_condition(ages), keeper_condition(health, now, armed), insolvent_condition(health),
                         sm_condition(previous_sm, sm_cash), unwatched_condition(heartbeat_urls()[0]),
-                        peg_condition(read_index_status(), time.time()), *gas) if c is not None]
+                        peg_condition(read_index_status(), time.time()), oi, *gas) if c is not None]
   to_page, resolved = step_state(state, active, now)
   state["smCash"] = sm_cash
 
@@ -428,6 +482,11 @@ def self_test() -> int:
   assert gas_condition("executor", 0.0019, 0.0, 0.002) is not None and "unknown burn" in gas_condition("executor", 0.0019, 0.0, 0.002).message
   assert gas_condition("executor", 0.0079, 0.00003, 0.002) is None
   assert gas_warning("relayer", 0.015, 0.0013) is None and "runway 5.0 days" in gas_warning("relayer", 0.0065, 0.0013)
+  # OI against the keeper's cash: warning from 2x, page from 3x, page at any OI with no cash.
+  assert oi_condition(9_999, 5_000) is None and oi_warning(9_999, 5_000) is None
+  assert "2.2x" in oi_warning(11_000, 5_000) and oi_condition(11_000, 5_000) is None
+  assert oi_condition(15_000, 5_000).key == "oi-vs-keeper" and oi_warning(15_000, 5_000) is None
+  assert "no cash" in oi_condition(100, 0).message
   os.environ["GAS_WATCH"] = "executor=0xF68ebcC8934B068655E1A4367Ba6C0e564678703:0.002"
   os.environ["KEEPER_EOA"] = "0x00000000000000000000000000000000000000aa"
   assert [(n, f) for n, _, f in gas_watch()] == [("executor", 0.002), ("keeper", KEEPER_GAS_FLOOR_ETH)]
@@ -460,7 +519,8 @@ def self_test() -> int:
   from resolve_cngn_action6 import keccak
   for selector, signature in [(SEL_GET_BALANCE, "getBalance(uint256,address,uint256)"),
                               (SEL_SPOT_DIFF_DETAILS, "spotDiffDetails()"),
-                              (SEL_TOTAL_POSITION_CAP, "totalPositionCap(address)")]:
+                              (SEL_TOTAL_POSITION_CAP, "totalPositionCap(address)"),
+                              (SEL_TOTAL_POSITION, "totalPosition(address)"), (SEL_GET_SPOT, "getSpot()")]:
     assert selector == "0x" + keccak(signature.encode()).hex()[:8], signature
   # The peg guard pages from perp-feeds' status; missing or stale status is silent (feed-halt covers it).
   wall = 2_000_000_000.0
