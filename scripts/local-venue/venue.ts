@@ -13,6 +13,7 @@
  *   tsx venue.ts <state-dir> spot-deposit <label> <usdc|cngn> <whole>   add to an existing spot account
  *   tsx venue.ts <state-dir> spot-quote <label> <buy|sell> <price> <usd> rest a spot order
  *   tsx venue.ts <state-dir> spot-cross [price] [usd] / spot-withdraw <label> <usdc>   spot regression
+ *   tsx venue.ts <state-dir> withdraw <label> <usdc>   a perp account withdraws margin (WithdrawalModule, perp cash)
  *   tsx venue.ts <state-dir> fund-sm <usdc>            donate to the stack's SecurityModule
  *   tsx venue.ts <state-dir> quote                      maker rests a bid and an ask 0.5% around the index
  *   tsx venue.ts <state-dir> cross                      taker lifts the maker's offer; waits for the position
@@ -551,6 +552,56 @@ async function spotCross(uiPrice: bigint, uiSize: bigint) {
 }
 
 /** A user-signed withdrawal of wrapped USDC back to the owner's wallet, through markets-service. */
+/**
+ * A perp account withdraws its margin the way the app does: a WithdrawalModule action for the perp's
+ * CashAsset (not the spot escrow), signed by the owner, submitted by the venue's executor. Proves the
+ * venue accepts the perp cash as a withdrawal asset (WITHDRAWAL_ASSET_ADDRESSES) and that the module
+ * can call CashAsset.withdraw, which pays real USDC to the owner.
+ */
+async function perpWithdraw(label: string, whole: bigint) {
+  const account = keyFor(label);
+  const subaccountId = readAccounts()[label]!;
+  const owner = getAddress(account.address);
+  const amount = whole * 10n ** 6n;
+  const data = encodeAbiParameters([{ type: 'address' }, { type: 'uint256' }], [getAddress(venue.cash), amount]);
+  const expiry = BigInt(Math.floor(Date.now() / 1000) + 600);
+  const withdrawalNonce = nonce();
+  const signature = await account.signTypedData({
+    domain: { name: 'Matching', version: '1.0', chainId: LOCAL_CHAIN_ID, verifyingContract: MATCHING },
+    primaryType: 'Action',
+    types: {
+      Action: [
+        { name: 'subaccountId', type: 'uint256' },
+        { name: 'nonce', type: 'uint256' },
+        { name: 'module', type: 'address' },
+        { name: 'data', type: 'bytes' },
+        { name: 'expiry', type: 'uint256' },
+        { name: 'owner', type: 'address' },
+        { name: 'signer', type: 'address' },
+      ],
+    },
+    message: { subaccountId: BigInt(subaccountId), nonce: withdrawalNonce, module: SPOT.withdrawalModule, data, expiry, owner, signer: owner },
+  });
+  const before = await client.readContract({ address: USDC, abi, functionName: 'balanceOf', args: [owner] });
+  const cashBefore = await balance(subaccountId, getAddress(venue.cash));
+  const response = await fetch(`${MARKETS}/v1/withdrawals`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      action: { subaccount_id: subaccountId, nonce: withdrawalNonce.toString(), module: SPOT.withdrawalModule, data, expiry: expiry.toString(), owner, signer: owner },
+      signature,
+    }),
+  });
+  const body = await response.text();
+  console.log(`perp withdraw ${whole} USDC from #${subaccountId} -> ${response.status} ${body.slice(0, 200)}`);
+  if (!response.ok) throw new Error('perp withdrawal refused');
+  const after = await client.readContract({ address: USDC, abi, functionName: 'balanceOf', args: [owner] });
+  const cashAfter = await balance(subaccountId, getAddress(venue.cash));
+  if (after - before !== amount) throw new Error(`owner received ${after - before}, expected ${amount}`);
+  if (cashBefore - cashAfter !== whole * 10n ** 18n) throw new Error(`account cash fell by ${cashBefore - cashAfter}, expected ${whole * 10n ** 18n}`);
+  console.log(`ok: perp withdrawal paid ${whole} USDC to the owner; account #${subaccountId} cash ${cashBefore / 10n ** 18n} -> ${cashAfter / 10n ** 18n}`);
+}
+
 async function spotWithdraw(label: string, whole: bigint) {
   const account = keyFor(label);
   const subaccountId = readAccounts()[label]!;
@@ -637,6 +688,9 @@ switch (command) {
     break;
   case 'spot-withdraw':
     await spotWithdraw(args[0] ?? 'usdc-maker', BigInt(args[1] ?? '10'));
+    break;
+  case 'withdraw':
+    await perpWithdraw(args[0] ?? 'taker', BigInt(args[1] ?? '10'));
     break;
   case 'fill-cap':
     await fillCap();
