@@ -7,7 +7,12 @@ Slack webhook, so the channel has the same record.
 
   feed-halt          the index, mark or an impact feed is past its warn age (index 960s of a 1200s
                      heartbeat): a stale index halts trading AND liquidations
-  keeper-unhealthy   the keeper's /health is unreachable, in dry run, failing, or stale
+  keeper-unhealthy   the keeper's /health is unreachable, in dry run, failing, or stale. Armed once
+                     the keeper has reported healthy at least once, or the market is open (cap > 0):
+                     before that, a keeper that is not running yet is not a page.
+  low-gas-<name>     an EOA the venue burns gas from (executor, relayer, keeper) holds less than 2
+                     days of its own measured burn, or less than its floor. A Slack-only warning goes
+                     out under 7 days.
   sm-payout          the SecurityModule's cash fell since the last run: it paid for a liquidation
   insolvent-account  the keeper's last pass saw an account below zero (mark-to-market < 0)
   peg-guard          perp-feeds refused the index because cNGN left NGN parity by more than
@@ -71,6 +76,17 @@ UNWATCHED_REPAGE_SEC = 86_400  # "no dead-man's switch" pages daily, not every h
 SM_PAYOUT_MIN = 1.0  # USD: below this a fall is rounding, not a payout
 
 SEL_SPOT_DIFF_DETAILS = "0xf8ff41bd"  # spotDiffDetails()
+SEL_TOTAL_POSITION_CAP = "0x745ab570"  # totalPositionCap(address) -- `cast sig`, pinned in --self-test
+# Gas watch. Burn is measured as the balance 24h ago minus now (a top-up in between reads as no
+# burn, which then falls back to the floor). Floors are two days at the worst case measured in the
+# runbook: relayer 0.0013/day (a mark a minute), executor ~0.00001 per settlement, keeper two full
+# liquidation cycles. `GAS_WATCH` overrides: "name=0xaddr:floorEth,...". `KEEPER_EOA` adds the keeper.
+BLOCKS_PER_DAY = 43_200  # Base, 2s blocks
+GAS_PAGE_DAYS = 2.0
+GAS_WARN_DAYS = 7.0
+GAS_WARN_REPEAT_SEC = 6 * 3600
+DEFAULT_GAS_WATCH = "executor=0xF68ebcC8934B068655E1A4367Ba6C0e564678703:0.002,relayer=0xC9F1FfdEd29f7051538ad3a72729C3d07F920FDc:0.003"
+KEEPER_GAS_FLOOR_ETH = 0.005
 SEL_GET_BALANCE = "0x0806e640"  # getBalance(uint256,address,uint256) -- `cast sig`, pinned in --self-test
 
 
@@ -81,7 +97,12 @@ class Condition:
 
 
 def head_timestamp(url: str) -> int:
-  return int(rpc(url, "eth_getBlockByNumber", ["latest", False])["timestamp"], 16)
+  return head_block(url)[1]
+
+
+def head_block(url: str) -> tuple[int, int]:
+  block = rpc(url, "eth_getBlockByNumber", ["latest", False])
+  return int(block["number"], 16), int(block["timestamp"], 16)
 
 
 def index_age(url: str, feed: str, now: int) -> int:
@@ -104,8 +125,13 @@ def feed_condition(ages: dict[str, int | None]) -> Condition | None:
   return Condition("feed-halt", f"USDCcNGN-PERP feed halt: {', '.join(late)}. A stale index halts trading and liquidations.")
 
 
-def keeper_condition(health: dict | None, now: int) -> Condition | None:
+def keeper_condition(health: dict | None, now: int, armed: bool = True) -> Condition | None:
+  """`armed` is False until the keeper has ever reported healthy and the market is still closed:
+  a keeper that is not installed yet (go-live steps 14-17) is not a page. Once the market is open,
+  no keeper at all is the loudest condition there is."""
   if health is None:
+    if not armed:
+      return None
     return Condition("keeper-unhealthy", "USDCcNGN-PERP keeper /health unreachable: nothing is liquidating.")
   if health.get("dryRun", True):
     return Condition("keeper-unhealthy", "USDCcNGN-PERP keeper is in DRY_RUN: it decides but sends nothing.")
@@ -114,6 +140,54 @@ def keeper_condition(health: dict | None, now: int) -> Condition | None:
   if not health.get("lastPassOk") or age > stale_after:
     return Condition("keeper-unhealthy", f"USDCcNGN-PERP keeper unhealthy: last pass ok={health.get('lastPassOk')} {age}s ago.")
   return None
+
+
+def keeper_healthy(health: dict | None, now: int) -> bool:
+  return health is not None and keeper_condition(health, now, armed=True) is None
+
+
+def gas_watch() -> list[tuple[str, str, float]]:
+  """(name, address, floor ETH) from GAS_WATCH, plus the keeper EOA when KEEPER_EOA is set."""
+  out = []
+  for item in os.environ.get("GAS_WATCH", DEFAULT_GAS_WATCH).split(","):
+    if not item.strip():
+      continue
+    name, rest = item.split("=", 1)
+    address, floor = rest.split(":", 1)
+    out.append((name.strip(), address.strip(), float(floor)))
+  keeper = os.environ.get("KEEPER_EOA", "").strip()
+  if keeper:
+    out.append(("keeper", keeper, float(os.environ.get("KEEPER_GAS_FLOOR_ETH", KEEPER_GAS_FLOOR_ETH))))
+  return out
+
+
+def gas_condition(name: str, balance: float, burn_per_day: float, floor: float) -> Condition | None:
+  """Page under 2 days of measured burn, or under the floor when the burn is unmeasurable (0)."""
+  need = max(GAS_PAGE_DAYS * burn_per_day, floor)
+  if balance >= need:
+    return None
+  runway = f"{balance / burn_per_day:.1f} days" if burn_per_day > 0 else "unknown burn"
+  return Condition(f"low-gas-{name}", f"USDCcNGN-PERP {name} low on gas: {balance:.5f} ETH, burning {burn_per_day:.5f}/day "
+                   f"({runway}); needs {need:.5f}. Top it up before it stops {'settling' if name == 'executor' else 'publishing' if name == 'relayer' else 'liquidating'}.")
+
+
+def gas_warning(name: str, balance: float, burn_per_day: float) -> str | None:
+  """Slack-only, under 7 days of measured burn."""
+  if burn_per_day <= 0 or balance / burn_per_day >= GAS_WARN_DAYS:
+    return None
+  return f"USDCcNGN-PERP {name} gas runway {balance / burn_per_day:.1f} days ({balance:.5f} ETH at {burn_per_day:.5f}/day): top up this week."
+
+
+def read_gas(url: str, head_block: int, address: str) -> tuple[float, float]:
+  """(balance ETH, burn ETH/day) from the balance now and ~24h of blocks ago."""
+  now_wei = int(rpc(url, "eth_getBalance", [address, "latest"]), 16)
+  then_wei = int(rpc(url, "eth_getBalance", [address, hex(max(head_block - BLOCKS_PER_DAY, 0))]), 16)
+  return now_wei / 1e18, max(then_wei - now_wei, 0) / 1e18
+
+
+def market_open(url: str, stack: dict) -> bool:
+  raw = rpc(url, "eth_call", [{"to": stack["perp"], "data": SEL_TOTAL_POSITION_CAP + stack["srm"].lower().removeprefix("0x").rjust(64, "0")}, "latest"])
+  return int(raw, 16) > 0
 
 
 def insolvent_condition(health: dict | None) -> Condition | None:
@@ -264,7 +338,7 @@ def run(stack_path: Path) -> int:
 def check_and_page(stack_path: Path, state: dict) -> int:
   url = os.environ["RPC_URL"]
   stack = json.loads(stack_path.read_text())
-  now = head_timestamp(url)
+  number, now = head_block(url)
 
   ages: dict[str, int | None] = {}
   for name, feed, reader in [("index", stack["indexFeed"], index_age), ("mark", stack["markFeed"], diff_age),
@@ -280,10 +354,25 @@ def check_and_page(stack_path: Path, state: dict) -> int:
                                   + stack["cash"].lower().removeprefix("0x").rjust(64, "0") + "0" * 64}, "latest"])
   sm_cash = int(sm_raw, 16) / 1e18
 
+  if keeper_healthy(health, now):
+    state["keeperSeenAt"] = now
+  armed = state.get("keeperSeenAt") is not None or market_open(url, stack)
+
+  gas = []
+  warned = state.setdefault("gasWarnedAt", {})
+  for name, address, floor in gas_watch():
+    balance, burn = read_gas(url, number, address)
+    gas.append(gas_condition(name, balance, burn, floor))
+    warning = gas_warning(name, balance, burn)
+    if warning and gas[-1] is None and time.time() - warned.get(name, 0) >= GAS_WARN_REPEAT_SEC:
+      mirror(f"{os.environ.get('PAGE_PREFIX', '')}{warning}")
+      warned[name] = time.time()
+    print(f"gas {name}: {balance:.5f} ETH, burn {burn:.5f}/day, floor {floor}")
+
   previous_sm = state.get("smCash")
-  active = [c for c in (feed_condition(ages), keeper_condition(health, now), insolvent_condition(health),
+  active = [c for c in (feed_condition(ages), keeper_condition(health, now, armed), insolvent_condition(health),
                         sm_condition(previous_sm, sm_cash), unwatched_condition(heartbeat_urls()[0]),
-                        peg_condition(read_index_status(), time.time())) if c is not None]
+                        peg_condition(read_index_status(), time.time()), *gas) if c is not None]
   to_page, resolved = step_state(state, active, now)
   state["smCash"] = sm_cash
 
@@ -323,6 +412,22 @@ def self_test() -> int:
   live = {"dryRun": False, "lastPassOk": True, "lastPassAt": now - 10, "pollIntervalMs": 15_000}
   assert keeper_condition(live, now) is None
   assert keeper_condition(None, now).key == "keeper-unhealthy"
+  # Not armed (never seen healthy, market closed): an absent keeper is not a page; an unhealthy
+  # one that IS answering still is.
+  assert keeper_condition(None, now, armed=False) is None
+  assert keeper_condition({**live, "dryRun": True}, now, armed=False) is not None
+  assert keeper_healthy(live, now) and not keeper_healthy(None, now) and not keeper_healthy({**live, "dryRun": True}, now)
+  # Gas: 2 days of burn, or the floor when burn is unmeasurable; Slack warning under 7 days.
+  assert gas_condition("relayer", 0.015, 0.0013, 0.003) is None
+  assert gas_condition("relayer", 0.0025, 0.0013, 0.003).key == "low-gas-relayer"
+  assert gas_condition("executor", 0.0019, 0.0, 0.002) is not None and "unknown burn" in gas_condition("executor", 0.0019, 0.0, 0.002).message
+  assert gas_condition("executor", 0.0079, 0.00003, 0.002) is None
+  assert gas_warning("relayer", 0.015, 0.0013) is None and "runway 5.0 days" in gas_warning("relayer", 0.0065, 0.0013)
+  os.environ["GAS_WATCH"] = "executor=0xF68ebcC8934B068655E1A4367Ba6C0e564678703:0.002"
+  os.environ["KEEPER_EOA"] = "0x00000000000000000000000000000000000000aa"
+  assert [(n, f) for n, _, f in gas_watch()] == [("executor", 0.002), ("keeper", KEEPER_GAS_FLOOR_ETH)]
+  os.environ.pop("GAS_WATCH"); os.environ.pop("KEEPER_EOA")
+  assert [n for n, _, _ in gas_watch()] == ["executor", "relayer"]
   assert keeper_condition({**live, "dryRun": True}, now) is not None
   assert keeper_condition({**live, "lastPassAt": now - 120}, now) is not None
   assert insolvent_condition({**live, "insolventAccounts": []}) is None
@@ -349,7 +454,8 @@ def self_test() -> int:
   # Selectors against their signatures, so a hand-typed one cannot ship (one did, in review).
   from resolve_cngn_action6 import keccak
   for selector, signature in [(SEL_GET_BALANCE, "getBalance(uint256,address,uint256)"),
-                              (SEL_SPOT_DIFF_DETAILS, "spotDiffDetails()")]:
+                              (SEL_SPOT_DIFF_DETAILS, "spotDiffDetails()"),
+                              (SEL_TOTAL_POSITION_CAP, "totalPositionCap(address)")]:
     assert selector == "0x" + keccak(signature.encode()).hex()[:8], signature
   # The peg guard pages from perp-feeds' status; missing or stale status is silent (feed-halt covers it).
   wall = 2_000_000_000.0
