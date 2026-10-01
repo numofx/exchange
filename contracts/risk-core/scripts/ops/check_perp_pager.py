@@ -141,11 +141,11 @@ def feed_condition(ages: dict[str, int | None]) -> Condition | None:
 
 def keeper_condition(health: dict | None, now: int, armed: bool = True) -> Condition | None:
   """`armed` is False until the keeper has ever reported healthy and the market is still closed:
-  a keeper that is not installed yet (go-live steps 14-17) is not a page. Once the market is open,
-  no keeper at all is the loudest condition there is."""
+  a keeper that is not installed yet, or running its DRY_RUN smoke (go-live steps 14-17), is not
+  a page. Once the market is open, no keeper at all is the loudest condition there is."""
+  if not armed:
+    return None
   if health is None:
-    if not armed:
-      return None
     return Condition("keeper-unhealthy", "USDCcNGN-PERP keeper /health unreachable: nothing is liquidating.")
   if health.get("dryRun", True):
     return Condition("keeper-unhealthy", "USDCcNGN-PERP keeper is in DRY_RUN: it decides but sends nothing.")
@@ -471,10 +471,11 @@ def self_test() -> int:
   live = {"dryRun": False, "lastPassOk": True, "lastPassAt": now - 10, "pollIntervalMs": 15_000}
   assert keeper_condition(live, now) is None
   assert keeper_condition(None, now).key == "keeper-unhealthy"
-  # Not armed (never seen healthy, market closed): an absent keeper is not a page; an unhealthy
-  # one that IS answering still is.
+  # Not armed (never seen healthy, market closed): neither an absent keeper nor the DRY_RUN smoke
+  # is a page. Armed, both are.
   assert keeper_condition(None, now, armed=False) is None
-  assert keeper_condition({**live, "dryRun": True}, now, armed=False) is not None
+  assert keeper_condition({**live, "dryRun": True}, now, armed=False) is None
+  assert keeper_condition({**live, "dryRun": True}, now, armed=True) is not None
   assert keeper_healthy(live, now) and not keeper_healthy(None, now) and not keeper_healthy({**live, "dryRun": True}, now)
   # Gas: 2 days of burn, or the floor when burn is unmeasurable; Slack warning under 7 days.
   assert gas_condition("relayer", 0.015, 0.0013, 0.003) is None
