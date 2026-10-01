@@ -8,7 +8,7 @@ resource "aws_ecs_cluster" "main" {
 }
 
 resource "aws_cloudwatch_log_group" "tasks" {
-  for_each          = toset(["markets-service", "matcher", "execution-service", "migrate", "market-maker"])
+  for_each          = toset(["markets-service", "matcher", "execution-service", "migrate", "market-maker", "market-maker-perp"])
   name              = "/ecs/${var.name}/${each.key}"
   retention_in_days = 30
 }
