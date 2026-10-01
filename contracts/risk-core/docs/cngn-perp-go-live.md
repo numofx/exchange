@@ -169,9 +169,10 @@ across three accounts.
     - every alert is prefixed `[REHEARSAL]`, and alerts go only to the test channel if one is given.
 18. **Keeper live:** `DRY_RUN=false`. The pager sees it healthy and arms "keeper unhealthy" from
     then on (a page if it ever stops); the step-16 dry run paged nothing, by design.
-19. **SecurityModule:** approve USDC to the SecurityModule, then `donate(8_000e6)` for
-    **$8,000 USDC**. The rule below needs $6,065 at 1374 cNGN/USDC. $8,000 still meets it if
-    cNGN strengthens to 1,042 per USDC.
+19. **SecurityModule:** approve USDC to the SecurityModule, then `donate(3_250e6)` for
+    **$3,250 USDC**. The rule below needs $3,064 at 1360 cNGN/USDC. `donate()` is recoverable only
+    by the vault (`withdraw(amount, recipient)`, owner-only); there is no `deposit()` and no shares
+    on the deployed contract, so who sends the donation does not matter.
 20. **Market maker:**
     - Open its perp account under the perp SRM with **$12,500 USDC**. This goes through the app's
       `/perp` "Deposit margin" or `createAndDepositSubAccount(perpCash, 12_500e6, perpSRM)`, which
@@ -198,25 +199,33 @@ The gates step 21 checks:
 | custody | The vault owns every contract. The SRM has a guardian that is not the vault. The market is still closed. |
 | feeds | The index and all three diff feeds are 10 minutes old or less. |
 | keeper | Its last pass succeeded recently and it is not in dry run. The keeper EOA owns its funding account, which is under the perp SRM, holds only cash and has enough of it. It has gas. |
-| sm | The SecurityModule holds at least the seed rule. |
+| sm | The SecurityModule holds at least the seed rule: a sixth of one side's notional at the cap. |
 | quoter | The book is two-sided, with at least $1k within 2% of the index on each side. |
 | pager | `check_perp_pager.py` ran successfully within 3 minutes, with a real provider and a dead-man's switch. |
 
 ## SecurityModule seed
 
-**The SecurityModule must hold at least a third of ONE side's notional at the current cap:**
+**The SecurityModule must hold at least a sixth of ONE side's notional at the current cap:**
 
 ```text
-seed >= (cap / 2 cNGN) × index (USDC per cNGN) / 3
+seed >= (cap / 2 cNGN) × index (USDC per cNGN) / 6
 ```
 
 The cap counts `|position|` over both sides, so one side is half of it. At the 50M cNGN launch cap
-and 1374 cNGN/USDC, one side is $18,195, so the seed is at least **$6,065**. The enable gate computes
-this from the live index and refuses below it; `--min-sm-cash` (default $5k) is only a floor under
-it.
+and 1360 cNGN/USDC, one side is $18,382, so the seed is at least **$3,064**. The enable gate computes
+this from the live index and refuses below it; `--min-sm-cash` (default $3k) is only a floor under
+it. Once the market is open the pager pages `sm-seed` whenever the SecurityModule falls under the
+rule (a payout, or the index moving the side's notional up).
 
-**Raising the cap is a new launch** for this rule: top the SecurityModule up to a third of the new
-side first.
+**What a sixth covers, and what it does not.** In the fork test below, a sixth (~$3,000 on the
+50M cap) is the SecurityModule's worst-case payout at a **25% single index jump**. It was lowered
+from a third on 2026-10-01 as a launch-size choice. **The naira's 2023 and 2024 steps each exceeded
+25%** (June 2023 and January–February 2024, roughly 40% and 45% against the dollar), so this ratio
+is a bet that no step of that size lands inside one liquidation cycle at this cap. **Revisit the
+ratio before any cap increase**, not just the amount.
+
+**Raising the cap is a new launch** for this rule: top the SecurityModule up to a sixth of the new
+side first (or a larger fraction, per the paragraph above).
 
 ## Keeper collateral
 
@@ -235,10 +244,10 @@ the side at the cap). **Before any cap increase, top the keeper account up to a 
 side**, exactly as for the SecurityModule; the enable gate's `--min-keeper-cash` (default $5,000)
 is only the floor under it.
 
-Why a third: it is the initial margin on that side. In
+The payout curve the fraction is read against. In
 `CngnPerpStackFork.testSecurityModuleLossFromIndexJumpAtFullCap`, the whole long side sits in one
 account just above maintenance margin and the insolvent auction runs to its most expensive second.
-The SecurityModule's payout there reaches this size at an index jump of about 50%:
+The SecurityModule's payout there is a sixth of a side at a 25% jump and a third at about 50%:
 
 | Index jump | SecurityModule pays (at 50M cNGN) |
 | --- | --- |
