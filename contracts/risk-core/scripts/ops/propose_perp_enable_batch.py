@@ -344,8 +344,8 @@ def self_test() -> int:
   for name, want in pinned.items():
     got = selector(name)
     assert got == want, f"{name}: {got} != {want}"
-  # 50M cNGN cap at 1374 cNGN/USDC: 25M cNGN a side is $18,195, a sixth of it $3,032.
-  assert round(sm_seed_required(50_000_000 * 10**18, 1 / 1374, 3_000)) == 3032
+  # 50M cNGN cap at 1374 cNGN/USDC: 25M cNGN a side is $18,195, a sixth of it $3,033.
+  assert round(sm_seed_required(50_000_000 * 10**18, 1 / 1374, 3_000)) == 3033
   assert sm_seed_required(1 * 10**18, 1 / 1374, 3_000) == 3_000
   import tempfile
   with tempfile.TemporaryDirectory() as tmp:
