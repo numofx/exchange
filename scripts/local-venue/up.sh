@@ -10,7 +10,8 @@
 #  5. perp-feeds --local-fixed-price, the keeper (live, /health on), the SecurityModule seed, a quote
 #  6. propose_perp_enable_batch.py --local checks every launch gate and writes the enable actions;
 #     they are applied as the vault (impersonated) -- the step that opens the market
-#  7. a taker crosses the quote and the position is read back from /v1/positions
+#  7. a taker crosses the quote and the position is read back from /v1/positions, then withdraws
+#     100 USDC of margin by a signed WithdrawalModule action on the perp cash
 #
 # Everything runs in the background with logs and pids under $LOCAL_VENUE_DIR (default
 # .local-venue/ at the repo root). ./scripts/local-venue/down.sh stops it all.
@@ -142,6 +143,7 @@ CNGN_SPOT_ASSET_ADDRESS=0x9d806fd040a719d27a8e5e77dc5ae0ed1e089493
 $PERP_MARKETS_ENV
 ENFORCE_MATCHING_CUSTODY=true
 WITHDRAWAL_MODULE_ADDRESS=0x0a10AE2f5D2482cE1e43bC309D430B8861C2b5aB
+WITHDRAWAL_ASSET_ADDRESSES=0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84,0x9d806fd040a719d27a8e5e77dc5ae0ed1e089493${CASH:+,$CASH}
 EXECUTOR_WITHDRAW_URL=http://127.0.0.1:$EXEC_PORT/withdraw
 EXECUTOR_URL=http://127.0.0.1:$EXEC_PORT/execute
 EXECUTOR_TIMEOUT=90s
@@ -153,7 +155,7 @@ step "services: execution :$EXEC_PORT, markets api :$API_PORT, matcher"
 (cd "$ROOT/services/execution" && RPC_URL=$RPC CHAIN_ID=31337 PRIVATE_KEY=$EXECUTOR_KEY MATCHING_ADDRESS=$MATCHING \
   TRADE_MODULE_ADDRESS=0x12423B366F6F07130961900bE00d05Ea63Acd071 \
   WITHDRAWAL_MODULE_ADDRESS=0x0a10AE2f5D2482cE1e43bC309D430B8861C2b5aB \
-  WITHDRAWAL_ASSET_ADDRESSES=0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84,0x9d806fd040a719d27a8e5e77dc5ae0ed1e089493 \
+  WITHDRAWAL_ASSET_ADDRESSES=0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84,0x9d806fd040a719d27a8e5e77dc5ae0ed1e089493${CASH:+,$CASH} \
   PORT=$EXEC_PORT HOST=127.0.0.1 DRY_RUN=false WAIT_FOR_RECEIPT=true start execution env $PERP_EXEC_ENV node dist/index.js)
 (set -a; . "$DIR/markets.env"; set +a; start markets-api "$DIR/bin/markets-api"; start markets-matcher "$DIR/bin/markets-matcher")
 wait_for execution curl -sf http://127.0.0.1:$EXEC_PORT/healthz
@@ -251,6 +253,9 @@ wait_for "trading_enabled" sh -c "curl -sf http://127.0.0.1:$API_PORT/v1/markets
 
 step "smoke: taker crosses the maker's offer"
 $VENUE cross
+
+step "smoke: taker withdraws 100 USDC of margin (WithdrawalModule on the perp cash, as the app does)"
+$VENUE withdraw taker 100
 
 cat <<DONE
 
