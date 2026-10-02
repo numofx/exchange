@@ -610,7 +610,17 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 		}
 		// A cNGN-margined account is a synthetic dollar: long USD only, no more than the cNGN it
 		// posted. Checked here so a refused order never rests, and again at every fill.
-		if err := s.perp.HedgeAllows(r.Context(), instrument, params.SubaccountID, string(params.Side), params.DesiredAmount); err != nil {
+		resting := big.NewInt(0)
+		if instrument.CollateralAssetAddress != "" {
+			open, _, err := s.orders.SnapshotOpenOrdersByOwner(r.Context(), params.OwnerAddress, 200)
+			if err != nil {
+				slog.Warn("order_submit_open_orders_unreadable", "order_id", params.OrderID, "error", err)
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "open orders could not be read; retry shortly"})
+				return
+			}
+			resting = restingPerpDelta(open, instrument.AssetAddress, params.SubaccountID)
+		}
+		if err := s.perp.HedgeAllows(r.Context(), instrument, params.SubaccountID, string(params.Side), params.DesiredAmount, resting); err != nil {
 			if errors.Is(err, errCollateralUnreadable) {
 				slog.Warn("order_submit_collateral_unreadable", "order_id", params.OrderID, "subaccount_id", params.SubaccountID, "error", err)
 				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
