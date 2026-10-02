@@ -104,10 +104,10 @@ echo $! >"$DIR/pids/perp-feeds"
 for _ in $(seq 1 60); do
   PAGER >/dev/null
   [ "$(paged trigger insolvent-account)" -ge 1 ] && break
-  [ "$(pnpm --dir $HERE exec tsx $HERE/venue.ts $DIR report 2>/dev/null | grep -c "'ngn-long' .* 0 ")" -ge 1 ] && break
+  [ "$(pnpm --dir $HERE exec tsx $HERE/venue.ts $DIR report 2>/dev/null | grep -c "'ngn-long' .* 0 " | tail -1)" -ge 1 ] && break
   sleep 3
 done
-$VENUE wait-closed ngn-long 600
+$VENUE wait-liquidated ngn-long 600
 # The keeper's next pass (every 5s here) is what clears the account from /health; give it a minute.
 for _ in $(seq 1 20); do
   PAGER >/dev/null
@@ -120,16 +120,27 @@ import json, sys
 for line in open(sys.argv[1]):
     e = json.loads(line)
     print(e['event_action'], e['dedup_key'], (e.get('payload') or {}).get('summary', ''))" "$PAGES"
+if [ "$COLLATERAL" = cngn ]; then
+  # On cNGN at the sized haircut the long opened at IM is still SOLVENT after the step (the fork
+  # test's sizing case): the keeper buys it in a solvent auction, the SecurityModule pays nothing,
+  # and no insolvency page is due. (Walk it to MM first for the insolvent variant.)
+  [ "$(paged trigger insolvent-account)" = 0 ] || { echo "FAIL: a solvent cNGN liquidation paged as insolvent" >&2; exit 1; }
+  [ "$(paged trigger sm-payout)" = 0 ] || { echo "FAIL: the SecurityModule paid for a solvent liquidation" >&2; exit 1; }
+  echo "ok: solvent liquidation, no insolvency or SecurityModule page"
+else
 [ "$(paged trigger insolvent-account)" -ge 1 ] || { echo "FAIL: the insolvent account was not paged" >&2; exit 1; }
 [ "$(paged trigger sm-payout)" -ge 1 ] || { echo "FAIL: the SecurityModule payout was not paged" >&2; exit 1; }
 [ "$(paged resolve insolvent-account)" -ge 1 ] || { echo "FAIL: the insolvent account did not resolve" >&2; exit 1; }
+echo "ok: insolvent account and SecurityModule payout paged, insolvency resolved"
+fi
 grep -q '\[REHEARSAL\]' "$PAGES" || { echo "FAIL: pages were not prefixed" >&2; exit 1; }
-echo "ok: insolvent account and SecurityModule payout paged, insolvency resolved, every page prefixed"
+echo "ok: every page prefixed"
 $VENUE report
 grep -E "bid|auction" "$DIR/logs/perp-keeper.log" | tail -12
 if [ "$COLLATERAL" = cngn ]; then
   step "cNGN: the keeper was paid in cNGN, holds it within its limit, and says so"
   grep -E "keeper-cngn-inventory|keeper-cngn-over-limit|haircut" "$DIR/logs/perp-keeper.log" | tail -4
   grep -q "keeper-cngn-inventory" "$DIR/logs/perp-keeper.log" || { echo "FAIL: the keeper did not report the cNGN it was paid in" >&2; exit 1; }
-  echo "ok: cNGN inventory reported"
+  SM_NOW=$($VENUE report 2>/dev/null | grep -o '"securityModuleCashUsd":"[0-9.]*"' | cut -d'"' -f4)
+  echo "ok: cNGN inventory reported; SecurityModule holds \$$SM_NOW (paid nothing)"
 fi

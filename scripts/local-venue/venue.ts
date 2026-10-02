@@ -75,6 +75,8 @@ const abi = parseAbi([
   'function totalPosition(address manager) view returns (uint256)',
   'function totalPositionCap(address manager) view returns (uint256)',
   'function getCashToStableExchangeRate() view returns (uint256)',
+  'function getAuction(uint256 accountId) view returns ((uint256 accountId, uint256 scenarioId, bool insolvent, bool ongoing, uint256 cachedMM, uint256 startTime, uint256 reservedCash))',
+  'function getMarginAndMarkToMarket(uint256 accountId, uint256 scenarioId) view returns (int256 mm, int256 bm, int256 mtm)',
   'event DepositedSubAccount(uint256 indexed accountId, address indexed owner)',
 ]);
 
@@ -82,6 +84,7 @@ type Venue = {
   perp: Address;
   cash: Address;
   srm: Address;
+  auction: Address;
   /** The perp's cNGN collateral escrow; absent until up.sh has deployed and enabled it. */
   cngnEscrow?: Address;
   securityModule: Address;
@@ -402,6 +405,7 @@ async function balance(accountId: string | number, asset: Address) {
 }
 
 const usd = (value: bigint) => Number(value) / 1e18;
+const abs = (value: bigint) => (value < 0n ? -value : value);
 
 /**
  * Opens whatever is left of the OI cap as one NGN long at ~3x (the most the SRM allows) against a
@@ -429,6 +433,9 @@ async function fillCap(collateral: 'usdc' | 'cngn' = 'usdc') {
   await placeOrder('ngn-long', 'sell', index, uiSize);
   await placeOrder('ngn-short', 'buy', index, uiSize);
   await waitForPosition('ngn-long');
+  // What was opened, for wait-liquidated to measure what the auction left.
+  const opened = await balance(readAccounts()['ngn-long']!, venue.perp);
+  writeFileSync(accountsFile, JSON.stringify({ ...readAccounts(), 'ngn-long.opened': opened.toString() }, null, 2));
   const after = await client.readContract({ address: venue.perp, abi, functionName: 'totalPosition', args: [venue.srm] });
   console.log(`OI ${after / 10n ** 18n} of cap ${cap / 10n ** 18n} NGN (each side $${uiSize} at ${index} cNGN/USDC)`);
 }
@@ -468,6 +475,41 @@ async function waitClosed(label: string, timeoutSec: number) {
     await new Promise((resolve) => setTimeout(resolve, 5_000));
   }
   throw new Error(`${label} (#${id}) still open after ${timeoutSec}s: ${await balance(id, venue.perp)}`);
+}
+
+/**
+ * Done when the account is liquidated as the venue means it: its position is gone (an insolvent
+ * auction takes all of it), or its auction has ended with the account back above maintenance
+ * margin, or all but a sliver (under 1% of what was opened) is gone and the account is above
+ * maintenance margin while its auction runs out its solvent window (a solvent auction sells only
+ * what restores margin, ends at buffer margin, and leaves the rest to the owner).
+ */
+async function waitLiquidated(label: string, timeoutSec: number) {
+  const id = readAccounts()[label];
+  if (id === undefined) throw new Error(`no account ${label}`);
+  const deadline = Date.now() + timeoutSec * 1000;
+  while (Date.now() < deadline) {
+    const position = await balance(id, venue.perp);
+    const auction = await client.readContract({ address: venue.auction, abi, functionName: 'getAuction', args: [BigInt(id)] });
+    const [mm] = await client.readContract({ address: venue.auction, abi, functionName: 'getMarginAndMarkToMarket', args: [BigInt(id), 0n] });
+    if (position === 0n) {
+      console.log(`${label} (#${id}) closed in full`);
+      return;
+    }
+    if (!auction.ongoing && mm >= 0n) {
+      console.log(`${label} (#${id}) liquidated: ${position / 10n ** 18n} NGN left, above maintenance margin by $${usd(mm).toFixed(2)}, auction over`);
+      return;
+    }
+    const opened = BigInt(readAccounts()[`${label}.opened`] ?? '0');
+    if (opened > 0n && mm >= 0n && abs(position) * 100n < abs(opened)) {
+      console.log(
+        `${label} (#${id}) liquidated: ${position / 10n ** 18n} of ${opened / 10n ** 18n} NGN left, above maintenance margin by $${usd(mm).toFixed(2)}; the sliver's auction ends with its solvent window`,
+      );
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
+  }
+  throw new Error(`${label} (#${id}) still under liquidation after ${timeoutSec}s: ${await balance(id, venue.perp)}`);
 }
 
 // --- spot regression: the live spot stack the fork inherits, with no perp anywhere -------------
@@ -750,6 +792,9 @@ switch (command) {
     break;
   case 'report':
     await report();
+    break;
+  case 'wait-liquidated':
+    await waitLiquidated(args[0] ?? 'ngn-long', Number(args[1] ?? '600'));
     break;
   case 'wait-closed':
     await waitClosed(args[0] ?? 'ngn-long', Number(args[1] ?? '600'));
