@@ -68,12 +68,13 @@ PAGER >/dev/null
 [ "$(paged resolve keeper-unhealthy)" = 1 ] || { echo "FAIL: keeper-unhealthy did not resolve" >&2; exit 1; }
 echo "ok: paged, then resolved when the keeper answered again"
 
-step "fill the cap"
-$VENUE fill-cap
 if [ "$COLLATERAL" = cngn ]; then
+  # Before the cap is filled: the treasury's long USD takes 2M cNGN of the OI cap, the NGN long the rest.
   step "cNGN: a treasury posts 2M cNGN and hedges 1:1 (long USD)"
   $VENUE hedge treasury 2000000
 fi
+step "fill the cap"
+$VENUE fill-cap
 $VENUE report
 
 step "stop the publisher; seed the sources' window at $NEW_LEVEL"

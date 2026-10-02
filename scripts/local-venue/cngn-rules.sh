@@ -30,7 +30,9 @@ step "3. long naira on USDC: accepted"
 $VENUE account usdc-trader 2000
 $VENUE order usdc-trader sell 100 accepted
 step "4. a USDC withdrawal past the account's cash is refused; one within it pays"
-$VENUE withdraw-refused usdc-trader 2001
-$VENUE withdraw usdc-trader 1
+# A fresh account with no orders: a fill's fee would move the cash the check reconciles.
+$VENUE account usdc-holder 100
+$VENUE withdraw-refused usdc-holder 101
+$VENUE withdraw usdc-holder 1
 echo
 echo "ok: all four cNGN rules hold on the local venue"
