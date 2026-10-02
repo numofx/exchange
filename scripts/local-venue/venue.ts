@@ -818,8 +818,11 @@ switch (command) {
     const cngnWhole = BigInt(args[1] ?? '2000000');
     await openCngnAccount(args[0] ?? 'treasury', cngnWhole);
     const index = await uiIndex();
-    const sizeUsd = cngnWhole / index - 1n; // one dollar under 1:1 so rounding never trips the rule
-    await placeOrder(args[0] ?? 'treasury', 'buy', index + (index * 100n) / 10_000n, sizeUsd);
+    // The 1:1 bound is in cNGN contracts, which scale with the order's price: size from the
+    // crossing price, one dollar under, so rounding never trips the rule.
+    const price = index + (index * 100n) / 10_000n;
+    const sizeUsd = cngnWhole / price - 1n;
+    await placeOrder(args[0] ?? 'treasury', 'buy', price, sizeUsd);
     await waitForPosition(args[0] ?? 'treasury');
     break;
   }
