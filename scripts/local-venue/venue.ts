@@ -812,6 +812,31 @@ switch (command) {
   case 'withdraw-refused':
     await perpWithdraw(args[0] ?? 'taker', BigInt(args[1] ?? '10'), 'refused');
     break;
+  case 'hedge': {
+    // hedge <label> <cngn whole>: a treasury posts cNGN and goes long USD 1:1 with it, crossing the
+    // maker's offer so the position exists (the venue's hedge rule: as much long USD as cNGN, no more).
+    const cngnWhole = BigInt(args[1] ?? '2000000');
+    await openCngnAccount(args[0] ?? 'treasury', cngnWhole);
+    const index = await uiIndex();
+    const sizeUsd = cngnWhole / index - 1n; // one dollar under 1:1 so rounding never trips the rule
+    await placeOrder(args[0] ?? 'treasury', 'buy', index + (index * 100n) / 10_000n, sizeUsd);
+    await waitForPosition(args[0] ?? 'treasury');
+    break;
+  }
+  case 'hedge-check': {
+    // hedge-check <label>: the hedged account is above maintenance margin and still holds its cNGN.
+    const label = args[0] ?? 'treasury';
+    const id = readAccounts()[label];
+    if (id === undefined) throw new Error(`no account ${label}`);
+    const [mm, , mtm] = await client.readContract({ address: venue.auction, abi, functionName: 'getMarginAndMarkToMarket', args: [BigInt(id), 0n] });
+    const cngn = venue.cngnEscrow === undefined ? 0n : await balance(id, venue.cngnEscrow);
+    const perpNgn = await balance(id, venue.perp);
+    console.log(`${label} (#${id}): perp ${perpNgn / 10n ** 18n} NGN, cNGN ${cngn / 10n ** 18n}, equity $${usd(mtm).toFixed(2)}, MM headroom $${usd(mm).toFixed(2)}`);
+    if (mm < 0n) throw new Error(`${label} is under maintenance margin: the hedge did not hold`);
+    if (cngn <= 0n) throw new Error(`${label} lost its cNGN`);
+    console.log(`ok: ${label} stayed above maintenance margin through the step, cNGN intact`);
+    break;
+  }
   case 'account-cngn':
     await openCngnAccount(args[0] ?? 'treasury', BigInt(args[1] ?? '10000000'));
     break;

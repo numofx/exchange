@@ -2,8 +2,9 @@
 # The index-step reopening procedure, drilled on the local venue with the full OI cap open:
 #
 #   ./scripts/local-venue/up.sh && ./scripts/local-venue/step-drill.sh [step-bps] [usdc|cngn]
-#   (default 4000 = 40%, margined in USDC; `cngn` margins the NGN long in cNGN only, the hedged
-#   venue's unhedged worst case: it loses on the position and on the collateral in the same step)
+#   (default 4000 = 40%. `cngn` adds the cNGN scenario the venue allows: a treasury posting cNGN
+#   and long USD 1:1 against it, which must ride the step out above margin with its cNGN intact
+#   while the USDC-margined NGN long is liquidated as usual)
 #
 #  1. fill the rest of the cap: one NGN long at ~3x against a well-funded NGN short
 #  2. stop the publisher; 12 minutes of source samples at the new level go in its state file (what
@@ -67,8 +68,12 @@ PAGER >/dev/null
 [ "$(paged resolve keeper-unhealthy)" = 1 ] || { echo "FAIL: keeper-unhealthy did not resolve" >&2; exit 1; }
 echo "ok: paged, then resolved when the keeper answered again"
 
-step "fill the cap (NGN long margined in $COLLATERAL)"
-$VENUE fill-cap "$COLLATERAL"
+step "fill the cap"
+$VENUE fill-cap
+if [ "$COLLATERAL" = cngn ]; then
+  step "cNGN: a treasury posts 2M cNGN and hedges 1:1 (long USD)"
+  $VENUE hedge treasury 2000000
+fi
 $VENUE report
 
 step "stop the publisher; seed the sources' window at $NEW_LEVEL"
@@ -120,27 +125,17 @@ import json, sys
 for line in open(sys.argv[1]):
     e = json.loads(line)
     print(e['event_action'], e['dedup_key'], (e.get('payload') or {}).get('summary', ''))" "$PAGES"
-if [ "$COLLATERAL" = cngn ]; then
-  # On cNGN at the sized haircut the long opened at IM is still SOLVENT after the step (the fork
-  # test's sizing case): the keeper buys it in a solvent auction, the SecurityModule pays nothing,
-  # and no insolvency page is due. (Walk it to MM first for the insolvent variant.)
-  [ "$(paged trigger insolvent-account)" = 0 ] || { echo "FAIL: a solvent cNGN liquidation paged as insolvent" >&2; exit 1; }
-  [ "$(paged trigger sm-payout)" = 0 ] || { echo "FAIL: the SecurityModule paid for a solvent liquidation" >&2; exit 1; }
-  echo "ok: solvent liquidation, no insolvency or SecurityModule page"
-else
 [ "$(paged trigger insolvent-account)" -ge 1 ] || { echo "FAIL: the insolvent account was not paged" >&2; exit 1; }
 [ "$(paged trigger sm-payout)" -ge 1 ] || { echo "FAIL: the SecurityModule payout was not paged" >&2; exit 1; }
 [ "$(paged resolve insolvent-account)" -ge 1 ] || { echo "FAIL: the insolvent account did not resolve" >&2; exit 1; }
 echo "ok: insolvent account and SecurityModule payout paged, insolvency resolved"
-fi
 grep -q '\[REHEARSAL\]' "$PAGES" || { echo "FAIL: pages were not prefixed" >&2; exit 1; }
 echo "ok: every page prefixed"
 $VENUE report
 grep -E "bid|auction" "$DIR/logs/perp-keeper.log" | tail -12
 if [ "$COLLATERAL" = cngn ]; then
-  step "cNGN: the keeper was paid in cNGN, holds it within its limit, and says so"
-  grep -E "keeper-cngn-inventory|keeper-cngn-over-limit|haircut" "$DIR/logs/perp-keeper.log" | tail -4
-  grep -q "keeper-cngn-inventory" "$DIR/logs/perp-keeper.log" || { echo "FAIL: the keeper did not report the cNGN it was paid in" >&2; exit 1; }
-  SM_NOW=$($VENUE report 2>/dev/null | grep -o '"securityModuleCashUsd":"[0-9.]*"' | cut -d'"' -f4)
-  echo "ok: cNGN inventory reported; SecurityModule holds \$$SM_NOW (paid nothing)"
+  step "cNGN: the hedged treasury rode the ${STEP_BPS}bps step out, above margin, cNGN intact, never liquidated"
+  $VENUE hedge-check treasury
+  grep -q "#$(json "$DIR/accounts.json" treasury): \(start\|bid\)" "$DIR/logs/perp-keeper.log" && { echo "FAIL: the keeper touched the hedged treasury" >&2; exit 1; }
+  echo "ok: the keeper never started an auction on the treasury"
 fi
