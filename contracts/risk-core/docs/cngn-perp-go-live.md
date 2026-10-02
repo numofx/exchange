@@ -280,6 +280,81 @@ In the local drill of a 40% step at the full cap, the NGN long was at 3x and a l
 soon as the payout covered the deficit plus 2%. The SecurityModule paid $1,018 and nothing
 socialized. The table is the ceiling; a live keeper keeps the payout well under it.
 
+## cNGN as margin
+
+A treasury that holds cNGN and shorts naira is hedged: naira weakness costs it on the collateral and
+pays it on the perp. The venue lets it post cNGN through the perp stack's **own cNGN escrow**
+(`deploy-cngn-perp-collateral.s.sol`, artifact `CNGN_PERP_COLLATERAL.json`), whitelisted on the perp
+SRM as a **base asset** valued at the index feed and haircut by a margin factor. Spot's escrow is not
+reused: an asset whitelisted on two managers lets cNGN be moved between stacks by a transfer.
+
+**The haircut is 50% (`SIZED_MARGIN_FACTOR = 0.5e18`, IM scale 1).** Sized in
+`CngnPerpCollateralFork.testMarginFactorSizingThroughA25PctStep` on the unhedged direction, which is
+the one the factor must cover: a long-naira account that posted ONLY cNGN, opened the full 25M cNGN
+side at initial margin, was left at maintenance margin by the keeper, and then took a 25% step. It
+loses on the position and on the collateral in the same move. Equity after the step, and what the
+SecurityModule pays when the auction runs to its end:
+
+| Factor | cNGN posted for the side | Equity after −25% | SecurityModule pays |
+| --- | --- | --- | --- |
+| 1.0 | 8.3M | −$2,110 | $4,493 |
+| 0.8 | 10.4M | −$1,117 | $4,493 |
+| 0.7 | 11.9M | −$407 | $4,493 |
+| 0.6 | 13.9M | +$540 | $0 (the analytic boundary; $540 is slack) |
+| **0.5** | **16.7M** | **+$1,865** | **$0** (solvent auction; keeper takes 82% and 13.7M cNGN) |
+| 0.4 | 20.9M | +$3,853 | $0 |
+
+At MM the account holds `N = 5·F·C` of naira per cNGN of collateral, so equity after a step `s`
+is `C·(1 − s) − s·5·F·C`: solvent through 25% iff `F ≤ 0.6`. 0.5 is the largest factor with real
+margin. The deploy script refuses a larger one and the review renderer refuses to render it.
+
+**What the hedged direction gets.** `testHedgedTreasuryHeadroom`: 10M cNGN posted, short naira.
+Through a 25% naira fall it stays above maintenance margin at full leverage. Naira *strength* is
+where the haircut bites, since the collateral gains at full value but is credited at half while the
+short loses at full value: at the IM maximum (15M short on 10M posted) a **~15% rise** liquidates
+it, solvent, through the auction; at **1:1** (10M short on 10M posted) it takes **~43%**. Tell the
+treasury to size at 1:1, not at the leverage the ticket allows.
+
+**Borrowing goes OFF in the enabling batch.** With cNGN counting as margin, `borrowingEnabled` is a
+USDC loan facility: an account could withdraw cash it does not have, down to initial margin, against
+its cNGN at the haircut, out of the pool's real USDC (the keeper's, the maker's, the SecurityModule's)
+at the rate model's 2–22%. Losses still settle into negative cash and positions still close with it
+off (`testBorrowingGatesLoansNotLosses`, and `testSettlementDoesNotDependOnBorrowing` before it).
+The venue does not lend; a treasury that lost repays the negative cash by depositing USDC, or is
+liquidated into its cNGN.
+
+**The collateral cap is the escrow's `setTotalPositionCap(srm, cap)`**: 25M cNGN at launch, one OI
+side, summed over every account under the perp SRM; the deposit that crosses it is refused, nothing
+else is. At the 50% haircut it margins 37.5M cNGN of notional at IM, the whole short side on cNGN
+alone. **It goes up with the OI cap**, by vault transaction, never past what the next two rules
+cover.
+
+**SecurityModule rule, re-derived.** `testCngnMarginCostsTheSecurityModuleNoMoreThanCashAt40Pct`:
+the same full-cap long at MM through the 40% drill step is $900 *less* underwater on cNGN
+(−$2,108) than on cash (−$2,995), but the insolvent auction's price walks from the mark-to-market
+deficit at its start to the **maintenance-margin** deficit at its end, and on cNGN that end price
+carries the 50% haircut on collateral the bidder receives at full value: **$7,195 at the auction's
+end, against $4,796 on cash.** The venue's own keeper decides when the bid lands. Valuing the cNGN
+it receives at the index less a 10% haircut and bidding the first minute the payout covers its
+deficit, it bid 8 minutes in and the SecurityModule paid **$2,788**. So: the seed rule stays a
+sixth of a side keyed to the OI cap alone (the 25% case costs $0 on cNGN at this factor), the
+collateral cap adds nothing to it, **and the keeper must be live and bidding on cNGN portfolios
+at a small haircut, not the SRM's 50%** — a keeper that waits for the SRM's valuation is what turns
+the cNGN case into the most expensive one. Keeper rule unchanged: a third of a side, and it now
+also holds the cNGN it is paid in (see the perp-keeper's `MAX_CNGN_INVENTORY`).
+
+**Procedure.** (1) `forge script scripts/deploy-cngn-perp-collateral.s.sol --rpc-url $BASE_RPC_URL
+--account numo-deployer --broadcast` (deployer gas ≈ 0.00002 ETH); it refuses the forge default
+sender, a factor above the sized one, a market that already has a base factor, and a market whose
+spot feed is not the index. (2) Verify on chain: `wrappedAsset()` is Base cNGN, `pendingOwner()`
+the vault, `whitelistedManager(srm)` false. (3) Commit the two artifacts, render the review
+(`render_perp_vault_review.py`, batch 4) and read it. (4) Sign the six actions in order in MPCVault:
+acceptOwnership, setBorrowingEnabled(false), setBaseAssetMarginFactor, whitelistAsset(Base),
+setTotalPositionCap, and setWhitelistManager LAST — every prefix is a safe place to stop, nothing
+can be deposited before the last. (5) Verify `baseMarginParams(1)`, `borrowingEnabled()` false,
+the cap, and that a 1-cNGN deposit into a perp account lands. The markets service and the app read
+the escrow from the artifact; deploy them after step 5, not before.
+
 ## Guardian: exploits only
 
 `PERP_GUARDIAN` is the only key that can stop the book without the vault's signers.

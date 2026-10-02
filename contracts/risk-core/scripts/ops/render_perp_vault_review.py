@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Renders every USDCcNGN-PERP vault action as one readable file, for review before signing.
 
-Three batches, in signing order:
+Four batches, in signing order:
   1. CNGN_PERP_STACK_VAULT_ACTIONS.json         custody of the stack, then the SRM guardian
   2. CNGN_PERP_TRADE_MODULE_VAULT_ACTIONS.json  custody of the TradeModule
   3. the enable batch                           built exactly as propose_perp_enable_batch.py builds it
+  4. CNGN_PERP_COLLATERAL_VAULT_ACTIONS.json    cNGN as margin (rendered when the artifact exists)
 
 For each action: the target (named from the deployment artifacts), the function, the decoded
 arguments (named, with units), what it is for, and the digest MPCVault will show. Nothing is taken
 on trust from the JSON:
-  - every selector must be one of the four functions these batches may contain;
+  - every selector must be one of the functions these batches may contain;
   - the decoded arguments are re-encoded and must reproduce the calldata byte for byte;
   - every digest is recomputed as keccak256(abi.encodePacked(to, keccak256(data))) and must match;
   - every target must be a contract named in the artifacts, and every value 0.
@@ -46,11 +47,19 @@ FUNCTIONS = {
   "setGuardian(address)": ["address"],
   "setTotalPositionCap(address,uint256)": ["address", "uint256"],
   "setAllowedModule(address,bool)": ["address", "bool"],
+  # batch 4, cNGN collateral (deploy-cngn-perp-collateral.s.sol / cngn-perp-collateral-batch.sol)
+  "setBorrowingEnabled(bool)": ["bool"],
+  "setBaseAssetMarginFactor(uint256,uint256,uint256)": ["uint256", "uint256", "uint256"],
+  "whitelistAsset(address,uint256,uint8)": ["address", "uint256", "uint8"],
+  "setWhitelistManager(address,bool)": ["address", "bool"],
 }
+ASSET_TYPES = {0: "NotSet", 1: "Option", 2: "Perpetual", 3: "Base"}
+# The fork test's sizing (DeployCngnPerpCollateral.SIZED_MARGIN_FACTOR); a larger factor is refused here as well.
+SIZED_MARGIN_FACTOR = 5 * 10**17
 SELECTORS = {"0x" + keccak(sig.encode()).hex()[:8]: sig for sig in FUNCTIONS}
 
 
-def names(stack: dict, module: dict) -> dict[str, str]:
+def names(stack: dict, module: dict, collateral: dict | None = None) -> dict[str, str]:
   """address (lowercase) -> human name, from the artifacts."""
   label = {
     "cash": "CashAsset (the perp's USDC cash)", "srmViewer": "SRMPortfolioViewer", "srm": "StandardManager (perp SRM)",
@@ -64,6 +73,9 @@ def names(stack: dict, module: dict) -> dict[str, str]:
   out[VAULT.lower()] = "the vault (MPCVault)"
   if "guardian" in stack:
     out.setdefault(stack["guardian"].lower(), "PERP_GUARDIAN (hot KMS key)")
+  if collateral is not None:
+    out[collateral["escrow"].lower()] = "cNGN escrow (perp collateral, WrappedERC20Asset)"
+    out.setdefault(collateral["cngnToken"].lower(), "cNGN token")
   return out
 
 
@@ -108,6 +120,25 @@ def purpose(sig: str, args: list, target: str, stack: dict) -> str:
   if sig == "setAllowedModule(address,bool)":
     return ("Opens the venue: Matching accepts orders settled through the perp's TradeModule. From here the matcher "
             "trades the perp.") if args[1] else "Closes the venue to this module."
+  if sig == "setBorrowingEnabled(bool)":
+    if args[0]:
+      raise SystemExit("REFUSED: setBorrowingEnabled(true) would lend the pool's USDC against cNGN")
+    return ("Turns off USDC loans: with cNGN counting as margin, borrowing would let an account withdraw cash it does "
+            "not have against its cNGN. Losses still settle into negative cash and positions still close.")
+  if sig == "setBaseAssetMarginFactor(uint256,uint256,uint256)":
+    if args[1] > SIZED_MARGIN_FACTOR:
+      raise SystemExit(f"REFUSED: margin factor {args[1] / 10**18:.2f} is above the sized {SIZED_MARGIN_FACTOR / 10**18:.2f}")
+    return (f"The haircut: {args[1] / 10**16:.0f}% of cNGN's oracle value counts as maintenance margin "
+            f"(x{args[2] / 10**18:.2f} again for initial margin) on market {args[0]}. Sized by CngnPerpCollateralFork so a "
+            "long-naira account on cNGN alone, left at maintenance margin, is still solvent after a 25% step.")
+  if sig == "whitelistAsset(address,uint256,uint8)":
+    if args[2] != 3:
+      raise SystemExit(f"REFUSED: whitelistAsset type {args[2]} is not Base (3)")
+    return (f"The SRM accepts the cNGN escrow as a BASE asset of market {args[1]}: valued at the market's spot feed (the "
+            "perp index), haircut by the factor above. The escrow itself is still shut.")
+  if sig == "setWhitelistManager(address,bool)":
+    return ("THE ENABLING SWITCH: the escrow accepts the perp SRM, so cNGN can be deposited into perp accounts. "
+            "Nothing can enter before this.") if args[1] else "Shuts the escrow to this manager."
   raise AssertionError(sig)
 
 
@@ -116,11 +147,20 @@ def render_args(sig: str, args: list, named: dict[str, str]) -> str:
     return "(none)"
   kinds = FUNCTIONS[sig]
   params = {"setGuardian(address)": ["guardian"], "setTotalPositionCap(address,uint256)": ["manager", "cap"],
-            "setAllowedModule(address,bool)": ["module", "allowed"]}[sig]
+            "setAllowedModule(address,bool)": ["module", "allowed"], "setBorrowingEnabled(bool)": ["enabled"],
+            "setBaseAssetMarginFactor(uint256,uint256,uint256)": ["marketId", "marginFactor", "imScale"],
+            "whitelistAsset(address,uint256,uint8)": ["asset", "marketId", "assetType"],
+            "setWhitelistManager(address,bool)": ["manager", "whitelisted"]}[sig]
   parts = []
   for name, kind, value in zip(params, kinds, args):
     if kind == "address":
       parts.append(f"`{name}` = `{value}` ({named.get(value.lower(), 'NOT IN THE ARTIFACTS')})")
+    elif name == "marketId":
+      parts.append(f"`{name}` = `{value}`")
+    elif name in ("marginFactor", "imScale"):
+      parts.append(f"`{name}` = `{value}` ({value / 10**16:.0f}%, 18dp)")
+    elif name == "assetType":
+      parts.append(f"`{name}` = `{value}` ({ASSET_TYPES.get(value, 'unknown')})")
     elif kind == "uint256":
       parts.append(f"`{name}` = `{value}` ({value / 10**18:,.0f} cNGN, 18dp)")
     else:
@@ -147,9 +187,17 @@ def section(title: str, when: str, actions: list[dict], named: dict[str, str], s
   return "\n".join(lines) + "\n"
 
 
-def render(stack_path: Path, stack_actions: Path, module_path: Path, module_actions: Path) -> str:
+def render(stack_path: Path, stack_actions: Path, module_path: Path, module_actions: Path,
+           collateral_path: Path | None = None, collateral_actions: Path | None = None) -> str:
   stack, module = json.loads(stack_path.read_text()), json.loads(module_path.read_text())
-  named = names(stack, module)
+  collateral = None
+  batch4 = None
+  if collateral_path is not None and collateral_actions is not None and collateral_path.exists() and collateral_actions.exists():
+    collateral = json.loads(collateral_path.read_text())
+    batch4 = json.loads(collateral_actions.read_text())
+    if collateral["srm"].lower() != stack["srm"].lower():
+      raise SystemExit("REFUSED: the collateral artifact names a different SRM than the stack")
+  named = names(stack, module, collateral)
   batch1 = json.loads(stack_actions.read_text())
   batch2 = json.loads(module_actions.read_text())
   batch3 = build_actions(load_venue(stack_path, module_path))
@@ -177,7 +225,14 @@ def render(stack_path: Path, stack_actions: Path, module_path: Path, module_acti
     section("Batch 1: stack custody and the guardian", "Sign after the stack deploy (checklist step 10).", batch1, named, stack),
     section("Batch 2: TradeModule custody", "Sign after the module deploy (checklist step 11).", batch2, named, stack),
     section("Batch 3: enable (opens the market)", "Last (checklist step 21). Action 0 first, then action 1.", batch3, named, stack),
-  ])
+  ] + ([] if batch4 is None else [
+    section(
+      "Batch 4: cNGN as margin",
+      f"After the escrow deploy (`{collateral_path.name}`: escrow `{collateral['escrow']}`, factor "
+      f"{int(collateral['marginFactor']) / 10**16:.0f}%, cap {int(collateral['collateralCap']) // 10**18:,} cNGN; batch hash "
+      f"`{collateral['batchHash']}`). In order; every prefix is a safe place to stop. Nothing can be deposited before the last action.",
+      batch4, named, stack),
+  ]))
 
 
 def self_test() -> int:
@@ -196,6 +251,23 @@ def self_test() -> int:
     raise AssertionError("trailing bytes must be refused")
   except SystemExit:
     pass
+  factor = "0x" + keccak(b"setBaseAssetMarginFactor(uint256,uint256,uint256)").hex()[:8]
+  sig, args = decode(factor + f"{1:064x}" + f"{5 * 10**17:064x}" + f"{10**18:064x}")
+  assert args == [1, 5 * 10**17, 10**18]
+  purpose(sig, args, "srm", {})
+  try:
+    purpose(sig, [1, 6 * 10**17, 10**18], "srm", {})  # above the sized factor
+    raise AssertionError("a factor above the sized one must be refused")
+  except SystemExit:
+    pass
+  try:
+    purpose("setBorrowingEnabled(bool)", [True], "srm", {})
+    raise AssertionError("enabling borrowing must be refused")
+  except SystemExit:
+    pass
+  wl = "0x" + keccak(b"whitelistAsset(address,uint256,uint8)").hex()[:8]
+  sig, args = decode(wl + "00" * 12 + "ab" * 20 + f"{1:064x}" + f"{3:064x}")
+  assert args[2] == 3 and "BASE" in purpose(sig, args, "srm", {})
   print("self-test ok")
   return 0
 
@@ -207,11 +279,13 @@ def main() -> int:
   ap.add_argument("--stack-actions", type=Path, default=ROOT / "deployments/8453/CNGN_PERP_STACK_VAULT_ACTIONS.json")
   ap.add_argument("--module", type=Path, default=EXECUTION / "deployments/8453/CNGN_PERP_TRADE_MODULE.json")
   ap.add_argument("--module-actions", type=Path, default=EXECUTION / "deployments/8453/CNGN_PERP_TRADE_MODULE_VAULT_ACTIONS.json")
+  ap.add_argument("--collateral", type=Path, default=ROOT / "deployments/8453/CNGN_PERP_COLLATERAL.json")
+  ap.add_argument("--collateral-actions", type=Path, default=ROOT / "deployments/8453/CNGN_PERP_COLLATERAL_VAULT_ACTIONS.json")
   ap.add_argument("--out", type=Path, default=ROOT / "deployments/8453/CNGN_PERP_VAULT_REVIEW.md")
   args = ap.parse_args()
   if args.self_test:
     return self_test()
-  args.out.write_text(render(args.stack, args.stack_actions, args.module, args.module_actions))
+  args.out.write_text(render(args.stack, args.stack_actions, args.module, args.module_actions, args.collateral, args.collateral_actions))
   print(f"wrote {args.out}")
   return 0
 
