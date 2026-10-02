@@ -15,8 +15,12 @@ import (
 )
 
 // Check is the pure rule. cngn is the account's collateral balance; a non-positive balance means the
-// rule does not apply. position is the account's perp balance now; delta is what the order adds.
-func Check(cngn, position, delta *big.Int) error {
+// rule does not apply. position is the account's perp balance now; delta is what the order adds;
+// resting is the net signed remaining amount of the account's open orders (nil at fill time).
+// Resting orders only ever make the rule stricter: direction is judged on the position alone (a
+// resting long-USD order is not a position, and may be cancelled), while the 1:1 bound counts the
+// long-USD side of what is resting, so orders cannot pass one by one and exceed it together.
+func Check(cngn, position, delta, resting *big.Int) error {
 	if cngn == nil || cngn.Sign() <= 0 {
 		return nil
 	}
@@ -30,6 +34,9 @@ func Check(cngn, position, delta *big.Int) error {
 			"this order would leave it long naira by %s cNGN. Deposit USDC margin, or withdraw the cNGN, to trade long naira", whole(after))
 	}
 	short := new(big.Int).Neg(after)
+	if resting != nil && resting.Sign() < 0 {
+		short.Sub(short, resting)
+	}
 	if short.Cmp(cngn) > 0 {
 		return fmt.Errorf("cngn_margin_hedge: an account margined in cNGN may hold at most as much long-USD notional as the cNGN "+
 			"it posted (%s cNGN); this order would take it to %s cNGN. Reduce the size, or post more cNGN", whole(cngn), whole(short))

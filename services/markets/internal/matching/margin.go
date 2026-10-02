@@ -209,7 +209,7 @@ func (c *chainMarginChecker) CheckPerpFill(ctx context.Context, instrument instr
 			if err != nil {
 				return marginVerdict{}, fmt.Errorf("read cNGN collateral of %s: %w", leg.order.SubaccountID, err)
 			}
-			if err := hedge.Check(cngn, position, delta); err != nil {
+			if err := hedge.Check(cngn, position, delta, nil); err != nil {
 				return marginVerdict{OK: false, Account: leg.order.SubaccountID, Reason: err.Error()}, nil
 			}
 		}
