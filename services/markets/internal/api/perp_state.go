@@ -14,6 +14,7 @@ import (
 	"github.com/numofx/matching-backend/internal/config"
 	"github.com/numofx/matching-backend/internal/hedge"
 	"github.com/numofx/matching-backend/internal/instruments"
+	"github.com/numofx/matching-backend/internal/orders"
 )
 
 // USDCcNGN-PERP's live state, read from its own stack on chain: mark, index, funding, open interest
@@ -335,8 +336,11 @@ var errCollateralUnreadable = errors.New("the account's cNGN collateral could no
 
 // HedgeAllows is the venue's rule for cNGN-margined accounts at order submission (internal/hedge):
 // only long USD, and no more of it than the cNGN posted. Nil for a market without a collateral
-// asset or an account holding none. desiredAmount is the engine amount, 18dp.
-func (r *perpStateReader) HedgeAllows(ctx context.Context, market instruments.Metadata, subaccountID, side, desiredAmount string) error {
+// asset or an account holding none. desiredAmount is the engine amount, 18dp; resting is the net
+// signed amount of the account's open orders on this perp (buys positive), so that orders which
+// pass one by one cannot together exceed the hedge. The fill-time check in the matcher is the
+// backstop for what still gets through.
+func (r *perpStateReader) HedgeAllows(ctx context.Context, market instruments.Metadata, subaccountID, side, desiredAmount string, resting *big.Int) error {
 	escrow := strings.ToLower(market.CollateralAssetAddress)
 	if escrow == "" {
 		return nil
@@ -367,7 +371,38 @@ func (r *perpStateReader) HedgeAllows(ctx context.Context, market instruments.Me
 	if strings.EqualFold(side, "sell") {
 		delta.Neg(delta)
 	}
+	if resting != nil {
+		position = new(big.Int).Add(position, resting)
+	}
 	return hedge.Check(cngn, position, delta)
+}
+
+// restingPerpDelta is the net signed remaining amount of an account's open orders on one perp
+// (buys positive, sells negative), 18dp: what its position becomes if they all fill.
+func restingPerpDelta(open []orders.Order, assetAddress, subaccountID string) *big.Int {
+	net := big.NewInt(0)
+	for _, order := range open {
+		if !strings.EqualFold(order.AssetAddress, assetAddress) || order.SubaccountID != subaccountID {
+			continue
+		}
+		desired, ok := new(big.Int).SetString(order.DesiredAmount, 10)
+		if !ok {
+			continue
+		}
+		filled, ok := new(big.Int).SetString(order.FilledAmount, 10)
+		if !ok {
+			filled = big.NewInt(0)
+		}
+		remaining := new(big.Int).Sub(desired, filled)
+		if remaining.Sign() <= 0 {
+			continue
+		}
+		if order.Side == orders.SideSell {
+			remaining.Neg(remaining)
+		}
+		net.Add(net, remaining)
+	}
+	return net
 }
 
 // paused reads the SRM guardian's pause flag, uncached: it is the one input that changes by a
