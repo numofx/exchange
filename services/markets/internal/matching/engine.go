@@ -529,6 +529,18 @@ func (e *Engine) perpMarginAllows(ctx context.Context, instrument instruments.Me
 	if verdict.OK {
 		return true
 	}
+	if verdict.Reason != "" {
+		e.noteMatchFailure(instrument.Symbol, candidate, "perp_cngn_rule", settlementRevert{})
+		slog.Warn(
+			"match_trace_perp_cngn_rule",
+			"market", instrument.Symbol,
+			"taker_order_id", candidate.Taker.OrderID,
+			"maker_order_id", candidate.Maker.OrderID,
+			"subaccount_id", verdict.Account,
+			"reason", verdict.Reason,
+		)
+		return false
+	}
 	e.noteMatchFailure(instrument.Symbol, candidate, "perp_margin_insufficient", settlementRevert{})
 	surplus := ""
 	if verdict.SurplusAfter != nil {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/numofx/matching-backend/internal/config"
+	"github.com/numofx/matching-backend/internal/hedge"
 	"github.com/numofx/matching-backend/internal/instruments"
 )
 
@@ -326,6 +327,47 @@ func (r *perpStateReader) collateralAssets(ctx context.Context, market instrumen
 		Cap:          e18String(cap),
 		Total:        e18String(total),
 	}}, factor, nil
+}
+
+// errCollateralUnreadable is a hedge check that could not read the chain: the order is refused
+// with a retry, not let through, since nothing on chain enforces the direction rule.
+var errCollateralUnreadable = errors.New("the account's cNGN collateral could not be read from the chain; retry shortly")
+
+// HedgeAllows is the venue's rule for cNGN-margined accounts at order submission (internal/hedge):
+// only long USD, and no more of it than the cNGN posted. Nil for a market without a collateral
+// asset or an account holding none. desiredAmount is the engine amount, 18dp.
+func (r *perpStateReader) HedgeAllows(ctx context.Context, market instruments.Metadata, subaccountID, side, desiredAmount string) error {
+	escrow := strings.ToLower(market.CollateralAssetAddress)
+	if escrow == "" {
+		return nil
+	}
+	account, err := encodeUint256(subaccountID)
+	if err != nil {
+		return err
+	}
+	subAccounts, err := r.chain.subAccountsAddress(ctx)
+	if err != nil {
+		return errCollateralUnreadable
+	}
+	cngn, err := r.word(ctx, subAccounts, sigGetBalance+account+addressArg(escrow)+strings.Repeat("0", 64), 0)
+	if err != nil {
+		return errCollateralUnreadable
+	}
+	if cngn.Sign() <= 0 {
+		return nil
+	}
+	position, err := r.word(ctx, subAccounts, sigGetBalance+account+addressArg(market.AssetAddress)+strings.Repeat("0", 64), 0)
+	if err != nil {
+		return errCollateralUnreadable
+	}
+	delta, ok := new(big.Int).SetString(strings.TrimSpace(desiredAmount), 10)
+	if !ok || delta.Sign() <= 0 {
+		return fmt.Errorf("desired_amount is not a positive integer")
+	}
+	if strings.EqualFold(side, "sell") {
+		delta.Neg(delta)
+	}
+	return hedge.Check(cngn, position, delta)
 }
 
 // paused reads the SRM guardian's pause flag, uncached: it is the one input that changes by a

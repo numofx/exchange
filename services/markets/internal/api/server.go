@@ -608,6 +608,18 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": tradingPausedError})
 			return
 		}
+		// A cNGN-margined account is a synthetic dollar: long USD only, no more than the cNGN it
+		// posted. Checked here so a refused order never rests, and again at every fill.
+		if err := s.perp.HedgeAllows(r.Context(), instrument, params.SubaccountID, string(params.Side), params.DesiredAmount); err != nil {
+			if errors.Is(err, errCollateralUnreadable) {
+				slog.Warn("order_submit_collateral_unreadable", "order_id", params.OrderID, "subaccount_id", params.SubaccountID, "error", err)
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
+				return
+			}
+			slog.Info("order_submit_rejected_hedge", "order_id", params.OrderID, "subaccount_id", params.SubaccountID, "error", err)
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+			return
+		}
 	}
 	order, err := s.orders.Create(r.Context(), params)
 	if err != nil {
