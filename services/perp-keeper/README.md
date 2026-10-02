@@ -28,6 +28,19 @@ fresh subaccount the keeper creates, funds with exactly that bid's requirement (
 Inherited positions stay in those bid accounts. The keeper does **not** close or hedge them — it
 alerts (`keeper-inventory`), and an operator or the market maker takes them from there.
 
+## cNGN collateral
+
+Once cNGN is margin on the perp (risk-core `CNGN_PERP_COLLATERAL.json`), set `CNGN_ESCROW` to that
+escrow. The keeper then reads each account's cNGN and values it at the perp index less
+`CNGN_HAIRCUT_BPS` (default 10%): an insolvent bid waits until the payout covers the deficit plus
+that haircut, and a solvent portfolio's discount is judged against its value net of it. The SRM
+credits cNGN at 50%, but the auction's end price is the maintenance-margin deficit, which on cNGN
+carries that same haircut — a keeper waiting for the SRM's valuation would let every cNGN auction
+run to its most expensive second. `MAX_CNGN_INVENTORY` (whole cNGN) bounds what the keeper will hold
+across its accounts: a bid that would pass it is sized down to the room left, then stops
+(`keeper-cngn-over-limit`). Inherited cNGN is alerted (`keeper-cngn-inventory`) and left for an
+operator to sell on spot or hold, like inherited perp.
+
 ## Bid size and health
 
 `MAX_BID_USD` caps one bid by the margin it ties up: a solvent bid by its price plus the buffer

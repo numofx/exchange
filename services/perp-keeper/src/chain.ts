@@ -139,6 +139,7 @@ const cashAbi = parseAbi([
   'function temporaryWithdrawFeeEnabled() view returns (bool)',
 ]);
 const perpAbi = parseAbi([
+  'function getIndexPrice() view returns (uint256, uint256)',
   'function totalPosition(address manager) view returns (uint256)',
   'function totalPositionCap(address manager) view returns (uint256)',
   'function isDisabled() view returns (bool)',
@@ -206,6 +207,15 @@ export function createKeeperChain(config: Config) {
     } catch {
       return null;
     }
+  }
+
+  /** The account's cNGN margin, valued at the perp index; null when it holds none or no escrow is set. */
+  async function readCollateral(accountId: bigint): Promise<AccountView['collateral']> {
+    if (config.CNGN_ESCROW === undefined) return null;
+    const cngn = await balance(accountId, config.CNGN_ESCROW);
+    if (cngn <= 0n) return null;
+    const [indexPrice] = await client.readContract({ address: config.PERP, abi: perpAbi, functionName: 'getIndexPrice' });
+    return { cngn, indexPrice };
   }
 
   /** A fresh cash-only account under the SRM, owned by the keeper, to bid from. */
@@ -338,6 +348,7 @@ export function createKeeperChain(config: Config) {
         canTerminate: false,
         bidPrice: null,
         maxProportion: null,
+        collateral: await readCollateral(accountId),
       };
       if (!auction.ongoing) return view;
 
@@ -389,6 +400,14 @@ export function createKeeperChain(config: Config) {
       return balance(config.KEEPER_ACCOUNT, config.CASH);
     },
 
+    /** cNGN across every keeper-owned account: what liquidations have paid it in so far. */
+    async keeperCngn(): Promise<bigint> {
+      if (config.CNGN_ESCROW === undefined) return 0n;
+      const escrow = config.CNGN_ESCROW;
+      const held = await Promise.all([...ownAccounts].map((id) => balance(id, escrow)));
+      return held.reduce((sum, amount) => sum + amount, 0n);
+    },
+
     async readHealth(): Promise<StackHealth> {
       const own = [...ownAccounts];
       const [ownPerp, ownMargins] = await Promise.all([
@@ -405,7 +424,7 @@ export function createKeeperChain(config: Config) {
         const margins = ownMargins[i];
         return margins !== null && margins !== undefined && margins[0] < 0n;
       });
-      const [securityModuleCash, totalInsolventMM, cashExchangeRate, temporaryWithdrawFeeEnabled, keeperCash, keeperEthWei, totalPosition, totalPositionCap] =
+      const [securityModuleCash, totalInsolventMM, cashExchangeRate, temporaryWithdrawFeeEnabled, keeperCash, keeperEthWei, totalPosition, totalPositionCap, keeperCngn] =
         await Promise.all([
           balance(config.SECURITY_MODULE_ACCOUNT, config.CASH),
           client.readContract({ address: config.AUCTION, abi: auctionAbi, functionName: 'totalInsolventMM' }),
@@ -415,6 +434,7 @@ export function createKeeperChain(config: Config) {
           client.getBalance({ address: keeper.address }),
           client.readContract({ address: config.PERP, abi: perpAbi, functionName: 'totalPosition', args: [config.SRM] }),
           client.readContract({ address: config.PERP, abi: perpAbi, functionName: 'totalPositionCap', args: [config.SRM] }),
+          this.keeperCngn(),
         ]);
       return {
         securityModuleCash,
@@ -424,6 +444,7 @@ export function createKeeperChain(config: Config) {
         keeperCash,
         keeperEthWei,
         keeperPerpPosition: ownPerp.reduce((sum, position) => sum + position, 0n),
+        keeperCngn,
         keeperAccountsUnderMargin,
         totalPosition,
         totalPositionCap,

@@ -5,7 +5,7 @@ import { decide, type AccountView } from './decide.js';
 import { assessHealth, fmt, type StackHealth } from './health.js';
 
 const E18 = 10n ** 18n;
-const rules = { maxBidUsd: null, minSolventDiscountBps: 200n, minBidPercent: E18 / 100n };
+const rules = { maxBidUsd: null, minSolventDiscountBps: 200n, minBidPercent: E18 / 100n, cngnHaircutBps: 1_000n, cngnInventory: 0n, maxCngnInventory: null };
 
 function account(overrides: Partial<AccountView>): AccountView {
   return {
@@ -17,9 +17,13 @@ function account(overrides: Partial<AccountView>): AccountView {
     canTerminate: false,
     bidPrice: null,
     maxProportion: null,
+    collateral: null,
     ...overrides,
   };
 }
+
+/** 10M cNGN at 0.00072 USDC/cNGN: $7,200 of collateral, $720 of haircut at 10%. */
+const tenMillionCngn = { cngn: 10_000_000n * E18, indexPrice: 72n * E18 / 100_000n };
 
 describe('decide', () => {
   it('leaves a healthy account alone', () => {
@@ -170,6 +174,50 @@ describe('decide', () => {
     assert.equal(action.kind === 'bid' && action.percent, E18 / 4n);
   });
 
+  it('waits on an insolvent cNGN portfolio until the payout also covers the haircut on the cNGN', () => {
+    const view = account({
+      mm: -800n * E18,
+      mtm: -300n * E18,
+      auction: { ongoing: true, insolvent: true, reservedCash: 0n },
+      bidPrice: -306n * E18, // covers the $300 deficit + 2%, but not the $720 haircut on 10M cNGN
+      collateral: tenMillionCngn,
+    });
+    assert.equal(decide(view, 10_000n * E18, rules).kind, 'none');
+    assert.equal(decide({ ...view, bidPrice: -1_026n * E18 }, 10_000n * E18, rules).kind, 'bid');
+    // Without a haircut the cNGN is taken at the index, as a cash-only portfolio would be.
+    assert.equal(decide(view, 10_000n * E18, { ...rules, cngnHaircutBps: 0n }).kind, 'bid');
+  });
+
+  it('reads a solvent cNGN portfolio net of the haircut before judging the discount', () => {
+    const view = account({
+      mm: -50n * E18,
+      bm: -200n * E18,
+      mtm: 7_200n * E18, // the cNGN alone
+      auction: { ongoing: true, insolvent: false, reservedCash: 0n },
+      bidPrice: 6_400n * E18, // 11% under the index value, but only 1.2% under the haircut value of 6,480
+      maxProportion: E18,
+      collateral: tenMillionCngn,
+    });
+    assert.equal(decide(view, 100_000n * E18, rules).kind, 'none');
+    assert.equal(decide({ ...view, bidPrice: 6_300n * E18 }, 100_000n * E18, rules).kind, 'bid');
+  });
+
+  it('sizes a cNGN bid down to the inventory room left, and stops at the limit', () => {
+    const view = account({
+      mm: -800n * E18,
+      mtm: -300n * E18,
+      auction: { ongoing: true, insolvent: true, reservedCash: 0n },
+      bidPrice: -1_100n * E18,
+      collateral: tenMillionCngn,
+    });
+    const limited = { ...rules, cngnInventory: 8_000_000n * E18, maxCngnInventory: 10_500_000n * E18 };
+    const action = decide(view, 10_000n * E18, limited);
+    assert.equal(action.kind === 'bid' && action.percent, E18 / 4n); // 2.5M of room against 10M
+    const full = decide(view, 10_000n * E18, { ...limited, cngnInventory: 10_500_000n * E18 });
+    assert.equal(full.kind, 'none');
+    assert.match(full.kind === 'none' ? full.note ?? '' : '', /inventory/);
+  });
+
   it('declines a bid too small to be worth its gas', () => {
     const view = account({
       mm: -800n * E18,
@@ -189,14 +237,22 @@ describe('assessHealth', () => {
     keeperCash: 5_000n * E18,
     keeperEthWei: E18 / 10n,
     keeperPerpPosition: 0n,
+    keeperCngn: 0n,
     keeperAccountsUnderMargin: [],
     totalPosition: 0n,
     totalPositionCap: 50_000_000n * E18,
   };
-  const healthRules = { minSecurityModuleCash: 1_000n * E18, minKeeperCash: 1_000n * E18, minKeeperEthWei: E18 / 100n, capWarnBps: 8_000n };
+  const healthRules = { minSecurityModuleCash: 1_000n * E18, minKeeperCash: 1_000n * E18, minKeeperEthWei: E18 / 100n, capWarnBps: 8_000n, maxCngnInventory: 10_000_000n * E18 };
 
   it('is quiet when nothing is wrong', () => {
     assert.deepEqual(assessHealth(healthy, healthRules), []);
+  });
+
+  it('reports cNGN the keeper was paid in, and says when it is over the limit', () => {
+    const held = assessHealth({ ...healthy, keeperCngn: 3_000_000n * E18 }, healthRules);
+    assert.deepEqual(held.map((a) => a.key), ['keeper-cngn-inventory']);
+    const over = assessHealth({ ...healthy, keeperCngn: 12_000_000n * E18 }, healthRules);
+    assert.deepEqual(over.map((a) => a.key), ['keeper-cngn-over-limit']);
   });
 
   it('raises a socialized loss, an SM that cannot cover live insolvency, and keeper inventory', () => {
