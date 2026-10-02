@@ -368,10 +368,7 @@ func (r *perpStateReader) HedgeAllows(ctx context.Context, market instruments.Me
 	if delta == nil || delta.Sign() == 0 {
 		return fmt.Errorf("the order adds nothing to the position")
 	}
-	if resting != nil {
-		position = new(big.Int).Add(position, resting)
-	}
-	return hedge.Check(cngn, position, delta)
+	return hedge.Check(cngn, position, delta, resting)
 }
 
 // signedDelta is what an order adds to the position in chain units: the signed action's
