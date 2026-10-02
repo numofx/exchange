@@ -530,15 +530,32 @@ func (e *Engine) perpMarginAllows(ctx context.Context, instrument instruments.Me
 		return true
 	}
 	if verdict.Reason != "" {
-		e.noteMatchFailure(instrument.Symbol, candidate, "perp_cngn_rule", settlementRevert{})
+		// The venue's own rule, not a transient: the offending order can never fill for this
+		// account as it stands, and retrying it would block everything queued behind it. Cancel it;
+		// the trader resubmits once the position or the collateral has changed.
+		offending := candidate.Taker
+		if candidate.Maker.SubaccountID == verdict.Account {
+			offending = candidate.Maker
+		}
+		_, cancelErr := e.orders.CancelByOwnerNonce(ctx, orders.CancelOrderParams{
+			OwnerAddress: offending.OwnerAddress,
+			Nonce:        offending.Nonce,
+			Reason:       "cngn_margin_rule",
+			CancelledBy:  "matcher",
+		})
 		slog.Warn(
 			"match_trace_perp_cngn_rule",
 			"market", instrument.Symbol,
 			"taker_order_id", candidate.Taker.OrderID,
 			"maker_order_id", candidate.Maker.OrderID,
 			"subaccount_id", verdict.Account,
+			"cancelled_order_id", offending.OrderID,
+			"cancel_error", cancelErr,
 			"reason", verdict.Reason,
 		)
+		if cancelErr != nil {
+			e.noteMatchFailure(instrument.Symbol, candidate, "perp_cngn_rule", settlementRevert{})
+		}
 		return false
 	}
 	e.noteMatchFailure(instrument.Symbol, candidate, "perp_margin_insufficient", settlementRevert{})
