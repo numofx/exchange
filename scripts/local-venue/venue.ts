@@ -290,7 +290,14 @@ function nonce() {
  * UI price cNGN per USDC and size in USD; the engine price is 1 / price and the engine side the
  * opposite one. Whole-naira prices keep the arithmetic exact.
  */
-async function placeOrder(label: string, side: 'buy' | 'sell', uiPrice: bigint, uiSizeUsd: bigint, market: OrderMarket = perpMarket()) {
+async function placeOrder(
+  label: string,
+  side: 'buy' | 'sell',
+  uiPrice: bigint,
+  uiSizeUsd: bigint,
+  market: OrderMarket = perpMarket(),
+  expectation: 'accepted' | 'refused' = 'accepted',
+): Promise<number> {
   const account = keyFor(label);
   const subaccountId = readAccounts()[label];
   if (subaccountId === undefined) throw new Error(`no account for ${label}; run "account ${label}" first`);
@@ -382,8 +389,12 @@ async function placeOrder(label: string, side: 'buy' | 'sell', uiPrice: bigint, 
   });
   const body = await response.text();
   console.log(`${label} ${market.label} ${side} $${uiSizeUsd} @ ${uiPrice} cNGN/USDC -> ${response.status} ${body.slice(0, 200)}`);
+  if (expectation === 'refused') {
+    if (response.ok) throw new Error(`order was accepted but the venue's rule should have refused it`);
+    return response.status;
+  }
   if (!response.ok) throw new Error(`order refused: ${response.status}`);
-  return (JSON.parse(body) as { order: { order_id: string } }).order.order_id;
+  return response.status;
 }
 
 async function waitForPosition(label: string) {
@@ -650,7 +661,7 @@ async function spotCross(uiPrice: bigint, uiSize: bigint) {
  * venue accepts the perp cash as a withdrawal asset (WITHDRAWAL_ASSET_ADDRESSES) and that the module
  * can call CashAsset.withdraw, which pays real USDC to the owner.
  */
-async function perpWithdraw(label: string, whole: bigint) {
+async function perpWithdraw(label: string, whole: bigint, expectation: 'accepted' | 'refused' = 'accepted') {
   const account = keyFor(label);
   const subaccountId = readAccounts()[label]!;
   const owner = getAddress(account.address);
@@ -686,6 +697,11 @@ async function perpWithdraw(label: string, whole: bigint) {
   });
   const body = await response.text();
   console.log(`perp withdraw ${whole} USDC from #${subaccountId} -> ${response.status} ${body.slice(0, 200)}`);
+  if (expectation === 'refused') {
+    if (response.ok) throw new Error('withdrawal was paid but the venue should have refused it');
+    console.log(`ok (refused as expected): ${response.status}`);
+    return;
+  }
   if (!response.ok) throw new Error('perp withdrawal refused');
   const after = await client.readContract({ address: USDC, abi, functionName: 'balanceOf', args: [owner] });
   const cashAfter = await balance(subaccountId, getAddress(venue.cash));
@@ -783,6 +799,18 @@ switch (command) {
     break;
   case 'withdraw':
     await perpWithdraw(args[0] ?? 'taker', BigInt(args[1] ?? '10'));
+    break;
+  case 'order': {
+    // order <label> <buy|sell> <size usd> [accepted|refused]: a limit at the index, with the
+    // venue's answer asserted. UI buy is long USD (the on-chain short of the cNGN perp).
+    const index = await uiIndex();
+    const expectation = (args[3] ?? 'accepted') as 'accepted' | 'refused';
+    const status = await placeOrder(args[0] ?? 'trader', (args[1] ?? 'buy') as 'buy' | 'sell', index, BigInt(args[2] ?? '100'), perpMarket(), expectation);
+    console.log(`${expectation === 'accepted' ? 'ok' : 'ok (refused as expected)'}: ${args[0]} ${args[1]} $${args[2]} -> ${status}`);
+    break;
+  }
+  case 'withdraw-refused':
+    await perpWithdraw(args[0] ?? 'taker', BigInt(args[1] ?? '10'), 'refused');
     break;
   case 'account-cngn':
     await openCngnAccount(args[0] ?? 'treasury', BigInt(args[1] ?? '10000000'));
