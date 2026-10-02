@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -100,6 +101,15 @@ func newWithdrawalHarness() *withdrawalHarness {
 		submitter:  submitter,
 		signatures: signatures,
 	}
+}
+
+type fakeWithdrawalLedger struct {
+	cash *big.Int
+	err  error
+}
+
+func (l *fakeWithdrawalLedger) CashBalance(context.Context, string) (*big.Int, error) {
+	return l.cash, l.err
 }
 
 func postWithdrawal(t *testing.T, server *Server, body any) *httptest.ResponseRecorder {
@@ -468,5 +478,46 @@ func TestDepositedOwnerReadsWhoMatchingRecords(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The venue does not pay out borrowed cash: a withdrawal of the perp's cash past the account's
+// balance is refused before anything reaches the executor, one within it goes through, and an
+// unreadable ledger fails closed. Spot assets are not subject to the rule.
+func TestPerpCashWithdrawalsStopAtZero(t *testing.T) {
+	const perpCash = "0xa74e49b4ed7cb176bc02ef4d8a1a3240c9ad4272"
+	h := newWithdrawalHarness()
+	h.server.withdrawals.assets = append(h.server.withdrawals.assets, perpCash)
+	h.server.withdrawals.perpCash = perpCash
+	ledger := &fakeWithdrawalLedger{cash: new(big.Int).Mul(big.NewInt(1_999_575), big.NewInt(1e12))} // 1.999575 USDC, 18dp
+	h.server.withdrawals.ledger = ledger
+
+	req := validWithdrawal()
+	req.Action.Data = withdrawalDataHex(perpCash, 1_999_575)
+	if rec := postWithdrawal(t, h.server, req); rec.Code != http.StatusOK {
+		t.Fatalf("a withdrawal of exactly the balance goes through: %d %s", rec.Code, rec.Body.String())
+	}
+
+	req.Action.Data = withdrawalDataHex(perpCash, 1_999_576)
+	rec := postWithdrawal(t, h.server, req)
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(decodeErrorBody(t, rec)["error"], "cash_floor") {
+		t.Fatalf("one wei past the balance must be refused: %d %s", rec.Code, rec.Body.String())
+	}
+
+	ledger.cash = big.NewInt(-5)
+	req.Action.Data = withdrawalDataHex(perpCash, 1)
+	if rec := postWithdrawal(t, h.server, req); rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("an account already below zero withdraws nothing: %d %s", rec.Code, rec.Body.String())
+	}
+
+	ledger.err = errors.New("rpc down")
+	if rec := postWithdrawal(t, h.server, req); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("an unreadable ledger fails closed: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Spot's wrapped USDC is paid out as before, whatever the perp ledger says.
+	req.Action.Data = withdrawalDataHex(testWrappedUSDC, 1_999_575)
+	if rec := postWithdrawal(t, h.server, req); rec.Code != http.StatusOK {
+		t.Fatalf("spot withdrawals are not subject to the perp cash floor: %d %s", rec.Code, rec.Body.String())
 	}
 }
