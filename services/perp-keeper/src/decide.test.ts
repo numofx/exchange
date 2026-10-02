@@ -88,8 +88,9 @@ describe('decide', () => {
   });
 
   it('says an auction is nearly sold out rather than blaming keeper cash', () => {
+    // Still under maintenance margin, so this is not the finishing bid below.
     const view = account({
-      mm: 10n * E18,
+      mm: -10n * E18,
       bm: -1n * E18,
       mtm: 1_000n * E18,
       auction: { ongoing: true, insolvent: false, reservedCash: 100n * E18 },
@@ -188,18 +189,19 @@ describe('decide', () => {
     assert.equal(decide(view, 10_000n * E18, { ...rules, cngnHaircutBps: 0n }).kind, 'bid');
   });
 
-  it('reads a solvent cNGN portfolio net of the haircut before judging the discount', () => {
+  it('bids a solvent cNGN portfolio at the index discount, carrying the cNGN as inventory', () => {
+    // Equity under the haircut: netting it would make this unbiddable until the auction ran out.
     const view = account({
       mm: -50n * E18,
       bm: -200n * E18,
-      mtm: 7_200n * E18, // the cNGN alone
+      mtm: 69n * E18, // 10M cNGN against a settled loss: $69 of equity, $720 of haircut
       auction: { ongoing: true, insolvent: false, reservedCash: 0n },
-      bidPrice: 6_400n * E18, // 11% under the index value, but only 1.2% under the haircut value of 6,480
+      bidPrice: 65n * E18, // 5.8% under
       maxProportion: E18,
       collateral: tenMillionCngn,
     });
-    assert.equal(decide(view, 100_000n * E18, rules).kind, 'none');
-    assert.equal(decide({ ...view, bidPrice: 6_300n * E18 }, 100_000n * E18, rules).kind, 'bid');
+    assert.equal(decide(view, 100_000n * E18, rules).kind, 'bid');
+    assert.equal(decide({ ...view, bidPrice: 68n * E18 }, 100_000n * E18, rules).kind, 'none'); // 1.4% is under the rule
   });
 
   it('sizes a cNGN bid down to the inventory room left, and stops at the limit', () => {
@@ -216,6 +218,25 @@ describe('decide', () => {
     const full = decide(view, 10_000n * E18, { ...limited, cngnInventory: 10_500_000n * E18 });
     assert.equal(full.kind, 'none');
     assert.match(full.kind === 'none' ? full.note ?? '' : '', /inventory/);
+  });
+
+  it('finishes a solvent auction whose sliver is under the minimum once the account is above MM', () => {
+    const view = account({
+      mm: 5n * E18, // above maintenance margin after an earlier bid
+      bm: -1n * E18 / 1_000_000n, // a millionth under buffer margin: the auction will not end on its own
+      mtm: 43n * E18,
+      auction: { ongoing: true, insolvent: false, reservedCash: 42n * E18 },
+      bidPrice: 3n * E18 / 10n,
+      maxProportion: E18 / 100_000n, // 0.001%: all the auction has left; pays in 3 millionths
+    });
+    const action = decide(view, 10_000n * E18, rules);
+    assert.equal(action.kind, 'bid');
+    assert.equal(action.kind === 'bid' && action.percent, E18 / 100_000n);
+    // Still under margin: a sliver is not finished, it is a keeper out of cash or an auction sold out.
+    assert.equal(decide({ ...view, mm: -5n * E18 }, 10_000n * E18, rules).kind, 'none');
+    // A price decayed too far to restore buffer margin: bidding would loop for nothing; the sliver
+    // waits for the solvent window to end, when maintenance margin is enough to terminate.
+    assert.equal(decide({ ...view, bm: -1n * E18 / 1_000n }, 10_000n * E18, rules).kind, 'none');
   });
 
   it('declines a bid too small to be worth its gas', () => {
