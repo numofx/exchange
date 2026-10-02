@@ -100,7 +100,8 @@ export function decide(account: AccountView, keeperCash: bigint, rules: KeeperRu
 /**
  * Solvent: the keeper pays `bidPrice × percent` for `percent` of a portfolio worth `mtm × percent`.
  * It bids only at a real discount, and only what its cash can back, since DutchAuction also requires
- * the bidder to hold |bm − reserved| × percent on top of the price.
+ * the bidder to hold |bm − reserved| × percent on top of the price. cNGN in the portfolio counts at
+ * the index here and at the inventory limit; see decideInsolventBid for the haircut.
  */
 function decideSolventBid(account: AccountView, keeperCash: bigint, rules: KeeperRules): Action {
   const { accountId, bidPrice, mtm, maxProportion } = account;
@@ -108,10 +109,11 @@ function decideSolventBid(account: AccountView, keeperCash: bigint, rules: Keepe
     return { kind: 'none', accountId, note: 'no solvent price' };
   }
 
-  // The portfolio is worth its mark-to-market less what the keeper discounts the cNGN in it by.
-  const value = mtm - cngnHaircut(account, rules);
-  if (value <= 0n) return { kind: 'none', accountId, note: 'portfolio is worth nothing to the keeper after the cNGN haircut' };
-  const discountBps = ((value - bidPrice) * 10_000n) / value;
+  // Judged at the index, cNGN included: the keeper carries the cNGN it is paid in as inventory,
+  // like the position itself. Netting the haircut here instead would leave an account whose equity
+  // is under the haircut unbiddable for the whole solvent phase (12 hours), position open. The
+  // haircut is the insolvent rule's, where it sets what the security module pays.
+  const discountBps = ((mtm - bidPrice) * 10_000n) / mtm;
   if (discountBps < rules.minSolventDiscountBps) {
     return { kind: 'none', accountId, note: `discount ${discountBps}bps below ${rules.minSolventDiscountBps}bps` };
   }
@@ -120,6 +122,22 @@ function decideSolventBid(account: AccountView, keeperCash: bigint, rules: Keepe
   const affordable = perUnit === 0n ? ONE : (keeperCash * ONE) / perUnit;
   const room = cngnRoom(account, rules);
   const percent = min(maxProportion, affordable, capToMaxBid(perUnit, rules), room, ONE);
+  // The finishing bid: an earlier bid restored maintenance margin and the auction has only a rounding
+  // sliver left to sell (it ends at BUFFER margin). Below the keeper's minimum, but a live auction
+  // freezes the account for its owner, so the keeper takes the sliver when the cash it pays in is
+  // what restores buffer margin and ends the auction. When the price has decayed too far for that,
+  // the sliver waits: the solvent window ends at maintenance margin, and terminate runs then.
+  const paysIn = (bidPrice * maxProportion) / ONE;
+  if (percent < rules.minBidPercent && percent === maxProportion && maxProportion > 0n && account.mm >= 0n && paysIn >= abs(account.bm)) {
+    return {
+      kind: 'bid',
+      accountId,
+      percent,
+      priceLimit: (bidPrice * percent) / ONE + 1n,
+      insolvent: false,
+      bidderCash: (perUnit * percent) / ONE + 1n,
+    };
+  }
   if (percent < rules.minBidPercent) {
     // Say which limit bound: an auction nearly sold out is routine, a keeper out of cash is an alarm.
     const note =
