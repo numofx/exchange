@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # The index-step reopening procedure, drilled on the local venue with the full OI cap open:
 #
-#   ./scripts/local-venue/up.sh && ./scripts/local-venue/step-drill.sh [step-bps]   (default 4000 = 40%)
+#   ./scripts/local-venue/up.sh && ./scripts/local-venue/step-drill.sh [step-bps] [usdc|cngn]
+#   (default 4000 = 40%, margined in USDC; `cngn` margins the NGN long in cNGN only, the hedged
+#   venue's unhedged worst case: it loses on the position and on the collateral in the same step)
 #
 #  1. fill the rest of the cap: one NGN long at ~3x against a well-funded NGN short
 #  2. stop the publisher; 12 minutes of source samples at the new level go in its state file (what
@@ -17,6 +19,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 DIR="${LOCAL_VENUE_DIR:-$ROOT/.local-venue}"
 STEP_BPS="${1:-4000}"
+COLLATERAL="${2:-usdc}"
 RPC=http://127.0.0.1:8600
 VENUE="pnpm --dir $HERE exec tsx $HERE/venue.ts $DIR"
 json() { python3 -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$@"; }
@@ -64,8 +67,8 @@ PAGER >/dev/null
 [ "$(paged resolve keeper-unhealthy)" = 1 ] || { echo "FAIL: keeper-unhealthy did not resolve" >&2; exit 1; }
 echo "ok: paged, then resolved when the keeper answered again"
 
-step "fill the cap"
-$VENUE fill-cap
+step "fill the cap (NGN long margined in $COLLATERAL)"
+$VENUE fill-cap "$COLLATERAL"
 $VENUE report
 
 step "stop the publisher; seed the sources' window at $NEW_LEVEL"
@@ -124,3 +127,9 @@ grep -q '\[REHEARSAL\]' "$PAGES" || { echo "FAIL: pages were not prefixed" >&2; 
 echo "ok: insolvent account and SecurityModule payout paged, insolvency resolved, every page prefixed"
 $VENUE report
 grep -E "bid|auction" "$DIR/logs/perp-keeper.log" | tail -12
+if [ "$COLLATERAL" = cngn ]; then
+  step "cNGN: the keeper was paid in cNGN, holds it within its limit, and says so"
+  grep -E "keeper-cngn-inventory|keeper-cngn-over-limit|haircut" "$DIR/logs/perp-keeper.log" | tail -4
+  grep -q "keeper-cngn-inventory" "$DIR/logs/perp-keeper.log" || { echo "FAIL: the keeper did not report the cNGN it was paid in" >&2; exit 1; }
+  echo "ok: cNGN inventory reported"
+fi

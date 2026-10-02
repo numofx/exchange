@@ -98,10 +98,23 @@ echo "cap=$(cast call "$(json "$STACK" perp)" 'totalPositionCap(address)(uint256
   "module allowed=$(cast call $MATCHING 'allowedModules(address)(bool)' "$MODULE" --rpc-url $RPC)" \
   "guardian=$(cast call "$(json "$STACK" srm)" 'guardian()(address)' --rpc-url $RPC)"
 
-python3 - "$STACK" "$MODULE" "$DIR/venue.json" <<'PY'
+step "deploy: the perp's cNGN collateral escrow, then its vault batch (haircut 50%, cap 25M cNGN)"
+(cd "$ROOT/contracts/risk-core" && forge script test/e2e/DeployCngnPerpCollateralForE2E.s.sol --sig "runE2E()" \
+  --rpc-url $RPC --private-key $DEPLOYER --broadcast --non-interactive >"$DIR/logs/deploy-collateral.log" 2>&1)
+COLLATERAL="$ROOT/contracts/risk-core/cache/e2e-perp-collateral.json"
+python3 -c "import json,sys;[print(a['to'], a['data']) for a in json.load(open(sys.argv[1]))]" \
+  "$ROOT/contracts/risk-core/cache/e2e-perp-collateral-vault-actions.json" |
+  while read -r TO DATA; do cast send "$TO" "$DATA" --from $VAULT --unlocked --rpc-url $RPC >/dev/null; done
+CNGN_ESCROW=$(json "$COLLATERAL" escrow)
+echo "cngn escrow=$CNGN_ESCROW open=$(cast call "$CNGN_ESCROW" 'whitelistedManager(address)(bool)' "$(json "$STACK" srm)" --rpc-url $RPC)" \
+  "factor=$(cast call "$(json "$STACK" srm)" 'baseMarginParams(uint256)(uint256,uint256)' 1 --rpc-url $RPC | head -1)" \
+  "cap=$(cast call "$CNGN_ESCROW" 'totalPositionCap(address)(uint256)' "$(json "$STACK" srm)" --rpc-url $RPC)"
+
+python3 - "$STACK" "$MODULE" "$DIR/venue.json" "$CNGN_ESCROW" <<'PY'
 import json, sys
 stack = json.load(open(sys.argv[1]))
 stack["tradePerp"] = sys.argv[2]
+stack["cngnEscrow"] = sys.argv[4]
 json.dump(stack, open(sys.argv[3], "w"), indent=2)
 PY
 V="$DIR/venue.json"
@@ -109,7 +122,8 @@ PERP=$(json "$V" perp) CASH=$(json "$V" cash) SRM=$(json "$V" srm)
 PERP_MARKETS_ENV="CNGN_PERP_ASSET_ADDRESS=$PERP
 CNGN_PERP_TRADE_MODULE_ADDRESS=$MODULE
 CNGN_PERP_CASH_ADDRESS=$CASH
-CNGN_PERP_SRM_ADDRESS=$SRM"
+CNGN_PERP_SRM_ADDRESS=$SRM
+CNGN_PERP_COLLATERAL_ADDRESS=$CNGN_ESCROW"
 PERP_EXEC_ENV="PERP_TRADE_MODULE_ADDRESS=$MODULE"
 else
   step "spot only: no perp deployed, every perp variable left unset"
@@ -207,6 +221,7 @@ $VENUE keeper-account 20000
   KEEPER_ACCOUNT="$(json "$DIR/accounts.json" keeper)" DRY_RUN=false SUB_ACCOUNTS=$SUB_ACCOUNTS SRM=$SRM \
   AUCTION="$(json "$V" auction)" CASH=$CASH PERP=$PERP SECURITY_MODULE_ACCOUNT="$(json "$V" securityModuleAccount)" \
   START_BLOCK="$(json "$V" blockNumber)" POLL_INTERVAL_MS=5000 HEALTH_PORT=$KEEPER_HEALTH_PORT MAX_BID_USD=2500 \
+  CNGN_ESCROW="$(json "$V" cngnEscrow)" MAX_CNGN_INVENTORY=25000000 \
   start perp-keeper node dist/main.js)
 wait_for "keeper health" sh -c "curl -sf http://127.0.0.1:$KEEPER_HEALTH_PORT/health | grep -q '\"lastPassOk\":true'"
 

@@ -315,13 +315,28 @@ short loses at full value: at the IM maximum (15M short on 10M posted) a **~15% 
 it, solvent, through the auction; at **1:1** (10M short on 10M posted) it takes **~43%**. Tell the
 treasury to size at 1:1, not at the leverage the ticket allows.
 
-**Borrowing goes OFF in the enabling batch.** With cNGN counting as margin, `borrowingEnabled` is a
-USDC loan facility: an account could withdraw cash it does not have, down to initial margin, against
-its cNGN at the haircut, out of the pool's real USDC (the keeper's, the maker's, the SecurityModule's)
-at the rate model's 2–22%. Losses still settle into negative cash and positions still close with it
-off (`testBorrowingGatesLoansNotLosses`, and `testSettlementDoesNotDependOnBorrowing` before it).
-The venue does not lend; a treasury that lost repays the negative cash by depositing USDC, or is
-liquidated into its cNGN.
+**Borrowing stays ON, and that is a loan facility.** The SRM refuses any negative cash delta that
+lands below zero while borrowing is off, and an account holding only cNGN pays its taker fee from
+zero cash: with borrowing off it cannot open, and after a settled loss it cannot close
+(`testTakerFeeOnACngnOnlyAccountNeedsBorrowing`; losses themselves settle either way). So the flag
+stays on, and with it the same account may withdraw USDC it does not have, down to initial margin,
+against its cNGN at the haircut — a loan from the pool's real USDC (the keeper's, the maker's, the
+SecurityModule's, other traders'). Bounds and price:
+
+- **Size:** at most the haircut on the collateral cap — half of 25M cNGN at the index, about
+  **$9,300** today — before IM stops it; less once the borrower also holds a position. Raise the
+  collateral cap with that in mind: it is also the venue's maximum loan book.
+- **Rate (InterestRateModel `0x19A5003A…`, not Ownable, replaced only via `cash.setInterestRateModel`):**
+  2% at zero utilisation, +8% × utilisation up to 85%, then +90% × the excess: ~8.8% at 85% and
+  ~22% at full utilisation, accrued continuously to cash suppliers with the SM's cut. Cheap at low
+  utilisation; the slope is what defends the pool when a loan gets large. A loan that sits at
+  utilisation above 85% is an alert condition (see the pager's `cash-utilisation` follow-up), and
+  the response is a new rate model with a higher floor, not turning borrowing off.
+- **Liquidity:** a withdrawal is paid from the CashAsset's USDC; borrowed USDC is not there. A full
+  loan book can make a large withdrawal wait for repayment or liquidation. The keeper and the
+  SecurityModule do not withdraw in normal operation; the maker and traders do.
+- **Loss:** a loan is a 2:1 over-collateralised cNGN position liquidated like any other, by the
+  keeper, at the index. The exposure is the same cNGN step risk the haircut was sized for.
 
 **The collateral cap is the escrow's `setTotalPositionCap(srm, cap)`**: 25M cNGN at launch, one OI
 side, summed over every account under the perp SRM; the deposit that crosses it is refused, nothing
@@ -348,11 +363,11 @@ also holds the cNGN it is paid in (see the perp-keeper's `MAX_CNGN_INVENTORY`).
 sender, a factor above the sized one, a market that already has a base factor, and a market whose
 spot feed is not the index. (2) Verify on chain: `wrappedAsset()` is Base cNGN, `pendingOwner()`
 the vault, `whitelistedManager(srm)` false. (3) Commit the two artifacts, render the review
-(`render_perp_vault_review.py`, batch 4) and read it. (4) Sign the six actions in order in MPCVault:
-acceptOwnership, setBorrowingEnabled(false), setBaseAssetMarginFactor, whitelistAsset(Base),
-setTotalPositionCap, and setWhitelistManager LAST — every prefix is a safe place to stop, nothing
-can be deposited before the last. (5) Verify `baseMarginParams(1)`, `borrowingEnabled()` false,
-the cap, and that a 1-cNGN deposit into a perp account lands. The markets service and the app read
+(`render_perp_vault_review.py`, batch 4) and read it. (4) Sign the five actions in order in MPCVault:
+acceptOwnership, setBaseAssetMarginFactor, whitelistAsset(Base), setTotalPositionCap, and
+setWhitelistManager LAST — every prefix is a safe place to stop, nothing can be deposited before
+the last. (5) Verify `baseMarginParams(1)`, `borrowingEnabled()` still true, the cap, and that a
+1-cNGN deposit into a perp account lands. The markets service and the app read
 the escrow from the artifact; deploy them after step 5, not before.
 
 ## Guardian: exploits only

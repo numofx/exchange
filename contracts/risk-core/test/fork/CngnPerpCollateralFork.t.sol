@@ -23,8 +23,8 @@ import {IStandardManager} from "../../src/interfaces/IStandardManager.sol";
  *   2. the hedged direction: how much naira strength a treasury short naira on cNGN margin survives
  *      before liquidation, at full leverage and at 1:1;
  *   3. what `borrowingEnabled` actually gates once cNGN counts: not loss settlement (pinned in
- *      CngnPerpStackFork), but USDC withdrawals into negative cash, i.e. loans against cNGN. The
- *      batch turns it off.
+ *      CngnPerpStackFork), but every negative cash delta that lands below zero -- a USDC withdrawal
+ *      against cNGN, and also the taker fee of an account that holds no cash. So it stays on.
  *
  * Requires BASE_RPC_URL. The real Base cNGN token is used (it is an upgradeable, pausable proxy;
  * the escrow must work with that one, not a mock).
@@ -55,7 +55,9 @@ contract CngnPerpCollateralFork is CngnPerpStackFork {
     _enable(SIZED_FACTOR, 1e18);
 
     assertEq(cngnEscrow.owner(), address(this), "custody passed");
-    assertFalse(srm.borrowingEnabled(), "no USDC loans against cNGN");
+    assertTrue(
+      srm.borrowingEnabled(), "borrowing stays on: fees and funding settle into cash a cNGN account does not hold"
+    );
     assertTrue(cngnEscrow.whitelistedManager(address(srm)), "open to the perp SRM only");
     assertEq(cngnEscrow.totalPositionCap(srm), COLLATERAL_CAP, "capped");
     (uint factor, uint imScale) = srm.baseMarginParams(marketId);
@@ -316,10 +318,10 @@ contract CngnPerpCollateralFork is CngnPerpStackFork {
 
   // --- 3. what borrowing gates ----------------------------------------------------
 
-  /// With cNGN as margin, `borrowingEnabled` is a USDC loan facility: an account can withdraw cash
-  /// it does not have, down to initial margin, against its cNGN at the haircut. Losses settle into
-  /// negative cash and the position can be closed either way. The flag decides whether the venue
-  /// lends its depositors' USDC against cNGN, not whether cNGN can be margin.
+  /// With cNGN as margin, `borrowingEnabled` is also a USDC loan facility: an account can withdraw
+  /// cash it does not have, down to initial margin, against its cNGN at the haircut. Losses settle
+  /// into negative cash and a fee-free close works either way. What needs it on is the next test:
+  /// the taker fee, a cash transfer an account holding only cNGN cannot make from zero.
   function testBorrowingGatesLoansNotLosses() public {
     _enable(SIZED_FACTOR, 1e18);
     _deposit(bob, bobAcc, 100_000e6);
@@ -354,6 +356,49 @@ contract CngnPerpCollateralFork is CngnPerpStackFork {
     // And cNGN can leave down to IM, borrowing or not: the negative cash is owed, the rest is hers.
     vm.prank(alice);
     cngnEscrow.withdraw(aliceAcc, 1_000_000e6, alice);
+  }
+
+  /// The venue's TradeModule charges the taker fee as a cash transfer in the same batch as the
+  /// perp leg. With borrowing OFF, an account whose cash ends below zero after a negative cash
+  /// delta reverts (SRM_NoNegativeCash), so a cNGN-only account could not open, and one whose loss
+  /// has already settled could not close. Borrowing therefore stays ON for cNGN margin.
+  function testTakerFeeOnACngnOnlyAccountNeedsBorrowing() public {
+    _enable(SIZED_FACTOR, 1e18);
+    _deposit(bob, bobAcc, 100_000e6);
+    _depositCngn(alice, aliceAcc, 10_000_000e6);
+    uint feeAcc = subAccounts.createAccountWithApproval(charlie, address(this), srm);
+
+    srm.setBorrowingEnabled(false);
+    vm.expectRevert(IStandardManager.SRM_NoNegativeCash.selector);
+    _tradePerpWithFee(bobAcc, aliceAcc, 5_000_000e18, aliceAcc, feeAcc, 9e18); // $9 fee on $3,600
+
+    srm.setBorrowingEnabled(true);
+    _tradePerpWithFee(bobAcc, aliceAcc, 5_000_000e18, aliceAcc, feeAcc, 9e18);
+    assertEq(_cash(aliceAcc), -9e18, "the fee is a small loan against the cNGN");
+    assertEq(_perpBalance(aliceAcc), 5_000_000e18, "and the position opened");
+
+    // A loss settles; with borrowing off the close's fee would revert on the negative cash.
+    _setPrices(uint96(uint(INDEX_PRICE) * 90 / 100));
+    _realize(aliceAcc);
+    assertLt(_cash(aliceAcc), -9e18, "the loss landed on top");
+    srm.setBorrowingEnabled(false);
+    vm.expectRevert(IStandardManager.SRM_NoNegativeCash.selector);
+    _tradePerpWithFee(aliceAcc, bobAcc, 5_000_000e18, aliceAcc, feeAcc, 9e18);
+    srm.setBorrowingEnabled(true);
+    _tradePerpWithFee(aliceAcc, bobAcc, 5_000_000e18, aliceAcc, feeAcc, 9e18);
+    assertEq(_perpBalance(aliceAcc), 0, "closed, fee paid from borrowed cash");
+  }
+
+  /// A perp transfer plus the taker's fee as a cash transfer, as the TradeModule submits them.
+  function _tradePerpWithFee(uint fromAcc, uint toAcc, int amount, uint payer, uint feeAcc, int fee) internal {
+    ISubAccounts.AssetTransfer[] memory transfers = new ISubAccounts.AssetTransfer[](2);
+    transfers[0] = ISubAccounts.AssetTransfer({
+      fromAcc: fromAcc, toAcc: toAcc, asset: perp, subId: 0, amount: amount, assetData: bytes32(0)
+    });
+    transfers[1] = ISubAccounts.AssetTransfer({
+      fromAcc: payer, toAcc: feeAcc, asset: cash, subId: 0, amount: fee, assetData: bytes32(0)
+    });
+    subAccounts.submitTransfers(transfers, "");
   }
 
   // --- helpers ---------------------------------------------------------------------
