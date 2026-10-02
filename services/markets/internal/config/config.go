@@ -66,6 +66,11 @@ type Config struct {
 	CNGNPerpTradeModuleAddress string
 	CNGNPerpCashAddress        string
 	CNGNPerpSRMAddress         string
+	// CNGNPerpCollateralAddress is the perp stack's own cNGN escrow (risk-core
+	// CNGN_PERP_COLLATERAL.json `escrow`), once the vault has whitelisted it as a base asset on the
+	// perp SRM. Optional: unset, the perp is margined in its cash only and /v1/positions reports no
+	// collateral. It is also a withdrawable asset by default.
+	CNGNPerpCollateralAddress string
 	// CashAssetAddress is the CashAsset contract. Kept as the legacy source of QuoteAssetAddress
 	// so an existing deployment that only sets CASH_ASSET_ADDRESS keeps working unchanged.
 	CashAssetAddress string
@@ -134,6 +139,7 @@ func Load() (Config, error) {
 		CNGNPerpTradeModuleAddress:   strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_TRADE_MODULE_ADDRESS"))),
 		CNGNPerpCashAddress:          strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_CASH_ADDRESS"))),
 		CNGNPerpSRMAddress:           strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_SRM_ADDRESS"))),
+		CNGNPerpCollateralAddress:    strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_COLLATERAL_ADDRESS"))),
 		CashAssetAddress:             strings.ToLower(strings.TrimSpace(os.Getenv("CASH_ASSET_ADDRESS"))),
 		QuoteAssetAddress:            strings.ToLower(strings.TrimSpace(os.Getenv("QUOTE_ASSET_ADDRESS"))),
 		EnforceFundingCheck:          getenvBool("ENFORCE_FUNDING_CHECK", true),
@@ -388,14 +394,15 @@ func getenvBool(key string, fallback bool) bool {
 
 // withdrawalAssets are the assets a signed withdrawal may pay out of: WITHDRAWAL_ASSET_ADDRESSES when set,
 // otherwise those this venue settles in: the quote asset, the cNGN spot asset and, when the perp is
-// configured, the perp stack's cash.
+// configured, the perp stack's cash and its cNGN collateral escrow.
 func withdrawalAssets(cfg Config) []string {
 	if configured := getenvCSV("WITHDRAWAL_ASSET_ADDRESSES", ""); len(configured) > 0 {
 		return configured
 	}
-	assets := make([]string, 0, 3)
-	// The perp's cash is withdrawable too: it is real USDC held by that stack's CashAsset.
-	for _, asset := range []string{cfg.QuoteAsset(), cfg.CNGNSpotAssetAddress, cfg.CNGNPerpCashAddress} {
+	assets := make([]string, 0, 4)
+	// The perp's cash is withdrawable too: it is real USDC held by that stack's CashAsset; so is
+	// the cNGN its collateral escrow holds.
+	for _, asset := range []string{cfg.QuoteAsset(), cfg.CNGNSpotAssetAddress, cfg.CNGNPerpCashAddress, cfg.CNGNPerpCollateralAddress} {
 		if asset = strings.ToLower(strings.TrimSpace(asset)); asset != "" {
 			assets = append(assets, asset)
 		}

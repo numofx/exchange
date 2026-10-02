@@ -100,7 +100,15 @@ func stubPerpRPC(t *testing.T, position *big.Int) *httptest.Server {
 		case sigPerpMarginRequirements:
 			result = word(big.NewInt(200_000_000_000_000_000)) + word(big.NewInt(333_330_000_000_000_000))
 		case sigGetBalance:
-			result = word(position)
+			if strings.Contains(strings.ToLower(call.Data), strings.TrimPrefix(testPerpCollateral, "0x")) {
+				result = word(e18Int(2_000_000)) // 2M cNGN posted
+			} else {
+				result = word(position)
+			}
+		case sigBaseMarginParams:
+			result = word(big.NewInt(500_000_000_000_000_000)) + word(perpE18) // 50% haircut, IM scale 1
+		case sigTotalPosition:
+			result = word(e18Int(2_000_000))
 		case sigUnrealizedCash:
 			result = word(new(big.Int).Neg(e18Int(40)))
 		case sigGetMargin:
@@ -129,6 +137,75 @@ func perpServer(t *testing.T, rpc string) *Server {
 		CNGNPerpSRMAddress:         testPerpSRM,
 	}
 	return &Server{cfg: cfg, instruments: instruments.DefaultRegistry(cfg), perp: newPerpStateReader(cfg)}
+}
+
+const testPerpCollateral = "0x6666666666666666666666666666666666666666"
+
+// perpServerWithCollateral is perpServer once the vault has whitelisted the cNGN escrow.
+func perpServerWithCollateral(t *testing.T, rpc string) *Server {
+	t.Helper()
+	s := perpServer(t, rpc)
+	s.cfg.CNGNPerpCollateralAddress = testPerpCollateral
+	s.instruments = instruments.DefaultRegistry(s.cfg)
+	return s
+}
+
+func TestMarketsAndPositionsReportCngnCollateralOnceConfigured(t *testing.T) {
+	rpc := stubPerpRPC(t, big.NewInt(0))
+	defer rpc.Close()
+	without := perpServer(t, rpc.URL)
+	rec := httptest.NewRecorder()
+	without.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/v1/markets", nil))
+	var plain []struct {
+		Perp struct {
+			CollateralAssets []perpCollateralAsset `json:"collateral_assets"`
+		} `json:"perp"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &plain); err != nil {
+		t.Fatal(err)
+	}
+	if len(plain) != 1 || len(plain[0].Perp.CollateralAssets) != 0 {
+		t.Fatalf("cash-only perp must list no collateral assets: %s", rec.Body.String())
+	}
+
+	s := perpServerWithCollateral(t, rpc.URL)
+	rec = httptest.NewRecorder()
+	s.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/v1/markets", nil))
+	var markets []struct {
+		Perp struct {
+			CollateralAssets []perpCollateralAsset `json:"collateral_assets"`
+		} `json:"perp"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &markets); err != nil {
+		t.Fatal(err)
+	}
+	assets := markets[0].Perp.CollateralAssets
+	if len(assets) != 1 || assets[0].Symbol != "cNGN" || assets[0].AssetAddress != testPerpCollateral {
+		t.Fatalf("collateral asset: %+v", assets)
+	}
+	if assets[0].MarginFactor != "0.5" || assets[0].IMScale != "1" {
+		t.Fatalf("haircut: %+v", assets[0])
+	}
+	if assets[0].Cap != "50000000" || assets[0].Total != "2000000" {
+		t.Fatalf("cap/total: %+v", assets[0])
+	}
+
+	rec = httptest.NewRecorder()
+	s.handlePositions(rec, httptest.NewRequest(http.MethodGet, "/v1/positions?subaccount_id=25", nil))
+	var body struct {
+		Accounts []presentedPerpAccount `json:"accounts"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Accounts) != 1 || len(body.Accounts[0].Collateral) != 1 {
+		t.Fatalf("account must carry its collateral: %s", rec.Body.String())
+	}
+	row := body.Accounts[0].Collateral[0]
+	// 2M cNGN at 0.00072 USDC/cNGN is $1,440; the SRM credits half of it.
+	if row.Balance != "2000000" || row.ValueUSD != "1440" || row.MarginValueUSD != "720" {
+		t.Fatalf("collateral row: %+v", row)
+	}
 }
 
 func TestMarketsServesPerpStateWithTheFundingSignFlippedForTheUI(t *testing.T) {
