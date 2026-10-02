@@ -15,7 +15,8 @@ import (
 // deltas with seq <= boundarySeq, giving exactly-once handoff from snapshot to live stream.
 
 const snapshotCols = `order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
-	desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at`
+	desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at,
+	post_only`
 
 // SnapshotBook returns the resting book (active orders) per side plus the consistent boundary.
 func (r *Repository) SnapshotBook(ctx context.Context, assetAddress, subID string, limit int32) (bids, asks []Order, boundarySeq int64, err error) {
