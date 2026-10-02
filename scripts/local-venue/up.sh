@@ -98,17 +98,23 @@ echo "cap=$(cast call "$(json "$STACK" perp)" 'totalPositionCap(address)(uint256
   "module allowed=$(cast call $MATCHING 'allowedModules(address)(bool)' "$MODULE" --rpc-url $RPC)" \
   "guardian=$(cast call "$(json "$STACK" srm)" 'guardian()(address)' --rpc-url $RPC)"
 
-step "deploy: the perp's cNGN collateral escrow, then its vault batch (haircut 50%, cap 25M cNGN)"
+step "deploy: the perp's cNGN collateral escrow and rate model, then both vault batches (haircut 50%, cap 8M cNGN, 10% floor)"
 (cd "$ROOT/contracts/risk-core" && forge script test/e2e/DeployCngnPerpCollateralForE2E.s.sol --sig "runE2E()" \
   --rpc-url $RPC --private-key $DEPLOYER --broadcast --non-interactive >"$DIR/logs/deploy-collateral.log" 2>&1)
 COLLATERAL="$ROOT/contracts/risk-core/cache/e2e-perp-collateral.json"
 python3 -c "import json,sys;[print(a['to'], a['data']) for a in json.load(open(sys.argv[1]))]" \
   "$ROOT/contracts/risk-core/cache/e2e-perp-collateral-vault-actions.json" |
   while read -r TO DATA; do cast send "$TO" "$DATA" --from $VAULT --unlocked --rpc-url $RPC >/dev/null; done
+# The enabling action is its own batch on mainnet (signed after the services are live); here the
+# services come up against an open escrow, so it is applied straight after.
+python3 -c "import json,sys;[print(a['to'], a['data']) for a in json.load(open(sys.argv[1]))]" \
+  "$ROOT/contracts/risk-core/cache/e2e-perp-collateral-enable-vault-actions.json" |
+  while read -r TO DATA; do cast send "$TO" "$DATA" --from $VAULT --unlocked --rpc-url $RPC >/dev/null; done
 CNGN_ESCROW=$(json "$COLLATERAL" escrow)
 echo "cngn escrow=$CNGN_ESCROW open=$(cast call "$CNGN_ESCROW" 'whitelistedManager(address)(bool)' "$(json "$STACK" srm)" --rpc-url $RPC)" \
   "factor=$(cast call "$(json "$STACK" srm)" 'baseMarginParams(uint256)(uint256,uint256)' 1 --rpc-url $RPC | head -1)" \
-  "cap=$(cast call "$CNGN_ESCROW" 'totalPositionCap(address)(uint256)' "$(json "$STACK" srm)" --rpc-url $RPC)"
+  "cap=$(cast call "$CNGN_ESCROW" 'totalPositionCap(address)(uint256)' "$(json "$STACK" srm)" --rpc-url $RPC)" \
+  "rateModel=$(cast call "$(json "$STACK" cash)" 'rateModel()(address)' --rpc-url $RPC)"
 
 python3 - "$STACK" "$MODULE" "$DIR/venue.json" "$CNGN_ESCROW" <<'PY'
 import json, sys
