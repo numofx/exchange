@@ -32,19 +32,20 @@ interface IOwned {
  *      (25%, the SecurityModule's own sizing case). test/fork/CngnPerpCollateralFork.t.sol finds
  *      the largest factor that does, and the deploy script refuses any other value.
  *
- * @dev Borrowing goes OFF in the same batch. Once cNGN counts as margin, `borrowingEnabled` is a
- *      USDC loan facility: an account may withdraw cash it does not have, down to initial margin,
- *      against its cNGN at the haircut, out of the pool's real USDC (the keeper's, the maker's, the
- *      SecurityModule's). Losses settle into negative cash and positions close with it off
- *      (CngnPerpStackFork pins that); the flag only decides whether the venue lends. It does not.
+ * @dev Borrowing stays ON, and the batch does not touch it. The SRM refuses any negative cash delta
+ *      that lands below zero while borrowing is off, and an account holding only cNGN pays its
+ *      taker fee from zero cash: with borrowing off it could not open, and after a settled loss it
+ *      could not close (CngnPerpCollateralFork.testTakerFeeOnACngnOnlyAccountNeedsBorrowing). The
+ *      price is that the same flag lets an account withdraw USDC against its cNGN down to initial
+ *      margin, a loan from the pool bounded by the collateral cap at the haircut; the runbook's
+ *      "cNGN as margin" sizes that and the rate model that prices it.
  *
- * @dev Ordering (six separate EOA transactions by the vault; every prefix is a safe place to stop):
- *      custody of the escrow first, borrowing off, then the SRM's view of the asset (factor, then
- *      whitelist), then the cap, and the escrow's own manager whitelist LAST -- nothing can be
- *      deposited until it.
+ * @dev Ordering (five separate EOA transactions by the vault; every prefix is a safe place to stop):
+ *      custody of the escrow first, then the SRM's view of the asset (factor, then whitelist), then
+ *      the cap, and the escrow's own manager whitelist LAST -- nothing can be deposited until it.
  */
 library CNGNPerpCollateralBatch {
-  uint internal constant ACTION_COUNT = 6;
+  uint internal constant ACTION_COUNT = 5;
 
   struct Ctx {
     /// @dev Who executes the batch: the MPCVault on mainnet, the test contract on a fork.
@@ -70,6 +71,9 @@ library CNGNPerpCollateralBatch {
       "PRE: escrow is not nominated to the vault"
     );
     require(!ManagerWhitelist(ctx.escrow).whitelistedManager(ctx.srm), "PRE: escrow already open to the srm");
+    require(
+      StandardManager(ctx.srm).borrowingEnabled(), "PRE: borrowing is off; a cNGN-only account could not pay its fee"
+    );
     (ISpotFeed spot,,) = StandardManager(ctx.srm).getMarketFeeds(ctx.marketId);
     require(address(spot) == ctx.indexFeed, "PRE: market spot feed is not the perp index feed");
     require(ctx.marginFactor > 0 && ctx.marginFactor <= 1e18, "PRE: margin factor out of range");
@@ -90,28 +94,24 @@ library CNGNPerpCollateralBatch {
     to[0] = ctx.escrow;
     data[0] = abi.encodeCall(IOwnable2StepAccept.acceptOwnership, ());
 
-    descriptions[1] = "srm.setBorrowingEnabled(false) [no USDC loans against cNGN; losses still settle]";
-    to[1] = ctx.srm;
-    data[1] = abi.encodeCall(StandardManager.setBorrowingEnabled, (false));
-
-    descriptions[2] =
+    descriptions[1] =
     "srm.setBaseAssetMarginFactor(marketId, factor, imScale) [the haircut, before the asset can count]";
-    to[2] = ctx.srm;
-    data[2] = abi.encodeCall(StandardManager.setBaseAssetMarginFactor, (ctx.marketId, ctx.marginFactor, ctx.imScale));
+    to[1] = ctx.srm;
+    data[1] = abi.encodeCall(StandardManager.setBaseAssetMarginFactor, (ctx.marketId, ctx.marginFactor, ctx.imScale));
 
-    descriptions[3] = "srm.whitelistAsset(cngnEscrow, marketId, Base) [SRM side of the gate; escrow still shut]";
-    to[3] = ctx.srm;
-    data[3] = abi.encodeCall(
+    descriptions[2] = "srm.whitelistAsset(cngnEscrow, marketId, Base) [SRM side of the gate; escrow still shut]";
+    to[2] = ctx.srm;
+    data[2] = abi.encodeCall(
       StandardManager.whitelistAsset, (IAsset(ctx.escrow), ctx.marketId, IStandardManager.AssetType.Base)
     );
 
-    descriptions[4] = "cngnEscrow.setTotalPositionCap(srm, cap) [collateral cap in place before deposits are possible]";
-    to[4] = ctx.escrow;
-    data[4] = abi.encodeCall(PositionTracking.setTotalPositionCap, (IManager(ctx.srm), ctx.cap));
+    descriptions[3] = "cngnEscrow.setTotalPositionCap(srm, cap) [collateral cap in place before deposits are possible]";
+    to[3] = ctx.escrow;
+    data[3] = abi.encodeCall(PositionTracking.setTotalPositionCap, (IManager(ctx.srm), ctx.cap));
 
-    descriptions[5] = "cngnEscrow.setWhitelistManager(srm, true) [THE ENABLING SWITCH - nothing can enter before this]";
-    to[5] = ctx.escrow;
-    data[5] = abi.encodeCall(ManagerWhitelist.setWhitelistManager, (ctx.srm, true));
+    descriptions[4] = "cngnEscrow.setWhitelistManager(srm, true) [THE ENABLING SWITCH - nothing can enter before this]";
+    to[4] = ctx.escrow;
+    data[4] = abi.encodeCall(ManagerWhitelist.setWhitelistManager, (ctx.srm, true));
   }
 
   /// @dev Commits to targets, calldata and ordering, not to the prose.

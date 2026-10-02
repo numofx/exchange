@@ -49,6 +49,10 @@ const MARKETS = process.env.LOCAL_VENUE_MARKETS ?? 'http://127.0.0.1:8090';
 // Base mainnet addresses the fork inherits.
 const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const USDC_BALANCE_SLOT = 9n;
+// Base cNGN (an upgradeable proxy): its balances mapping sits at slot 201 of the implementation's
+// layout (found with stdstore on a fork, 2026-10-02).
+const CNGN = '0x46C85152bFe9f96829aA94755D9f915F9B10EF5F';
+const CNGN_BALANCE_SLOT = 201n;
 const MATCHING = '0x9E90A9cD13d859Bd6a08168082FB1F6F7405F191';
 const SUB_ACCOUNTS = '0x7019244E25FA416e6Ca2ed2F3cA25277aef72843';
 const SUBACCOUNT_CREATOR = '0x568890A8D63Ba8a03b6eCbEedA1bD9f6ea014D5D';
@@ -78,6 +82,8 @@ type Venue = {
   perp: Address;
   cash: Address;
   srm: Address;
+  /** The perp's cNGN collateral escrow; absent until up.sh has deployed and enabled it. */
+  cngnEscrow?: Address;
   securityModule: Address;
   securityModuleAccount: number;
   indexFeed: Address;
@@ -168,6 +174,43 @@ async function send(
   const receipt = await client.waitForTransactionReceipt({ hash });
   if (receipt.status !== 'success') throw new Error(`${functionName} reverted (${hash})`);
   return receipt;
+}
+
+/** Gives `label`'s EOA gas and `cngn` (6dp) of cNGN, then returns a wallet for it. */
+async function fundedCngn(label: string, cngn: bigint) {
+  const { account, wallet } = await funded(label, 0n);
+  const slot = keccak256(encodeAbiParameters([{ type: 'address' }, { type: 'uint256' }], [account.address, CNGN_BALANCE_SLOT]));
+  await client.request({ method: 'anvil_setStorageAt' as never, params: [CNGN, slot, pad(toHex(cngn), { size: 32 })] as never });
+  const held = await client.readContract({ address: CNGN, abi, functionName: 'balanceOf', args: [account.address] });
+  if (held !== cngn) throw new Error(`cNGN balance slot moved: set ${cngn}, read ${held}`);
+  return { account, wallet };
+}
+
+/**
+ * Opens a perp account posting ONLY cNGN, as the app's "Deposit margin" with cNGN selected does:
+ * one creator call into the perp's cNGN escrow, under the perp SRM. The account holds no cash.
+ */
+async function openCngnAccount(label: string, cngnWhole: bigint) {
+  const escrow = venue.cngnEscrow;
+  if (escrow === undefined) throw new Error('no cNGN escrow in venue.json: up.sh did not enable cNGN margin');
+  const cngn = cngnWhole * 10n ** 6n;
+  const { account, wallet } = await fundedCngn(label, cngn);
+  await send(wallet, CNGN, 'approve', [SUBACCOUNT_CREATOR, cngn]);
+  const receipt = await send(wallet, SUBACCOUNT_CREATOR, 'createAndDepositSubAccount', [escrow, cngn, venue.srm]);
+  const event = receipt.logs
+    .filter((log) => log.address.toLowerCase() === MATCHING.toLowerCase())
+    .map((log) => {
+      try {
+        return decodeEventLog({ abi, data: log.data, topics: log.topics });
+      } catch {
+        return null;
+      }
+    })
+    .find((decoded) => decoded?.eventName === 'DepositedSubAccount');
+  if (event?.eventName !== 'DepositedSubAccount') throw new Error(`${label}: no DepositedSubAccount`);
+  const id = event.args.accountId.toString();
+  writeFileSync(accountsFile, JSON.stringify({ ...readAccounts(), [label]: id }, null, 2));
+  console.log(JSON.stringify({ label, address: account.address, subaccountId: id, cngn: cngnWhole.toString() }));
 }
 
 /** Opens a perp account the way PerpMarginDialog does: one creator call, cash under the perp SRM. */
@@ -364,7 +407,7 @@ const usd = (value: bigint) => Number(value) / 1e18;
  * Opens whatever is left of the OI cap as one NGN long at ~3x (the most the SRM allows) against a
  * well-funded NGN short, both at the index: the worst book a step can meet at the launch cap.
  */
-async function fillCap() {
+async function fillCap(collateral: 'usdc' | 'cngn' = 'usdc') {
   const [cap, total] = await Promise.all([
     client.readContract({ address: venue.perp, abi, functionName: 'totalPositionCap', args: [venue.srm] }),
     client.readContract({ address: venue.perp, abi, functionName: 'totalPosition', args: [venue.srm] }),
@@ -373,8 +416,14 @@ async function fillCap() {
   const perSideNgn = (cap - total) / 2n / 10n ** 18n;
   const uiSize = perSideNgn / index;
   if (uiSize < 1n) throw new Error(`nothing left under the cap (cap ${cap}, total ${total})`);
-  // Initial margin is a third of notional; the deposit covers it, the taker fee, and $50.
-  await openAccount('ngn-long', (uiSize * 34n) / 100n + 50n);
+  if (collateral === 'cngn') {
+    // cNGN counts for half its value: initial margin (a third of notional) needs two thirds of the
+    // notional in cNGN, plus 1% for the open to clear. The fee and funding land as negative cash.
+    await openCngnAccount('ngn-long', (uiSize * index * 2n * 101n) / 300n);
+  } else {
+    // Initial margin is a third of notional; the deposit covers it, the taker fee, and $50.
+    await openAccount('ngn-long', (uiSize * 34n) / 100n + 50n);
+  }
   await openAccount('ngn-short', uiSize + 1_000n);
   // The NGN long is a UI short: it rests at the index, and the NGN short's UI buy takes it there.
   await placeOrder('ngn-long', 'sell', index, uiSize);
@@ -393,6 +442,7 @@ async function report() {
       account: id,
       perpNgn: Number((await balance(id, venue.perp)) / 10n ** 18n),
       cashUsd: usd(await balance(id, venue.cash)).toFixed(2),
+      cngn: venue.cngnEscrow === undefined ? '-' : Number((await balance(id, venue.cngnEscrow)) / 10n ** 18n),
     })),
   );
   console.table(rows);
@@ -692,8 +742,11 @@ switch (command) {
   case 'withdraw':
     await perpWithdraw(args[0] ?? 'taker', BigInt(args[1] ?? '10'));
     break;
+  case 'account-cngn':
+    await openCngnAccount(args[0] ?? 'treasury', BigInt(args[1] ?? '10000000'));
+    break;
   case 'fill-cap':
-    await fillCap();
+    await fillCap((args[0] ?? 'usdc') as 'usdc' | 'cngn');
     break;
   case 'report':
     await report();

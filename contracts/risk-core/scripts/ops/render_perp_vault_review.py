@@ -48,7 +48,6 @@ FUNCTIONS = {
   "setTotalPositionCap(address,uint256)": ["address", "uint256"],
   "setAllowedModule(address,bool)": ["address", "bool"],
   # batch 4, cNGN collateral (deploy-cngn-perp-collateral.s.sol / cngn-perp-collateral-batch.sol)
-  "setBorrowingEnabled(bool)": ["bool"],
   "setBaseAssetMarginFactor(uint256,uint256,uint256)": ["uint256", "uint256", "uint256"],
   "whitelistAsset(address,uint256,uint8)": ["address", "uint256", "uint8"],
   "setWhitelistManager(address,bool)": ["address", "bool"],
@@ -120,11 +119,6 @@ def purpose(sig: str, args: list, target: str, stack: dict) -> str:
   if sig == "setAllowedModule(address,bool)":
     return ("Opens the venue: Matching accepts orders settled through the perp's TradeModule. From here the matcher "
             "trades the perp.") if args[1] else "Closes the venue to this module."
-  if sig == "setBorrowingEnabled(bool)":
-    if args[0]:
-      raise SystemExit("REFUSED: setBorrowingEnabled(true) would lend the pool's USDC against cNGN")
-    return ("Turns off USDC loans: with cNGN counting as margin, borrowing would let an account withdraw cash it does "
-            "not have against its cNGN. Losses still settle into negative cash and positions still close.")
   if sig == "setBaseAssetMarginFactor(uint256,uint256,uint256)":
     if args[1] > SIZED_MARGIN_FACTOR:
       raise SystemExit(f"REFUSED: margin factor {args[1] / 10**18:.2f} is above the sized {SIZED_MARGIN_FACTOR / 10**18:.2f}")
@@ -147,7 +141,7 @@ def render_args(sig: str, args: list, named: dict[str, str]) -> str:
     return "(none)"
   kinds = FUNCTIONS[sig]
   params = {"setGuardian(address)": ["guardian"], "setTotalPositionCap(address,uint256)": ["manager", "cap"],
-            "setAllowedModule(address,bool)": ["module", "allowed"], "setBorrowingEnabled(bool)": ["enabled"],
+            "setAllowedModule(address,bool)": ["module", "allowed"],
             "setBaseAssetMarginFactor(uint256,uint256,uint256)": ["marketId", "marginFactor", "imScale"],
             "whitelistAsset(address,uint256,uint8)": ["asset", "marketId", "assetType"],
             "setWhitelistManager(address,bool)": ["manager", "whitelisted"]}[sig]
@@ -258,11 +252,6 @@ def self_test() -> int:
   try:
     purpose(sig, [1, 6 * 10**17, 10**18], "srm", {})  # above the sized factor
     raise AssertionError("a factor above the sized one must be refused")
-  except SystemExit:
-    pass
-  try:
-    purpose("setBorrowingEnabled(bool)", [True], "srm", {})
-    raise AssertionError("enabling borrowing must be refused")
   except SystemExit:
     pass
   wl = "0x" + keccak(b"whitelistAsset(address,uint256,uint8)").hex()[:8]
