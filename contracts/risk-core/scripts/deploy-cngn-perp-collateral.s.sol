@@ -7,16 +7,19 @@ import {IERC20Metadata} from "openzeppelin/token/ERC20/extensions/IERC20Metadata
 import {ISubAccounts} from "../src/interfaces/ISubAccounts.sol";
 import {ISpotFeed} from "../src/interfaces/ISpotFeed.sol";
 import {StandardManager} from "../src/risk-managers/StandardManager.sol";
+import {CashAsset} from "../src/assets/CashAsset.sol";
+import {InterestRateModel} from "../src/assets/InterestRateModel.sol";
 import {WrappedERC20Asset} from "../src/assets/WrappedERC20Asset.sol";
 import {Utils} from "./utils.sol";
 import {CNGNPerpCollateralBatch} from "./cngn-perp-collateral-batch.sol";
 
 /**
  * @title DeployCngnPerpCollateral
- * @notice Deploys the perp stack's own cNGN escrow (a plain WrappedERC20Asset over Base cNGN),
- *         nominates it to the vault, and writes the vault batch that makes it margin:
- *         deployments/{chainId}/CNGN_PERP_COLLATERAL.json and
- *         deployments/{chainId}/CNGN_PERP_COLLATERAL_VAULT_ACTIONS.json.
+ * @notice Deploys the perp stack's own cNGN escrow (a plain WrappedERC20Asset over Base cNGN) and
+ *         a replacement InterestRateModel with a higher floor, nominates the escrow to the vault,
+ *         and writes the two vault batches: deployments/{chainId}/CNGN_PERP_COLLATERAL.json,
+ *         CNGN_PERP_COLLATERAL_VAULT_ACTIONS.json (configure: custody, haircut, whitelist, cap,
+ *         rate model) and CNGN_PERP_COLLATERAL_ENABLE_VAULT_ACTIONS.json (open deposits, last).
  *
  * @dev A SEPARATE escrow from spot's (WRAPPED_CNGN.json `base`): that one is whitelisted on the
  *      spot SRM, where cNGN earns no margin, and an asset whitelisted on two managers lets an
@@ -36,6 +39,7 @@ import {CNGNPerpCollateralBatch} from "./cngn-perp-collateral-batch.sol";
 contract DeployCngnPerpCollateral is Utils {
   string internal constant ARTIFACT_NAME = "CNGN_PERP_COLLATERAL";
   string internal constant VAULT_ACTIONS_NAME = "CNGN_PERP_COLLATERAL_VAULT_ACTIONS";
+  string internal constant ENABLE_ACTIONS_NAME = "CNGN_PERP_COLLATERAL_ENABLE_VAULT_ACTIONS";
 
   address internal constant EXPECTED_VAULT = 0x1dcA42ab54Bd3862853A821F84B29BF65245F435;
   address internal constant FORGE_DEFAULT_SENDER = 0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38;
@@ -48,18 +52,33 @@ contract DeployCngnPerpCollateral is Utils {
   /// @dev Launch collateral cap, summed over every account under the perp SRM: one OI side. At the
   ///      sized factor it margins the whole short side on cNGN alone (25M x 0.5 / 0.333 = 37.5M
   ///      cNGN of notional against a 25M side). Raise it by vault transaction with the OI cap.
-  uint public constant DEFAULT_COLLATERAL_CAP = 25_000_000e18;
+  uint public constant DEFAULT_COLLATERAL_CAP = 8_000_000e18;
+  /// @dev The replacement rate model's floor: 10% on borrowed cash (the live model's is 2%). The
+  ///      other parameters are the live model's (config-mainnet.sol): +8% x utilisation to 85%,
+  ///      then +90% x the excess. A loan against cNGN is meant to be unattractive, not impossible;
+  ///      a trader's own negative cash after a loss is small and short-lived.
+  uint public constant DEFAULT_RATE_FLOOR = 0.1e18;
+  uint internal constant RATE_MULTIPLIER = 0.08e18;
+  uint internal constant HIGH_RATE_MULTIPLIER = 0.9e18;
+  uint internal constant OPTIMAL_UTIL = 0.85e18;
 
   struct Params {
     address subAccounts;
     address cngnToken;
     address srm;
+    address cash;
     address indexFeed;
     uint marketId;
     address vault;
     uint marginFactor;
     uint imScale;
     uint cap;
+    uint rateFloor;
+  }
+
+  struct Deployed {
+    WrappedERC20Asset escrow;
+    InterestRateModel rateModel;
   }
 
   function run() external {
@@ -68,24 +87,27 @@ contract DeployCngnPerpCollateral is Utils {
     if (deployer == FORGE_DEFAULT_SENDER) revert("run with --account <keystore> (or --private-key): no sender given");
 
     vm.startBroadcast();
-    WrappedERC20Asset escrow = deployEscrow(params);
+    Deployed memory deployed = deploy(params);
     vm.stopBroadcast();
 
-    assertEscrow(escrow, params, deployer);
-    CNGNPerpCollateralBatch.Ctx memory ctx = batchCtx(address(escrow), params);
+    assertDeployed(deployed, params, deployer);
+    CNGNPerpCollateralBatch.Ctx memory ctx = batchCtx(deployed, params);
     CNGNPerpCollateralBatch.checkPreconditions(ctx);
-    _writeArtifacts(escrow, params, ctx);
+    _writeArtifacts(deployed, params, ctx);
 
-    console2.log("perp cNGN escrow:", address(escrow));
+    console2.log("perp cNGN escrow:", address(deployed.escrow));
+    console2.log("rate model (floor raised):", address(deployed.rateModel));
     console2.log("nominated to vault:", params.vault);
     console2.log("margin factor (18dp):", params.marginFactor);
     console2.log("IM scale (18dp):", params.imScale);
     console2.log("collateral cap (cNGN, 18dp):", params.cap);
-    console2.log("batch hash:", vm.toString(CNGNPerpCollateralBatch.hash(ctx)));
+    console2.log("rate floor (18dp):", params.rateFloor);
+    console2.log("batches hash:", vm.toString(CNGNPerpCollateralBatch.hash(ctx)));
     console2.log(
-      "Vault must execute all %s calls in %s.json IN ORDER, as the vault.",
+      "Vault executes the %s calls in %s.json IN ORDER; then, once the services are live, the 1 call in %s.json.",
       CNGNPerpCollateralBatch.ACTION_COUNT,
-      VAULT_ACTIONS_NAME
+      VAULT_ACTIONS_NAME,
+      ENABLE_ACTIONS_NAME
     );
   }
 
@@ -96,6 +118,7 @@ contract DeployCngnPerpCollateral is Utils {
   function _loadParams() internal view returns (Params memory params) {
     string memory stack = _readDeploymentFile(ARTIFACT_STACK);
     params.srm = vm.parseJsonAddress(stack, ".srm");
+    params.cash = vm.parseJsonAddress(stack, ".cash");
     params.indexFeed = vm.parseJsonAddress(stack, ".indexFeed");
     params.marketId = vm.parseJsonUint(stack, ".marketId");
     params.subAccounts = vm.parseJsonAddress(_readDeploymentFile("core"), ".subAccounts");
@@ -104,12 +127,19 @@ contract DeployCngnPerpCollateral is Utils {
     params.marginFactor = vm.envOr("CNGN_MARGIN_FACTOR", SIZED_MARGIN_FACTOR);
     params.imScale = vm.envOr("CNGN_IM_SCALE", DEFAULT_IM_SCALE);
     params.cap = vm.envOr("CNGN_COLLATERAL_CAP", DEFAULT_COLLATERAL_CAP);
+    params.rateFloor = vm.envOr("CNGN_RATE_FLOOR", DEFAULT_RATE_FLOOR);
 
     if (params.marginFactor == 0 || params.marginFactor > SIZED_MARGIN_FACTOR) {
       revert("CNGN_MARGIN_FACTOR above the sized factor: re-size in CngnPerpCollateralFork.t.sol first");
     }
     if (params.imScale == 0 || params.imScale > 1e18) revert("CNGN_IM_SCALE must be in (0, 1]");
     if (params.cap == 0) revert("CNGN_COLLATERAL_CAP is zero");
+    if (params.rateFloor < 0.05e18 || params.rateFloor > 0.5e18) revert("CNGN_RATE_FLOOR outside 5%..50%");
+    if (params.cash.code.length == 0) revert("perp cash has no code");
+    if (CashAsset(params.cash).owner() != params.vault) revert("perp cash owner is not the recorded vault");
+    if (InterestRateModel(address(CashAsset(params.cash).rateModel())).minRate() >= params.rateFloor) {
+      revert("the live rate floor is already that high");
+    }
     if (params.subAccounts.code.length == 0) revert("subAccounts has no code - wrong chain?");
     if (params.cngnToken.code.length == 0) revert("cNGN token has no code");
     if (IERC20Metadata(params.cngnToken).decimals() > 18) revert("unexpected cNGN decimals");
@@ -128,16 +158,24 @@ contract DeployCngnPerpCollateral is Utils {
   // deployment: public so the fork test deploys exactly what the script deploys
   // ---------------------------------------------------------------------------------------------
 
-  function deployEscrow(Params memory params) public returns (WrappedERC20Asset escrow) {
-    escrow = new WrappedERC20Asset(ISubAccounts(params.subAccounts), IERC20Metadata(params.cngnToken));
-    escrow.transferOwnership(params.vault);
+  function deploy(Params memory params) public returns (Deployed memory deployed) {
+    deployed.escrow = new WrappedERC20Asset(ISubAccounts(params.subAccounts), IERC20Metadata(params.cngnToken));
+    deployed.escrow.transferOwnership(params.vault);
+    // Not Ownable: nothing to nominate. It only ever does arithmetic for the cash that points at it.
+    deployed.rateModel = new InterestRateModel(params.rateFloor, RATE_MULTIPLIER, HIGH_RATE_MULTIPLIER, OPTIMAL_UTIL);
   }
 
-  function batchCtx(address escrow, Params memory params) public pure returns (CNGNPerpCollateralBatch.Ctx memory) {
+  function batchCtx(Deployed memory deployed, Params memory params)
+    public
+    pure
+    returns (CNGNPerpCollateralBatch.Ctx memory)
+  {
     return CNGNPerpCollateralBatch.Ctx({
       vault: params.vault,
       srm: params.srm,
-      escrow: escrow,
+      escrow: address(deployed.escrow),
+      cash: params.cash,
+      rateModel: address(deployed.rateModel),
       indexFeed: params.indexFeed,
       marketId: params.marketId,
       marginFactor: params.marginFactor,
@@ -150,7 +188,10 @@ contract DeployCngnPerpCollateral is Utils {
   // postconditions
   // ---------------------------------------------------------------------------------------------
 
-  function assertEscrow(WrappedERC20Asset escrow, Params memory params, address deployer) public view {
+  function assertDeployed(Deployed memory deployed, Params memory params, address deployer) public view {
+    WrappedERC20Asset escrow = deployed.escrow;
+    if (deployed.rateModel.minRate() != params.rateFloor) revert("rate model floor mismatch");
+    if (deployed.rateModel.rateMultiplier() != RATE_MULTIPLIER) revert("rate model multiplier mismatch");
     if (address(escrow.wrappedAsset()) != params.cngnToken) revert("escrow wraps the wrong token");
     if (escrow.assetDecimals() != IERC20Metadata(params.cngnToken).decimals()) revert("escrow decimals mismatch");
     if (address(escrow.subAccounts()) != params.subAccounts) revert("escrow bound to the wrong SubAccounts");
@@ -164,26 +205,44 @@ contract DeployCngnPerpCollateral is Utils {
   // artifacts
   // ---------------------------------------------------------------------------------------------
 
-  function _writeArtifacts(WrappedERC20Asset escrow, Params memory params, CNGNPerpCollateralBatch.Ctx memory ctx)
+  function _writeArtifacts(Deployed memory deployed, Params memory params, CNGNPerpCollateralBatch.Ctx memory ctx)
     internal
   {
     string memory obj = "cngn-perp-collateral";
-    vm.serializeAddress(obj, "escrow", address(escrow));
+    vm.serializeAddress(obj, "escrow", address(deployed.escrow));
+    vm.serializeAddress(obj, "rateModel", address(deployed.rateModel));
     vm.serializeAddress(obj, "cngnToken", params.cngnToken);
     vm.serializeAddress(obj, "srm", params.srm);
+    vm.serializeAddress(obj, "cash", params.cash);
     vm.serializeAddress(obj, "indexFeed", params.indexFeed);
     vm.serializeUint(obj, "marketId", params.marketId);
     vm.serializeUint(obj, "marginFactor", params.marginFactor);
     vm.serializeUint(obj, "imScale", params.imScale);
     vm.serializeUint(obj, "collateralCap", params.cap);
+    vm.serializeUint(obj, "rateFloor", params.rateFloor);
     string memory json = vm.serializeBytes32(obj, "batchHash", CNGNPerpCollateralBatch.hash(ctx));
     _writeToDeployments(ARTIFACT_NAME, json);
     _writeToDeployments(VAULT_ACTIONS_NAME, vaultActionsJson(ctx));
+    _writeToDeployments(ENABLE_ACTIONS_NAME, enableActionsJson(ctx));
   }
 
-  /// @dev The batch in the recorded vault-action format, one object per call, in execution order.
+  /// @dev The configuring batch in the recorded vault-action format, one object per call, in order.
   function vaultActionsJson(CNGNPerpCollateralBatch.Ctx memory ctx) public pure returns (string memory json) {
     (address[] memory to, bytes[] memory data, string[] memory descriptions) = CNGNPerpCollateralBatch.build(ctx);
+    return _actionsJson(to, data, descriptions);
+  }
+
+  /// @dev The enabling action, its own batch.
+  function enableActionsJson(CNGNPerpCollateralBatch.Ctx memory ctx) public pure returns (string memory json) {
+    (address[] memory to, bytes[] memory data, string[] memory descriptions) = CNGNPerpCollateralBatch.buildEnable(ctx);
+    return _actionsJson(to, data, descriptions);
+  }
+
+  function _actionsJson(address[] memory to, bytes[] memory data, string[] memory descriptions)
+    internal
+    pure
+    returns (string memory json)
+  {
     json = "[";
     for (uint i = 0; i < to.length; i++) {
       json = string.concat(json, i == 0 ? "" : ",", _action(descriptions[i], to[i], data[i]));

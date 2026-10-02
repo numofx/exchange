@@ -5,7 +5,10 @@ import {IAsset} from "../src/interfaces/IAsset.sol";
 import {IManager} from "../src/interfaces/IManager.sol";
 import {IStandardManager} from "../src/interfaces/IStandardManager.sol";
 import {ISpotFeed} from "../src/interfaces/ISpotFeed.sol";
+import {IInterestRateModel} from "../src/interfaces/IInterestRateModel.sol";
 import {StandardManager} from "../src/risk-managers/StandardManager.sol";
+import {CashAsset} from "../src/assets/CashAsset.sol";
+import {InterestRateModel} from "../src/assets/InterestRateModel.sol";
 import {ManagerWhitelist} from "../src/assets/utils/ManagerWhitelist.sol";
 import {PositionTracking} from "../src/assets/utils/PositionTracking.sol";
 
@@ -20,11 +23,14 @@ interface IOwned {
 
 /**
  * @title CNGNPerpCollateralBatch
- * @notice THE single definition of the vault batch that lets cNGN be posted as margin on
+ * @notice THE single definition of the two vault batches that let cNGN be posted as margin on
  *         USDCcNGN-PERP: a dedicated cNGN escrow (WrappedERC20Asset) whitelisted on the perp SRM
  *         as a BASE asset, haircut by the margin factor the fork test sized, under a collateral
- *         cap. Both the deploy script (which serialises build() for MPCVault) and the fork test
- *         (which executes build() against live Base state) call this and nothing else.
+ *         cap, with the cash's rate model replaced by one with a higher floor. `build()` is the
+ *         configuring batch; `buildEnable()` is the single action that opens cNGN deposits, signed
+ *         on its own once the keeper, markets-service and app that enforce the venue's rules on
+ *         cNGN accounts are live. Both the deploy script (which serialises them for MPCVault) and
+ *         the fork test (which executes them against live Base state) call this and nothing else.
  *
  * @dev Why cNGN margin is a haircut and not a price: cNGN collateral carries the very risk the perp
  *      trades. A long-naira account posting cNGN loses on the position AND on the collateral in
@@ -36,22 +42,29 @@ interface IOwned {
  *      that lands below zero while borrowing is off, and an account holding only cNGN pays its
  *      taker fee from zero cash: with borrowing off it could not open, and after a settled loss it
  *      could not close (CngnPerpCollateralFork.testTakerFeeOnACngnOnlyAccountNeedsBorrowing). The
- *      price is that the same flag lets an account withdraw USDC against its cNGN down to initial
- *      margin, a loan from the pool bounded by the collateral cap at the haircut; the runbook's
- *      "cNGN as margin" sizes that and the rate model that prices it.
+ *      same flag lets an account withdraw USDC against its cNGN down to initial margin on chain, so
+ *      the batch bounds that three ways: the collateral cap (8M cNGN: ~$3k of borrowing at the
+ *      haircut), a rate model with a higher floor, and -- off chain -- markets-service refusing a
+ *      venue-routed withdrawal that would take cash below zero.
  *
- * @dev Ordering (five separate EOA transactions by the vault; every prefix is a safe place to stop):
- *      custody of the escrow first, then the SRM's view of the asset (factor, then whitelist), then
- *      the cap, and the escrow's own manager whitelist LAST -- nothing can be deposited until it.
+ * @dev Ordering of build() (five separate EOA transactions by the vault; every prefix is a safe
+ *      place to stop): custody of the escrow, the SRM's view of the asset (factor, then whitelist),
+ *      the cap, the rate model. None of them lets cNGN in. buildEnable() is the escrow's own manager
+ *      whitelist, the one action after which deposits are possible.
  */
 library CNGNPerpCollateralBatch {
   uint internal constant ACTION_COUNT = 5;
+  uint internal constant ENABLE_ACTION_COUNT = 1;
 
   struct Ctx {
     /// @dev Who executes the batch: the MPCVault on mainnet, the test contract on a fork.
     address vault;
     address srm;
     address escrow;
+    /// @dev The perp's CashAsset, whose rate model the batch replaces.
+    address cash;
+    /// @dev The replacement InterestRateModel, deployed by the script with the higher floor.
+    address rateModel;
     address indexFeed;
     uint marketId;
     /// @dev 18dp: the share of the oracle value that counts as maintenance margin.
@@ -73,6 +86,13 @@ library CNGNPerpCollateralBatch {
     require(!ManagerWhitelist(ctx.escrow).whitelistedManager(ctx.srm), "PRE: escrow already open to the srm");
     require(
       StandardManager(ctx.srm).borrowingEnabled(), "PRE: borrowing is off; a cNGN-only account could not pay its fee"
+    );
+    require(IOwned(ctx.cash).owner() == ctx.vault, "PRE: cash owner is not the recorded vault");
+    require(address(CashAsset(ctx.cash).rateModel()) != ctx.rateModel, "PRE: the cash already uses this rate model");
+    require(
+      InterestRateModel(ctx.rateModel).minRate()
+        > InterestRateModel(address(CashAsset(ctx.cash).rateModel())).minRate(),
+      "PRE: the new rate model does not raise the floor"
     );
     (ISpotFeed spot,,) = StandardManager(ctx.srm).getMarketFeeds(ctx.marketId);
     require(address(spot) == ctx.indexFeed, "PRE: market spot feed is not the perp index feed");
@@ -109,17 +129,37 @@ library CNGNPerpCollateralBatch {
     to[3] = ctx.escrow;
     data[3] = abi.encodeCall(PositionTracking.setTotalPositionCap, (IManager(ctx.srm), ctx.cap));
 
-    descriptions[4] = "cngnEscrow.setWhitelistManager(srm, true) [THE ENABLING SWITCH - nothing can enter before this]";
-    to[4] = ctx.escrow;
-    data[4] = abi.encodeCall(ManagerWhitelist.setWhitelistManager, (ctx.srm, true));
+    descriptions[4] = "cash.setInterestRateModel(rateModel) [the higher floor on borrowed cash]";
+    to[4] = ctx.cash;
+    data[4] = abi.encodeCall(CashAsset.setInterestRateModel, (IInterestRateModel(ctx.rateModel)));
   }
 
-  /// @dev Commits to targets, calldata and ordering, not to the prose.
+  /// @dev The one action that opens cNGN deposits. Its own batch: signed only once the keeper,
+  ///      markets-service and app are deployed and the fork rehearsal has run a cNGN scenario
+  ///      against the real escrow.
+  function buildEnable(Ctx memory ctx)
+    internal
+    pure
+    returns (address[] memory to, bytes[] memory data, string[] memory descriptions)
+  {
+    to = new address[](ENABLE_ACTION_COUNT);
+    data = new bytes[](ENABLE_ACTION_COUNT);
+    descriptions = new string[](ENABLE_ACTION_COUNT);
+    descriptions[0] = "cngnEscrow.setWhitelistManager(srm, true) [THE ENABLING SWITCH - cNGN deposits open here]";
+    to[0] = ctx.escrow;
+    data[0] = abi.encodeCall(ManagerWhitelist.setWhitelistManager, (ctx.srm, true));
+  }
+
+  /// @dev Commits to targets, calldata and ordering of BOTH batches, not to the prose.
   function hash(Ctx memory ctx) internal pure returns (bytes32) {
     (address[] memory to, bytes[] memory data,) = build(ctx);
+    (address[] memory enableTo, bytes[] memory enableData,) = buildEnable(ctx);
     bytes memory acc;
     for (uint i = 0; i < ACTION_COUNT; ++i) {
       acc = abi.encodePacked(acc, actionHash(to[i], data[i]));
+    }
+    for (uint i = 0; i < ENABLE_ACTION_COUNT; ++i) {
+      acc = abi.encodePacked(acc, actionHash(enableTo[i], enableData[i]));
     }
     return keccak256(acc);
   }
@@ -129,12 +169,21 @@ library CNGNPerpCollateralBatch {
     return keccak256(abi.encodePacked(to, keccak256(data)));
   }
 
-  /// @dev Executes the batch as the caller: the fork test's path (the test owns the contracts).
+  /// @dev Executes the configuring batch as the caller: the fork test's path (the test owns the contracts).
   function execute(Ctx memory ctx) internal {
     (address[] memory to, bytes[] memory data,) = build(ctx);
     for (uint i = 0; i < ACTION_COUNT; ++i) {
       (bool ok, bytes memory ret) = to[i].call(data[i]);
       require(ok, string.concat("batch action failed: ", _revertReason(ret)));
+    }
+  }
+
+  /// @dev Executes the enabling action as the caller.
+  function executeEnable(Ctx memory ctx) internal {
+    (address[] memory to, bytes[] memory data,) = buildEnable(ctx);
+    for (uint i = 0; i < ENABLE_ACTION_COUNT; ++i) {
+      (bool ok, bytes memory ret) = to[i].call(data[i]);
+      require(ok, string.concat("enable action failed: ", _revertReason(ret)));
     }
   }
 

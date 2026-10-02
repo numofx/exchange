@@ -35,6 +35,7 @@ contract CngnPerpCollateralFork is CngnPerpStackFork {
   uint SIZED_FACTOR;
 
   DeployCngnPerpCollateral script;
+  DeployCngnPerpCollateral.Deployed deployed;
   WrappedERC20Asset cngnEscrow;
   uint marketId;
 
@@ -44,8 +45,9 @@ contract CngnPerpCollateralFork is CngnPerpStackFork {
     script = new DeployCngnPerpCollateral();
     SIZED_FACTOR = script.SIZED_MARGIN_FACTOR();
     // The test plays the vault: the escrow is nominated to it, and it owns the SRM already.
-    cngnEscrow = script.deployEscrow(_params(SIZED_FACTOR, 1e18));
-    script.assertEscrow(cngnEscrow, _params(SIZED_FACTOR, 1e18), address(script));
+    deployed = script.deploy(_params(SIZED_FACTOR, 1e18));
+    cngnEscrow = deployed.escrow;
+    script.assertDeployed(deployed, _params(SIZED_FACTOR, 1e18), address(script));
   }
 
   // --- the batch -------------------------------------------------------------------
@@ -58,6 +60,8 @@ contract CngnPerpCollateralFork is CngnPerpStackFork {
     assertTrue(
       srm.borrowingEnabled(), "borrowing stays on: fees and funding settle into cash a cNGN account does not hold"
     );
+    assertEq(address(cash.rateModel()), address(deployed.rateModel), "the cash prices borrowed cash on the new model");
+    assertEq(deployed.rateModel.minRate(), 0.1e18, "with a 10% floor");
     assertTrue(cngnEscrow.whitelistedManager(address(srm)), "open to the perp SRM only");
     assertEq(cngnEscrow.totalPositionCap(srm), COLLATERAL_CAP, "capped");
     (uint factor, uint imScale) = srm.baseMarginParams(marketId);
@@ -408,20 +412,24 @@ contract CngnPerpCollateralFork is CngnPerpStackFork {
       subAccounts: SUB_ACCOUNTS,
       cngnToken: CNGN,
       srm: address(srm),
+      cash: address(cash),
       indexFeed: address(indexFeed),
       marketId: marketId,
       vault: address(this),
       marginFactor: factor,
       imScale: imScale,
-      cap: COLLATERAL_CAP
+      cap: COLLATERAL_CAP,
+      rateFloor: 0.1e18
     });
   }
 
   /// Executes the batch as the vault would: the same build() the script serialises, in order.
   function _enable(uint factor, uint imScale) internal {
-    CNGNPerpCollateralBatch.Ctx memory ctx = script.batchCtx(address(cngnEscrow), _params(factor, imScale));
+    CNGNPerpCollateralBatch.Ctx memory ctx = script.batchCtx(deployed, _params(factor, imScale));
     CNGNPerpCollateralBatch.checkPreconditions(ctx);
     CNGNPerpCollateralBatch.execute(ctx);
+    assertFalse(cngnEscrow.whitelistedManager(address(srm)), "the configuring batch opens nothing");
+    CNGNPerpCollateralBatch.executeEnable(ctx);
   }
 
   function _depositCngn(address user, uint acc, uint cngnAmount) internal {
