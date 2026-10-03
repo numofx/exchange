@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # The index-step reopening procedure, drilled on the local venue with the full OI cap open:
 #
-#   ./scripts/local-venue/up.sh && ./scripts/local-venue/step-drill.sh [step-bps]   (default 4000 = 40%)
+#   ./scripts/local-venue/up.sh && ./scripts/local-venue/step-drill.sh [step-bps] [usdc|cngn]
+#   (default 4000 = 40%. `cngn` adds the cNGN scenario the venue allows: a treasury posting cNGN
+#   and long USD 1:1 against it, which must ride the step out above margin with its cNGN intact
+#   while the USDC-margined NGN long is liquidated as usual)
 #
 #  1. fill the rest of the cap: one NGN long at ~3x against a well-funded NGN short
 #  2. stop the publisher; 12 minutes of source samples at the new level go in its state file (what
@@ -17,6 +20,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 DIR="${LOCAL_VENUE_DIR:-$ROOT/.local-venue}"
 STEP_BPS="${1:-4000}"
+COLLATERAL="${2:-usdc}"
 RPC=http://127.0.0.1:8600
 VENUE="pnpm --dir $HERE exec tsx $HERE/venue.ts $DIR"
 json() { python3 -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$@"; }
@@ -64,6 +68,11 @@ PAGER >/dev/null
 [ "$(paged resolve keeper-unhealthy)" = 1 ] || { echo "FAIL: keeper-unhealthy did not resolve" >&2; exit 1; }
 echo "ok: paged, then resolved when the keeper answered again"
 
+if [ "$COLLATERAL" = cngn ]; then
+  # Before the cap is filled: the treasury's long USD takes 2M cNGN of the OI cap, the NGN long the rest.
+  step "cNGN: a treasury posts 2M cNGN and hedges 1:1 (long USD)"
+  $VENUE hedge treasury 2000000
+fi
 step "fill the cap"
 $VENUE fill-cap
 $VENUE report
@@ -101,10 +110,10 @@ echo $! >"$DIR/pids/perp-feeds"
 for _ in $(seq 1 60); do
   PAGER >/dev/null
   [ "$(paged trigger insolvent-account)" -ge 1 ] && break
-  [ "$(pnpm --dir $HERE exec tsx $HERE/venue.ts $DIR report 2>/dev/null | grep -c "'ngn-long' .* 0 ")" -ge 1 ] && break
+  [ "$(pnpm --dir $HERE exec tsx $HERE/venue.ts $DIR report 2>/dev/null | grep -c "'ngn-long' .* 0 " | tail -1)" -ge 1 ] && break
   sleep 3
 done
-$VENUE wait-closed ngn-long 600
+$VENUE wait-liquidated ngn-long 600
 # The keeper's next pass (every 5s here) is what clears the account from /health; give it a minute.
 for _ in $(seq 1 20); do
   PAGER >/dev/null
@@ -120,7 +129,14 @@ for line in open(sys.argv[1]):
 [ "$(paged trigger insolvent-account)" -ge 1 ] || { echo "FAIL: the insolvent account was not paged" >&2; exit 1; }
 [ "$(paged trigger sm-payout)" -ge 1 ] || { echo "FAIL: the SecurityModule payout was not paged" >&2; exit 1; }
 [ "$(paged resolve insolvent-account)" -ge 1 ] || { echo "FAIL: the insolvent account did not resolve" >&2; exit 1; }
+echo "ok: insolvent account and SecurityModule payout paged, insolvency resolved"
 grep -q '\[REHEARSAL\]' "$PAGES" || { echo "FAIL: pages were not prefixed" >&2; exit 1; }
-echo "ok: insolvent account and SecurityModule payout paged, insolvency resolved, every page prefixed"
+echo "ok: every page prefixed"
 $VENUE report
 grep -E "bid|auction" "$DIR/logs/perp-keeper.log" | tail -12
+if [ "$COLLATERAL" = cngn ]; then
+  step "cNGN: the hedged treasury rode the ${STEP_BPS}bps step out, above margin, cNGN intact, never liquidated"
+  $VENUE hedge-check treasury
+  grep -q "#$(json "$DIR/accounts.json" treasury): \(start\|bid\)" "$DIR/logs/perp-keeper.log" && { echo "FAIL: the keeper touched the hedged treasury" >&2; exit 1; }
+  echo "ok: the keeper never started an auction on the treasury"
+fi

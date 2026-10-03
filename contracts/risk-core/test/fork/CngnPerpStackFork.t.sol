@@ -75,7 +75,7 @@ contract CngnPerpStackFork is Test {
   uint bobAcc;
   uint charlieAcc;
 
-  function setUp() public {
+  function setUp() public virtual {
     vm.createSelectFork(vm.envString("BASE_RPC_URL"));
     _deployStack();
     _deployPerp();

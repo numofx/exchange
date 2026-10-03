@@ -49,6 +49,10 @@ const MARKETS = process.env.LOCAL_VENUE_MARKETS ?? 'http://127.0.0.1:8090';
 // Base mainnet addresses the fork inherits.
 const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const USDC_BALANCE_SLOT = 9n;
+// Base cNGN (an upgradeable proxy): its balances mapping sits at slot 201 of the implementation's
+// layout (found with stdstore on a fork, 2026-10-02).
+const CNGN = '0x46C85152bFe9f96829aA94755D9f915F9B10EF5F';
+const CNGN_BALANCE_SLOT = 201n;
 const MATCHING = '0x9E90A9cD13d859Bd6a08168082FB1F6F7405F191';
 const SUB_ACCOUNTS = '0x7019244E25FA416e6Ca2ed2F3cA25277aef72843';
 const SUBACCOUNT_CREATOR = '0x568890A8D63Ba8a03b6eCbEedA1bD9f6ea014D5D';
@@ -71,6 +75,8 @@ const abi = parseAbi([
   'function totalPosition(address manager) view returns (uint256)',
   'function totalPositionCap(address manager) view returns (uint256)',
   'function getCashToStableExchangeRate() view returns (uint256)',
+  'function getAuction(uint256 accountId) view returns ((uint256 accountId, uint256 scenarioId, bool insolvent, bool ongoing, uint256 cachedMM, uint256 startTime, uint256 reservedCash))',
+  'function getMarginAndMarkToMarket(uint256 accountId, uint256 scenarioId) view returns (int256 mm, int256 bm, int256 mtm)',
   'event DepositedSubAccount(uint256 indexed accountId, address indexed owner)',
 ]);
 
@@ -78,6 +84,9 @@ type Venue = {
   perp: Address;
   cash: Address;
   srm: Address;
+  auction: Address;
+  /** The perp's cNGN collateral escrow; absent until up.sh has deployed and enabled it. */
+  cngnEscrow?: Address;
   securityModule: Address;
   securityModuleAccount: number;
   indexFeed: Address;
@@ -170,6 +179,43 @@ async function send(
   return receipt;
 }
 
+/** Gives `label`'s EOA gas and `cngn` (6dp) of cNGN, then returns a wallet for it. */
+async function fundedCngn(label: string, cngn: bigint) {
+  const { account, wallet } = await funded(label, 0n);
+  const slot = keccak256(encodeAbiParameters([{ type: 'address' }, { type: 'uint256' }], [account.address, CNGN_BALANCE_SLOT]));
+  await client.request({ method: 'anvil_setStorageAt' as never, params: [CNGN, slot, pad(toHex(cngn), { size: 32 })] as never });
+  const held = await client.readContract({ address: CNGN, abi, functionName: 'balanceOf', args: [account.address] });
+  if (held !== cngn) throw new Error(`cNGN balance slot moved: set ${cngn}, read ${held}`);
+  return { account, wallet };
+}
+
+/**
+ * Opens a perp account posting ONLY cNGN, as the app's "Deposit margin" with cNGN selected does:
+ * one creator call into the perp's cNGN escrow, under the perp SRM. The account holds no cash.
+ */
+async function openCngnAccount(label: string, cngnWhole: bigint) {
+  const escrow = venue.cngnEscrow;
+  if (escrow === undefined) throw new Error('no cNGN escrow in venue.json: up.sh did not enable cNGN margin');
+  const cngn = cngnWhole * 10n ** 6n;
+  const { account, wallet } = await fundedCngn(label, cngn);
+  await send(wallet, CNGN, 'approve', [SUBACCOUNT_CREATOR, cngn]);
+  const receipt = await send(wallet, SUBACCOUNT_CREATOR, 'createAndDepositSubAccount', [escrow, cngn, venue.srm]);
+  const event = receipt.logs
+    .filter((log) => log.address.toLowerCase() === MATCHING.toLowerCase())
+    .map((log) => {
+      try {
+        return decodeEventLog({ abi, data: log.data, topics: log.topics });
+      } catch {
+        return null;
+      }
+    })
+    .find((decoded) => decoded?.eventName === 'DepositedSubAccount');
+  if (event?.eventName !== 'DepositedSubAccount') throw new Error(`${label}: no DepositedSubAccount`);
+  const id = event.args.accountId.toString();
+  writeFileSync(accountsFile, JSON.stringify({ ...readAccounts(), [label]: id }, null, 2));
+  console.log(JSON.stringify({ label, address: account.address, subaccountId: id, cngn: cngnWhole.toString() }));
+}
+
 /** Opens a perp account the way PerpMarginDialog does: one creator call, cash under the perp SRM. */
 async function openAccount(label: string, usdcWhole: bigint) {
   const usdc = usdcWhole * 10n ** 6n;
@@ -244,7 +290,14 @@ function nonce() {
  * UI price cNGN per USDC and size in USD; the engine price is 1 / price and the engine side the
  * opposite one. Whole-naira prices keep the arithmetic exact.
  */
-async function placeOrder(label: string, side: 'buy' | 'sell', uiPrice: bigint, uiSizeUsd: bigint, market: OrderMarket = perpMarket()) {
+async function placeOrder(
+  label: string,
+  side: 'buy' | 'sell',
+  uiPrice: bigint,
+  uiSizeUsd: bigint,
+  market: OrderMarket = perpMarket(),
+  expectation: 'accepted' | 'refused' = 'accepted',
+): Promise<number> {
   const account = keyFor(label);
   const subaccountId = readAccounts()[label];
   if (subaccountId === undefined) throw new Error(`no account for ${label}; run "account ${label}" first`);
@@ -336,8 +389,12 @@ async function placeOrder(label: string, side: 'buy' | 'sell', uiPrice: bigint, 
   });
   const body = await response.text();
   console.log(`${label} ${market.label} ${side} $${uiSizeUsd} @ ${uiPrice} cNGN/USDC -> ${response.status} ${body.slice(0, 200)}`);
+  if (expectation === 'refused') {
+    if (response.ok) throw new Error(`order was accepted but the venue's rule should have refused it`);
+    return response.status;
+  }
   if (!response.ok) throw new Error(`order refused: ${response.status}`);
-  return (JSON.parse(body) as { order: { order_id: string } }).order.order_id;
+  return response.status;
 }
 
 async function waitForPosition(label: string) {
@@ -359,12 +416,13 @@ async function balance(accountId: string | number, asset: Address) {
 }
 
 const usd = (value: bigint) => Number(value) / 1e18;
+const abs = (value: bigint) => (value < 0n ? -value : value);
 
 /**
  * Opens whatever is left of the OI cap as one NGN long at ~3x (the most the SRM allows) against a
  * well-funded NGN short, both at the index: the worst book a step can meet at the launch cap.
  */
-async function fillCap() {
+async function fillCap(collateral: 'usdc' | 'cngn' = 'usdc') {
   const [cap, total] = await Promise.all([
     client.readContract({ address: venue.perp, abi, functionName: 'totalPositionCap', args: [venue.srm] }),
     client.readContract({ address: venue.perp, abi, functionName: 'totalPosition', args: [venue.srm] }),
@@ -373,13 +431,22 @@ async function fillCap() {
   const perSideNgn = (cap - total) / 2n / 10n ** 18n;
   const uiSize = perSideNgn / index;
   if (uiSize < 1n) throw new Error(`nothing left under the cap (cap ${cap}, total ${total})`);
-  // Initial margin is a third of notional; the deposit covers it, the taker fee, and $50.
-  await openAccount('ngn-long', (uiSize * 34n) / 100n + 50n);
+  if (collateral === 'cngn') {
+    // cNGN counts for half its value: initial margin (a third of notional) needs two thirds of the
+    // notional in cNGN, plus 1% for the open to clear. The fee and funding land as negative cash.
+    await openCngnAccount('ngn-long', (uiSize * index * 2n * 101n) / 300n);
+  } else {
+    // Initial margin is a third of notional; the deposit covers it, the taker fee, and $50.
+    await openAccount('ngn-long', (uiSize * 34n) / 100n + 50n);
+  }
   await openAccount('ngn-short', uiSize + 1_000n);
   // The NGN long is a UI short: it rests at the index, and the NGN short's UI buy takes it there.
   await placeOrder('ngn-long', 'sell', index, uiSize);
   await placeOrder('ngn-short', 'buy', index, uiSize);
   await waitForPosition('ngn-long');
+  // What was opened, for wait-liquidated to measure what the auction left.
+  const opened = await balance(readAccounts()['ngn-long']!, venue.perp);
+  writeFileSync(accountsFile, JSON.stringify({ ...readAccounts(), 'ngn-long.opened': opened.toString() }, null, 2));
   const after = await client.readContract({ address: venue.perp, abi, functionName: 'totalPosition', args: [venue.srm] });
   console.log(`OI ${after / 10n ** 18n} of cap ${cap / 10n ** 18n} NGN (each side $${uiSize} at ${index} cNGN/USDC)`);
 }
@@ -393,6 +460,7 @@ async function report() {
       account: id,
       perpNgn: Number((await balance(id, venue.perp)) / 10n ** 18n),
       cashUsd: usd(await balance(id, venue.cash)).toFixed(2),
+      cngn: venue.cngnEscrow === undefined ? '-' : Number((await balance(id, venue.cngnEscrow)) / 10n ** 18n),
     })),
   );
   console.table(rows);
@@ -418,6 +486,41 @@ async function waitClosed(label: string, timeoutSec: number) {
     await new Promise((resolve) => setTimeout(resolve, 5_000));
   }
   throw new Error(`${label} (#${id}) still open after ${timeoutSec}s: ${await balance(id, venue.perp)}`);
+}
+
+/**
+ * Done when the account is liquidated as the venue means it: its position is gone (an insolvent
+ * auction takes all of it), or its auction has ended with the account back above maintenance
+ * margin, or all but a sliver (under 1% of what was opened) is gone and the account is above
+ * maintenance margin while its auction runs out its solvent window (a solvent auction sells only
+ * what restores margin, ends at buffer margin, and leaves the rest to the owner).
+ */
+async function waitLiquidated(label: string, timeoutSec: number) {
+  const id = readAccounts()[label];
+  if (id === undefined) throw new Error(`no account ${label}`);
+  const deadline = Date.now() + timeoutSec * 1000;
+  while (Date.now() < deadline) {
+    const position = await balance(id, venue.perp);
+    const auction = await client.readContract({ address: venue.auction, abi, functionName: 'getAuction', args: [BigInt(id)] });
+    const [mm] = await client.readContract({ address: venue.auction, abi, functionName: 'getMarginAndMarkToMarket', args: [BigInt(id), 0n] });
+    if (position === 0n) {
+      console.log(`${label} (#${id}) closed in full`);
+      return;
+    }
+    if (!auction.ongoing && mm >= 0n) {
+      console.log(`${label} (#${id}) liquidated: ${position / 10n ** 18n} NGN left, above maintenance margin by $${usd(mm).toFixed(2)}, auction over`);
+      return;
+    }
+    const opened = BigInt(readAccounts()[`${label}.opened`] ?? '0');
+    if (opened > 0n && mm >= 0n && abs(position) * 100n < abs(opened)) {
+      console.log(
+        `${label} (#${id}) liquidated: ${position / 10n ** 18n} of ${opened / 10n ** 18n} NGN left, above maintenance margin by $${usd(mm).toFixed(2)}; the sliver's auction ends with its solvent window`,
+      );
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
+  }
+  throw new Error(`${label} (#${id}) still under liquidation after ${timeoutSec}s: ${await balance(id, venue.perp)}`);
 }
 
 // --- spot regression: the live spot stack the fork inherits, with no perp anywhere -------------
@@ -558,7 +661,7 @@ async function spotCross(uiPrice: bigint, uiSize: bigint) {
  * venue accepts the perp cash as a withdrawal asset (WITHDRAWAL_ASSET_ADDRESSES) and that the module
  * can call CashAsset.withdraw, which pays real USDC to the owner.
  */
-async function perpWithdraw(label: string, whole: bigint) {
+async function perpWithdraw(label: string, whole: bigint, expectation: 'accepted' | 'refused' = 'accepted') {
   const account = keyFor(label);
   const subaccountId = readAccounts()[label]!;
   const owner = getAddress(account.address);
@@ -594,6 +697,11 @@ async function perpWithdraw(label: string, whole: bigint) {
   });
   const body = await response.text();
   console.log(`perp withdraw ${whole} USDC from #${subaccountId} -> ${response.status} ${body.slice(0, 200)}`);
+  if (expectation === 'refused') {
+    if (response.ok) throw new Error('withdrawal was paid but the venue should have refused it');
+    console.log(`ok (refused as expected): ${response.status}`);
+    return;
+  }
   if (!response.ok) throw new Error('perp withdrawal refused');
   const after = await client.readContract({ address: USDC, abi, functionName: 'balanceOf', args: [owner] });
   const cashAfter = await balance(subaccountId, getAddress(venue.cash));
@@ -692,11 +800,57 @@ switch (command) {
   case 'withdraw':
     await perpWithdraw(args[0] ?? 'taker', BigInt(args[1] ?? '10'));
     break;
+  case 'order': {
+    // order <label> <buy|sell> <size usd> [accepted|refused]: a limit at the index, with the
+    // venue's answer asserted. UI buy is long USD (the on-chain short of the cNGN perp).
+    const index = await uiIndex();
+    const expectation = (args[3] ?? 'accepted') as 'accepted' | 'refused';
+    const status = await placeOrder(args[0] ?? 'trader', (args[1] ?? 'buy') as 'buy' | 'sell', index, BigInt(args[2] ?? '100'), perpMarket(), expectation);
+    console.log(`${expectation === 'accepted' ? 'ok' : 'ok (refused as expected)'}: ${args[0]} ${args[1]} $${args[2]} -> ${status}`);
+    break;
+  }
+  case 'withdraw-refused':
+    await perpWithdraw(args[0] ?? 'taker', BigInt(args[1] ?? '10'), 'refused');
+    break;
+  case 'hedge': {
+    // hedge <label> <cngn whole>: a treasury posts cNGN and goes long USD 1:1 with it, crossing the
+    // maker's offer so the position exists (the venue's hedge rule: as much long USD as cNGN, no more).
+    const cngnWhole = BigInt(args[1] ?? '2000000');
+    await openCngnAccount(args[0] ?? 'treasury', cngnWhole);
+    const index = await uiIndex();
+    // The 1:1 bound is in cNGN contracts, which scale with the order's price: size from the
+    // crossing price, one dollar under, so rounding never trips the rule.
+    const price = index + (index * 100n) / 10_000n;
+    const sizeUsd = cngnWhole / price - 1n;
+    await placeOrder(args[0] ?? 'treasury', 'buy', price, sizeUsd);
+    await waitForPosition(args[0] ?? 'treasury');
+    break;
+  }
+  case 'hedge-check': {
+    // hedge-check <label>: the hedged account is above maintenance margin and still holds its cNGN.
+    const label = args[0] ?? 'treasury';
+    const id = readAccounts()[label];
+    if (id === undefined) throw new Error(`no account ${label}`);
+    const [mm, , mtm] = await client.readContract({ address: venue.auction, abi, functionName: 'getMarginAndMarkToMarket', args: [BigInt(id), 0n] });
+    const cngn = venue.cngnEscrow === undefined ? 0n : await balance(id, venue.cngnEscrow);
+    const perpNgn = await balance(id, venue.perp);
+    console.log(`${label} (#${id}): perp ${perpNgn / 10n ** 18n} NGN, cNGN ${cngn / 10n ** 18n}, equity $${usd(mtm).toFixed(2)}, MM headroom $${usd(mm).toFixed(2)}`);
+    if (mm < 0n) throw new Error(`${label} is under maintenance margin: the hedge did not hold`);
+    if (cngn <= 0n) throw new Error(`${label} lost its cNGN`);
+    console.log(`ok: ${label} stayed above maintenance margin through the step, cNGN intact`);
+    break;
+  }
+  case 'account-cngn':
+    await openCngnAccount(args[0] ?? 'treasury', BigInt(args[1] ?? '10000000'));
+    break;
   case 'fill-cap':
-    await fillCap();
+    await fillCap((args[0] ?? 'usdc') as 'usdc' | 'cngn');
     break;
   case 'report':
     await report();
+    break;
+  case 'wait-liquidated':
+    await waitLiquidated(args[0] ?? 'ngn-long', Number(args[1] ?? '600'));
     break;
   case 'wait-closed':
     await waitClosed(args[0] ?? 'ngn-long', Number(args[1] ?? '600'));
