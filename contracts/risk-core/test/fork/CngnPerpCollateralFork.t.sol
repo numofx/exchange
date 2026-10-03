@@ -237,8 +237,9 @@ contract CngnPerpCollateralFork is CngnPerpStackFork {
   function _cngnStep(uint factor, uint imScale, uint jumpBps, bool walkToMM) internal returns (StepResult memory r) {
     _enable(factor, imScale);
     uint n = uint(CAP_SIDE);
-    // IM: C*p*F*s >= N*p/3, so C = N / (3*F*s), plus 0.1% so the open clears.
-    r.collateral = (n * 1e18 / (3 * factor * imScale / 1e18)) * 1_001 / 1_000;
+    (uint mmReq, uint imReq) = srm.perpMarginRequirements(marketId);
+    // IM: C*p*F*s >= N*p*im, so C = N*im / (F*s), plus 0.1% so the open clears.
+    r.collateral = (n * imReq / (factor * imScale / 1e18)) * 1_001 / 1_000;
     _depositCngn(alice, aliceAcc, r.collateral / 1e12);
     _deposit(bob, bobAcc, 100_000e6);
     _deposit(charlie, charlieAcc, 100_000e6);
@@ -247,9 +248,9 @@ contract CngnPerpCollateralFork is CngnPerpStackFork {
 
     uint96 preJump = INDEX_PRICE;
     if (walkToMM) {
-      // MM: C*p*F - 0.2*N*p + N*(p - p0) = 0  =>  p = N*p0 / (C*F + 0.8*N); sit 5bps above it.
+      // MM: C*p*F - mm*N*p + N*(p - p0) = 0  =>  p = N*p0 / (C*F + (1-mm)*N); sit 5bps above it.
       uint usd = n * INDEX_PRICE / 1e18;
-      uint denom = r.collateral * factor / 1e18 + n * 8 / 10;
+      uint denom = r.collateral * factor / 1e18 + n * (1e18 - mmReq) / 1e18;
       preJump = uint96(usd * 1e18 / denom * 10_005 / 10_000);
       _setPrices(preJump);
       int mm = srm.getMargin(aliceAcc, false);
