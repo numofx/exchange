@@ -94,7 +94,9 @@ KEEPER_ADDR=$(cast wallet address --private-key "$KEEPER_KEY")
 # margin, and an auction that has sold what it can only ends when its solvent phase does (15 min
 # fast + 12 h slow), so once carol is back above margin the fork jumps past that phase.
 DONE='"alice":"0","carol":"[1-9][0-9]*","carolInAuction":false,"carolAboveMaintenance":true'
-[ $CNGN = 1 ] && DONE="$DONE"',.*"treasuryAboveMaintenance":true,"dave":"0","daveInAuction":false'
+# dave ends in a SOLVENT auction (equity just above zero after the fall), which sells what restores
+# margin and leaves a rounding sliver, so "liquidated" is under 100k cNGN left and the auction over.
+[ $CNGN = 1 ] && DONE="$DONE"',.*"treasuryAboveMaintenance":true,"dave":"[0-9]{1,23}","daveInAuction":false'
 LONG_WARP=0
 for pass in $(seq 1 30); do
   (cd "$KEEPER_DIR" && set -a && . "$KEEPER_ENV" && set +a && unset HEALTH_PORT &&
