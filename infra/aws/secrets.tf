@@ -86,6 +86,9 @@ locals {
     # repoint it at the executor's provider.
     mm_private_key = local.use_ssm ? "${local.ssm_arn_prefix}/numo/exchange/mm_private_key" : data.aws_secretsmanager_secret.mm_private_key[0].arn
     mm_rpc_url     = local.use_ssm ? "${local.ssm_arn_prefix}/numo/exchange/mm_rpc_url" : data.aws_secretsmanager_secret.mm_rpc_url[0].arn
+    # The index publisher's token for POST /v1/internal/index-status (the index-lag gate). The same
+    # value sits at /numo/feeds/index_status_token for the publisher on the ops box. SSM only.
+    index_status_token = "${local.ssm_arn_prefix}/numo/markets/index_status_token"
 
     # Under /numo/feeds rather than /numo/exchange because it is the same Slack webhook the ops-box
     # alert timers already post to — one channel for anything that halts the venue, whether the

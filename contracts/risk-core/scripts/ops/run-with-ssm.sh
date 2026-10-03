@@ -26,5 +26,7 @@ export RPC_URL="$(get rpc_url)"
 export FEED_SIGNER_KEY="$(get feed_signer_key)"
 export RELAYER_KEY="$(get relayer_key)"
 export ALERT_WEBHOOK_URL="$(get_optional alert_webhook_url)"
+# For the index publisher's spot reports to markets-service (the index-lag gate); unset: no reports.
+export INDEX_STATUS_TOKEN="$(get_optional index_status_token)"
 
 exec "$@"

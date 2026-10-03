@@ -4,13 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { keccak256, toHex, type Address, type Hex } from 'viem';
+import { formatUnits, keccak256, toHex, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 import type { Chain } from './chain.js';
 import { loadConfig } from './config.js';
 import { encodeSpotData, encodeSpotDiffData } from './feed-data.js';
-import { IndexPublisher } from './index-publisher.js';
+import { IndexPublisher, pushIndexStatus } from './index-publisher.js';
 import { toUsdPerNgn } from './index-aggregation.js';
 import { MarkPublisher } from './mark-publisher.js';
 import { toSpotDiff, type RestingOrder } from './mark-targets.js';
@@ -234,3 +234,31 @@ describe('index sample and the peg guard', () => {
   });
 });
 
+
+describe('pushIndexStatus', () => {
+  const calls: { url: string; init: RequestInit }[] = [];
+  const fakeFetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    calls.push({ url: String(url), init: init ?? {} });
+    return new Response(null, { status: 204 });
+  }) as unknown as typeof fetch;
+
+  it('reports a good sample in the engine orientation with the token, and a failed one as blind', async () => {
+    const cfg = { INDEX_STATUS_PUSH_URL: 'https://api.example/v1/internal/index-status', INDEX_STATUS_TOKEN: 't0k3n' };
+    await pushIndexStatus(cfg, { atMs: 1_800_000_000_000, cngnPerUsdt: 1374 }, fakeFetch);
+    await pushIndexStatus(cfg, { atMs: 1_800_000_060_000, cngnPerUsdt: null }, fakeFetch);
+    assert.equal(calls.length, 2);
+    const good = JSON.parse(String(calls[0]!.init.body));
+    assert.equal(good.sample_ok, true);
+    assert.equal(good.usdc_per_cngn, formatUnits(toUsdPerNgn(1374), 18));
+    assert.equal((calls[0]!.init.headers as Record<string, string>)['x-numo-index-token'], 't0k3n');
+    const blind = JSON.parse(String(calls[1]!.init.body));
+    assert.deepEqual(blind, { at_ms: 1_800_000_060_000, usdc_per_cngn: '', sample_ok: false });
+  });
+
+  it('does nothing without a push url, and survives a refused report', async () => {
+    await pushIndexStatus({ INDEX_STATUS_PUSH_URL: '', INDEX_STATUS_TOKEN: '' }, { atMs: 1, cngnPerUsdt: 1374 }, fakeFetch);
+    assert.equal(calls.length, 2);
+    const refusing = (async () => new Response('no', { status: 401 })) as unknown as typeof fetch;
+    await pushIndexStatus({ INDEX_STATUS_PUSH_URL: 'https://api.example/x', INDEX_STATUS_TOKEN: 'bad' }, { atMs: 1, cngnPerUsdt: 1374 }, refusing);
+  });
+});

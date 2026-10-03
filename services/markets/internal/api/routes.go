@@ -23,6 +23,7 @@ func (s *Server) routes(integrations *integrationCache) chi.Router {
 	router.Post("/v1/orders", s.handleCreateOrder)
 	router.Post("/v1/orders/cancel", s.handleCancelOrder)
 	router.Post("/v1/withdrawals", s.handleCreateWithdrawal)
+	router.Post("/v1/internal/index-status", s.handleIndexStatus)
 	router.Get("/v1/ws", s.handleWS)
 	return router
 }

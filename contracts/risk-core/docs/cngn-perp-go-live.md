@@ -559,7 +559,8 @@ Unused gas is refunded. The evidence is
 
 ## Reopening after an index step
 
-The index publisher refuses any move over 300 bps from the on-chain index. A real devaluation trips
+The index publisher refuses any move over 150 bps from the on-chain index per publish (300 until
+2026-10-03; publishes are now every minute from a 5-minute TWAP). A real devaluation trips
 that guard, publishing stops, and after the 20-minute heartbeat the market halts: trading and
 liquidations alike. To reopen at the new level:
 
@@ -580,7 +581,7 @@ liquidations alike. To reopen at the new level:
    - the keeper's `/health` passes (`KEEPER_HEALTH_URL`);
    - the sources' own window TWAP, with every sample guard applied, is within
      `INDEX_STEP_MATCH_BPS` (100) of the confirmed level;
-   - the move is larger than the 300 bps guard and no larger than `INDEX_STEP_MAX_BPS` (5,000).
+   - the move is larger than the 150 bps guard and no larger than `INDEX_STEP_MAX_BPS` (5,000).
 
    What it publishes is the sources' TWAP, not the typed number. It appends the approval to
    `INDEX_STEP_AUDIT_FILE` (approver, reason, levels, keeper state) before sending, then appends the
