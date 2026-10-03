@@ -188,13 +188,16 @@ contract CngnPerpCollateralFork is CngnPerpStackFork {
   {
     _enable(factor, 1e18);
     uint n = uint(CAP_SIDE);
-    uint collateral = (n * 1e18 / (3 * factor)) * 1_001 / 1_000;
+    (uint mmReq, uint imReq) = srm.perpMarginRequirements(marketId);
+    // The same collateral and MM walk as _cngnStep, so the two paths describe one account.
+    uint collateral = (n * imReq / factor) * 1_001 / 1_000;
     _depositCngn(alice, aliceAcc, collateral / 1e12);
     _deposit(bob, bobAcc, 100_000e6);
     _deposit(charlie, charlieAcc, 100_000e6);
     _tradePerp(bobAcc, aliceAcc, CAP_SIDE);
-    uint96 preJump =
-      uint96((n * INDEX_PRICE / 1e18) * 1e18 / (collateral * factor / 1e18 + n * 8 / 10) * 10_005 / 10_000);
+    uint96 preJump = uint96(
+      (n * INDEX_PRICE / 1e18) * 1e18 / (collateral * factor / 1e18 + n * (1e18 - mmReq) / 1e18) * 10_005 / 10_000
+    );
     _setPrices(preJump);
     uint96 postJump = uint96(uint(preJump) * (10_000 - jumpBps) / 10_000);
     _setPrices(postJump);
