@@ -327,8 +327,14 @@ def main() -> int:
     if not tx_hash:
       raise SystemExit(f"action {i} not approved within the timeout")
     confirm_on_chain(rpc_url, tx_hash)
-    if not landed(rpc_url, art, a, vault):
-      raise SystemExit(f"action {i} mined but its post-state does not read back. Stop and investigate.")
+    # The receipt and the state read can land on different nodes behind the RPC; give `latest` a
+    # few blocks to catch up before calling it a failure (seen 2026-10-03 on action 3).
+    for _ in range(12):
+      if landed(rpc_url, art, a, vault):
+        break
+      time.sleep(5)
+    else:
+      raise SystemExit(f"action {i} mined but its post-state does not read back after 60s. Stop and investigate.")
     print(f"       landed: {a['description']}")
   print(f"\nbatch {args.batch} complete.")
   return 0
