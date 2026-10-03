@@ -29,17 +29,28 @@ const envSchema = z.object({
   IMPACT_BID_FEED: address,
   MARKETS_SERVICE_URL: z.string().url().default('https://api.numofx.com'),
 
-  // Index: a sample every minute, a 15-minute TWAP, republished every 5 minutes against a
-  // 20-minute heartbeat, so one missed publish is survivable and three are not.
+  // Index: a sample every minute, a 5-minute TWAP, republished every minute against a 20-minute
+  // heartbeat. Tightened from 15 min / 5 min on 2026-10-03 (the leverage study): a spot step is
+  // then fully in the index within 5 minutes and the keeper sees several publishes between an
+  // account crossing maintenance margin and zero equity. The cost is tolerance to refused samples:
+  // 3 good samples in the last 5 minutes are needed where 5 in 15 were.
   INDEX_SAMPLE_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
-  INDEX_PUBLISH_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
-  INDEX_TWAP_WINDOW_MS: z.coerce.number().int().positive().default(900_000),
-  INDEX_MIN_WINDOW_SAMPLES: z.coerce.number().int().positive().default(5),
+  INDEX_PUBLISH_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
+  INDEX_TWAP_WINDOW_MS: z.coerce.number().int().positive().default(300_000),
+  INDEX_MIN_WINDOW_SAMPLES: z.coerce.number().int().positive().default(3),
   /** Three missed samples: past this, the index is not republished from older ones. */
   INDEX_MAX_SAMPLE_AGE_MS: z.coerce.number().int().positive().default(180_000),
   INDEX_MIN_SOURCES: z.coerce.number().int().min(3).default(3),
   INDEX_MAX_SOURCE_DEVIATION_BPS: z.coerce.number().positive().default(150),
-  INDEX_MAX_JUMP_BPS: z.coerce.number().int().positive().default(300),
+  /** Per publish: with publishes every minute, 150 bps lets a 5-minute TWAP track a step of ~7.5%. */
+  INDEX_MAX_JUMP_BPS: z.coerce.number().int().positive().default(150),
+  /**
+   * Where every spot sample is reported (markets-service POST /v1/internal/index-status) so the
+   * venue can refuse new perp orders while spot has moved away from the on-chain index. Unset: no
+   * report. INDEX_STATUS_TOKEN comes from SSM /numo/feeds/index_status_token via run-with-ssm.sh.
+   */
+  INDEX_STATUS_PUSH_URL: z.string().url().optional().or(z.literal('')),
+  INDEX_STATUS_TOKEN: z.string().optional().or(z.literal('')),
   /**
    * `--accept-index-step` (index-step.ts): the confirmed level must sit within this of the sources'
    * own window TWAP, and the step may be no larger than INDEX_STEP_MAX_BPS. Every accepted step is

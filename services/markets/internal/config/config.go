@@ -71,6 +71,14 @@ type Config struct {
 	// perp SRM. Optional: unset, the perp is margined in its cash only and /v1/positions reports no
 	// collateral. It is also a withdrawable asset by default.
 	CNGNPerpCollateralAddress string
+	// The index-lag gate (api/index_lag.go). IndexStatusToken authenticates the publisher's spot
+	// reports on POST /v1/internal/index-status; empty disables the endpoint and the gate. With
+	// IndexLagGate on, a new perp order is refused while the latest good spot sample is more than
+	// IndexLagMaxBps from the on-chain index, or when no sample newer than IndexStatusMaxAge exists.
+	IndexStatusToken  string
+	IndexLagGate      bool
+	IndexLagMaxBps    int
+	IndexStatusMaxAge time.Duration
 	// CashAssetAddress is the CashAsset contract. Kept as the legacy source of QuoteAssetAddress
 	// so an existing deployment that only sets CASH_ASSET_ADDRESS keeps working unchanged.
 	CashAssetAddress string
@@ -140,6 +148,10 @@ func Load() (Config, error) {
 		CNGNPerpCashAddress:          strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_CASH_ADDRESS"))),
 		CNGNPerpSRMAddress:           strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_SRM_ADDRESS"))),
 		CNGNPerpCollateralAddress:    strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_COLLATERAL_ADDRESS"))),
+		IndexStatusToken:             strings.TrimSpace(os.Getenv("INDEX_STATUS_TOKEN")),
+		IndexLagGate:                 getenvBool("INDEX_LAG_GATE", false),
+		IndexLagMaxBps:               getenvIntDefault("INDEX_LAG_MAX_BPS", 100),
+		IndexStatusMaxAge:            getenvDurationDefault("INDEX_STATUS_MAX_AGE", 180*time.Second),
 		CashAssetAddress:             strings.ToLower(strings.TrimSpace(os.Getenv("CASH_ASSET_ADDRESS"))),
 		QuoteAssetAddress:            strings.ToLower(strings.TrimSpace(os.Getenv("QUOTE_ASSET_ADDRESS"))),
 		EnforceFundingCheck:          getenvBool("ENFORCE_FUNDING_CHECK", true),

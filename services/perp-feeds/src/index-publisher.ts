@@ -1,3 +1,4 @@
+import { formatUnits } from 'viem';
 import { readFile, writeFile, rename } from 'node:fs/promises';
 
 import type { PricePoint } from 'cngn-rate-picker';
@@ -31,6 +32,8 @@ export class IndexPublisher {
     /** The peg market's ticker; injectable so tests (and --local-sources) need no network. */
     private readonly readPegTicker: (signal: AbortSignal) => Promise<PegTicker> = (signal) =>
       fetchPegTicker(config.QUIDAX_API_URL, signal),
+    /** For the status report to markets-service; injectable for tests. */
+    private readonly fetchImpl: typeof fetch = fetch,
   ) {}
 
   /**
@@ -180,6 +183,7 @@ export class IndexPublisher {
     const tmp = `${this.config.INDEX_STATUS_FILE}.tmp`;
     await writeFile(tmp, JSON.stringify(status));
     await rename(tmp, this.config.INDEX_STATUS_FILE);
+    await pushIndexStatus(this.config, { atMs: at, cngnPerUsdt: outcome.ok ? outcome.median : null }, this.fetchImpl);
   }
 
   /** Publishes the window TWAP, inverted to USDC per cNGN, if every guard passes. */
@@ -231,5 +235,35 @@ export class IndexPublisher {
     this.state.lastPublished = next.toString();
     await this.save();
     console.log(`[index] published ${next} (TWAP ${twap.cngnPerUsdt} NGN/USDT, ${twap.samples} samples) tx=${tx}`);
+  }
+}
+
+/**
+ * Reports one spot sample to markets-service, which refuses new perp orders while spot sits away
+ * from the on-chain index (its index-lag gate). A failed sample is reported too, so the venue knows
+ * the publisher is alive but blind. Best effort: a report that fails is logged, never fatal -- the
+ * venue reads the absence of fresh reports as blind on its own.
+ */
+export async function pushIndexStatus(
+  config: Pick<Config, 'INDEX_STATUS_PUSH_URL' | 'INDEX_STATUS_TOKEN'>,
+  sample: { atMs: number; cngnPerUsdt: number | null },
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  if (!config.INDEX_STATUS_PUSH_URL) return;
+  const body = {
+    at_ms: sample.atMs,
+    usdc_per_cngn: sample.cngnPerUsdt === null ? '' : formatUnits(toUsdPerNgn(sample.cngnPerUsdt), 18),
+    sample_ok: sample.cngnPerUsdt !== null,
+  };
+  try {
+    const response = await fetchImpl(config.INDEX_STATUS_PUSH_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-numo-index-token': config.INDEX_STATUS_TOKEN ?? '' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!response.ok) console.warn(`[index] status report refused: HTTP ${response.status}`);
+  } catch (error) {
+    console.warn(`[index] status report failed: ${(error as Error).message}`);
   }
 }
