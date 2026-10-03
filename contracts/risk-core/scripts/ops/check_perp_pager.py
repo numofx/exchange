@@ -103,6 +103,14 @@ GAS_WARN_REPEAT_SEC = 6 * 3600
 DEFAULT_GAS_WATCH = "executor=0xF68ebcC8934B068655E1A4367Ba6C0e564678703:0.002,relayer=0xC9F1FfdEd29f7051538ad3a72729C3d07F920FDc:0.003"
 KEEPER_GAS_FLOOR_ETH = 0.002  # ~100 liquidation cycles at 3M gas and Base gas prices; the keeper idles at ~0 burn
 SEL_GET_BALANCE = "0x0806e640"  # getBalance(uint256,address,uint256) -- `cast sig`, pinned in --self-test
+# Negative cash across the perp: CashAsset.totalBorrow(), the sum of every account's cash below zero
+# (losses not yet repaid, fees of cNGN-margined accounts, and USDC withdrawn against cNGN on chain).
+# The venue does not pay out borrowed cash through its own withdrawals, so growth here is either
+# losses sitting unpaid or a borrower going around the venue. Slack from $1,500, page at 2x.
+SEL_TOTAL_BORROW = "0x8285ef40"  # totalBorrow()
+NEGATIVE_CASH_WARN_USD = 1_500.0
+NEGATIVE_CASH_PAGE_USD = 3_000.0
+NEGATIVE_CASH_WARN_REPEAT_SEC = 6 * 3600
 
 
 @dataclass(frozen=True)
@@ -219,6 +227,25 @@ def oi_condition(one_side_usd: float, keeper_cash_usd: float) -> Condition | Non
     return None
   return Condition("oi-vs-keeper", f"USDCcNGN-PERP one-side OI ${one_side_usd:,.0f} is {ratio:.1f}x the keeper's ${keeper_cash_usd:,.0f} cash "
                    f"(page at {OI_KEEPER_PAGE_X:.0f}x): top the keeper account up, or set cap = current OI.")
+
+
+def negative_cash_condition(total_borrow_usd: float) -> Condition | None:
+  if total_borrow_usd < NEGATIVE_CASH_PAGE_USD:
+    return None
+  return Condition("negative-cash", f"USDCcNGN-PERP accounts owe ${total_borrow_usd:,.0f} of negative cash (page at "
+                   f"${NEGATIVE_CASH_PAGE_USD:,.0f}): unpaid losses, or USDC borrowed against cNGN around the venue. "
+                   "Liquidate or lower the cNGN collateral cap.")
+
+
+def negative_cash_warning(total_borrow_usd: float) -> str | None:
+  if total_borrow_usd < NEGATIVE_CASH_WARN_USD or total_borrow_usd >= NEGATIVE_CASH_PAGE_USD:
+    return None
+  return f"USDCcNGN-PERP accounts owe ${total_borrow_usd:,.0f} of negative cash (warn at ${NEGATIVE_CASH_WARN_USD:,.0f}, page at ${NEGATIVE_CASH_PAGE_USD:,.0f})."
+
+
+def read_total_borrow(url: str, stack: dict) -> float:
+  raw = rpc(url, "eth_call", [{"to": stack["cash"], "data": SEL_TOTAL_BORROW}, "latest"])
+  return int(raw, 16) / 1e18
 
 
 def oi_warning(one_side_usd: float, keeper_cash_usd: float) -> str | None:
@@ -467,10 +494,22 @@ def check_and_page(stack_path: Path, state: dict) -> int:
   except Exception as exc:  # noqa: BLE001
     print(f"sm seed: unreadable ({str(exc)[:80]})")
 
+  negative_cash = None
+  try:
+    total_borrow = read_total_borrow(url, stack)
+    negative_cash = negative_cash_condition(total_borrow)
+    warning = negative_cash_warning(total_borrow)
+    if warning and time.time() - state.get("negativeCashWarnedAt", 0) >= NEGATIVE_CASH_WARN_REPEAT_SEC:
+      mirror(f"{os.environ.get('PAGE_PREFIX', '')}{warning}")
+      state["negativeCashWarnedAt"] = time.time()
+    print(f"negative cash: ${total_borrow:,.0f} (warn ${NEGATIVE_CASH_WARN_USD:,.0f}, page ${NEGATIVE_CASH_PAGE_USD:,.0f})")
+  except Exception as exc:  # noqa: BLE001
+    print(f"negative cash: unreadable ({str(exc)[:80]})")
+
   previous_sm = state.get("smCash")
   active = [c for c in (feed_condition(ages), keeper_condition(health, now, armed), insolvent_condition(health),
                         sm_condition(previous_sm, sm_cash), unwatched_condition(heartbeat_urls()[0]),
-                        peg_condition(read_index_status(), time.time()), seed, oi, *gas) if c is not None]
+                        peg_condition(read_index_status(), time.time()), seed, oi, negative_cash, *gas) if c is not None]
   to_page, resolved = step_state(state, active, now)
   state["smCash"] = sm_cash
 
@@ -532,6 +571,10 @@ def self_test() -> int:
   assert "2.2x" in oi_warning(11_000, 5_000) and oi_condition(11_000, 5_000) is None
   assert oi_condition(15_000, 5_000).key == "oi-vs-keeper" and oi_warning(15_000, 5_000) is None
   assert "no cash" in oi_condition(100, 0).message
+  # Negative cash across the perp: Slack from $1,500, page from $3,000.
+  assert negative_cash_condition(1_499) is None and negative_cash_warning(1_499) is None
+  assert "$1,600" in negative_cash_warning(1_600) and negative_cash_condition(1_600) is None
+  assert negative_cash_condition(3_000).key == "negative-cash" and negative_cash_warning(3_000) is None
   os.environ["GAS_WATCH"] = "executor=0xF68ebcC8934B068655E1A4367Ba6C0e564678703:0.002"
   os.environ["KEEPER_EOA"] = "0x00000000000000000000000000000000000000aa"
   assert [(n, f) for n, _, f in gas_watch()] == [("executor", 0.002), ("keeper", KEEPER_GAS_FLOOR_ETH)]
