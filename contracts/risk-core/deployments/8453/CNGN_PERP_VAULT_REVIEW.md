@@ -1,6 +1,6 @@
 # USDCcNGN-PERP vault actions: review before signing
 
-Rendered 2026-10-03 22:49 UTC from commit `c25d4df`, from `CNGN_PERP_STACK.json`, `CNGN_PERP_STACK_VAULT_ACTIONS.json`, `CNGN_PERP_TRADE_MODULE.json` and `CNGN_PERP_TRADE_MODULE_VAULT_ACTIONS.json`.
+Rendered 2026-10-03 23:28 UTC from commit `ed08e0a`, from `CNGN_PERP_STACK.json`, `CNGN_PERP_STACK_VAULT_ACTIONS.json`, `CNGN_PERP_TRADE_MODULE.json` and `CNGN_PERP_TRADE_MODULE_VAULT_ACTIONS.json`.
 Every row was decoded and re-encoded to its own calldata, every digest recomputed, every target matched to an artifact, and every value is 0. Compare each digest with the one MPCVault shows before approving.
 
 - Vault: `0x1dcA42ab54Bd3862853A821F84B29BF65245F435`
@@ -67,7 +67,7 @@ LAST, on its own. Sign only once the keeper, markets-service and app are deploye
 
 ## Batch 6: stage (B) leverage, 5x with the cNGN factor re-sized
 
-Only after the SecurityModule holds at least $6,000 of cash (it held $3,250 when this was rendered; the proposer refuses below the floor). In order: the requirements first (eases every account), then the factor 35% (tightens cNGN-margined accounts; a 1:1 hedge then liquidates on a ~30% naira rally, from ~43% today). Hedge mode stays 1:1 in markets-service and the app. Hash `0x22ff8b039708b4aef3f0635b35cd65adb12b6b9a49bafc0a9374674ba15527a1`.
+Gate: the SecurityModule must cover a 25% step on today's ONE-SIDE open interest at the new IM (cash >= one side x 25% x (1 - IM); at render it held $3,250, covering a $16,250 side against $2 open; the proposer refuses otherwise and the pager Slack-warns past coverage, pages at 1.2x). In order: the requirements first (eases every account), then the factor 35% (tightens cNGN-margined accounts; a 1:1 hedge then liquidates on a ~30% naira rally, from ~43% today). Hedge mode stays 1:1 in markets-service and the app. Hash `0x22ff8b039708b4aef3f0635b35cd65adb12b6b9a49bafc0a9374674ba15527a1`.
 
 | # | Target | Function | Arguments | Purpose | MPCVault digest |
 | --- | --- | --- | --- | --- | --- |

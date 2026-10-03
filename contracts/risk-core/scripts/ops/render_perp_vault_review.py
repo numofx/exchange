@@ -281,11 +281,13 @@ def render(stack_path: Path, stack_actions: Path, module_path: Path, module_acti
   ]) + ([] if batch6 is None else [
     section(
       "Batch 6: stage (B) leverage, 5x with the cNGN factor re-sized",
-      f"Only after the SecurityModule holds at least ${int(leverage['securityModuleFloor']) // 10**18:,} of cash (it held "
-      f"${int(leverage['securityModuleCashAtRender']) / 10**18:,.0f} when this was rendered; the proposer refuses below the "
-      f"floor). In order: the requirements first (eases every account), then the factor "
-      f"{int(leverage['marginFactor']) / 10**16:.0f}% (tightens cNGN-margined accounts; a 1:1 hedge then liquidates on a "
-      f"~30% naira rally, from ~43% today). Hedge mode stays 1:1 in markets-service and the app. Hash `{leverage['batchHash']}`.",
+      f"Gate: the SecurityModule must cover a 25% step on today's ONE-SIDE open interest at the new IM "
+      f"(cash >= one side x 25% x (1 - IM); at render it held ${int(leverage['securityModuleCashAtRender']) / 10**18:,.0f}, "
+      f"covering a ${int(leverage['securityModuleCoversOneSideUsd']) / 10**18:,.0f} side against ${int(leverage['oneSideOpenInterestUsdAtRender']) / 10**18:,.0f} "
+      f"open; the proposer refuses otherwise and the pager Slack-warns past coverage, pages at 1.2x). In order: the "
+      f"requirements first (eases every account), then the factor {int(leverage['marginFactor']) / 10**16:.0f}% (tightens "
+      f"cNGN-margined accounts; a 1:1 hedge then liquidates on a ~30% naira rally, from ~43% today). Hedge mode stays 1:1 "
+      f"in markets-service and the app. Hash `{leverage['batchHash']}`.",
       batch6, named, stack),
   ]))
 
