@@ -8,7 +8,12 @@
 #
 # Options: --fork-url <url> (default $BASE_RPC_URL), --stack <CNGN_PERP_STACK.json>,
 #          --module <CNGN_PERP_TRADE_MODULE.json> (both default to the 8453 artifacts),
-#          --keeper-dir <perp-keeper checkout with dist/> (default this repo's).
+#          --keeper-dir <perp-keeper checkout with dist/> (default this repo's),
+#          --cngn: the cNGN scenario against the REAL escrow (CNGN_PERP_COLLATERAL.json beside the
+#          stack artifact; batch 5 applied on the fork as the vault): a treasury hedged 1:1 must ride
+#          the fall out above margin, and a directly-created long-naira-on-cNGN account must be
+#          liquidated by the production keeper, which then holds its cNGN. Needs CNGN_ESCROW in the
+#          keeper env.
 # Alerts are prefixed "[REHEARSAL] " and go ONLY to $REHEARSAL_ALERT_WEBHOOK_URL (a test channel);
 # unset, they print here and reach no one.
 #
@@ -28,8 +33,10 @@ STACK="$ROOT/contracts/risk-core/deployments/8453/CNGN_PERP_STACK.json"
 MODULE="$ROOT/contracts/execution/deployments/8453/CNGN_PERP_TRADE_MODULE.json"
 KEEPER_DIR="$ROOT/services/perp-keeper"
 KEEPER_ENV=""
+CNGN=0
 while [ $# -gt 0 ]; do
   case "$1" in
+    --cngn) CNGN=1; shift ;;
     --fork-url) FORK_URL=$2; shift 2 ;;
     --stack) STACK=$2; shift 2 ;;
     --module) MODULE=$2; shift 2 ;;
@@ -68,6 +75,12 @@ step "fork only: open the market, add a fork signer, positions, a 40% fall"
 $T open-market
 $T prices 0 2>/dev/null || $T prices 1374   # the live index if fresh, else a fixed level
 $T positions
+if [ $CNGN = 1 ]; then
+  step "cNGN: batch 5 on the fork as the vault, then a hedged treasury and a long-naira-on-cNGN account"
+  grep -q "^CNGN_ESCROW=" "$KEEPER_ENV" || { echo "--cngn needs CNGN_ESCROW in $KEEPER_ENV" >&2; exit 1; }
+  $T cngn-open
+  $T cngn-positions
+fi
 $T crash 4000
 
 step "the production keeper, CHAIN_ID=31337, until both accounts are liquidated"
@@ -81,6 +94,7 @@ KEEPER_ADDR=$(cast wallet address --private-key "$KEEPER_KEY")
 # margin, and an auction that has sold what it can only ends when its solvent phase does (15 min
 # fast + 12 h slow), so once carol is back above margin the fork jumps past that phase.
 DONE='"alice":"0","carol":"[1-9][0-9]*","carolInAuction":false,"carolAboveMaintenance":true'
+[ $CNGN = 1 ] && DONE="$DONE"',.*"treasuryAboveMaintenance":true,"dave":"0","daveInAuction":false'
 LONG_WARP=0
 for pass in $(seq 1 30); do
   (cd "$KEEPER_DIR" && set -a && . "$KEEPER_ENV" && set +a && unset HEALTH_PORT &&
@@ -102,6 +116,11 @@ echo "$STATUS" | grep -q '"carol":"10000000000000000000000000"' && { echo "REHEA
 
 step "checks"
 echo "ok: the production keeper closed the insolvent account, cut the solvent one back above margin, and ended its auction"
+if [ $CNGN = 1 ]; then
+  echo "$STATUS" | grep -q '"treasuryCngn":"2000000000000000000000000"' || { echo "REHEARSAL FAILED: the hedged treasury lost cNGN" >&2; exit 1; }
+  grep -q "keeper-cngn-inventory" "$DIR/keeper.log" || { echo "REHEARSAL FAILED: the keeper did not report the cNGN it was paid in" >&2; exit 1; }
+  echo "ok: cNGN: the hedged treasury rode the fall out above margin with its 2M cNGN; the keeper liquidated the long-naira-on-cNGN account and reports holding its cNGN"
+fi
 $T verify-keeper-txs "$KEEPER_ADDR" "$START"
 grep -E "^\[keeper\] #|\[alert\]" "$DIR/keeper.log" | tail -12
 printf '\nREHEARSAL PASSED. Keeper log: %s/keeper.log\n' "$DIR"

@@ -16,8 +16,8 @@
  *   ... verify-keeper-txs <keeper-address> <from-block>
  *                                   every transaction the keeper sent is signed for chain 31337
  */
-import { readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 
 import {
   createPublicClient,
@@ -56,6 +56,14 @@ const SRM = addr('srm');
 const CASH = addr('cash');
 const FEEDS = { index: addr('indexFeed'), mark: addr('markFeed'), impactAsk: addr('impactAskFeed'), impactBid: addr('impactBidFeed') };
 const MODULE = getAddress(moduleArtifact.tradePerp!);
+// The perp's cNGN collateral escrow (CNGN_PERP_COLLATERAL.json beside the stack artifact), when
+// deployed: the cNGN scenario rehearses against the real one.
+const collateralFile = join(dirname(stackFile), 'CNGN_PERP_COLLATERAL.json');
+const collateral = existsSync(collateralFile) ? (JSON.parse(readFileSync(collateralFile, 'utf8')) as Record<string, string>) : null;
+const ESCROW = collateral ? getAddress(collateral.escrow!) : null;
+// Base cNGN, an upgradeable proxy whose balances mapping sits at slot 201 (venue.ts, found with stdstore).
+const CNGN = getAddress('0x46C85152bFe9f96829aA94755D9f915F9B10EF5F');
+const CNGN_BALANCE_SLOT = 201n;
 const MATCHING = getAddress(moduleArtifact.matching ?? '0x9E90A9cD13d859Bd6a08168082FB1F6F7405F191');
 
 const chain = defineChain({
@@ -87,6 +95,9 @@ const abi = parseAbi([
   'function getAuction(uint256 accountId) view returns ((uint256 accountId, uint256 scenarioId, bool insolvent, bool ongoing, uint256 cachedMM, uint256 startTime, uint256 reservedCash))',
   'function getMarginAndMarkToMarket(uint256 accountId, uint256 scenarioId) view returns (int256 mm, int256 bm, int256 mtm)',
   'function submitTransfers((uint256 fromAcc, uint256 toAcc, address asset, uint256 subId, int256 amount, bytes32 assetData)[] transfers, bytes managerData) returns (uint256)',
+  'function whitelistedManager(address manager) view returns (bool)',
+  'function setWhitelistManager(address manager, bool whitelisted)',
+  'function balanceOf(address) view returns (uint256)',
 ]);
 
 const keyFor = (label: string) => privateKeyToAccount(keccak256(toHex(`numo.rehearsal.${label}`)));
@@ -260,6 +271,64 @@ async function positions() {
   console.log(`fork: alice #${accounts.alice} and carol #${accounts.carol} long 10M cNGN each against bob #${accounts.bob}`);
 }
 
+/** Batch 5 on the FORK only: the real escrow opens to the SRM, as the vault will sign it on Base. */
+async function cngnOpen() {
+  if (ESCROW === null) throw new Error(`no ${collateralFile}: the cNGN escrow is not deployed`);
+  const open = await client.readContract({ address: ESCROW, abi, functionName: 'whitelistedManager', args: [SRM] });
+  if (open) {
+    console.log('fork: cNGN escrow already open to the SRM');
+    return;
+  }
+  await asVault(ESCROW, 'setWhitelistManager', [SRM, true]);
+  console.log(`fork: escrow ${ESCROW} opened to the SRM as the vault (batch 5, fork only)`);
+}
+
+/** Gives `label` `cngnWhole` cNGN at the proxy's balance slot and returns its (gas-funded) key. */
+async function fundedCngn(label: string, cngnWhole: bigint) {
+  const account = await funded(label);
+  const slot = keccak256(encodeAbiParameters([{ type: 'address' }, { type: 'uint256' }], [account.address, CNGN_BALANCE_SLOT]));
+  await anvil('anvil_setStorageAt', [CNGN, slot, pad(toHex(cngnWhole * 10n ** 6n), { size: 32 })]);
+  const held = await client.readContract({ address: CNGN, abi, functionName: 'balanceOf', args: [account.address] });
+  if (held !== cngnWhole * 10n ** 6n) throw new Error(`cNGN balance slot moved: set ${cngnWhole}, read ${held}`);
+  return account;
+}
+
+/**
+ * The cNGN scenario, on the real escrow:
+ *   treasury: 2M cNGN posted, long USD 1:1 against it (the venue's allowed use) -- must ride the
+ *             40% fall out above maintenance margin with its cNGN intact;
+ *   dave:     a directly-created account that posts 1M cNGN and goes long NAIRA (the venue refuses
+ *             this; the chain does not) at the IM the haircut allows -- insolvent or nearly so after
+ *             the fall, so the production keeper has to bid on a cNGN portfolio at its haircut and
+ *             end up holding the cNGN.
+ */
+async function cngnPositions() {
+  if (ESCROW === null) throw new Error(`no ${collateralFile}: the cNGN escrow is not deployed`);
+  const accounts = readAccounts();
+  if (!accounts.bob) throw new Error('run positions first: bob is the counterparty');
+  const operator = keyFor('operator');
+  const newCngnAccount = async (label: string, cngnWhole: bigint) => {
+    const owner = await fundedCngn(label, cngnWhole);
+    await write(owner, SUB_ACCOUNTS, 'createAccountWithApproval', [owner.address, operator.address, SRM]);
+    const id = await client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'lastAccountId' });
+    await write(owner, CNGN, 'approve', [ESCROW, cngnWhole * 10n ** 6n]);
+    await write(owner, ESCROW, 'deposit', [id, cngnWhole * 10n ** 6n]);
+    return id;
+  };
+  const treasury = await newCngnAccount('treasury', 2_000_000n);
+  const dave = await newCngnAccount('dave', 1_000_000n);
+  writeFileSync(accountsFile, JSON.stringify({ ...accounts, treasury: treasury.toString(), dave: dave.toString() }, null, 2));
+  const bob = BigInt(accounts.bob);
+  const transfers = [
+    // treasury short naira (long USD) 1.98M cNGN: 1:1 with its collateral, a hair under.
+    { fromAcc: treasury, toAcc: bob, asset: PERP, subId: 0n, amount: 1_980_000n * E18, assetData: pad('0x', { size: 32 }) },
+    // dave long naira 1.49M cNGN on 1M cNGN of collateral: IM credit 0.5M against 0.497M needed.
+    { fromAcc: bob, toAcc: dave, asset: PERP, subId: 0n, amount: 1_490_000n * E18, assetData: pad('0x', { size: 32 }) },
+  ];
+  await write(operator, SUB_ACCOUNTS, 'submitTransfers', [transfers, '0x']);
+  console.log(`fork: treasury #${treasury} long USD 1.98M cNGN on 2M cNGN; dave #${dave} long naira 1.49M cNGN on 1M cNGN (the backstop case)`);
+}
+
 async function status() {
   const accounts = readAccounts();
   const smAccount = BigInt(String(stack.securityModuleAccount));
@@ -273,6 +342,15 @@ async function status() {
     carolInAuction: carolAuction.ongoing,
     carolAboveMaintenance: carolMM >= 0n,
     securityModuleCash: (await client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'getBalance', args: [smAccount, CASH, 0n] })).toString(),
+    ...(accounts.treasury && ESCROW
+      ? {
+          treasury: await perpOf(accounts.treasury),
+          treasuryCngn: (await client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'getBalance', args: [BigInt(accounts.treasury), ESCROW, 0n] })).toString(),
+          treasuryAboveMaintenance: (await client.readContract({ address: auction, abi, functionName: 'getMarginAndMarkToMarket', args: [BigInt(accounts.treasury), 0n] }))[0] >= 0n,
+          dave: await perpOf(accounts.dave!),
+          daveInAuction: (await client.readContract({ address: auction, abi, functionName: 'getAuction', args: [BigInt(accounts.dave!)] })).ongoing,
+        }
+      : {}),
   };
   console.log(JSON.stringify(out));
 }
@@ -301,6 +379,12 @@ switch (command) {
     break;
   case 'positions':
     await positions();
+    break;
+  case 'cngn-open':
+    await cngnOpen();
+    break;
+  case 'cngn-positions':
+    await cngnPositions();
     break;
   case 'prices':
     await prices(BigInt(args[0] ?? '0'));
