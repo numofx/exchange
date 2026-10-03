@@ -41,6 +41,8 @@ type Server struct {
 	withdrawals *withdrawalService
 	// perp reads USDCcNGN-PERP's chain state for /v1/markets and /v1/positions; nil without a perp.
 	perp *perpStateReader
+	// indexLag is the index-lag gate; nil without INDEX_STATUS_TOKEN.
+	indexLag *indexLagGate
 }
 
 type marketPresentation struct {
@@ -219,6 +221,7 @@ func NewServer(cfg config.Config, pool *pgxpool.Pool, registry *instruments.Regi
 		signatures:  signatures,
 		withdrawals: newWithdrawalService(cfg, signatures),
 		perp:        newPerpStateReader(cfg),
+		indexLag:    newIndexLagGate(cfg),
 		hub:         events.NewHub(pool, cfg, slog.Default()),
 		wsAuth:      wsauth.Verifier{Domain: cfg.WSAuthDomain, MaxTTL: cfg.WSAuthMaxTTL},
 		orderHistoryAuth: wsauth.Verifier{
@@ -324,10 +327,17 @@ func (s *Server) handleMarkets(w http.ResponseWriter, r *http.Request) {
 	for _, item := range items {
 		presentation := s.presentMarket(r.Context(), item)
 		if item.IsPerpetual() && s.perp != nil {
-			state, _, err := s.perp.marketState(r.Context(), item)
+			state, raw, err := s.perp.marketState(r.Context(), item)
 			if err != nil {
 				slog.Warn("read perp state", "market", item.Symbol, "error", err)
 			} else {
+				if s.indexLag != nil {
+					// A copy: the cached state is shared, and the lag view changes every sample.
+					shown := *state
+					lag := s.indexLag.presentation(raw.index)
+					shown.IndexLag = &lag
+					state = &shown
+				}
 				presentation.Perp = state
 			}
 		}
@@ -607,6 +617,24 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 			slog.Info("order_submit_rejected_paused", "order_id", params.OrderID, "market", instrument.Symbol)
 			writeJSON(w, http.StatusConflict, map[string]string{"error": tradingPausedError})
 			return
+		}
+		// New exposure waits while spot has moved away from the on-chain index (index_lag.go).
+		if s.indexLag != nil {
+			_, raw, err := s.perp.marketState(r.Context(), instrument)
+			if err != nil {
+				slog.Warn("order_submit_index_unreadable", "order_id", params.OrderID, "error", err)
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "the perp index could not be read; retry shortly"})
+				return
+			}
+			if err := s.indexLag.allows(raw.index); err != nil {
+				slog.Info("order_submit_rejected_index_lag", "order_id", params.OrderID, "error", err)
+				status := http.StatusUnprocessableEntity
+				if errors.Is(err, errIndexBlind) {
+					status = http.StatusServiceUnavailable
+				}
+				writeJSON(w, status, map[string]string{"error": err.Error()})
+				return
+			}
 		}
 		// A cNGN-margined account is a synthetic dollar: long USD only, no more than the cNGN it
 		// posted. Checked here so a refused order never rests, and again at every fill.

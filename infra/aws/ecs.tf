@@ -119,6 +119,8 @@ resource "aws_ecs_task_definition" "markets" {
       { name = "CNGN_PERP_CASH_ADDRESS", value = var.cngn_perp_cash_address },
       { name = "CNGN_PERP_SRM_ADDRESS", value = var.cngn_perp_srm_address },
       { name = "CNGN_PERP_COLLATERAL_ADDRESS", value = var.cngn_perp_collateral_address },
+      { name = "INDEX_LAG_GATE", value = var.index_lag_gate ? "true" : "false" },
+      { name = "INDEX_LAG_MAX_BPS", value = tostring(var.index_lag_max_bps) },
 
       # Every one of these was set on Railway and every one has a code default that
       # differs from it or is empty. Omitting them silently relaxed the service:
@@ -146,6 +148,7 @@ resource "aws_ecs_task_definition" "markets" {
     ])
 
     secrets = [
+      { name = "INDEX_STATUS_TOKEN", valueFrom = local.secret_arns.index_status_token },
       { name = "DATABASE_URL", valueFrom = local.secret_arns.database_url },
       { name = "CHAIN_RPC_URL", valueFrom = local.secret_arns.rpc_url },
     ]

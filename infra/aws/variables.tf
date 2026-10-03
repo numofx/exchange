@@ -183,6 +183,20 @@ variable "cngn_perp_collateral_address" {
   default = ""
 }
 
+# The index-lag gate (markets-service api/index_lag.go). The publisher reports every spot sample to
+# the api; with the gate on, a new perp order is refused while that sample is more than
+# index_lag_max_bps from the on-chain index, or while no fresh sample exists. Off by default so the
+# reports can be watched on /v1/markets (perp.index_lag) before anything is refused.
+variable "index_lag_gate" {
+  type    = bool
+  default = false
+}
+
+variable "index_lag_max_bps" {
+  type    = number
+  default = 100
+}
+
 variable "matcher_poll_interval" {
   type    = string
   default = "250ms"
