@@ -22,7 +22,7 @@ import (
 // the on-chain index, new perp orders are refused until the index has caught up. Resting orders,
 // cancels and liquidations are untouched: only new exposure waits.
 //
-// A sample the venue has not heard for INDEX_STATUS_MAX_AGE_SEC reads as blind, and a blind venue
+// A sample the venue has not heard for INDEX_STATUS_MAX_AGE reads as blind, and a blind venue
 // refuses new perp orders too: an index it cannot check is the condition the gate exists for.
 //
 // Enforcement is a separate switch (INDEX_LAG_GATE) from the status endpoint, so the publisher can
