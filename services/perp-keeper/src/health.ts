@@ -15,6 +15,8 @@ export type StackHealth = {
   keeperEthWei: bigint;
   /** Net perp across the keeper's bid accounts, NGN 18dp: inventory inherited from liquidations. */
   keeperPerpPosition: bigint;
+  /** cNGN across the keeper's accounts, 18dp: collateral it was paid in by liquidations. */
+  keeperCngn: bigint;
   /** Keeper-owned accounts below maintenance margin: the liquidator itself needs liquidating. */
   keeperAccountsUnderMargin: bigint[];
   /** PerpAsset totalPosition for the SRM against its cap: both count |long| + |short|. */
@@ -28,6 +30,8 @@ export type HealthRules = {
   minKeeperEthWei: bigint;
   /** Alert when total position reaches this share of the cap, in bps. */
   capWarnBps: bigint;
+  /** Most cNGN the keeper means to hold, 18dp; null for no limit. */
+  maxCngnInventory: bigint | null;
 };
 
 export type HealthAlert = { key: string; message: string };
@@ -71,6 +75,15 @@ export function assessHealth(health: StackHealth, rules: HealthRules): HealthAle
     alerts.push({
       key: 'keeper-inventory',
       message: `keeper holds ${fmt(health.keeperPerpPosition)} cNGN of perp inherited from liquidations: close or hedge it`,
+    });
+  }
+  if (health.keeperCngn > 0n) {
+    const over = rules.maxCngnInventory !== null && health.keeperCngn > rules.maxCngnInventory;
+    alerts.push({
+      key: over ? 'keeper-cngn-over-limit' : 'keeper-cngn-inventory',
+      message: over
+        ? `keeper holds ${fmt(health.keeperCngn)} cNGN from liquidations, OVER its ${fmt(rules.maxCngnInventory!)} limit: it will not take more; sell on spot or raise MAX_CNGN_INVENTORY`
+        : `keeper holds ${fmt(health.keeperCngn)} cNGN from liquidations${rules.maxCngnInventory === null ? '' : ` (limit ${fmt(rules.maxCngnInventory)})`}: sell on spot or hold`,
     });
   }
   if (health.keeperAccountsUnderMargin.length > 0) {
