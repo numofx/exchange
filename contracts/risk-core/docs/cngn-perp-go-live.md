@@ -627,3 +627,27 @@ than 50 bps.
 The direct cNGN markets (Quidax `usdtcngn`, the Blockradar benchmark, HyperFX `USDC-cNGN` on Base)
 are not sources: they measure cNGN trading, which is thin (Quidax `usdtcngn` ~30 USDT/day, HyperFX
 one solver a side). Their readers were built and removed in exchange#83; the history has them.
+
+## Stage (B): 5x with the cNGN factor re-sized (prepared, not proposed)
+
+Decided 2026-10-03 after the fork study (`CngnPerpFiveXFork`): IM 20% / MM 12% on USDC and the cNGN
+margin factor 0.35, as one vault batch, because each was sized against the other (at today's MM 20%
+a 0.35 factor would cut a 1:1 hedge's rally room from ~43% to ~18%; at MM 12% the 0.5 factor leaves a
+long-naira account on cNGN insolvent after a 25% step). Hedge mode stays 1:1 in markets-service and
+the app.
+
+Order: (1) the operator funds the SecurityModule to $6,000 of cash (it held $3,250 on 2026-10-03);
+(2) the vault executes `CNGN_PERP_LEVERAGE_VAULT_ACTIONS.json` in order: `setPerpMarginRequirements(1,
+0.12, 0.20)` then `setBaseAssetMarginFactor(1, 0.35, 1.0)`. The requirements go first because they
+only ease accounts; the factor tightens cNGN-margined ones and a 1:1 hedge is still well inside IM.
+
+```bash
+# Re-render the batch and the review from live state (deploys and broadcasts nothing):
+forge script scripts/prepare-cngn-perp-leverage.s.sol --rpc-url $BASE_RPC_URL
+python3 scripts/ops/render_perp_vault_review.py    # adds "Batch 6" to CNGN_PERP_VAULT_REVIEW.md
+# Applies the exact calldata on a Base fork and re-checks the sizing:
+BASE_RPC_URL=… forge test --match-contract CngnPerpLeverageBatchFork -vv
+```
+
+The library's `checkFunded` is the proposer's gate: the batch cannot be proposed while the
+SecurityModule is below the floor. Nothing here is proposed or signed yet.

@@ -54,6 +54,8 @@ FUNCTIONS = {
   "whitelistAsset(address,uint256,uint8)": ["address", "uint256", "uint8"],
   "setWhitelistManager(address,bool)": ["address", "bool"],
   "setInterestRateModel(address)": ["address"],
+  # batch 6, stage (B) leverage (prepare-cngn-perp-leverage.s.sol / cngn-perp-leverage-batch.sol)
+  "setPerpMarginRequirements(uint256,uint256,uint256)": ["uint256", "uint256", "uint256"],
 }
 ASSET_TYPES = {0: "NotSet", 1: "Option", 2: "Perpetual", 3: "Base"}
 # The fork test's sizing (DeployCngnPerpCollateral.SIZED_MARGIN_FACTOR); a larger factor is refused here as well.
@@ -130,6 +132,12 @@ def purpose(sig: str, args: list, target: str, stack: dict) -> str:
     return (f"The haircut: {args[1] / 10**16:.0f}% of cNGN's oracle value counts as maintenance margin "
             f"(x{args[2] / 10**18:.2f} again for initial margin) on market {args[0]}. Sized by CngnPerpCollateralFork so a "
             "long-naira account on cNGN alone, left at maintenance margin, is still solvent after a 25% step.")
+  if sig == "setPerpMarginRequirements(uint256,uint256,uint256)":
+    if not (0 < args[1] < args[2] < 10**18):
+      raise SystemExit(f"REFUSED: perp margin requirements MM {args[1]} / IM {args[2]} are out of order")
+    return (f"Perp margin requirements on market {args[0]}: maintenance {args[1] / 10**16:.1f}%, initial "
+            f"{args[2] / 10**16:.1f}% ({10**18 / args[2]:.0f}x). Lower than today's: eases every account, tightens none. "
+            "Sized with the cNGN factor that follows (CngnPerpFiveXFork).")
   if sig == "whitelistAsset(address,uint256,uint8)":
     if args[2] != 3:
       raise SystemExit(f"REFUSED: whitelistAsset type {args[2]} is not Base (3)")
@@ -151,6 +159,7 @@ def render_args(sig: str, args: list, named: dict[str, str]) -> str:
     return "(none)"
   kinds = FUNCTIONS[sig]
   params = {"setGuardian(address)": ["guardian"], "setTotalPositionCap(address,uint256)": ["manager", "cap"],
+              "setPerpMarginRequirements(uint256,uint256,uint256)": ["marketId", "mm", "im"],
             "setAllowedModule(address,bool)": ["module", "allowed"],
             "setBaseAssetMarginFactor(uint256,uint256,uint256)": ["marketId", "marginFactor", "imScale"],
             "whitelistAsset(address,uint256,uint8)": ["asset", "marketId", "assetType"],
@@ -164,6 +173,8 @@ def render_args(sig: str, args: list, named: dict[str, str]) -> str:
       parts.append(f"`{name}` = `{value}`")
     elif name in ("marginFactor", "imScale"):
       parts.append(f"`{name}` = `{value}` ({value / 10**16:.0f}%, 18dp)")
+    elif name in ("mm", "im"):
+      parts.append(f"`{name}` = `{value}` ({value / 10**16:.1f}%, 18dp)")
     elif name == "assetType":
       parts.append(f"`{name}` = `{value}` ({ASSET_TYPES.get(value, 'unknown')})")
     elif kind == "uint256":
@@ -194,7 +205,8 @@ def section(title: str, when: str, actions: list[dict], named: dict[str, str], s
 
 def render(stack_path: Path, stack_actions: Path, module_path: Path, module_actions: Path,
            collateral_path: Path | None = None, collateral_actions: Path | None = None,
-           collateral_enable: Path | None = None) -> str:
+           collateral_enable: Path | None = None, leverage_path: Path | None = None,
+           leverage_actions: Path | None = None) -> str:
   stack, module = json.loads(stack_path.read_text()), json.loads(module_path.read_text())
   collateral = None
   batch4 = None
@@ -212,6 +224,19 @@ def render(stack_path: Path, stack_actions: Path, module_path: Path, module_acti
         raise SystemExit("REFUSED: the enabling switch must be in its own batch, not in the configuring one")
     if len(batch5) != 1:
       raise SystemExit("REFUSED: the enable batch must be exactly one action")
+  leverage = None
+  batch6 = None
+  if leverage_path is not None and leverage_actions is not None and leverage_path.exists() and leverage_actions.exists():
+    if collateral is None:
+      raise SystemExit("REFUSED: the leverage batch exists without the collateral artifact it re-sizes")
+    leverage = json.loads(leverage_path.read_text())
+    batch6 = json.loads(leverage_actions.read_text())
+    if leverage["srm"].lower() != stack["srm"].lower():
+      raise SystemExit("REFUSED: the leverage artifact names a different SRM than the stack")
+    if len(batch6) != 2:
+      raise SystemExit("REFUSED: the leverage batch must be exactly two actions")
+    if int(leverage["marginFactor"]) * 2_500 > int(leverage["mmReq"]) * 7_500:
+      raise SystemExit("REFUSED: the leverage factor is not sized for a 25% step at its MM (F <= MM(1-s)/s)")
   named = names(stack, module, collateral)
   batch1 = json.loads(stack_actions.read_text())
   batch2 = json.loads(module_actions.read_text())
@@ -253,6 +278,15 @@ def render(stack_path: Path, stack_actions: Path, module_path: Path, module_acti
       "LAST, on its own. Sign only once the keeper, markets-service and app are deployed with the escrow configured "
       "and the mainnet-fork rehearsal has run a cNGN scenario against this escrow.",
       batch5, named, stack),
+  ]) + ([] if batch6 is None else [
+    section(
+      "Batch 6: stage (B) leverage, 5x with the cNGN factor re-sized",
+      f"Only after the SecurityModule holds at least ${int(leverage['securityModuleFloor']) // 10**18:,} of cash (it held "
+      f"${int(leverage['securityModuleCashAtRender']) / 10**18:,.0f} when this was rendered; the proposer refuses below the "
+      f"floor). In order: the requirements first (eases every account), then the factor "
+      f"{int(leverage['marginFactor']) / 10**16:.0f}% (tightens cNGN-margined accounts; a 1:1 hedge then liquidates on a "
+      f"~30% naira rally, from ~43% today). Hedge mode stays 1:1 in markets-service and the app. Hash `{leverage['batchHash']}`.",
+      batch6, named, stack),
   ]))
 
 
@@ -301,11 +335,13 @@ def main() -> int:
   ap.add_argument("--collateral", type=Path, default=ROOT / "deployments/8453/CNGN_PERP_COLLATERAL.json")
   ap.add_argument("--collateral-actions", type=Path, default=ROOT / "deployments/8453/CNGN_PERP_COLLATERAL_VAULT_ACTIONS.json")
   ap.add_argument("--collateral-enable", type=Path, default=ROOT / "deployments/8453/CNGN_PERP_COLLATERAL_ENABLE_VAULT_ACTIONS.json")
+  ap.add_argument("--leverage", type=Path, default=ROOT / "deployments/8453/CNGN_PERP_LEVERAGE.json")
+  ap.add_argument("--leverage-actions", type=Path, default=ROOT / "deployments/8453/CNGN_PERP_LEVERAGE_VAULT_ACTIONS.json")
   ap.add_argument("--out", type=Path, default=ROOT / "deployments/8453/CNGN_PERP_VAULT_REVIEW.md")
   args = ap.parse_args()
   if args.self_test:
     return self_test()
-  args.out.write_text(render(args.stack, args.stack_actions, args.module, args.module_actions, args.collateral, args.collateral_actions, args.collateral_enable))
+  args.out.write_text(render(args.stack, args.stack_actions, args.module, args.module_actions, args.collateral, args.collateral_actions, args.collateral_enable, args.leverage, args.leverage_actions))
   print(f"wrote {args.out}")
   return 0
 
