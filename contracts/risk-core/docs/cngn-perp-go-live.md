@@ -386,7 +386,11 @@ than the live one. (2) Verify on chain: `wrappedAsset()` is Base cNGN, `pendingO
 artifacts, render the review (`render_perp_vault_review.py`, batches 4 and 5) and read it. (4) Sign
 **batch 4**, five actions in order: acceptOwnership, setBaseAssetMarginFactor, whitelistAsset(Base),
 setTotalPositionCap, cash.setInterestRateModel — every prefix is a safe place to stop, and none of
-them lets cNGN in. (5) Verify `baseMarginParams(1)`, `borrowingEnabled()` still true, the cap, and
+them lets cNGN in. Proposed through `propose_cngn_collateral_batch.py --propose` from the ops box
+(MPCVault's API token is IP-allowlisted to it) and approved in the app. **Executed 2026-10-03**,
+blocks 52112993–52113252: `0xd9b20f1e…` (acceptOwnership), `0xe803ce30…` (factor 0.5 / IM 1.0),
+`0xd6e87e83…` (whitelistAsset Base, market 1), `0x046c023d…` (cap 8M), `0x746da28f…`
+(rate model `0x44466561…`, floor 10%). (5) Verify `baseMarginParams(1)`, `borrowingEnabled()` still true, the cap, and
 `cash.rateModel()`. (6) Deploy the keeper (`CNGN_ESCROW`, `MAX_CNGN_INVENTORY`), markets-service
 (`cngn_perp_collateral_address`) and the app, each verified from its running tasks; run the
 mainnet-fork rehearsal with its cNGN scenario against the real escrow. (7) Only then sign
