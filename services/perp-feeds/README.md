@@ -6,8 +6,14 @@ Price publishers for `USDCcNGN-PERP`. One process, one feed signer, one relayer:
   [`cngn-rate-picker`](https://github.com/wrappedcbdc/cngn-rate-picker) (Quidax `usdtngn`, Textile,
   Bybit P2P) are queried. A sample is the **median**, and is
   refused if fewer than 3 sources answer or any source sits more than 150 bps from the median. Every
-  5 minutes the 15-minute **time-weighted average** of accepted samples is inverted to USDC per cNGN,
-  refused if it would move the on-chain index more than 300 bps, then signed and pushed.
+  minute the 5-minute **time-weighted average** of accepted samples is inverted to USDC per cNGN,
+  refused if it would move the on-chain index more than 150 bps, then signed and pushed (15 min /
+  5 min / 300 bps until 2026-10-03; tightened by the leverage study so a step is in the index within
+  5 minutes and the keeper sees several publishes between maintenance margin and zero equity).
+  Every spot sample is also reported to markets-service (`INDEX_STATUS_PUSH_URL`,
+  `INDEX_STATUS_TOKEN` from SSM `/numo/feeds/index_status_token`), whose index-lag gate refuses new
+  perp orders while spot sits more than 100 bps from the on-chain index, or while no fresh sample
+  has arrived.
 - **Mark and impacts.** Every minute, the perp book from markets-service gives the mark (book mid)
   and impact prices (average fill for $1,000 each side), each clamped to the index ± 200 bps. A side
   without that depth reads as the index, so a thin book creates no funding premium. Published on a
@@ -34,7 +40,7 @@ halts the perp's trading **and its liquidations** until a fresh value lands (hea
 That is the design: an index nobody is sure of liquidates solvent traders; no index stops the market.
 Every refusal alerts through `ALERT_WEBHOOK_URL`.
 
-A real devaluation will trip the 300 bps jump guard too. Reopening is the index-step procedure in
+A real devaluation will trip the 150 bps jump guard too. Reopening is the index-step procedure in
 `contracts/risk-core/docs/cngn-perp-go-live.md`: `--accept-index-step --level=… --approved-by=…
 --reason=…` publishes the sources' TWAP once. It refuses without a live keeper, or if the sources
 disagree with the confirmed level, and it writes an audit record. There is no env override.
