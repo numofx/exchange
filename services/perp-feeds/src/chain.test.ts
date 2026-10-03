@@ -1,7 +1,21 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { serialized } from './chain.js';
+import type { Config } from './config.js';
+import { createChain, serialized } from './chain.js';
+
+describe('relayer account', () => {
+  it('tracks its own nonce, so a lagging RPC node cannot hand the previous nonce out again', () => {
+    const chain = createChain({
+      CHAIN_ID: 31337,
+      RPC_URL: 'http://127.0.0.1:8599',
+      RELAYER_KEY: '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d',
+      FEED_SIGNER_KEY: '0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a',
+      DATA_SUBMITTER: '0x0000000000000000000000000000000000000001',
+    } as unknown as Config);
+    assert.ok(chain.relayer.nonceManager, 'relayer has no nonce manager');
+  });
+});
 
 describe('serialized submissions', () => {
   it('starts each task only after the previous one has settled, in call order', async () => {
