@@ -68,6 +68,10 @@ async function main() {
           keeperAddress: chain.keeper.address,
           maxBidUsd: config.MAX_BID_USD?.toString() ?? null,
           pollIntervalMs: config.POLL_INTERVAL_MS,
+          // The cNGN escrow this keeper bids for (null: cash-only); the batch-5 gate reads it.
+          cngnEscrow: config.CNGN_ESCROW ?? null,
+          cngnHaircutBps: config.CNGN_HAIRCUT_BPS.toString(),
+          maxCngnInventory: config.MAX_CNGN_INVENTORY?.toString() ?? null,
         }),
       );
     }).listen(config.HEALTH_PORT, config.HEALTH_HOST);

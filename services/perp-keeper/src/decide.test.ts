@@ -5,7 +5,7 @@ import { decide, type AccountView } from './decide.js';
 import { assessHealth, fmt, type StackHealth } from './health.js';
 
 const E18 = 10n ** 18n;
-const rules = { maxBidUsd: null, minSolventDiscountBps: 200n, minBidPercent: E18 / 100n };
+const rules = { maxBidUsd: null, minSolventDiscountBps: 200n, minBidPercent: E18 / 100n, cngnHaircutBps: 1_000n, cngnInventory: 0n, maxCngnInventory: null };
 
 function account(overrides: Partial<AccountView>): AccountView {
   return {
@@ -17,9 +17,13 @@ function account(overrides: Partial<AccountView>): AccountView {
     canTerminate: false,
     bidPrice: null,
     maxProportion: null,
+    collateral: null,
     ...overrides,
   };
 }
+
+/** 10M cNGN at 0.00072 USDC/cNGN: $7,200 of collateral, $720 of haircut at 10%. */
+const tenMillionCngn = { cngn: 10_000_000n * E18, indexPrice: 72n * E18 / 100_000n };
 
 describe('decide', () => {
   it('leaves a healthy account alone', () => {
@@ -84,8 +88,9 @@ describe('decide', () => {
   });
 
   it('says an auction is nearly sold out rather than blaming keeper cash', () => {
+    // Still under maintenance margin, so this is not the finishing bid below.
     const view = account({
-      mm: 10n * E18,
+      mm: -10n * E18,
       bm: -1n * E18,
       mtm: 1_000n * E18,
       auction: { ongoing: true, insolvent: false, reservedCash: 100n * E18 },
@@ -170,6 +175,70 @@ describe('decide', () => {
     assert.equal(action.kind === 'bid' && action.percent, E18 / 4n);
   });
 
+  it('waits on an insolvent cNGN portfolio until the payout also covers the haircut on the cNGN', () => {
+    const view = account({
+      mm: -800n * E18,
+      mtm: -300n * E18,
+      auction: { ongoing: true, insolvent: true, reservedCash: 0n },
+      bidPrice: -306n * E18, // covers the $300 deficit + 2%, but not the $720 haircut on 10M cNGN
+      collateral: tenMillionCngn,
+    });
+    assert.equal(decide(view, 10_000n * E18, rules).kind, 'none');
+    assert.equal(decide({ ...view, bidPrice: -1_026n * E18 }, 10_000n * E18, rules).kind, 'bid');
+    // Without a haircut the cNGN is taken at the index, as a cash-only portfolio would be.
+    assert.equal(decide(view, 10_000n * E18, { ...rules, cngnHaircutBps: 0n }).kind, 'bid');
+  });
+
+  it('bids a solvent cNGN portfolio at the index discount, carrying the cNGN as inventory', () => {
+    // Equity under the haircut: netting it would make this unbiddable until the auction ran out.
+    const view = account({
+      mm: -50n * E18,
+      bm: -200n * E18,
+      mtm: 69n * E18, // 10M cNGN against a settled loss: $69 of equity, $720 of haircut
+      auction: { ongoing: true, insolvent: false, reservedCash: 0n },
+      bidPrice: 65n * E18, // 5.8% under
+      maxProportion: E18,
+      collateral: tenMillionCngn,
+    });
+    assert.equal(decide(view, 100_000n * E18, rules).kind, 'bid');
+    assert.equal(decide({ ...view, bidPrice: 68n * E18 }, 100_000n * E18, rules).kind, 'none'); // 1.4% is under the rule
+  });
+
+  it('sizes a cNGN bid down to the inventory room left, and stops at the limit', () => {
+    const view = account({
+      mm: -800n * E18,
+      mtm: -300n * E18,
+      auction: { ongoing: true, insolvent: true, reservedCash: 0n },
+      bidPrice: -1_100n * E18,
+      collateral: tenMillionCngn,
+    });
+    const limited = { ...rules, cngnInventory: 8_000_000n * E18, maxCngnInventory: 10_500_000n * E18 };
+    const action = decide(view, 10_000n * E18, limited);
+    assert.equal(action.kind === 'bid' && action.percent, E18 / 4n); // 2.5M of room against 10M
+    const full = decide(view, 10_000n * E18, { ...limited, cngnInventory: 10_500_000n * E18 });
+    assert.equal(full.kind, 'none');
+    assert.match(full.kind === 'none' ? full.note ?? '' : '', /inventory/);
+  });
+
+  it('finishes a solvent auction whose sliver is under the minimum once the account is above MM', () => {
+    const view = account({
+      mm: 5n * E18, // above maintenance margin after an earlier bid
+      bm: -1n * E18 / 1_000_000n, // a millionth under buffer margin: the auction will not end on its own
+      mtm: 43n * E18,
+      auction: { ongoing: true, insolvent: false, reservedCash: 42n * E18 },
+      bidPrice: 3n * E18 / 10n,
+      maxProportion: E18 / 100_000n, // 0.001%: all the auction has left; pays in 3 millionths
+    });
+    const action = decide(view, 10_000n * E18, rules);
+    assert.equal(action.kind, 'bid');
+    assert.equal(action.kind === 'bid' && action.percent, E18 / 100_000n);
+    // Still under margin: a sliver is not finished, it is a keeper out of cash or an auction sold out.
+    assert.equal(decide({ ...view, mm: -5n * E18 }, 10_000n * E18, rules).kind, 'none');
+    // A price decayed too far to restore buffer margin: bidding would loop for nothing; the sliver
+    // waits for the solvent window to end, when maintenance margin is enough to terminate.
+    assert.equal(decide({ ...view, bm: -1n * E18 / 1_000n }, 10_000n * E18, rules).kind, 'none');
+  });
+
   it('declines a bid too small to be worth its gas', () => {
     const view = account({
       mm: -800n * E18,
@@ -189,14 +258,22 @@ describe('assessHealth', () => {
     keeperCash: 5_000n * E18,
     keeperEthWei: E18 / 10n,
     keeperPerpPosition: 0n,
+    keeperCngn: 0n,
     keeperAccountsUnderMargin: [],
     totalPosition: 0n,
     totalPositionCap: 50_000_000n * E18,
   };
-  const healthRules = { minSecurityModuleCash: 1_000n * E18, minKeeperCash: 1_000n * E18, minKeeperEthWei: E18 / 100n, capWarnBps: 8_000n };
+  const healthRules = { minSecurityModuleCash: 1_000n * E18, minKeeperCash: 1_000n * E18, minKeeperEthWei: E18 / 100n, capWarnBps: 8_000n, maxCngnInventory: 10_000_000n * E18 };
 
   it('is quiet when nothing is wrong', () => {
     assert.deepEqual(assessHealth(healthy, healthRules), []);
+  });
+
+  it('reports cNGN the keeper was paid in, and says when it is over the limit', () => {
+    const held = assessHealth({ ...healthy, keeperCngn: 3_000_000n * E18 }, healthRules);
+    assert.deepEqual(held.map((a) => a.key), ['keeper-cngn-inventory']);
+    const over = assessHealth({ ...healthy, keeperCngn: 12_000_000n * E18 }, healthRules);
+    assert.deepEqual(over.map((a) => a.key), ['keeper-cngn-over-limit']);
   });
 
   it('raises a socialized loss, an SM that cannot cover live insolvency, and keeper inventory', () => {

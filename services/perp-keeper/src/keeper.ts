@@ -18,17 +18,19 @@ export async function runOnce(
   alert: Alerter,
   summary: PassSummary = { liquidatable: [], insolvent: [] },
 ): Promise<Action[]> {
-  const rules = {
-    minSolventDiscountBps: config.MIN_SOLVENT_DISCOUNT_BPS,
-    minBidPercent: BigInt(Math.round(config.MIN_BID_PERCENT * 1e16)),
-    maxBidUsd: config.MAX_BID_USD,
-  };
-
   // Throws (a failed pass, so /health fails) when the funding account cannot fund a bid.
   await chain.assertFundingAccount();
   const accounts = await chain.discoverAccounts();
   const actions: Action[] = [];
   let keeperCash = await chain.keeperCash();
+  const rules = {
+    minSolventDiscountBps: config.MIN_SOLVENT_DISCOUNT_BPS,
+    minBidPercent: BigInt(Math.round(config.MIN_BID_PERCENT * 1e16)),
+    maxBidUsd: config.MAX_BID_USD,
+    cngnHaircutBps: config.CNGN_HAIRCUT_BPS,
+    cngnInventory: await chain.keeperCngn(),
+    maxCngnInventory: config.MAX_CNGN_INVENTORY,
+  };
 
   for (const accountId of accounts) {
     let action: Action;
@@ -61,8 +63,11 @@ export async function runOnce(
       const { sent } = await chain.execute(call, config.DRY_RUN);
       console.log(`[keeper] #${accountId}: ${describe(action)} ${sent ? `tx=${sent}` : '(dry-run, simulated ok)'}`);
       await alert(`action-${action.kind}-${accountId}`, `${config.DRY_RUN ? 'DRY-RUN ' : ''}${describe(action)} on account ${accountId}`);
-      // A bid spends keeper cash; re-read before sizing the next one against a balance it no longer has.
-      if (action.kind === 'bid' && sent) keeperCash = await chain.keeperCash();
+      // A bid spends keeper cash and may pay it in cNGN; re-read both before sizing the next one.
+      if (action.kind === 'bid' && sent) {
+        keeperCash = await chain.keeperCash();
+        rules.cngnInventory = await chain.keeperCngn();
+      }
     } catch (error) {
       // Funded but not bid from: still cash-only, so the next bid can use it.
       if (freshBidder !== null) chain.releaseBidAccount(freshBidder);
@@ -76,6 +81,7 @@ export async function runOnce(
     minKeeperCash: config.MIN_KEEPER_CASH_USD,
     minKeeperEthWei: config.MIN_KEEPER_ETH,
     capWarnBps: config.OI_CAP_WARN_BPS,
+    maxCngnInventory: config.MAX_CNGN_INVENTORY,
   })) {
     await alert(problem.key, problem.message);
   }

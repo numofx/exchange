@@ -28,6 +28,28 @@ fresh subaccount the keeper creates, funds with exactly that bid's requirement (
 Inherited positions stay in those bid accounts. The keeper does **not** close or hedge them — it
 alerts (`keeper-inventory`), and an operator or the market maker takes them from there.
 
+## cNGN collateral
+
+Once cNGN is margin on the perp (risk-core `CNGN_PERP_COLLATERAL.json`), set `CNGN_ESCROW` to that
+escrow. The keeper then reads each account's cNGN. An insolvent bid waits until the payout covers the
+deficit plus `CNGN_HAIRCUT_BPS` (default 10%) of the cNGN's index value; a solvent bid is judged
+at the index like any other, and the cNGN is carried as inventory (netting the haircut there would
+leave an account whose equity is under it unbiddable for the whole 12-hour solvent phase, position
+open — the local drill found exactly that). The SRM
+credits cNGN at 50%, but the auction's end price is the maintenance-margin deficit, which on cNGN
+carries that same haircut — a keeper waiting for the SRM's valuation would let every cNGN auction
+run to its most expensive second. `MAX_CNGN_INVENTORY` (whole cNGN) bounds what the keeper will hold
+across its accounts: a bid that would pass it is sized down to the room left, then stops
+(`keeper-cngn-over-limit`). Inherited cNGN is alerted (`keeper-cngn-inventory`) and left for an
+operator to sell on spot or hold, like inherited perp.
+
+A solvent auction sells only what restores the account's margin and ends at *buffer* margin.
+When an earlier bid has put the account above maintenance margin and a rounding sliver under the
+keeper's minimum is all that is left, the keeper takes it if the cash it pays in restores buffer
+margin (a live auction freezes the account for its owner); otherwise the sliver waits for the
+solvent window to end (12h15m at the venue's parameters), when maintenance margin is enough and
+the keeper terminates it.
+
 ## Bid size and health
 
 `MAX_BID_USD` caps one bid by the margin it ties up: a solvent bid by its price plus the buffer

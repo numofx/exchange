@@ -50,6 +50,27 @@ const envSchema = z.object({
    */
   MAX_BID_USD: z.coerce.number().positive().optional().transform((value) => (value === undefined ? null : parseUnits(String(value), 18))),
 
+  /**
+   * The perp stack's cNGN escrow (risk-core deployments CNGN_PERP_COLLATERAL.json `escrow`), once
+   * cNGN is margin. Unset: accounts are read as cash-and-perp only, and a bid on an account that
+   * does hold cNGN is still correct, just priced without the haircut below.
+   */
+  CNGN_ESCROW: address.optional(),
+  /**
+   * Haircut the keeper takes on cNGN it is paid in, in bps of its index value: it bids an insolvent
+   * auction once the payout covers the deficit plus this much of the cNGN, and reads a solvent
+   * portfolio's value net of it. The SRM credits cNGN at 50%; a keeper that waited for THAT
+   * valuation would let the auction run to its most expensive second (see the runbook's
+   * "cNGN as margin": $7,195 at the end against $2,788 bid early, on the 40% drill).
+   */
+  CNGN_HAIRCUT_BPS: z.coerce.bigint().nonnegative().max(10_000n).default(1_000n),
+  /**
+   * Most cNGN the keeper will hold across its accounts, in whole cNGN. A bid that would push it
+   * past this is sized down to the room left, not skipped. Unset: no limit. Inherited cNGN is
+   * reported (`keeper-cngn-inventory`) and left for an operator to sell on spot or hold.
+   */
+  MAX_CNGN_INVENTORY: z.coerce.number().positive().optional().transform((value) => (value === undefined ? null : parseUnits(String(value), 18))),
+
   MIN_SECURITY_MODULE_USD: usd.default(1000),
   MIN_KEEPER_CASH_USD: usd.default(1000),
   MIN_KEEPER_ETH: z.coerce.number().nonnegative().default(0.005).transform((value) => parseUnits(String(value), 18)),
