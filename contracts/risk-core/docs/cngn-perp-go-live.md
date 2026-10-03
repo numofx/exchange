@@ -6,8 +6,10 @@ a real index step, and settling one that is too large to reopen. Every step here
 rehearsed first on `scripts/local-venue/up.sh`, and the index step on `step-drill.sh`.
 
 Nothing in this runbook broadcasts or signs by itself. Deploys are signed by the deployer from a
-forge keystore account (`--account numo-deployer`); the key is never put on a command line or in
-an environment variable. Vault actions go through MPCVault, and a human approves each one.
+forge keystore account (`--account numo-deployer`, always with `--sender <the deployer address>`:
+without it forge simulates from its placeholder sender and every deploy script here refuses to run
+— "no sender given", 2026-10-03); the key is never put on a command line or in an environment
+variable. Vault actions go through MPCVault, and a human approves each one.
 
 ## Go-live checklist
 
@@ -75,14 +77,14 @@ across three accounts.
    ```bash
    FEED_SIGNER=0xdA1976E83D54B76D0c794B35262228960a1a918f PERP_GUARDIAN=<the KMS address> \
      forge script scripts/deploy-cngn-perp-stack.s.sol --rpc-url $BASE_RPC_URL \
-     --account numo-deployer --broadcast
+     --account numo-deployer --sender 0x2D724867d3AeD4A9F09c096B87F939285DD3AE2D --broadcast
    ```
    `FEED_SIGNER` must be what `/numo/feeds/feed_signer_key` derives to (checked 2026-09-30).
    `PERP_OI_CAP` defaults to 50,000,000 cNGN.
 7. Broadcast the module, from `contracts/execution`:
    ```bash
    forge script scripts/deploy-cngn-perp-trade-module.s.sol --rpc-url $BASE_RPC_URL \
-     --account numo-deployer --broadcast
+     --account numo-deployer --sender 0x2D724867d3AeD4A9F09c096B87F939285DD3AE2D --broadcast
    ```
 8. Commit the deployment artifacts (`CNGN_PERP_STACK*.json`, `CNGN_PERP_TRADE_MODULE*.json`).
 9. **Requires the follow-up exchange PR (the index rework and the pager's dead-man's switch) to
@@ -375,8 +377,9 @@ the cNGN case into the most expensive one. Keeper rule unchanged: a third of a s
 also holds the cNGN it is paid in (see the perp-keeper's `MAX_CNGN_INVENTORY`).
 
 **Procedure.** (1) `forge script scripts/deploy-cngn-perp-collateral.s.sol --rpc-url $BASE_RPC_URL
---account numo-deployer --broadcast` (deployer gas ≈ 0.00003 ETH): the escrow and the replacement
-rate model. It refuses the forge default sender, a factor above the sized one, a market that already
+--account numo-deployer --sender 0x2D724867d3AeD4A9F09c096B87F939285DD3AE2D --broadcast` (deployer
+gas ≈ 0.00003 ETH; done 2026-10-03, block 52112046: escrow `0x37c976bb…7c98`, rate model
+`0x44466561…caAF`): the escrow and the replacement rate model. It refuses the forge default sender, a factor above the sized one, a market that already
 has a base factor, a market whose spot feed is not the index, borrowing off, and a floor no higher
 than the live one. (2) Verify on chain: `wrappedAsset()` is Base cNGN, `pendingOwner()` the vault,
 `whitelistedManager(srm)` false, the rate model's `minRate()` 0.10e18. (3) Commit the three
