@@ -1,6 +1,6 @@
 # USDCcNGN-PERP vault actions: review before signing
 
-Rendered 2026-10-03 07:51 UTC from commit `44cea5d`, from `CNGN_PERP_STACK.json`, `CNGN_PERP_STACK_VAULT_ACTIONS.json`, `CNGN_PERP_TRADE_MODULE.json` and `CNGN_PERP_TRADE_MODULE_VAULT_ACTIONS.json`.
+Rendered 2026-10-03 23:28 UTC from commit `ed08e0a`, from `CNGN_PERP_STACK.json`, `CNGN_PERP_STACK_VAULT_ACTIONS.json`, `CNGN_PERP_TRADE_MODULE.json` and `CNGN_PERP_TRADE_MODULE_VAULT_ACTIONS.json`.
 Every row was decoded and re-encoded to its own calldata, every digest recomputed, every target matched to an artifact, and every value is 0. Compare each digest with the one MPCVault shows before approving.
 
 - Vault: `0x1dcA42ab54Bd3862853A821F84B29BF65245F435`
@@ -64,3 +64,12 @@ LAST, on its own. Sign only once the keeper, markets-service and app are deploye
 | # | Target | Function | Arguments | Purpose | MPCVault digest |
 | --- | --- | --- | --- | --- | --- |
 | 0 | cNGN escrow (perp collateral, WrappedERC20Asset)<br>`0x37c976bb5d4887a714ef19AF6B83e34fe2f37c98` | `setWhitelistManager(address,bool)` | `manager` = `0xde0423d0a1e15536265c9513d2e0c10dab5835d4` (StandardManager (perp SRM))<br>`whitelisted` = `true` | THE ENABLING SWITCH: the escrow accepts the perp SRM, so cNGN can be deposited into perp accounts. Nothing can enter before this. Sign only once the keeper, markets-service and app that enforce the cNGN rules are live and the fork rehearsal has run a cNGN scenario against this escrow. | `0xa109461ae67d8885ade26a1cdadeacaeeaab8c949756eb3b4bc6c3b9fdf1c0d2` |
+
+## Batch 6: stage (B) leverage, 5x with the cNGN factor re-sized
+
+Gate: the SecurityModule must cover a 25% step on today's ONE-SIDE open interest at the new IM (cash >= one side x 25% x (1 - IM); at render it held $3,250, covering a $16,250 side against $2 open; the proposer refuses otherwise and the pager Slack-warns past coverage, pages at 1.2x). In order: the requirements first (eases every account), then the factor 35% (tightens cNGN-margined accounts; a 1:1 hedge then liquidates on a ~30% naira rally, from ~43% today). Hedge mode stays 1:1 in markets-service and the app. Hash `0x22ff8b039708b4aef3f0635b35cd65adb12b6b9a49bafc0a9374674ba15527a1`.
+
+| # | Target | Function | Arguments | Purpose | MPCVault digest |
+| --- | --- | --- | --- | --- | --- |
+| 0 | StandardManager (perp SRM)<br>`0xDE0423D0a1E15536265C9513d2e0c10DAb5835D4` | `setPerpMarginRequirements(uint256,uint256,uint256)` | `marketId` = `1`<br>`mm` = `120000000000000000` (12.0%, 18dp)<br>`im` = `200000000000000000` (20.0%, 18dp) | Perp margin requirements on market 1: maintenance 12.0%, initial 20.0% (5x). Lower than today's: eases every account, tightens none. Sized with the cNGN factor that follows (CngnPerpFiveXFork). | `0x4282de301de3bd8290eb30c5cd4f824c6e28102d9df96c56ebd76be5e40ef4de` |
+| 1 | StandardManager (perp SRM)<br>`0xDE0423D0a1E15536265C9513d2e0c10DAb5835D4` | `setBaseAssetMarginFactor(uint256,uint256,uint256)` | `marketId` = `1`<br>`marginFactor` = `350000000000000000` (35%, 18dp)<br>`imScale` = `1000000000000000000` (100%, 18dp) | The haircut: 35% of cNGN's oracle value counts as maintenance margin (x1.00 again for initial margin) on market 1. Sized by CngnPerpCollateralFork so a long-naira account on cNGN alone, left at maintenance margin, is still solvent after a 25% step. | `0x21ffcdcf708911002a4209fbad7a467e942c104c784c7a22c434c6deaa97bee9` |
