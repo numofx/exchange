@@ -118,6 +118,7 @@ resource "aws_ecs_task_definition" "markets" {
       { name = "CNGN_PERP_TRADE_MODULE_ADDRESS", value = var.cngn_perp_trade_module_address },
       { name = "CNGN_PERP_CASH_ADDRESS", value = var.cngn_perp_cash_address },
       { name = "CNGN_PERP_SRM_ADDRESS", value = var.cngn_perp_srm_address },
+      { name = "CNGN_PERP_COLLATERAL_ADDRESS", value = var.cngn_perp_collateral_address },
 
       # Every one of these was set on Railway and every one has a code default that
       # differs from it or is empty. Omitting them silently relaxed the service:
@@ -183,6 +184,7 @@ resource "aws_ecs_task_definition" "matcher" {
       { name = "CNGN_PERP_TRADE_MODULE_ADDRESS", value = var.cngn_perp_trade_module_address },
       { name = "CNGN_PERP_CASH_ADDRESS", value = var.cngn_perp_cash_address },
       { name = "CNGN_PERP_SRM_ADDRESS", value = var.cngn_perp_srm_address },
+      { name = "CNGN_PERP_COLLATERAL_ADDRESS", value = var.cngn_perp_collateral_address },
       { name = "MATCHER_POLL_INTERVAL", value = var.matcher_poll_interval },
       # Must exceed execution-service's RECEIPT_TIMEOUT_MS (60s). See that setting.
       { name = "EXECUTOR_TIMEOUT", value = "90s" },

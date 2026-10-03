@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/numofx/matching-backend/internal/config"
 	"github.com/numofx/matching-backend/internal/instruments"
+	"github.com/numofx/matching-backend/internal/orders"
 )
 
 func e18Int(whole int64) *big.Int { return new(big.Int).Mul(big.NewInt(whole), perpE18) }
@@ -100,7 +102,15 @@ func stubPerpRPC(t *testing.T, position *big.Int) *httptest.Server {
 		case sigPerpMarginRequirements:
 			result = word(big.NewInt(200_000_000_000_000_000)) + word(big.NewInt(333_330_000_000_000_000))
 		case sigGetBalance:
-			result = word(position)
+			if strings.Contains(strings.ToLower(call.Data), strings.TrimPrefix(testPerpCollateral, "0x")) {
+				result = word(e18Int(2_000_000)) // 2M cNGN posted
+			} else {
+				result = word(position)
+			}
+		case sigBaseMarginParams:
+			result = word(big.NewInt(500_000_000_000_000_000)) + word(perpE18) // 50% haircut, IM scale 1
+		case sigTotalPosition:
+			result = word(e18Int(2_000_000))
 		case sigUnrealizedCash:
 			result = word(new(big.Int).Neg(e18Int(40)))
 		case sigGetMargin:
@@ -129,6 +139,75 @@ func perpServer(t *testing.T, rpc string) *Server {
 		CNGNPerpSRMAddress:         testPerpSRM,
 	}
 	return &Server{cfg: cfg, instruments: instruments.DefaultRegistry(cfg), perp: newPerpStateReader(cfg)}
+}
+
+const testPerpCollateral = "0x6666666666666666666666666666666666666666"
+
+// perpServerWithCollateral is perpServer once the vault has whitelisted the cNGN escrow.
+func perpServerWithCollateral(t *testing.T, rpc string) *Server {
+	t.Helper()
+	s := perpServer(t, rpc)
+	s.cfg.CNGNPerpCollateralAddress = testPerpCollateral
+	s.instruments = instruments.DefaultRegistry(s.cfg)
+	return s
+}
+
+func TestMarketsAndPositionsReportCngnCollateralOnceConfigured(t *testing.T) {
+	rpc := stubPerpRPC(t, big.NewInt(0))
+	defer rpc.Close()
+	without := perpServer(t, rpc.URL)
+	rec := httptest.NewRecorder()
+	without.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/v1/markets", nil))
+	var plain []struct {
+		Perp struct {
+			CollateralAssets []perpCollateralAsset `json:"collateral_assets"`
+		} `json:"perp"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &plain); err != nil {
+		t.Fatal(err)
+	}
+	if len(plain) != 1 || len(plain[0].Perp.CollateralAssets) != 0 {
+		t.Fatalf("cash-only perp must list no collateral assets: %s", rec.Body.String())
+	}
+
+	s := perpServerWithCollateral(t, rpc.URL)
+	rec = httptest.NewRecorder()
+	s.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/v1/markets", nil))
+	var markets []struct {
+		Perp struct {
+			CollateralAssets []perpCollateralAsset `json:"collateral_assets"`
+		} `json:"perp"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &markets); err != nil {
+		t.Fatal(err)
+	}
+	assets := markets[0].Perp.CollateralAssets
+	if len(assets) != 1 || assets[0].Symbol != "cNGN" || assets[0].AssetAddress != testPerpCollateral {
+		t.Fatalf("collateral asset: %+v", assets)
+	}
+	if assets[0].MarginFactor != "0.5" || assets[0].IMScale != "1" {
+		t.Fatalf("haircut: %+v", assets[0])
+	}
+	if assets[0].Cap != "50000000" || assets[0].Total != "2000000" {
+		t.Fatalf("cap/total: %+v", assets[0])
+	}
+
+	rec = httptest.NewRecorder()
+	s.handlePositions(rec, httptest.NewRequest(http.MethodGet, "/v1/positions?subaccount_id=25", nil))
+	var body struct {
+		Accounts []presentedPerpAccount `json:"accounts"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Accounts) != 1 || len(body.Accounts[0].Collateral) != 1 {
+		t.Fatalf("account must carry its collateral: %s", rec.Body.String())
+	}
+	row := body.Accounts[0].Collateral[0]
+	// 2M cNGN at 0.00072 USDC/cNGN is $1,440; the SRM credits half of it.
+	if row.Balance != "2000000" || row.ValueUSD != "1440" || row.MarginValueUSD != "720" {
+		t.Fatalf("collateral row: %+v", row)
+	}
 }
 
 func TestMarketsServesPerpStateWithTheFundingSignFlippedForTheUI(t *testing.T) {
@@ -274,4 +353,51 @@ func TestLiftingAPauseDoesNotOpenAClosedMarket(t *testing.T) {
 		}
 	}
 	stubPaused = 0
+}
+
+// The venue's rule for cNGN-margined accounts at order submission: long USD (an engine sell of the
+// cNGN perp) up to the cNGN posted, never long naira; a USDC-margined account is untouched.
+func TestHedgeAllowsAtSubmit(t *testing.T) {
+	rpc := stubPerpRPC(t, big.NewInt(0)) // no position
+	defer rpc.Close()
+	cashOnly := perpServer(t, rpc.URL)
+	withCngn := perpServerWithCollateral(t, rpc.URL)
+	market := withCngn.instruments.Enabled()[0]
+	if !market.IsPerpetual() {
+		t.Fatal("expected the perp")
+	}
+	// The stub posts 2M cNGN. Long USD up to 2M cNGN of notional passes, 2M + 1 does not.
+	sell := func(whole int64) *big.Int { return new(big.Int).Neg(e18Int(whole)) }
+	if err := withCngn.perp.HedgeAllows(context.Background(), market, "25", sell(2_000_000), nil); err != nil {
+		t.Fatalf("long USD at 1:1 must pass: %v", err)
+	}
+	err := withCngn.perp.HedgeAllows(context.Background(), market, "25", new(big.Int).Sub(sell(2_000_000), big.NewInt(1)), nil)
+	if err == nil || !strings.Contains(err.Error(), "cngn_margin_hedge") {
+		t.Fatalf("over the hedge must be refused: %v", err)
+	}
+	// A resting long-USD order counts: 1.5M resting (whole cNGN in the book, scaled to chain units)
+	// plus 600k more is over the 2M posted.
+	resting := restingPerpDelta([]orders.Order{
+		{AssetAddress: market.AssetAddress, SubaccountID: "25", Side: orders.SideSell, DesiredAmount: "1500000", FilledAmount: "0"},
+		{AssetAddress: market.AssetAddress, SubaccountID: "26", Side: orders.SideSell, DesiredAmount: "9000000", FilledAmount: "0"},                          // another account
+		{AssetAddress: "0x9999999999999999999999999999999999999999", SubaccountID: "25", Side: orders.SideSell, DesiredAmount: "9000000", FilledAmount: "0"}, // spot
+	}, market.AssetAddress, "25", perpE18)
+	if resting.Cmp(new(big.Int).Neg(e18Int(1_500_000))) != 0 {
+		t.Fatalf("resting delta = %s, want -1.5M", resting)
+	}
+	if err := withCngn.perp.HedgeAllows(context.Background(), market, "25", sell(500_000), resting); err != nil {
+		t.Fatalf("1.5M resting + 500k is within the 2M: %v", err)
+	}
+	err = withCngn.perp.HedgeAllows(context.Background(), market, "25", sell(600_000), resting)
+	if err == nil || !strings.Contains(err.Error(), "cngn_margin_hedge") {
+		t.Fatalf("1.5M resting + 600k is over the 2M and must be refused at submit: %v", err)
+	}
+	err = withCngn.perp.HedgeAllows(context.Background(), market, "25", e18Int(1), nil)
+	if err == nil || !strings.Contains(err.Error(), "cngn_margin_direction") {
+		t.Fatalf("long naira on cNGN must be refused: %v", err)
+	}
+	// Without a collateral asset configured the rule does not exist.
+	if err := cashOnly.perp.HedgeAllows(context.Background(), cashOnly.instruments.Enabled()[0], "25", e18Int(5_000_000), nil); err != nil {
+		t.Fatalf("cash-only venue: %v", err)
+	}
 }

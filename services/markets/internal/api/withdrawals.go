@@ -56,6 +56,16 @@ type withdrawalReceipt struct {
 	BlockNumber   string `json:"block_number,omitempty"`
 }
 
+// withdrawalLedger reads a perp account's cash, for the rule that a venue-routed withdrawal never
+// takes it below zero (borrowing is on for cNGN margin; the venue does not pay out borrowed cash).
+type withdrawalLedger interface {
+	CashBalance(ctx context.Context, subaccountID string) (*big.Int, error)
+}
+
+// perpCashTokenDecimals is Base USDC's: the withdrawal names an amount in the token's decimals and
+// the ledger holds cash at 18, so the two are compared at 18.
+const perpCashTokenDecimals = 6
+
 type withdrawalCustody interface {
 	// DepositedOwner returns the owner Matching records for a subaccount it holds, or an error wrapping
 	// errNotDepositedInMatching when Matching does not hold it.
@@ -72,9 +82,13 @@ type withdrawalService struct {
 	moduleAddress string
 	assets        []string
 	custody       withdrawalCustody
-	submitter     withdrawalSubmitter
-	limiter       *withdrawalLimiter
-	now           func() time.Time
+	// perpCash is the perp's CashAsset, lowercased, and ledger reads its balances; both empty/nil
+	// without a perp, in which case no cash rule applies.
+	perpCash  string
+	ledger    withdrawalLedger
+	submitter withdrawalSubmitter
+	limiter   *withdrawalLimiter
+	now       func() time.Time
 }
 
 func newWithdrawalService(cfg config.Config, signatures signatureChecker) *withdrawalService {
@@ -89,9 +103,21 @@ func newWithdrawalService(cfg config.Config, signatures signatureChecker) *withd
 		return nil
 	}
 
+	custody := &chainCustodyChecker{
+		rpcURL:          strings.TrimSpace(cfg.ChainRPCURL),
+		matchingAddress: strings.ToLower(strings.TrimSpace(cfg.MatchingAddress)),
+		httpClient:      &http.Client{Timeout: 5 * time.Second},
+	}
+	var ledger withdrawalLedger
+	perpCash := strings.ToLower(strings.TrimSpace(cfg.CNGNPerpCashAddress))
+	if cfg.PerpEnabled() && isHexAddress(perpCash) {
+		ledger = &chainCashLedger{chain: custody, cash: perpCash}
+	}
 	return &withdrawalService{
 		moduleAddress: moduleAddress,
 		assets:        cfg.WithdrawalAssetAddresses,
+		perpCash:      perpCash,
+		ledger:        ledger,
 		custody: &chainCustodyChecker{
 			rpcURL:          strings.TrimSpace(cfg.ChainRPCURL),
 			matchingAddress: strings.ToLower(strings.TrimSpace(cfg.MatchingAddress)),
@@ -179,6 +205,16 @@ func (s *Server) handleCreateWithdrawal(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusForbidden, map[string]string{
 			"error": fmt.Sprintf("subaccount_id %s is not owned by action.owner", req.Action.SubaccountID),
 		})
+		return
+	}
+
+	if message, err := svc.cashFloor(r.Context(), req); err != nil {
+		slog.Warn("withdrawal_cash_unreadable", "owner", owner, "subaccount_id", req.Action.SubaccountID, "error", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "the account's cash could not be read from the chain; retry shortly"})
+		return
+	} else if message != "" {
+		slog.Info("withdrawal_rejected", "stage", "cash_floor", "owner", owner, "subaccount_id", req.Action.SubaccountID, "reason", message)
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": message})
 		return
 	}
 
@@ -299,6 +335,52 @@ func (svc *withdrawalService) validate(req withdrawalRequest) error {
 		return errors.New("signature must be hex of at least 65 bytes")
 	}
 	return nil
+}
+
+// cashFloor refuses a withdrawal of the perp's cash that would take the account's cash below zero.
+// Borrowing is on for cNGN margin (a cNGN-only account pays its fee from zero cash), so the chain
+// would allow it down to initial margin; the venue does not pay out borrowed cash. Returns the
+// refusal message, or an error when the ledger could not be read (the handler fails closed).
+func (svc *withdrawalService) cashFloor(ctx context.Context, req withdrawalRequest) (string, error) {
+	asset, amount, err := decodeWithdrawalData(req.Action.Data)
+	if err != nil || svc.ledger == nil || svc.perpCash == "" || !strings.EqualFold(asset, svc.perpCash) {
+		return "", nil
+	}
+	balance, err := svc.ledger.CashBalance(ctx, req.Action.SubaccountID)
+	if err != nil {
+		return "", err
+	}
+	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(18-perpCashTokenDecimals), nil)
+	amount18 := new(big.Int).Mul(amount, scale)
+	if balance.Sign() <= 0 || amount18.Cmp(balance) > 0 {
+		return fmt.Sprintf("cash_floor: withdrawing %s USDC would take the perp account's cash below zero (it holds %s); "+
+			"the venue does not pay out borrowed cash. Close positions or deposit USDC first",
+			formatDecimal(new(big.Rat).SetFrac(amount, new(big.Int).Exp(big.NewInt(10), big.NewInt(perpCashTokenDecimals), nil)), perpCashTokenDecimals),
+			formatSignedE18(balance, perpCashTokenDecimals)), nil
+	}
+	return "", nil
+}
+
+// chainCashLedger reads a perp account's cash straight off SubAccounts.
+type chainCashLedger struct {
+	chain *chainCustodyChecker
+	cash  string
+}
+
+func (l *chainCashLedger) CashBalance(ctx context.Context, subaccountID string) (*big.Int, error) {
+	account, err := encodeUint256(subaccountID)
+	if err != nil {
+		return nil, err
+	}
+	subAccounts, err := l.chain.subAccountsAddress(ctx)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := l.chain.ethCall(ctx, subAccounts, sigGetBalance+account+addressArg(l.cash)+strings.Repeat("0", 64))
+	if err != nil {
+		return nil, err
+	}
+	return signedWord(raw, 0)
 }
 
 func (svc *withdrawalService) allowsAsset(asset string) bool {

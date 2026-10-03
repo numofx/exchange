@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/numofx/matching-backend/internal/config"
+	"github.com/numofx/matching-backend/internal/hedge"
 	"github.com/numofx/matching-backend/internal/instruments"
 	"github.com/numofx/matching-backend/internal/orders"
 )
@@ -104,6 +105,8 @@ type marginVerdict struct {
 	// Account is the subaccount that would fail, and SurplusAfter its projected IM surplus.
 	Account      string
 	SurplusAfter *big.Int
+	// Reason is set when the fill fails the venue's cNGN rule rather than margin (internal/hedge).
+	Reason string
 }
 
 type chainMarginChecker struct {
@@ -198,6 +201,17 @@ func (c *chainMarginChecker) CheckPerpFill(ctx context.Context, instrument instr
 		ok, surplusAfter := perpFillCheck(perpSide{ImSurplus: surplus, Position: position, Delta: delta, Fee: sideFee}, price, mark, imReq)
 		if !ok {
 			return marginVerdict{OK: false, Account: leg.order.SubaccountID, SurplusAfter: surplusAfter}, nil
+		}
+		// The venue's rule for cNGN-margined accounts, re-checked at the fill the order was
+		// submitted under may have been followed by others.
+		if escrow := strings.ToLower(strings.TrimSpace(instrument.CollateralAssetAddress)); escrow != "" {
+			cngn, err := c.position(ctx, escrow, leg.order.SubaccountID)
+			if err != nil {
+				return marginVerdict{}, fmt.Errorf("read cNGN collateral of %s: %w", leg.order.SubaccountID, err)
+			}
+			if err := hedge.Check(cngn, position, delta, nil); err != nil {
+				return marginVerdict{OK: false, Account: leg.order.SubaccountID, Reason: err.Error()}, nil
+			}
 		}
 	}
 	return marginVerdict{OK: true}, nil
