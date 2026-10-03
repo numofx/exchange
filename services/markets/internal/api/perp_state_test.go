@@ -2,8 +2,10 @@ package api
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"golang.org/x/crypto/sha3"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -73,6 +75,8 @@ func word(v *big.Int) string {
 var (
 	stubPaused int64
 	stubCap    int64 = 50_000_000
+	// stubDepositsOpen is the escrow's whitelistedManager(srm): 0 until a test opens deposits.
+	stubDepositsOpen int64
 )
 
 func stubPerpRPC(t *testing.T, position *big.Int) *httptest.Server {
@@ -111,6 +115,8 @@ func stubPerpRPC(t *testing.T, position *big.Int) *httptest.Server {
 			result = word(big.NewInt(500_000_000_000_000_000)) + word(perpE18) // 50% haircut, IM scale 1
 		case sigTotalPosition:
 			result = word(e18Int(2_000_000))
+		case sigWhitelistedManager:
+			result = word(big.NewInt(stubDepositsOpen))
 		case sigUnrealizedCash:
 			result = word(new(big.Int).Neg(e18Int(40)))
 		case sigGetMargin:
@@ -152,6 +158,25 @@ func perpServerWithCollateral(t *testing.T, rpc string) *Server {
 	return s
 }
 
+// The selectors the perp reader hardcodes, against keccak of their signatures: a stub answers
+// whatever constant the code uses, so only this (or the chain) catches a typo.
+func TestPerpStateSelectorsMatchTheirSignatures(t *testing.T) {
+	for sig, want := range map[string]string{
+		"baseMarginParams(uint256)":           sigBaseMarginParams,
+		"totalPosition(address)":              sigTotalPosition,
+		"whitelistedManager(address)":         sigWhitelistedManager,
+		"totalPositionCap(address)":           sigTotalPositionCap,
+		"adjustmentsPaused()":                 sigAdjustmentsPaused,
+		"getBalance(uint256,address,uint256)": sigGetBalance,
+	} {
+		h := sha3.NewLegacyKeccak256()
+		h.Write([]byte(sig))
+		if got := "0x" + hex.EncodeToString(h.Sum(nil)[:4]); got != want {
+			t.Fatalf("%s: selector %s, constant %s", sig, got, want)
+		}
+	}
+}
+
 func TestMarketsAndPositionsReportCngnCollateralOnceConfigured(t *testing.T) {
 	rpc := stubPerpRPC(t, big.NewInt(0))
 	defer rpc.Close()
@@ -190,6 +215,20 @@ func TestMarketsAndPositionsReportCngnCollateralOnceConfigured(t *testing.T) {
 	}
 	if assets[0].Cap != "50000000" || assets[0].Total != "2000000" {
 		t.Fatalf("cap/total: %+v", assets[0])
+	}
+	if assets[0].DepositsOpen {
+		t.Fatalf("the escrow is configured but not yet open: deposits_open must be false: %+v", assets[0])
+	}
+	stubDepositsOpen = 1
+	defer func() { stubDepositsOpen = 0 }()
+	s.perp.cache = map[string]cachedPerpState{}
+	rec = httptest.NewRecorder()
+	s.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/v1/markets", nil))
+	if err := json.Unmarshal(rec.Body.Bytes(), &markets); err != nil {
+		t.Fatal(err)
+	}
+	if !markets[0].Perp.CollateralAssets[0].DepositsOpen {
+		t.Fatalf("once the escrow accepts the SRM, deposits_open must be true: %s", rec.Body.String())
 	}
 
 	rec = httptest.NewRecorder()

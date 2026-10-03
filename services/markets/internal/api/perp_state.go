@@ -39,6 +39,7 @@ const (
 	sigAdjustmentsPaused      = "0xac06ba05" // BaseManager.adjustmentsPaused(): the SRM guardian's pause
 	sigBaseMarginParams       = "0xcd27955d" // StandardManager.baseMarginParams(uint256): (marginFactor, IMScale)
 	sigTotalPosition          = "0xa9578774" // PositionTracking.totalPosition(address): cNGN held under the manager
+	sigWhitelistedManager     = "0x97d51c04" // ManagerWhitelist.whitelistedManager(address): the escrow accepts the SRM
 
 	perpStateTTL = 10 * time.Second
 	perpUIScale  = 6
@@ -94,6 +95,10 @@ type perpCollateralAsset struct {
 	// units 18dp. A deposit that would cross the cap is refused on chain.
 	Cap   string `json:"cap"`
 	Total string `json:"total"`
+	// DepositsOpen is the escrow's own switch (whitelistedManager(srm)): the SRM may credit the
+	// asset before the escrow accepts deposits for it, and a deposit offered in between reverts. The
+	// app offers the asset only while this is true.
+	DepositsOpen bool `json:"deposits_open"`
 }
 
 // presentedCollateral is one collateral asset in an account: the balance, what it is worth at the
@@ -320,6 +325,10 @@ func (r *perpStateReader) collateralAssets(ctx context.Context, market instrumen
 	if err != nil {
 		return nil, nil, fmt.Errorf("collateral total: %w", err)
 	}
+	open, err := r.word(ctx, escrow, sigWhitelistedManager+addressArg(srm), 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("collateral deposits open: %w", err)
+	}
 	return []perpCollateralAsset{{
 		Symbol:       "cNGN",
 		AssetAddress: escrow,
@@ -327,6 +336,7 @@ func (r *perpStateReader) collateralAssets(ctx context.Context, market instrumen
 		IMScale:      e18String(imScale),
 		Cap:          e18String(cap),
 		Total:        e18String(total),
+		DepositsOpen: open.Sign() > 0,
 	}}, factor, nil
 }
 
