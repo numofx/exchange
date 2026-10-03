@@ -64,7 +64,10 @@ type Metadata struct {
 	TradeModuleAddress   string `json:"trade_module_address,omitempty"`
 	QuoteAssetAddress    string `json:"quote_asset_address,omitempty"`
 	MarginManagerAddress string `json:"margin_manager_address,omitempty"`
-	Enabled              bool   `json:"enabled"`
+	// CollateralAssetAddress is a base asset the margin manager credits besides cash (the perp's
+	// cNGN escrow); empty when margin is cash only.
+	CollateralAssetAddress string `json:"collateral_asset_address,omitempty"`
+	Enabled                bool   `json:"enabled"`
 }
 
 type Registry struct {

@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/numofx/matching-backend/internal/config"
+	"github.com/numofx/matching-backend/internal/hedge"
 	"github.com/numofx/matching-backend/internal/instruments"
+	"github.com/numofx/matching-backend/internal/orders"
 )
 
 // USDCcNGN-PERP's live state, read from its own stack on chain: mark, index, funding, open interest
@@ -35,6 +37,8 @@ const (
 	sigAllowedModules         = "0x8ba5a0c2" // Matching.allowedModules(address)
 	sigTotalPositionCap       = "0x745ab570" // PerpAsset.totalPositionCap(address)
 	sigAdjustmentsPaused      = "0xac06ba05" // BaseManager.adjustmentsPaused(): the SRM guardian's pause
+	sigBaseMarginParams       = "0xcd27955d" // StandardManager.baseMarginParams(uint256): (marginFactor, IMScale)
+	sigTotalPosition          = "0xa9578774" // PositionTracking.totalPosition(address): cNGN held under the manager
 
 	perpStateTTL = 10 * time.Second
 	perpUIScale  = 6
@@ -68,10 +72,38 @@ type perpMarketState struct {
 	TradingEnabled bool   `json:"trading_enabled"`
 	Paused         bool   `json:"paused"`
 	PositionCap    string `json:"position_cap"`
+	// CollateralAssets are the base assets the SRM credits as margin besides cash: today at most the
+	// perp's cNGN escrow, with the haircut the SRM applies and the escrow's cap. Empty when margin is
+	// cash only.
+	CollateralAssets []perpCollateralAsset `json:"collateral_assets"`
 	// enabledOnChain is the enable action's half of TradingEnabled (module allowed, cap above
 	// zero), kept apart so a pause re-read over a cached state can recompute the whole.
 	enabledOnChain bool
 	UpdatedAt      int64 `json:"updated_at"`
+}
+
+// perpCollateralAsset is one base asset a perp account may post, as the SRM values it.
+type perpCollateralAsset struct {
+	Symbol       string `json:"symbol"`
+	AssetAddress string `json:"asset_address"`
+	// MarginFactor is the share of the asset's index value that counts as maintenance margin;
+	// IMScale multiplies in again for initial margin. 18dp decimals.
+	MarginFactor string `json:"margin_factor"`
+	IMScale      string `json:"im_scale"`
+	// Cap and Total are the escrow's collateral cap under the SRM and what is posted now, whole
+	// units 18dp. A deposit that would cross the cap is refused on chain.
+	Cap   string `json:"cap"`
+	Total string `json:"total"`
+}
+
+// presentedCollateral is one collateral asset in an account: the balance, what it is worth at the
+// index, and how much of that the SRM credits as initial margin.
+type presentedCollateral struct {
+	Symbol         string `json:"symbol"`
+	AssetAddress   string `json:"asset_address"`
+	Balance        string `json:"balance"`
+	ValueUSD       string `json:"value_usd"`
+	MarginValueUSD string `json:"margin_value_usd"`
 }
 
 type presentedPosition struct {
@@ -100,6 +132,8 @@ type presentedPerpAccount struct {
 	Cash                     string `json:"cash"`
 	InitialMarginSurplus     string `json:"initial_margin_surplus"`
 	MaintenanceMarginSurplus string `json:"maintenance_margin_surplus"`
+	// Collateral lists every base asset the account holds (empty when none, or margin is cash only).
+	Collateral []presentedCollateral `json:"collateral"`
 }
 
 type perpStateReader struct {
@@ -119,6 +153,8 @@ type cachedPerpState struct {
 // perpRaw is the chain state behind a presentation, kept for the positions endpoint's arithmetic.
 type perpRaw struct {
 	mark, index, imReq, mmReq *big.Int
+	// collateralFactor is the SRM's margin factor for the collateral asset (18dp); nil when none.
+	collateralFactor *big.Int
 }
 
 func newPerpStateReader(cfg config.Config) *perpStateReader {
@@ -217,8 +253,13 @@ func (r *perpStateReader) marketState(ctx context.Context, market instruments.Me
 	if err != nil {
 		return nil, perpRaw{}, err
 	}
+	collateral, collateralFactor, err := r.collateralAssets(ctx, market, srm, marketID)
+	if err != nil {
+		return nil, perpRaw{}, err
+	}
 
 	state := &perpMarketState{
+		CollateralAssets:       collateral,
 		TradingEnabled:         allowed.Sign() > 0 && positionCap.Sign() > 0 && !paused,
 		Paused:                 paused,
 		enabledOnChain:         allowed.Sign() > 0 && positionCap.Sign() > 0,
@@ -242,12 +283,131 @@ func (r *perpStateReader) marketState(ctx context.Context, market instruments.Me
 	if imReq.Sign() > 0 {
 		state.MaxLeverage = formatDecimal(new(big.Rat).SetFrac(perpE18, imReq), 2)
 	}
-	raw := perpRaw{mark: mark, index: index, imReq: imReq, mmReq: mmReq}
+	raw := perpRaw{mark: mark, index: index, imReq: imReq, mmReq: mmReq, collateralFactor: collateralFactor}
 
 	r.mu.Lock()
 	r.cache[key] = cachedPerpState{state: state, raw: raw, at: r.now()}
 	r.mu.Unlock()
 	return state, raw, nil
+}
+
+// collateralAssets reads the perp's cNGN collateral as the SRM values it: the market's base margin
+// factor and IM scale, and the escrow's cap and total under the SRM. Nothing when no escrow is
+// configured. A configured escrow the SRM credits at 0 is reported as such: the app shows the asset
+// with no margin value rather than hiding a deposit that would lock cNGN for nothing.
+func (r *perpStateReader) collateralAssets(ctx context.Context, market instruments.Metadata, srm string, marketID *big.Int) ([]perpCollateralAsset, *big.Int, error) {
+	escrow := strings.ToLower(market.CollateralAssetAddress)
+	if escrow == "" {
+		return []perpCollateralAsset{}, nil, nil
+	}
+	params, err := r.chain.ethCall(ctx, srm, sigBaseMarginParams+fmt.Sprintf("%064x", marketID))
+	if err != nil {
+		return nil, nil, fmt.Errorf("base margin params: %w", err)
+	}
+	factor, err := signedWord(params, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	imScale, err := signedWord(params, 1)
+	if err != nil {
+		return nil, nil, err
+	}
+	cap, err := r.word(ctx, escrow, sigTotalPositionCap+addressArg(srm), 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("collateral cap: %w", err)
+	}
+	total, err := r.word(ctx, escrow, sigTotalPosition+addressArg(srm), 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("collateral total: %w", err)
+	}
+	return []perpCollateralAsset{{
+		Symbol:       "cNGN",
+		AssetAddress: escrow,
+		MarginFactor: e18String(factor),
+		IMScale:      e18String(imScale),
+		Cap:          e18String(cap),
+		Total:        e18String(total),
+	}}, factor, nil
+}
+
+// errCollateralUnreadable is a hedge check that could not read the chain: the order is refused
+// with a retry, not let through, since nothing on chain enforces the direction rule.
+var errCollateralUnreadable = errors.New("the account's cNGN collateral could not be read from the chain; retry shortly")
+
+// HedgeAllows is the venue's rule for cNGN-margined accounts at order submission (internal/hedge):
+// only long USD, and no more of it than the cNGN posted. Nil for a market without a collateral
+// asset or an account holding none. delta is what the order adds to the position in CHAIN units
+// (18dp, signed: the engine buyer positive) -- the signed action's own desiredAmount, not the
+// book's atomic one; resting is the net signed remaining amount of the account's open orders on
+// this perp in the same units, so that orders which pass one by one cannot together exceed the
+// hedge. The fill-time check in the matcher is the backstop for what still gets through.
+func (r *perpStateReader) HedgeAllows(ctx context.Context, market instruments.Metadata, subaccountID string, delta, resting *big.Int) error {
+	escrow := strings.ToLower(market.CollateralAssetAddress)
+	if escrow == "" {
+		return nil
+	}
+	account, err := encodeUint256(subaccountID)
+	if err != nil {
+		return err
+	}
+	subAccounts, err := r.chain.subAccountsAddress(ctx)
+	if err != nil {
+		return errCollateralUnreadable
+	}
+	cngn, err := r.word(ctx, subAccounts, sigGetBalance+account+addressArg(escrow)+strings.Repeat("0", 64), 0)
+	if err != nil {
+		return errCollateralUnreadable
+	}
+	if cngn.Sign() <= 0 {
+		return nil
+	}
+	position, err := r.word(ctx, subAccounts, sigGetBalance+account+addressArg(market.AssetAddress)+strings.Repeat("0", 64), 0)
+	if err != nil {
+		return errCollateralUnreadable
+	}
+	if delta == nil || delta.Sign() == 0 {
+		return fmt.Errorf("the order adds nothing to the position")
+	}
+	return hedge.Check(cngn, position, delta, resting)
+}
+
+// signedDelta is what an order adds to the position in chain units: the signed action's
+// desiredAmount, negative for the engine seller.
+func signedDelta(side orders.Side, desired *big.Int) *big.Int {
+	delta := new(big.Int).Set(desired)
+	if side == orders.SideSell {
+		delta.Neg(delta)
+	}
+	return delta
+}
+
+// restingPerpDelta is the net signed remaining amount of an account's open orders on one perp
+// (buys positive, sells negative) in the book's atomic units times `scale` (the atomic-to-chain
+// scale the new order was aligned with): what its position becomes if they all fill.
+func restingPerpDelta(open []orders.Order, assetAddress, subaccountID string, scale *big.Int) *big.Int {
+	net := big.NewInt(0)
+	for _, order := range open {
+		if !strings.EqualFold(order.AssetAddress, assetAddress) || order.SubaccountID != subaccountID {
+			continue
+		}
+		desired, ok := new(big.Int).SetString(order.DesiredAmount, 10)
+		if !ok {
+			continue
+		}
+		filled, ok := new(big.Int).SetString(order.FilledAmount, 10)
+		if !ok {
+			filled = big.NewInt(0)
+		}
+		remaining := new(big.Int).Sub(desired, filled)
+		if remaining.Sign() <= 0 {
+			continue
+		}
+		if order.Side == orders.SideSell {
+			remaining.Neg(remaining)
+		}
+		net.Add(net, remaining.Mul(remaining, scale))
+	}
+	return net
 }
 
 // paused reads the SRM guardian's pause flag, uncached: it is the one input that changes by a
@@ -302,13 +462,50 @@ func (r *perpStateReader) account(ctx context.Context, market instruments.Metada
 	if err != nil {
 		return nil, err
 	}
+	collateral, err := r.collateral(ctx, market, subAccounts, account)
+	if err != nil {
+		return nil, err
+	}
 	return &presentedPerpAccount{
 		Market:                   market.Symbol,
 		SubaccountID:             subaccountID,
 		Cash:                     e18String(cash),
 		InitialMarginSurplus:     e18String(im),
 		MaintenanceMarginSurplus: e18String(mm),
+		Collateral:               collateral,
 	}, nil
+}
+
+// collateral reads the account's cNGN in the perp's escrow and values it at the index: the whole
+// value, and the share the SRM credits as margin. Empty when none is configured or none is held.
+func (r *perpStateReader) collateral(ctx context.Context, market instruments.Metadata, subAccounts, account string) ([]presentedCollateral, error) {
+	escrow := strings.ToLower(market.CollateralAssetAddress)
+	if escrow == "" {
+		return []presentedCollateral{}, nil
+	}
+	balance, err := r.word(ctx, subAccounts, sigGetBalance+account+addressArg(escrow)+strings.Repeat("0", 64), 0)
+	if err != nil {
+		return nil, fmt.Errorf("collateral balance: %w", err)
+	}
+	if balance.Sign() <= 0 {
+		return []presentedCollateral{}, nil
+	}
+	_, raw, err := r.marketState(ctx, market)
+	if err != nil {
+		return nil, err
+	}
+	value := new(big.Int).Div(new(big.Int).Mul(balance, raw.index), perpE18)
+	marginValue := big.NewInt(0)
+	if raw.collateralFactor != nil {
+		marginValue = new(big.Int).Div(new(big.Int).Mul(value, raw.collateralFactor), perpE18)
+	}
+	return []presentedCollateral{{
+		Symbol:         "cNGN",
+		AssetAddress:   escrow,
+		Balance:        e18String(balance),
+		ValueUSD:       e18String(value),
+		MarginValueUSD: e18String(marginValue),
+	}}, nil
 }
 
 func (r *perpStateReader) position(ctx context.Context, market instruments.Metadata, subaccountID string) (*presentedPosition, error) {

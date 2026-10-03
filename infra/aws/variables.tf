@@ -174,6 +174,15 @@ variable "cngn_perp_srm_address" {
   default = "0xDE0423D0a1E15536265C9513d2e0c10DAb5835D4" # StandardManager (perp SRM)
 }
 
+# The perp's cNGN collateral escrow (risk-core CNGN_PERP_COLLATERAL.json `escrow`). Set it only
+# once the vault batch that whitelists it on the perp SRM has executed: markets-service then lists
+# it under the perp's collateral_assets and reads each account's cNGN, and accepts withdrawals
+# from it. Empty means cash-only margin.
+variable "cngn_perp_collateral_address" {
+  type    = string
+  default = ""
+}
+
 variable "matcher_poll_interval" {
   type    = string
   default = "250ms"
