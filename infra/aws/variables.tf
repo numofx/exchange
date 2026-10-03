@@ -197,6 +197,13 @@ variable "index_lag_max_bps" {
   default = 100
 }
 
+# How old the publisher's latest good spot sample may be before the venue counts itself blind and
+# (with the gate on) refuses new perp orders. A Go duration. Sized to the 5-minute TWAP window.
+variable "index_status_max_age" {
+  type    = string
+  default = "300s"
+}
+
 variable "matcher_poll_interval" {
   type    = string
   default = "250ms"
