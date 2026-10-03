@@ -88,7 +88,15 @@ SEL_GET_SPOT = "0x2b37269c"  # getSpot() on the index feed: USDC per cNGN, 18dp
 # One side's OI notional against the keeper's cash. The keeper must hold maintenance margin (20%)
 # for what it inherits in an auction and may carry several accounts at once, so 3x is where a full
 # side could no longer be taken in one go; 2x is the warning to top up (runbook: keeper collateral).
-SM_SEED_FRACTION = 6  # the seed rule: SecurityModule cash >= one side at the cap / 6 (runbook)
+# SecurityModule coverage, leverage-aware (cngn-perp-leverage-batch.sol, CngnPerpLeverageBatchFork):
+# the module's payout when one whole side is liquidated at maintenance margin after a 25% step is
+# one-side notional x 25% x (1 - IM), within 0.2% of the fork's measured payouts (a sixth of a side at
+# 3x, a fifth at 5x). Read against ACTUAL one-side open interest, not the cap: Slack once open
+# interest passes what the module covers at the current IM, page at 1.2x of it.
+SM_STEP = 0.25
+SM_COVERAGE_PAGE_X = 1.2
+SM_COVERAGE_WARN_REPEAT_SEC = 6 * 3600
+SEL_PERP_MARGIN_REQUIREMENTS = "0xbf270f9d"  # perpMarginRequirements(uint256) -> (mm, im) -- `cast sig`, pinned in --self-test
 OI_KEEPER_WARN_X = 2.0
 OI_KEEPER_PAGE_X = 3.0
 OI_WARN_REPEAT_SEC = 6 * 3600
@@ -203,20 +211,42 @@ def gas_warning(name: str, balance: float, burn_per_day: float) -> str | None:
   return f"USDCcNGN-PERP {name} gas runway {balance / burn_per_day:.1f} days ({balance:.5f} ETH at {burn_per_day:.5f}/day): top up this week."
 
 
-def sm_seed_condition(sm_cash_usd: float, one_side_at_cap_usd: float) -> Condition | None:
-  required = one_side_at_cap_usd / SM_SEED_FRACTION
-  if sm_cash_usd >= required:
+def sm_covered_one_side_usd(sm_cash_usd: float, im: float) -> float:
+  """One-side notional the SecurityModule covers through a 25% step at initial margin `im` (a fraction)."""
+  if not 0 < im < 1:
+    return 0.0
+  return sm_cash_usd / (SM_STEP * (1 - im))
+
+
+def sm_coverage_condition(one_side_usd: float, covered_usd: float, im: float) -> Condition | None:
+  if one_side_usd <= 0 or (covered_usd > 0 and one_side_usd < SM_COVERAGE_PAGE_X * covered_usd):
     return None
-  return Condition("sm-seed", f"USDCcNGN-PERP SecurityModule holds ${sm_cash_usd:,.0f}, under the seed rule's ${required:,.0f} "
-                   f"(a sixth of one side at the cap): the next insolvency can socialize. Donate, or set cap = current OI.")
+  return Condition("sm-coverage", f"USDCcNGN-PERP one-side OI ${one_side_usd:,.0f} is past {SM_COVERAGE_PAGE_X:.1f}x what the SecurityModule "
+                   f"covers (${covered_usd:,.0f} at IM {im * 100:.0f}%: a 25% step on that side would cost it more than it holds). "
+                   "Fund the SecurityModule, or set cap = current OI.")
 
 
-def read_one_side_at_cap(url: str, stack: dict) -> float:
-  """One side's notional at the cap, USD at the index: totalPositionCap(srm) / 2 x getSpot()."""
+def sm_coverage_warning(one_side_usd: float, covered_usd: float, im: float) -> str | None:
+  """Slack-only, from coverage up to the page."""
+  if covered_usd <= 0 or one_side_usd <= covered_usd or one_side_usd >= SM_COVERAGE_PAGE_X * covered_usd:
+    return None
+  return (f"USDCcNGN-PERP one-side OI ${one_side_usd:,.0f} exceeds the ${covered_usd:,.0f} the SecurityModule covers at IM {im * 100:.0f}% "
+          f"(page at {SM_COVERAGE_PAGE_X:.1f}x): fund it before the next step costs more than it holds.")
+
+
+def read_perp_im(url: str, stack: dict) -> float:
+  """The perp's initial margin requirement on the SRM, as a fraction."""
+  market_word = f"{int(stack['marketId']):064x}"
+  raw = rpc(url, "eth_call", [{"to": stack["srm"], "data": SEL_PERP_MARGIN_REQUIREMENTS + market_word}, "latest"])[2:]
+  return int(raw[64:128], 16) / 1e18
+
+
+def read_one_side_usd(url: str, stack: dict) -> float:
+  """One side's open interest in USD at the index: totalPosition(srm) / 2 x getSpot()."""
   srm_word = stack["srm"].lower().removeprefix("0x").rjust(64, "0")
-  cap = int(rpc(url, "eth_call", [{"to": stack["perp"], "data": SEL_TOTAL_POSITION_CAP + srm_word}, "latest"]), 16)
+  total = int(rpc(url, "eth_call", [{"to": stack["perp"], "data": SEL_TOTAL_POSITION + srm_word}, "latest"]), 16)
   spot = int(rpc(url, "eth_call", [{"to": stack["indexFeed"], "data": SEL_GET_SPOT}, "latest"])[2:66], 16)
-  return (cap / 2) / 1e18 * (spot / 1e18)
+  return (total / 2) / 1e18 * (spot / 1e18)
 
 
 def oi_condition(one_side_usd: float, keeper_cash_usd: float) -> Condition | None:
@@ -485,14 +515,20 @@ def check_and_page(stack_path: Path, state: dict) -> int:
   else:
     print("oi: KEEPER_ACCOUNT unset, not watched")
 
-  seed = None
+  coverage = None
   try:
-    one_side_at_cap = read_one_side_at_cap(url, stack)
-    if one_side_at_cap > 0:  # cap 0 = market closed: the seed rule is the enable gate's job until then
-      seed = sm_seed_condition(sm_cash, one_side_at_cap)
-    print(f"sm seed: ${sm_cash:,.0f} vs a sixth of one side at the cap ${one_side_at_cap / SM_SEED_FRACTION:,.0f}")
+    im = read_perp_im(url, stack)
+    one_side_now = read_one_side_usd(url, stack)
+    covered = sm_covered_one_side_usd(sm_cash, im)
+    coverage = sm_coverage_condition(one_side_now, covered, im)
+    warning = sm_coverage_warning(one_side_now, covered, im)
+    if warning and time.time() - state.get("smCoverageWarnedAt", 0) >= SM_COVERAGE_WARN_REPEAT_SEC:
+      mirror(f"{os.environ.get('PAGE_PREFIX', '')}{warning}")
+      state["smCoverageWarnedAt"] = time.time()
+    print(f"sm coverage: ${sm_cash:,.0f} covers one side ${covered:,.0f} at IM {im * 100:.1f}%; one side now ${one_side_now:,.0f} "
+          f"(page at {SM_COVERAGE_PAGE_X:.1f}x)")
   except Exception as exc:  # noqa: BLE001
-    print(f"sm seed: unreadable ({str(exc)[:80]})")
+    print(f"sm coverage: unreadable ({str(exc)[:80]})")
 
   negative_cash = None
   try:
@@ -509,7 +545,7 @@ def check_and_page(stack_path: Path, state: dict) -> int:
   previous_sm = state.get("smCash")
   active = [c for c in (feed_condition(ages), keeper_condition(health, now, armed), insolvent_condition(health),
                         sm_condition(previous_sm, sm_cash), unwatched_condition(heartbeat_urls()[0]),
-                        peg_condition(read_index_status(), time.time()), seed, oi, negative_cash, *gas) if c is not None]
+                        peg_condition(read_index_status(), time.time()), coverage, oi, negative_cash, *gas) if c is not None]
   to_page, resolved = step_state(state, active, now)
   state["smCash"] = sm_cash
 
@@ -563,9 +599,13 @@ def self_test() -> int:
   assert gas_condition("executor", 0.0019, 0.0, 0.002) is not None and "unknown burn" in gas_condition("executor", 0.0019, 0.0, 0.002).message
   assert gas_condition("executor", 0.0079, 0.00003, 0.002) is None
   assert gas_warning("relayer", 0.015, 0.0013) is None and "runway 5.0 days" in gas_warning("relayer", 0.0065, 0.0013)
-  # Seed rule: a sixth of one side at the cap ($18,382 a side -> $3,064); under it pages.
-  assert sm_seed_condition(3_250, 18_382) is None
-  assert sm_seed_condition(3_000, 18_382).key == "sm-seed" and "$3,064" in sm_seed_condition(3_000, 18_382).message
+  # SecurityModule coverage: $3,250 covers a $19,500 side at 3x (a sixth) and $16,250 at 5x (a fifth);
+  # Slack past coverage, page at 1.2x; nothing while open interest is under it.
+  assert round(sm_covered_one_side_usd(3_250, 1 / 3)) == 19_500 and round(sm_covered_one_side_usd(3_250, 0.2)) == 16_250
+  assert sm_coverage_condition(18_000, 19_500, 1 / 3) is None and sm_coverage_warning(18_000, 19_500, 1 / 3) is None
+  assert "$17,000" in sm_coverage_warning(17_000, 16_250, 0.2) and sm_coverage_condition(17_000, 16_250, 0.2) is None
+  assert sm_coverage_condition(19_500, 16_250, 0.2).key == "sm-coverage" and sm_coverage_warning(19_500, 16_250, 0.2) is None
+  assert sm_coverage_condition(2, 16_250, 0.2) is None and sm_covered_one_side_usd(3_250, 0) == 0.0
   # OI against the keeper's cash: warning from 2x, page from 3x, page at any OI with no cash.
   assert oi_condition(9_999, 5_000) is None and oi_warning(9_999, 5_000) is None
   assert "2.2x" in oi_warning(11_000, 5_000) and oi_condition(11_000, 5_000) is None
@@ -605,6 +645,7 @@ def self_test() -> int:
   assert "payload" not in pagerduty_payload("k", "feed-halt", "m", resolve=True)
   # Selectors against their signatures, so a hand-typed one cannot ship (one did, in review).
   from resolve_cngn_action6 import keccak
+  assert SEL_PERP_MARGIN_REQUIREMENTS == "0x" + keccak(b"perpMarginRequirements(uint256)").hex()[:8]
   for selector, signature in [(SEL_GET_BALANCE, "getBalance(uint256,address,uint256)"),
                               (SEL_SPOT_DIFF_DETAILS, "spotDiffDetails()"),
                               (SEL_TOTAL_POSITION_CAP, "totalPositionCap(address)"),
