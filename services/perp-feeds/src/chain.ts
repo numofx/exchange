@@ -3,6 +3,7 @@ import {
   createPublicClient,
   createWalletClient,
   http,
+  nonceManager,
   parseAbi,
   type Address,
   type Hex,
@@ -65,7 +66,12 @@ export function createChain(config: Config): Chain {
           rpcUrls: { default: { http: [config.RPC_URL] } },
         });
   const publicClient = createPublicClient({ chain, transport });
-  const relayer = privateKeyToAccount(config.RELAYER_KEY as Hex);
+  // The relayer tracks its own nonce. Submissions are already queued one behind another, but a
+  // load-balanced RPC can answer the next nonce query from a node that has not yet seen the
+  // transaction just mined, which hands out the nonce again and the node refuses the "replacement"
+  // as underpriced (what kept failing the mark publish on 2026-10-03). viem's manager never returns
+  // a nonce at or below the last one it issued, and forgets it when a send fails, so no gap is left.
+  const relayer = privateKeyToAccount(config.RELAYER_KEY as Hex, { nonceManager });
   const wallet = createWalletClient({ account: relayer, chain, transport });
 
   return {
