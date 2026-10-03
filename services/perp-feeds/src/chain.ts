@@ -32,7 +32,26 @@ export type Chain = {
   submit(managerData: Hex): Promise<Hex>;
 };
 
+/**
+ * Runs the tasks it is given one at a time, in order, each starting after the previous has settled.
+ * The index and mark publishers tick on their own intervals and both pay gas from the one relayer;
+ * two transactions sent in the same instant take the same nonce and the node drops the second as an
+ * underpriced replacement. On 1-minute index publishes the ticks coincide every minute, and that is
+ * what let the mark feed run past its heartbeat on 2026-10-03. Queueing the submissions behind one
+ * another (each waits for its receipt) means they never share a nonce.
+ */
+export function serialized(): <T>(task: () => Promise<T>) => Promise<T> {
+  let tail: Promise<unknown> = Promise.resolve();
+  return (task) => {
+    const run = tail.then(task, task);
+    // A failure must not jam the queue: the next task starts whether this one settled or threw.
+    tail = run.catch(() => undefined);
+    return run;
+  };
+}
+
 export function createChain(config: Config): Chain {
+  const submitOneAtATime = serialized();
   const transport = http(config.RPC_URL);
   // Base in production; any other id (a local anvil, a fork) gets a minimal definition so the
   // relayer's transactions are signed for the chain actually behind RPC_URL.
@@ -76,18 +95,20 @@ export function createChain(config: Config): Chain {
         return null;
       }
     },
-    async submit(managerData) {
-      const hash = await wallet.writeContract({
-        account: relayer,
-        chain,
-        address: config.DATA_SUBMITTER,
-        abi: submitterAbi,
-        functionName: 'submitData',
-        args: [managerData],
+    submit(managerData) {
+      return submitOneAtATime(async () => {
+        const hash = await wallet.writeContract({
+          account: relayer,
+          chain,
+          address: config.DATA_SUBMITTER,
+          abi: submitterAbi,
+          functionName: 'submitData',
+          args: [managerData],
+        });
+        const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
+        if (receipt.status !== 'success') throw new Error(`submitData reverted: ${hash}`);
+        return hash;
       });
-      const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
-      if (receipt.status !== 'success') throw new Error(`submitData reverted: ${hash}`);
-      return hash;
     },
   };
 }
