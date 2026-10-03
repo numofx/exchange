@@ -1,0 +1,9 @@
+[
+  {
+    "description": "cngnEscrow.setWhitelistManager(srm, true) [THE ENABLING SWITCH - cNGN deposits open here]",
+    "to": "0x37c976bb5d4887a714ef19AF6B83e34fe2f37c98",
+    "value": "0",
+    "data": "0xe64cc9da000000000000000000000000de0423d0a1e15536265c9513d2e0c10dab5835d40000000000000000000000000000000000000000000000000000000000000001",
+    "digest": "0xa109461ae67d8885ade26a1cdadeacaeeaab8c949756eb3b4bc6c3b9fdf1c0d2"
+  }
+]

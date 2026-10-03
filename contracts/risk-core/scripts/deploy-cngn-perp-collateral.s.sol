@@ -31,10 +31,12 @@ import {CNGNPerpCollateralBatch} from "./cngn-perp-collateral-batch.sol";
  *      account that posted only cNGN, left at maintenance margin, through a 25% step), and this
  *      script refuses anything larger. Re-size there first, then change the constant.
  *
- * Usage (mainnet, from a keystore; the key never touches a command line):
- *   FEED-free: this script needs no signer env. Set BASE_RPC_URL.
+ * Usage (mainnet, from a keystore; the key never touches a command line). Needs no signer env;
+ * set BASE_RPC_URL. `--sender` is required alongside `--account`: forge simulates with its
+ * placeholder sender unless told the keystore's address, and the guard below refuses that (seen
+ * 2026-10-03: "no sender given" with --account alone).
  *   forge script scripts/deploy-cngn-perp-collateral.s.sol --rpc-url $BASE_RPC_URL \
- *     --account numo-deployer --broadcast
+ *     --account numo-deployer --sender 0x2D724867d3AeD4A9F09c096B87F939285DD3AE2D --broadcast
  */
 contract DeployCngnPerpCollateral is Utils {
   string internal constant ARTIFACT_NAME = "CNGN_PERP_COLLATERAL";
