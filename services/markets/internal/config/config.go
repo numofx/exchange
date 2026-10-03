@@ -75,6 +75,9 @@ type Config struct {
 	// reports on POST /v1/internal/index-status; empty disables the endpoint and the gate. With
 	// IndexLagGate on, a new perp order is refused while the latest good spot sample is more than
 	// IndexLagMaxBps from the on-chain index, or when no sample newer than IndexStatusMaxAge exists.
+	// The publisher samples once a minute and refuses a sample when fewer than three sources answer,
+	// so the max age is the TWAP window (5 minutes), not a couple of samples: two refused samples in a
+	// row happened within an hour of going live and must not blind the venue.
 	IndexStatusToken  string
 	IndexLagGate      bool
 	IndexLagMaxBps    int
@@ -151,7 +154,7 @@ func Load() (Config, error) {
 		IndexStatusToken:             strings.TrimSpace(os.Getenv("INDEX_STATUS_TOKEN")),
 		IndexLagGate:                 getenvBool("INDEX_LAG_GATE", false),
 		IndexLagMaxBps:               getenvIntDefault("INDEX_LAG_MAX_BPS", 100),
-		IndexStatusMaxAge:            getenvDurationDefault("INDEX_STATUS_MAX_AGE", 180*time.Second),
+		IndexStatusMaxAge:            getenvDurationDefault("INDEX_STATUS_MAX_AGE", 300*time.Second),
 		CashAssetAddress:             strings.ToLower(strings.TrimSpace(os.Getenv("CASH_ASSET_ADDRESS"))),
 		QuoteAssetAddress:            strings.ToLower(strings.TrimSpace(os.Getenv("QUOTE_ASSET_ADDRESS"))),
 		EnforceFundingCheck:          getenvBool("ENFORCE_FUNDING_CHECK", true),
