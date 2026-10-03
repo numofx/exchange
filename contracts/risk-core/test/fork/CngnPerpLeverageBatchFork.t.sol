@@ -80,7 +80,9 @@ contract CngnPerpLeverageBatchFork is CngnPerpLeverageFork {
       console2.log("  required for a 25% step at IM 20% ($, 18dp):", required);
       assertLt(held, required, "the live SecurityModule does not cover a whole side at 5x");
       vm.expectRevert(
-        bytes("PRE: SecurityModule does not cover a 25% step on today's one-side open interest at the new leverage; fund it or lower the cap")
+        bytes(
+          "PRE: SecurityModule does not cover a 25% step on today's one-side open interest at the new leverage; fund it or lower the cap"
+        )
       );
       this.checkCoveredExternal(ctx);
       _fundSecurityModule(uint((required - held) / 1e12) + 1e6);

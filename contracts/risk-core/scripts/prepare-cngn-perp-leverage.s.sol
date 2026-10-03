@@ -33,7 +33,8 @@ contract PrepareCngnPerpLeverage is Utils {
     CNGNPerpLeverageBatch.checkPreconditions(ctx);
 
     (uint held, uint oneSide, uint price) = CNGNPerpLeverageBatch.coverageInputs(ctx);
-    uint required = CNGNPerpLeverageBatch.requiredSecurityModule(oneSide, price, ctx.imReq, CNGNPerpLeverageBatch.SIZING_STEP_BPS);
+    uint required =
+      CNGNPerpLeverageBatch.requiredSecurityModule(oneSide, price, ctx.imReq, CNGNPerpLeverageBatch.SIZING_STEP_BPS);
     uint covered = CNGNPerpLeverageBatch.coveredOneSide(held, ctx.imReq, CNGNPerpLeverageBatch.SIZING_STEP_BPS);
     uint oneSideUsd = oneSide * price / 1e18;
 
@@ -46,9 +47,15 @@ contract PrepareCngnPerpLeverage is Utils {
     console2.log("one-side open interest now ($, 18dp):", oneSideUsd);
     console2.log("SecurityModule required for a 25% step on it at the new IM ($, 18dp):", required);
     console2.log("one-side notional the SecurityModule covers at the new IM ($, 18dp):", covered);
-    console2.log(held >= required ? "SecurityModule covers today's open interest" : "SecurityModule DOES NOT cover today's open interest: fund it or lower the cap before proposing");
+    console2.log(
+      held >= required
+        ? "SecurityModule covers today's open interest"
+        : "SecurityModule DOES NOT cover today's open interest: fund it or lower the cap before proposing"
+    );
     console2.log("batch hash:", vm.toString(CNGNPerpLeverageBatch.hash(ctx)));
-    console2.log("Vault executes the %s calls in %s.json IN ORDER.", CNGNPerpLeverageBatch.ACTION_COUNT, VAULT_ACTIONS_NAME);
+    console2.log(
+      "Vault executes the %s calls in %s.json IN ORDER.", CNGNPerpLeverageBatch.ACTION_COUNT, VAULT_ACTIONS_NAME
+    );
   }
 
   function loadCtx() public view returns (CNGNPerpLeverageBatch.Ctx memory ctx) {
@@ -88,7 +95,9 @@ contract PrepareCngnPerpLeverage is Utils {
     vm.serializeUint(obj, "oneSideOpenInterestUsdAtRender", oneSideUsd);
     vm.serializeUint(obj, "securityModuleRequiredAtRender", required);
     vm.serializeUint(obj, "securityModuleCoversOneSideUsd", covered);
-    vm.serializeString(obj, "securityModuleRule", "cash >= oneSideNotional x 25% x (1 - IM); pager warns past coverage, pages at 1.2x");
+    vm.serializeString(
+      obj, "securityModuleRule", "cash >= oneSideNotional x 25% x (1 - IM); pager warns past coverage, pages at 1.2x"
+    );
     vm.serializeString(obj, "hedgeMode", "1:1, unchanged (markets-service and app; not on chain)");
     return vm.serializeBytes32(obj, "batchHash", CNGNPerpLeverageBatch.hash(ctx));
   }
