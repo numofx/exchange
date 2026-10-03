@@ -218,6 +218,10 @@ The gates step 21 checks:
 
 **The SecurityModule must hold at least a sixth of ONE side's notional at the current cap:**
 
+> Superseded on 2026-10-04 by the leverage-aware coverage rule in the stage (B) section below: a sixth
+> is this rule at 3x (25% x (1 - IM)); the pager now reads it against actual one-side open interest at
+> the current IM (`sm-coverage`) rather than against the cap.
+
 ```text
 seed >= (cap / 2 cNGN) × index (USDC per cNGN) / 6
 ```
@@ -636,8 +640,24 @@ a 0.35 factor would cut a 1:1 hedge's rally room from ~43% to ~18%; at MM 12% th
 long-naira account on cNGN insolvent after a 25% step). Hedge mode stays 1:1 in markets-service and
 the app.
 
-Order: (1) the operator funds the SecurityModule to $6,000 of cash (it held $3,250 on 2026-10-03);
-(2) the vault executes `CNGN_PERP_LEVERAGE_VAULT_ACTIONS.json` in order: `setPerpMarginRequirements(1,
+**The SecurityModule rule is leverage-aware and read against actual open interest.** The module's
+payout when one whole side is liquidated at maintenance margin after a single 25% step, auction run to
+its end, is within 0.2% of
+
+    one-side notional x 25% x (1 - IM)
+
+(the seed rule's "a sixth of a side" is this at 3x; at 5x it is a fifth; at 10x 22.5%). The fork
+measured $2,995 (3x) and $3,595 (5x) on an $18,000 side against $3,000 and $3,600 from the formula
+(`CngnPerpLeverageBatchFork.testCoverageFormulaMatchesTheForkWithinFivePercent`). Two things enforce
+it:
+
+- the stage (B) gate (`CNGNPerpLeverageBatch.checkCovered`, run by the proposer): the module must
+  cover today's one-side open interest at the NEW IM, not a fixed dollar floor. With $3,250 it covers
+  a $16,250 side at 5x (87% of the 25M cNGN cap at 0.000743); open interest on 2026-10-04 was $2.
+- the pager (`check_perp_pager.py`, condition `sm-coverage`): Slack once one-side open interest passes
+  what the module covers at the current IM, page at 1.2x of it. This replaces the cap-based seed rule.
+
+Order: the vault executes `CNGN_PERP_LEVERAGE_VAULT_ACTIONS.json` in order: `setPerpMarginRequirements(1,
 0.12, 0.20)` then `setBaseAssetMarginFactor(1, 0.35, 1.0)`. The requirements go first because they
 only ease accounts; the factor tightens cNGN-margined ones and a 1:1 hedge is still well inside IM.
 
@@ -645,9 +665,8 @@ only ease accounts; the factor tightens cNGN-margined ones and a 1:1 hedge is st
 # Re-render the batch and the review from live state (deploys and broadcasts nothing):
 forge script scripts/prepare-cngn-perp-leverage.s.sol --rpc-url $BASE_RPC_URL
 python3 scripts/ops/render_perp_vault_review.py    # adds "Batch 6" to CNGN_PERP_VAULT_REVIEW.md
-# Applies the exact calldata on a Base fork and re-checks the sizing:
+# Applies the exact calldata on a Base fork and re-checks the sizing and the gates:
 BASE_RPC_URL=… forge test --match-contract CngnPerpLeverageBatchFork -vv
 ```
 
-The library's `checkFunded` is the proposer's gate: the batch cannot be proposed while the
-SecurityModule is below the floor. Nothing here is proposed or signed yet.
+Nothing here is proposed or signed yet.
