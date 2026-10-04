@@ -91,12 +91,24 @@ async function authHeader() {
   return Buffer.from(JSON.stringify({ ...frame, signature })).toString('base64url');
 }
 
+type HistoryOrder = { order_id: string; nonce: string; status: string; market?: string; owner_address: string };
+
+/** Every resting order of the MM: the order history, newest first, 100 a page, walked to its end. */
 async function restingOrders() {
-  const response = await fetch(`${MARKETS}/v1/orders?limit=200`, { headers: { 'X-Numo-Auth': await authHeader() } });
-  if (!response.ok) throw new Error(`GET /v1/orders -> ${response.status} ${await response.text()}`);
-  const body = (await response.json()) as { orders: { order_id: string; nonce: string; status: string; market?: string; owner_address: string }[] };
-  // The venue's resting statuses: active on the book, or matching (a fill in flight).
-  return body.orders.filter((o) => o.status === 'active' || o.status === 'matching');
+  const auth = await authHeader();
+  const resting: HistoryOrder[] = [];
+  let before = '';
+  for (let page = 0; page < 200; page++) {
+    const url = `${MARKETS}/v1/orders?limit=100${before ? `&before=${encodeURIComponent(before)}` : ''}`;
+    const response = await fetch(url, { headers: { 'X-Numo-Auth': auth } });
+    if (!response.ok) throw new Error(`GET /v1/orders -> ${response.status} ${await response.text()}`);
+    const body = (await response.json()) as { orders: HistoryOrder[]; next_before?: string };
+    // The venue's resting statuses: active on the book, or matching (a fill in flight).
+    resting.push(...body.orders.filter((o) => o.status === 'active' || o.status === 'matching'));
+    if (!body.next_before) break;
+    before = body.next_before;
+  }
+  return resting;
 }
 
 async function status() {
