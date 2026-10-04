@@ -276,7 +276,7 @@ $VENUE keeper-account 20000
 (cd "$ROOT/services/perp-keeper" && RPC_URL=$RPC CHAIN_ID=31337 KEEPER_KEY=$KEEPER_KEY \
   KEEPER_ACCOUNT="$(json "$DIR/accounts.json" keeper)" DRY_RUN=false SUB_ACCOUNTS=$SUB_ACCOUNTS SRM=$SRM \
   AUCTION="$(json "$V" auction)" CASH=$CASH PERP=$PERP SECURITY_MODULE_ACCOUNT="$(json "$V" securityModuleAccount)" \
-  START_BLOCK="$(json "$V" blockNumber)" POLL_INTERVAL_MS=5000 HEALTH_PORT=$KEEPER_HEALTH_PORT MAX_BID_USD=2500 \
+  START_BLOCK="$(json "$V" blockNumber)" POLL_INTERVAL_MS=5000 HEALTH_PORT=$KEEPER_HEALTH_PORT MAX_BID_USD=2500 AUCTION_OPEN_WARN_MS="${AUCTION_OPEN_WARN_MS:-600000}" \
   CNGN_ESCROW="$(json "$V" cngnEscrow)" MAX_CNGN_INVENTORY=25000000 \
   start perp-keeper node dist/main.js)
 wait_for "keeper health" sh -c "curl -sf http://127.0.0.1:$KEEPER_HEALTH_PORT/health | grep -q '\"lastPassOk\":true'"
