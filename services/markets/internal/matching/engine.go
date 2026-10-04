@@ -51,6 +51,12 @@ func (e *Engine) Run(ctx context.Context) error {
 		return err
 	}
 
+	// The ledger reduce-only orders are clamped against follows positions the venue did not move:
+	// liquidations, settlement, transfers, from SubAccounts' own events.
+	if indexer := newPositionIndexer(e.cfg, e.orders, e.margin); indexer != nil {
+		go indexer.run(ctx)
+	}
+
 	ticker := time.NewTicker(e.cfg.MatcherPollInterval)
 	defer ticker.Stop()
 

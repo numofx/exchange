@@ -125,3 +125,76 @@ insert into active_orders (
 		t.Fatalf("second cancel: %v", err)
 	}
 }
+
+func TestApplyChainAdjustmentsFollowsOffVenueChangesAndSkipsVenueFills(t *testing.T) {
+	pool := openTestPool(t)
+	repo := NewRepository(pool)
+	ctx := context.Background()
+	perp := fmt.Sprintf("0xfeed0000000000000000000000000000000000%02x", time.Now().UnixNano()%0xff)
+	base := 920_000_000 + time.Now().UnixNano()%1_000_000
+	liquidated, filled := fmt.Sprint(base), fmt.Sprint(base+1)
+	suffix := fmt.Sprintf("it-chain-adj-%d", time.Now().UnixNano())
+	fillTx := fmt.Sprintf("0x%064x", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "delete from trade_fills where taker_order_id like $1", suffix+"%")
+		_, _ = pool.Exec(ctx, "delete from active_orders where order_id like $1", suffix+"%")
+		_, _ = pool.Exec(ctx, "delete from perp_positions where asset_address = $1", perp)
+		_, _ = pool.Exec(ctx, "delete from perp_position_cursor where asset_address = $1", perp)
+	})
+
+	// The venue's own fill, already in trade_fills with its transaction.
+	insertOrder := `
+insert into active_orders (
+  order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
+  desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status
+) values ($1, $2, $2, $3, $3, $4, $5, $6, '0', '10', '0', '0.00074', '740000000000000', '0', $7, '{}'::jsonb, '0xsig', 'matching')
+`
+	expiry := time.Now().Add(time.Hour).Unix()
+	if _, err := pool.Exec(ctx, insertOrder, suffix+"-t", "0xo"+suffix, filled, "1", SideBuy, perp, expiry); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, insertOrder, suffix+"-m", "0xp"+suffix, liquidated, "2", SideSell, perp, expiry); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SyncPerpPosition(ctx, filled, perp, big.NewInt(0)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SyncPerpPosition(ctx, liquidated, perp, big.NewInt(-1_387_000)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.FinalizeMatchWithPrice(ctx, suffix+"-t", suffix+"-m", "0.00074", "10", FillSettlement{TxHash: fillTx, Perp: &PerpFillLedger{AssetAddress: perp, ChainAmount: big.NewInt(10), AmountScale: big.NewInt(1)}}); err != nil {
+		t.Fatal(err)
+	}
+
+	applied, skipped, err := repo.ApplyChainAdjustments(ctx, perp, []ChainPositionAdjustment{
+		// The fill's own event: the ledger already moved by +10 / -10; applying the post-balance
+		// again would be a second count, so it is skipped.
+		{SubaccountID: filled, PostBalance: big.NewInt(10), TxHash: fillTx, BlockNumber: 100},
+		// A liquidation took most of the short: not a venue fill, the post-balance is the truth.
+		{SubaccountID: liquidated, PostBalance: big.NewInt(-900_000), TxHash: "0xliq", BlockNumber: 101},
+	}, 105)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied != 1 || skipped != 1 {
+		t.Fatalf("applied %d skipped %d", applied, skipped)
+	}
+	for account, want := range map[string]int64{filled: 10, liquidated: -900_000} {
+		got, ok, err := repo.PerpPosition(ctx, account, perp)
+		if err != nil || !ok || got.Cmp(big.NewInt(want)) != 0 {
+			t.Fatalf("ledger of %s = %v (%v, %v), want %d", account, got, ok, err, want)
+		}
+	}
+	block, ok, err := repo.PerpPositionCursor(ctx, perp)
+	if err != nil || !ok || block != 105 {
+		t.Fatalf("cursor %d %v %v", block, ok, err)
+	}
+	// Flat after a full liquidation: the row goes to zero, so a submit sees nothing to reduce and the
+	// clamp cancels anything already resting.
+	if _, _, err := repo.ApplyChainAdjustments(ctx, perp, []ChainPositionAdjustment{{SubaccountID: liquidated, PostBalance: big.NewInt(0), TxHash: "0xliq2", BlockNumber: 106}}, 106); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := repo.PerpPosition(ctx, liquidated, perp); got.Sign() != 0 {
+		t.Fatalf("after a full liquidation the ledger must be flat: %s", got)
+	}
+}

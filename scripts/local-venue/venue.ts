@@ -1006,6 +1006,46 @@ switch (command) {
     else console.log(`ok (refused as expected): ${label} close -> ${placed.status}`);
     break;
   }
+  case 'close-from': {
+    // close-from <label> <position chain units> [accepted|refused]: a Close sized from a position
+    // read earlier (what a UI drawn before a liquidation would send). Accepted: must end flat.
+    const label = args[0] ?? 'taker';
+    const stale = BigInt(args[1] ?? '0');
+    const expectation = (args[2] ?? 'accepted') as 'accepted' | 'refused';
+    const placed = await closeFrom(label, stale, expectation);
+    if (expectation === 'accepted') await assertFlat(label, [placed.orderId]);
+    else {
+      if (placed.status !== 422) throw new Error(`stale close: want 422, got ${placed.status}`);
+      console.log(`ok (refused as expected): a Close sized from the pre-liquidation position -> 422`);
+    }
+    break;
+  }
+  case 'wait-reduced': {
+    // wait-reduced <label> <position before> [timeout s]: until a liquidation has taken part of the
+    // position and the auction is over with the account above maintenance margin (or all of it).
+    const label = args[0] ?? 'taker';
+    const before = BigInt(args[1] ?? '0');
+    const timeoutSec = Number(args[2] ?? '600');
+    const id = readAccounts()[label];
+    if (id === undefined) throw new Error(`no account ${label}`);
+    const deadline = Date.now() + timeoutSec * 1000;
+    for (;;) {
+      const position = await balance(id, venue.perp);
+      const auction = await client.readContract({ address: venue.auction, abi, functionName: 'getAuction', args: [BigInt(id)] });
+      const [mm] = await client.readContract({ address: venue.auction, abi, functionName: 'getMarginAndMarkToMarket', args: [BigInt(id), 0n] });
+      if (position === 0n) {
+        console.log(`${label} (#${id}) liquidated in full`);
+        break;
+      }
+      if (abs(position) < abs(before) && !auction.ongoing && mm >= 0n) {
+        console.log(`${label} (#${id}) partially liquidated: ${usd(before)} -> ${usd(position)} contracts, above maintenance margin by $${usd(mm).toFixed(2)}, auction over`);
+        break;
+      }
+      if (Date.now() > deadline) throw new Error(`${label} (#${id}) not liquidated after ${timeoutSec}s: position ${position}, auction ongoing ${auction.ongoing}, mm ${usd(mm).toFixed(2)}`);
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
+    }
+    break;
+  }
   case 'close-refused-flat': {
     // A reduce-only order from a flat account is refused at submission (422), never rests.
     const label = args[0] ?? 'taker';

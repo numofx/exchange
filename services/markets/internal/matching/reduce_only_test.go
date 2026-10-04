@@ -62,3 +62,30 @@ func TestPerpLedgerCarriesTheExactScaleAndIsNilForSpot(t *testing.T) {
 		t.Fatalf("spot keeps no position ledger: %v %v", ledger, err)
 	}
 }
+
+func TestEffectiveCapacityIsTheSmallerOfLedgerAndChain(t *testing.T) {
+	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
+	units := func(n int64) *big.Int { return new(big.Int).Mul(big.NewInt(n), scale) }
+	short := func(n int64) *big.Int { return new(big.Int).Neg(units(n)) }
+
+	// A liquidation took 487,000 of a 1,387,000 short the ledger still shows in full: the chain wins.
+	if got := effectiveReduceOnlyCapacity(orders.SideBuy, short(1_387_000), short(900_000), scale); got.Cmp(big.NewInt(900_000)) != 0 {
+		t.Fatalf("stale ledger must be clamped to the chain: %s", got)
+	}
+	// A fill the venue finalized that the RPC node has not seen yet: the ledger is smaller, and wins.
+	if got := effectiveReduceOnlyCapacity(orders.SideBuy, short(900_000), short(1_387_000), scale); got.Cmp(big.NewInt(900_000)) != 0 {
+		t.Fatalf("a lagging chain must not enlarge the fill: %s", got)
+	}
+	// Fully liquidated: nothing to reduce whatever the ledger says.
+	if got := effectiveReduceOnlyCapacity(orders.SideBuy, short(1_387_000), big.NewInt(0), scale); got.Sign() != 0 {
+		t.Fatalf("flat on chain means no capacity: %s", got)
+	}
+	// Flipped on chain (a transfer in): the order would increase it.
+	if got := effectiveReduceOnlyCapacity(orders.SideBuy, short(1_387_000), units(5), scale); got.Sign() != 0 {
+		t.Fatalf("a position on the order's side means no capacity: %s", got)
+	}
+	// No chain reader: the ledger alone.
+	if got := effectiveReduceOnlyCapacity(orders.SideBuy, short(1_387_000), nil, scale); got.Cmp(big.NewInt(1_387_000)) != 0 {
+		t.Fatalf("without a chain the ledger stands: %s", got)
+	}
+}
