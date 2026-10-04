@@ -108,6 +108,8 @@ type presentedOrder struct {
 	Signature        string                 `json:"signature"`
 	Status           orders.Status          `json:"status"`
 	CreatedAt        time.Time              `json:"created_at"`
+	PostOnly         bool                   `json:"post_only"`
+	ReduceOnly       bool                   `json:"reduce_only"`
 	Market           string                 `json:"market,omitempty"`
 	ContractType     string                 `json:"contract_type,omitempty"`
 	SettlementType   string                 `json:"settlement_type,omitempty"`
@@ -138,6 +140,8 @@ type orderStatusResponse struct {
 	// able to tell an order that was accepted as ordinary from a service too old to have the
 	// concept at all.
 	PostOnly bool `json:"post_only"`
+	// ReduceOnly: the venue clamps and cancels this order against the account's position.
+	ReduceOnly bool `json:"reduce_only"`
 }
 
 type bookResponse struct {
@@ -555,6 +559,7 @@ func (s *Server) handleGetOrderStatus(w http.ResponseWriter, r *http.Request) {
 		RemainingAmount: remaining,
 		CancelReason:    snapshot.CancelReason,
 		PostOnly:        snapshot.PostOnly,
+		ReduceOnly:      snapshot.ReduceOnly,
 		UpdatedAt:       snapshot.UpdatedAt.UTC(),
 	})
 }
@@ -647,6 +652,13 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, status, map[string]string{"error": err.Error()})
 				return
 			}
+		}
+	}
+	if params.ReduceOnly {
+		if status, msg := s.admitReduceOnly(r.Context(), params); msg != "" {
+			slog.Info("order_submit_rejected_reduce_only", "order_id", params.OrderID, "subaccount_id", params.SubaccountID, "error", msg)
+			writeJSON(w, status, map[string]string{"error": msg})
+			return
 		}
 	}
 	order, err := s.orders.Create(r.Context(), params)
@@ -1053,6 +1065,8 @@ func presentOrder(order orders.Order, instrument instruments.Metadata) presented
 		LimitPrice:       order.LimitPrice,
 		WorstFee:         order.WorstFee,
 		Expiry:           order.Expiry,
+		PostOnly:         order.PostOnly,
+		ReduceOnly:       order.ReduceOnly,
 		ActionJSON:       order.ActionJSON,
 		Signature:        order.Signature,
 		Status:           order.Status,

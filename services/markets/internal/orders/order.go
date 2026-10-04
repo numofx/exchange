@@ -43,4 +43,8 @@ type Order struct {
 	// rejection alone cannot promise that: it evaluates against the book as it was, and a crossing
 	// order committing concurrently still leaves a post-only order able to take.
 	PostOnly bool
+	// ReduceOnly: the venue clamps this order to the account's perp position and never lets it
+	// open or flip one. Checked at submission against the chain and at every fill against the
+	// venue's own position ledger (perp_positions).
+	ReduceOnly bool
 }
