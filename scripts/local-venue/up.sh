@@ -20,9 +20,15 @@
 #                       unset on markets-service and execution-service, exactly as they run before the
 #                       perp's Terraform vars are set. A spot fill (checked against the fill contract)
 #                       and a spot withdrawal must go through.
+#   up.sh --unified     spot on the perp stack: the spot market's asset is the perp's cNGN escrow, its
+#                       module the perp TradeModule and its quote the perp cash, so one account under
+#                       the perp SRM trades spot and perp and all of it is margin. What the unified
+#                       cutover configures on mainnet (unified-rules.sh then checks it).
 set -euo pipefail
 SPOT_ONLY=0
+UNIFIED=0
 [ "${1:-}" = "--spot-only" ] && SPOT_ONLY=1
+[ "${1:-}" = "--unified" ] && UNIFIED=1
 : "${BASE_RPC_URL:?set BASE_RPC_URL (an archive-capable Base RPC to fork)}"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -116,11 +122,12 @@ echo "cngn escrow=$CNGN_ESCROW open=$(cast call "$CNGN_ESCROW" 'whitelistedManag
   "cap=$(cast call "$CNGN_ESCROW" 'totalPositionCap(address)(uint256)' "$(json "$STACK" srm)" --rpc-url $RPC)" \
   "rateModel=$(cast call "$(json "$STACK" cash)" 'rateModel()(address)' --rpc-url $RPC)"
 
-python3 - "$STACK" "$MODULE" "$DIR/venue.json" "$CNGN_ESCROW" <<'PY'
+python3 - "$STACK" "$MODULE" "$DIR/venue.json" "$CNGN_ESCROW" "$UNIFIED" <<'PY'
 import json, sys
 stack = json.load(open(sys.argv[1]))
 stack["tradePerp"] = sys.argv[2]
 stack["cngnEscrow"] = sys.argv[4]
+stack["unified"] = sys.argv[5] == "1"
 json.dump(stack, open(sys.argv[3], "w"), indent=2)
 PY
 V="$DIR/venue.json"
@@ -131,10 +138,22 @@ CNGN_PERP_CASH_ADDRESS=$CASH
 CNGN_PERP_SRM_ADDRESS=$SRM
 CNGN_PERP_COLLATERAL_ADDRESS=$CNGN_ESCROW"
 PERP_EXEC_ENV="PERP_TRADE_MODULE_ADDRESS=$MODULE"
+if [ "$UNIFIED" = 1 ]; then
+  step "unified: spot on the perp stack (asset = cNGN escrow, module = perp TradeModule, quote = perp cash, manager = perp SRM)"
+  SPOT_ASSET=$CNGN_ESCROW SPOT_MODULE=$MODULE SPOT_QUOTE=$CASH SPOT_MANAGER_ENV="SPOT_MARGIN_MANAGER_ADDRESS=$SRM"
+fi
 else
   step "spot only: no perp deployed, every perp variable left unset"
-  PERP_MARKETS_ENV="" PERP_EXEC_ENV=""
+  PERP_MARKETS_ENV="" PERP_EXEC_ENV="" CASH="" CNGN_ESCROW=""
 fi
+
+# The spot market's stack: Base's own (the fork inherits it), or the perp's under --unified. The
+# legacy spot assets stay withdrawable either way, as they must on mainnet after the cutover.
+SPOT_ASSET=${SPOT_ASSET:-0x9d806fd040a719d27a8e5e77dc5ae0ed1e089493}
+SPOT_MODULE=${SPOT_MODULE:-0x12423B366F6F07130961900bE00d05Ea63Acd071}
+SPOT_QUOTE=${SPOT_QUOTE:-0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84}
+SPOT_MANAGER_ENV=${SPOT_MANAGER_ENV:-}
+WITHDRAWAL_ASSETS="0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84,0x9d806fd040a719d27a8e5e77dc5ae0ed1e089493${CASH:+,$CASH}${CNGN_ESCROW:+,$CNGN_ESCROW}"
 
 step "postgres on :$PG_PORT, migrations"
 command -v pg_ctl >/dev/null || { echo "needs Postgres binaries (brew install postgresql)" >&2; exit 1; }
@@ -157,13 +176,14 @@ DATABASE_URL=$DB
 CHAIN_RPC_URL=$RPC
 CHAIN_ID=31337
 MATCHING_ADDRESS=$MATCHING
-TRADE_MODULE_ADDRESS=0x12423B366F6F07130961900bE00d05Ea63Acd071
-QUOTE_ASSET_ADDRESS=0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84
-CNGN_SPOT_ASSET_ADDRESS=0x9d806fd040a719d27a8e5e77dc5ae0ed1e089493
+TRADE_MODULE_ADDRESS=$SPOT_MODULE
+QUOTE_ASSET_ADDRESS=$SPOT_QUOTE
+CNGN_SPOT_ASSET_ADDRESS=$SPOT_ASSET
+$SPOT_MANAGER_ENV
 $PERP_MARKETS_ENV
 ENFORCE_MATCHING_CUSTODY=true
 WITHDRAWAL_MODULE_ADDRESS=0x0a10AE2f5D2482cE1e43bC309D430B8861C2b5aB
-WITHDRAWAL_ASSET_ADDRESSES=0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84,0x9d806fd040a719d27a8e5e77dc5ae0ed1e089493${CASH:+,$CASH}
+WITHDRAWAL_ASSET_ADDRESSES=$WITHDRAWAL_ASSETS
 EXECUTOR_WITHDRAW_URL=http://127.0.0.1:$EXEC_PORT/withdraw
 EXECUTOR_URL=http://127.0.0.1:$EXEC_PORT/execute
 EXECUTOR_TIMEOUT=90s
@@ -173,9 +193,9 @@ ENV
 
 step "services: execution :$EXEC_PORT, markets api :$API_PORT, matcher"
 (cd "$ROOT/services/execution" && RPC_URL=$RPC CHAIN_ID=31337 PRIVATE_KEY=$EXECUTOR_KEY MATCHING_ADDRESS=$MATCHING \
-  TRADE_MODULE_ADDRESS=0x12423B366F6F07130961900bE00d05Ea63Acd071 \
+  TRADE_MODULE_ADDRESS=$SPOT_MODULE \
   WITHDRAWAL_MODULE_ADDRESS=0x0a10AE2f5D2482cE1e43bC309D430B8861C2b5aB \
-  WITHDRAWAL_ASSET_ADDRESSES=0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84,0x9d806fd040a719d27a8e5e77dc5ae0ed1e089493${CASH:+,$CASH} \
+  WITHDRAWAL_ASSET_ADDRESSES=$WITHDRAWAL_ASSETS \
   PORT=$EXEC_PORT HOST=127.0.0.1 DRY_RUN=false WAIT_FOR_RECEIPT=true start execution env $PERP_EXEC_ENV node dist/index.js)
 (set -a; . "$DIR/markets.env"; set +a; start markets-api "$DIR/bin/markets-api"; start markets-matcher "$DIR/bin/markets-matcher")
 wait_for execution curl -sf http://127.0.0.1:$EXEC_PORT/healthz
@@ -280,7 +300,7 @@ $VENUE withdraw taker 100
 
 cat <<DONE
 
-Local venue up. Point trading-app at it:
+Local venue up$([ "$UNIFIED" = 1 ] && echo " (UNIFIED: spot on the perp stack; run unified-rules.sh)"). Point trading-app at it:
   MARKETS_SERVICE_URL=http://127.0.0.1:$API_PORT
   NEXT_PUBLIC_MARKETS_WS_URL=ws://127.0.0.1:$API_PORT/v1/ws
   NEXT_PUBLIC_BASE_RPC_URL=$RPC

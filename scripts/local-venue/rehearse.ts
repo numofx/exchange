@@ -329,6 +329,36 @@ async function cngnPositions() {
   console.log(`fork: treasury #${treasury} long USD 1.98M cNGN on 2M cNGN; dave #${dave} long naira 1.49M cNGN on 1M cNGN (the backstop case)`);
 }
 
+/**
+ * The unified scenario, on the real escrow: one account under the perp SRM holding USDC cash AND
+ * cNGN (its spot holding, which is the same escrow balance as margin) with a long-naira perp
+ * position sized so the 40% fall leaves it insolvent. The production keeper must take the whole
+ * portfolio, cNGN included, and the SecurityModule pays the auction's terminal deficit. Sized
+ * inside the fork's 50M OI cap: the base scenario already carries 40M of it.
+ */
+async function unifiedPositions() {
+  if (ESCROW === null) throw new Error(`no ${collateralFile}: the cNGN escrow is not deployed`);
+  const accounts = readAccounts();
+  if (!accounts.bob) throw new Error('run positions first: bob is the counterparty');
+  const operator = keyFor('operator');
+  const owner = await funded('mixed', 800n);
+  const slot = keccak256(encodeAbiParameters([{ type: 'address' }, { type: 'uint256' }], [owner.address, CNGN_BALANCE_SLOT]));
+  await anvil('anvil_setStorageAt', [CNGN, slot, pad(toHex(500_000n * 10n ** 6n), { size: 32 })]);
+  await write(owner, SUB_ACCOUNTS, 'createAccountWithApproval', [owner.address, operator.address, SRM]);
+  const id = await client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'lastAccountId' });
+  await write(owner, USDC, 'approve', [CASH, 800n * 10n ** 6n]);
+  await write(owner, CASH, 'deposit', [id, 800n * 10n ** 6n]);
+  await write(owner, CNGN, 'approve', [ESCROW, 500_000n * 10n ** 6n]);
+  await write(owner, ESCROW, 'deposit', [id, 500_000n * 10n ** 6n]);
+  writeFileSync(accountsFile, JSON.stringify({ ...accounts, mixed: id.toString() }, null, 2));
+  // Long naira 4M cNGN (~$2,900 at 1374) on $800 cash + 500k cNGN credited at half ($982 of IM credit
+  // against $971 needed at 3x): opens, and is insolvent after a 40% fall on both the position and the
+  // collateral (800 - 1,165 + 218 = -$147).
+  const transfer = { fromAcc: BigInt(accounts.bob), toAcc: id, asset: PERP, subId: 0n, amount: 4_000_000n * E18, assetData: pad('0x', { size: 32 }) };
+  await write(operator, SUB_ACCOUNTS, 'submitTransfers', [[transfer], '0x']);
+  console.log(`fork: mixed #${id} holds $800 cash + 500k cNGN and is long naira 4M cNGN (the unified account)`);
+}
+
 async function status() {
   const accounts = readAccounts();
   const smAccount = BigInt(String(stack.securityModuleAccount));
@@ -342,6 +372,17 @@ async function status() {
     carolInAuction: carolAuction.ongoing,
     carolAboveMaintenance: carolMM >= 0n,
     securityModuleCash: (await client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'getBalance', args: [smAccount, CASH, 0n] })).toString(),
+    // alice's maintenance margin, signed: her insolvent auction is also paid by the SecurityModule.
+    aliceMaintenanceMargin: (await client.readContract({ address: auction, abi, functionName: 'getMarginAndMarkToMarket', args: [BigInt(accounts.alice!), 0n] }))[0].toString(),
+    ...(accounts.mixed && ESCROW
+      ? {
+          mixed: await perpOf(accounts.mixed),
+          mixedCngn: (await client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'getBalance', args: [BigInt(accounts.mixed), ESCROW, 0n] })).toString(),
+          mixedInAuction: (await client.readContract({ address: auction, abi, functionName: 'getAuction', args: [BigInt(accounts.mixed)] })).ongoing,
+          // The SRM's maintenance margin, signed: negative is the deficit an insolvent auction ends at.
+          mixedMaintenanceMargin: (await client.readContract({ address: auction, abi, functionName: 'getMarginAndMarkToMarket', args: [BigInt(accounts.mixed), 0n] }))[0].toString(),
+        }
+      : {}),
     ...(accounts.treasury && ESCROW
       ? {
           treasury: await perpOf(accounts.treasury),
@@ -382,6 +423,9 @@ switch (command) {
     break;
   case 'cngn-open':
     await cngnOpen();
+    break;
+  case 'unified-positions':
+    await unifiedPositions();
     break;
   case 'cngn-positions':
     await cngnPositions();
