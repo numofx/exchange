@@ -26,6 +26,7 @@ const RPC = process.env.RPC_URL ?? 'https://mainnet.base.org';
 const KEY = process.env.MM_OWNER_PRIVATE_KEY as Hex | undefined;
 const SPOT_ACCOUNT = BigInt(process.env.MM_SPOT_SUBACCOUNT_ID ?? '15');
 const WS_AUTH_DOMAIN = process.env.WS_AUTH_DOMAIN ?? 'markets.numo.xyz';
+const SPOT_SYMBOL = process.env.SPOT_SYMBOL ?? 'USDCcNGN-SPOT';
 
 // Base mainnet, the retired spot stack and the shared custody contracts.
 const MATCHING: Address = '0x9E90A9cD13d859Bd6a08168082FB1F6F7405F191';
@@ -81,21 +82,35 @@ async function ledger(account: bigint, asset: Address) {
   return client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'getBalance', args: [account, asset, 0n] });
 }
 
-/** The venue's signed authentication frame (wsauth): what GET /v1/orders needs to list the owner's orders. */
+/** The venue's signed authentication frame (wsauth, order-history statement): what GET /v1/orders needs. */
 async function authHeader() {
   const now = Math.floor(Date.now() / 1000);
   const frame = { address: owner.address.toLowerCase(), nonce: `${now}-${Math.random().toString(36).slice(2)}`, issued_at: now, expiry: now + 300 };
-  const message = `${WS_AUTH_DOMAIN} wants you to authenticate for the Numo markets WebSocket.\nAddress: ${frame.address}\nNonce: ${frame.nonce}\nIssued At: ${frame.issued_at}\nExpiration Time: ${frame.expiry}`;
+  // The order-history statement (wsauth OrderHistoryStatement), byte-for-byte as the app signs it.
+  const message = `${WS_AUTH_DOMAIN} wants you to view your Numo order history.\nAddress: ${frame.address}\nNonce: ${frame.nonce}\nIssued At: ${frame.issued_at}\nExpiration Time: ${frame.expiry}`;
   const signature = await owner.signMessage({ message });
   return Buffer.from(JSON.stringify({ ...frame, signature })).toString('base64url');
 }
 
+type HistoryOrder = { order_id: string; nonce: string; status: string; market?: string; owner_address: string };
+
+/** Every resting order of the MM: the order history, newest first, 100 a page, walked to its end. */
 async function restingOrders() {
-  const response = await fetch(`${MARKETS}/v1/orders?limit=200`, { headers: { 'X-Numo-Auth': await authHeader() } });
-  if (!response.ok) throw new Error(`GET /v1/orders -> ${response.status} ${await response.text()}`);
-  const body = (await response.json()) as { orders: { order_id: string; nonce: string; status: string; market?: string; owner_address: string }[] };
-  // The venue's resting statuses: active on the book, or matching (a fill in flight).
-  return body.orders.filter((o) => o.status === 'active' || o.status === 'matching');
+  const auth = await authHeader();
+  const resting: HistoryOrder[] = [];
+  let before = '';
+  for (let page = 0; page < 200; page++) {
+    const url = `${MARKETS}/v1/orders?limit=100${before ? `&before=${encodeURIComponent(before)}` : ''}`;
+    const response = await fetch(url, { headers: { 'X-Numo-Auth': auth } });
+    if (!response.ok) throw new Error(`GET /v1/orders -> ${response.status} ${await response.text()}`);
+    const body = (await response.json()) as { orders: HistoryOrder[]; next_before?: string };
+    // The venue's resting statuses: active on the book, or matching (a fill in flight). Spot only:
+    // the perp maker quotes from the same wallet, and its orders are not this migration's to touch.
+    resting.push(...body.orders.filter((o) => (o.status === 'active' || o.status === 'matching') && o.market === SPOT_SYMBOL));
+    if (!body.next_before) break;
+    before = body.next_before;
+  }
+  return resting;
 }
 
 async function status() {
@@ -111,7 +126,7 @@ async function status() {
     spotCngn: (await ledger(SPOT_ACCOUNT, LEGACY.cngnEscrow)).toString(),
     walletUsdc: (await client.readContract({ address: USDC, abi, functionName: 'balanceOf', args: [owner.address] })).toString(),
     walletCngn: (await client.readContract({ address: CNGN, abi, functionName: 'balanceOf', args: [owner.address] })).toString(),
-    restingOrders: (await restingOrders()).length,
+    restingSpotOrders: (await restingOrders()).length,
     perpStack: stack,
   };
   if (custodian.toLowerCase() !== owner.address.toLowerCase()) throw new Error(`spot account #${SPOT_ACCOUNT} is not the MM's in Matching (owner ${custodian})`);
@@ -120,7 +135,7 @@ async function status() {
 
 async function cancel() {
   const orders = await restingOrders();
-  console.log(`${orders.length} resting order(s) of ${owner.address}`);
+  console.log(`${orders.length} resting ${SPOT_SYMBOL} order(s) of ${owner.address}`);
   for (const order of orders) {
     if (!execute) {
       console.log(`dry run: would cancel ${order.order_id} (nonce ${order.nonce})`);
