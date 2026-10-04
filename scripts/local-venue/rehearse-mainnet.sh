@@ -113,7 +113,7 @@ DONE='"alice":"0","carol":"[1-9][0-9]*","carolInAuction":false,"carolAboveMainte
 # margin and leaves a rounding sliver, so "liquidated" is under 100k cNGN left and the auction over.
 [ $CNGN = 1 ] && DONE="$DONE"',.*"treasuryAboveMaintenance":true,"dave":"[0-9]{1,23}","daveInAuction":false'
 # The mixed account is insolvent: the whole position goes in one bid and its auction ends.
-[ $UNIFIED = 1 ] && DONE="$DONE"',.*"mixed":"0","mixedInAuction":false'
+[ $UNIFIED = 1 ] && DONE="$DONE"',.*"mixed":"0",.*"mixedInAuction":false'
 LONG_WARP=0
 for pass in $(seq 1 30); do
   (cd "$KEEPER_DIR" && set -a && . "$KEEPER_ENV" && set +a && unset HEALTH_PORT &&
