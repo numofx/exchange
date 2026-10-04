@@ -208,6 +208,25 @@ step "services: execution :$EXEC_PORT, markets api :$API_PORT, matcher"
 wait_for execution curl -sf http://127.0.0.1:$EXEC_PORT/healthz
 wait_for "markets api" curl -sf http://127.0.0.1:$API_PORT/v1/markets
 
+# What perp-feeds does on Base after every sample: report spot to the venue's index-lag gate. The
+# local publisher runs at a fixed price and takes no samples, so this loop reports that price every
+# 30s in the publisher's format; without it the enforced gate is blind and refuses perp orders.
+if [ "$SPOT_ONLY" = 0 ]; then
+  cat >"$DIR/bin/index-status-reporter.sh" <<REPORTER
+#!/usr/bin/env bash
+USDC_PER_CNGN=\$(python3 -c "print(f'{1 / $INDEX_NGN_PER_USD:.18f}')")
+while :; do
+  curl -s -o /dev/null -X POST -H "X-Numo-Index-Token: $INDEX_STATUS_TOKEN" -H "content-type: application/json" \\
+    -d "{\\"at_ms\\": \$(( \$(date +%s) * 1000 )), \\"usdc_per_cngn\\": \\"\$USDC_PER_CNGN\\", \\"sample_ok\\": true}" \\
+    http://127.0.0.1:$API_PORT/v1/internal/index-status
+  sleep 30
+done
+REPORTER
+  chmod +x "$DIR/bin/index-status-reporter.sh"
+  start index-status-reporter "$DIR/bin/index-status-reporter.sh"
+  wait_for "index-status report" sh -c "curl -sf http://127.0.0.1:$API_PORT/v1/markets | grep -q '\"spot_sample_at\"'"
+fi
+
 VENUE="pnpm --dir $HERE exec tsx $HERE/venue.ts $DIR"
 if [ "$SPOT_ONLY" = 1 ]; then
   step "spot regression: /v1/markets, a fill, a withdrawal"
