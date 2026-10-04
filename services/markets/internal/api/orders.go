@@ -1,11 +1,13 @@
 package api
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math/big"
+	"net/http"
 	"strings"
 	"time"
 
@@ -32,7 +34,11 @@ type createOrderRequest struct {
 	Expiry        int64  `json:"expiry"`
 	// PostOnly refuses the order rather than letting it take. Absent means false, so every
 	// existing client is unchanged.
-	PostOnly       bool             `json:"post_only,omitempty"`
+	PostOnly bool `json:"post_only,omitempty"`
+	// ReduceOnly asks the venue to let this order only shrink the account's perp position: the fill
+	// is clamped to the position the venue's own ledger shows, and the order is refused (or its
+	// remainder cancelled) when there is nothing on the opposite side to reduce. Perp only.
+	ReduceOnly     bool             `json:"reduce_only,omitempty"`
 	OrderEntrySpec string           `json:"order_entry_spec,omitempty"`
 	UIIntent       *spotOrderIntent `json:"ui_intent,omitempty"`
 	ActionJSON     json.RawMessage  `json:"action_json"`
@@ -208,6 +214,7 @@ func (r createOrderRequest) toParams(cfg config.Config) (orders.CreateOrderParam
 		ActionJSON:      r.ActionJSON,
 		Signature:       r.Signature,
 		PostOnly:        r.PostOnly,
+		ReduceOnly:      r.ReduceOnly,
 	}, nil
 }
 
@@ -547,4 +554,37 @@ func validateActionJSON(raw json.RawMessage, ownerAddress string, signerAddress 
 		return fmt.Errorf("action_json.signer must match signer_address")
 	}
 	return nil
+}
+
+// admitReduceOnly decides whether a reduce-only order may rest at all. The flag is perp-only (a spot
+// holding is not a position the venue tracks). The account's position is read from the chain and
+// written to the venue's ledger (seeded, or refreshed when no fill is in flight), and the order must
+// sit on the opposite side of a non-zero position: an engine buy reduces a short, a sell a long. The
+// match-time clamp (matching.clampReduceOnly) then holds every fill to the ledger. Returns the HTTP
+// status and message to refuse with, or "" to admit.
+func (s *Server) admitReduceOnly(ctx context.Context, params orders.CreateOrderParams) (int, string) {
+	instrument, ok := s.instruments.ByAssetAndSubID(strings.ToLower(params.AssetAddress), params.SubID)
+	if !ok || !instrument.IsPerpetual() {
+		return http.StatusBadRequest, "reduce_only is only accepted on the perpetual: a spot order has no position to reduce"
+	}
+	if s.perp == nil {
+		return http.StatusServiceUnavailable, "reduce_only needs the account's perp position, which this deployment cannot read"
+	}
+	chainPosition, err := s.perp.rawPosition(ctx, instrument, params.SubaccountID)
+	if err != nil {
+		slog.Warn("order_submit_reduce_only_position_unreadable", "order_id", params.OrderID, "subaccount_id", params.SubaccountID, "error", err)
+		return http.StatusServiceUnavailable, "reduce_only: the account's perp position could not be read; retry shortly"
+	}
+	position, err := s.orders.SyncPerpPosition(ctx, params.SubaccountID, instrument.AssetAddress, chainPosition)
+	if err != nil {
+		slog.Error("order_submit_reduce_only_ledger", "order_id", params.OrderID, "subaccount_id", params.SubaccountID, "error", err)
+		return http.StatusInternalServerError, "reduce_only: the venue's position ledger could not be updated"
+	}
+	switch {
+	case position.Sign() == 0:
+		return http.StatusUnprocessableEntity, "reduce_only order refused: the account has no position to reduce"
+	case params.Side == orders.SideBuy && position.Sign() > 0, params.Side == orders.SideSell && position.Sign() < 0:
+		return http.StatusUnprocessableEntity, "reduce_only order refused: it is on the same side as the account's position and would increase it"
+	}
+	return 0, ""
 }

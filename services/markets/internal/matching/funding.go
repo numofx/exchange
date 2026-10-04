@@ -380,48 +380,64 @@ func (c *chainFundingChecker) subAccountsAddress(ctx context.Context) (string, e
 }
 
 func (c *chainFundingChecker) ethCall(ctx context.Context, to string, data string) (string, error) {
+	raw, err := c.rpcCall(ctx, "eth_call", []any{map[string]string{"to": to, "data": data}, "latest"})
+	if err != nil {
+		return "", err
+	}
+	var result string
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return "", fmt.Errorf("eth_call result is not a string: %w", err)
+	}
+	if strings.TrimSpace(result) == "" {
+		return "", errors.New("empty rpc result")
+	}
+	return strings.ToLower(strings.TrimSpace(result)), nil
+}
+
+// rpcCall is one JSON-RPC request; the raw result is the caller's to decode.
+func (c *chainFundingChecker) rpcCall(ctx context.Context, method string, params []any) (json.RawMessage, error) {
 	body, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0",
 		"id":      1,
-		"method":  "eth_call",
-		"params":  []any{map[string]string{"to": to, "data": data}, "latest"},
+		"method":  method,
+		"params":  params,
 	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.rpcURL, bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	req.Header.Set("content-type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("rpc status %d", resp.StatusCode)
+		return nil, fmt.Errorf("rpc status %d", resp.StatusCode)
 	}
 
 	var payload struct {
-		Result string `json:"result"`
+		Result json.RawMessage `json:"result"`
 		Error  *struct {
 			Message string `json:"message"`
 		} `json:"error"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return "", err
+		return nil, err
 	}
 	if payload.Error != nil {
-		return "", errors.New(payload.Error.Message)
+		return nil, errors.New(payload.Error.Message)
 	}
-	if strings.TrimSpace(payload.Result) == "" {
-		return "", errors.New("empty rpc result")
+	if len(payload.Result) == 0 || string(payload.Result) == "null" {
+		return nil, errors.New("empty rpc result")
 	}
-	return strings.ToLower(strings.TrimSpace(payload.Result)), nil
+	return payload.Result, nil
 }
 
 // ---------------------------------------------------------------------------------------------

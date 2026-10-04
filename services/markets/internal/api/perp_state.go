@@ -439,6 +439,23 @@ func (r *perpStateReader) collateral(ctx context.Context, market instruments.Met
 	}}, nil
 }
 
+// rawPosition is the account's signed perp balance in chain units (18dp), read from SubAccounts.
+func (r *perpStateReader) rawPosition(ctx context.Context, market instruments.Metadata, subaccountID string) (*big.Int, error) {
+	account, err := encodeUint256(subaccountID)
+	if err != nil {
+		return nil, err
+	}
+	subAccounts, err := r.chain.subAccountsAddress(ctx)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := r.chain.ethCall(ctx, subAccounts, sigGetBalance+account+addressArg(strings.ToLower(market.AssetAddress))+strings.Repeat("0", 64))
+	if err != nil {
+		return nil, fmt.Errorf("position: %w", err)
+	}
+	return signedWord(raw, 0)
+}
+
 func (r *perpStateReader) position(ctx context.Context, market instruments.Metadata, subaccountID string) (*presentedPosition, error) {
 	_, raw, err := r.marketState(ctx, market)
 	if err != nil {

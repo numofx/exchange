@@ -1,4 +1,16 @@
 {
+  "../execution/lib/forge-std": {
+    "rev": "0e7097750918380d84dd3cfdef595bee74dabb70"
+  },
+  "../execution/lib/lyra-utils": {
+    "rev": "8f6962cb49525c887d802a1b1d44ac35ed114791"
+  },
+  "../execution/lib/openzeppelin-contracts": {
+    "rev": "c64a1edb67b6e3f4a15cca8909c9482ad33a02b0"
+  },
+  "../execution/lib/openzeppelin-contracts-upgradeable": {
+    "rev": "e725abddf1e01cf05ace496e950fc8e243cc7cab"
+  },
   "lib/forge-std": {
     "tag": {
       "name": "v1.9.5",

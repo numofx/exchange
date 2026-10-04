@@ -97,6 +97,8 @@ func reducesOnly(before, after *big.Int) bool {
 // marginChecker judges a prospective perp fill for both sides.
 type marginChecker interface {
 	CheckPerpFill(ctx context.Context, instrument instruments.Metadata, candidate orders.MatchCandidate, fillPrice, fillAmount, takerFee string) (marginVerdict, error)
+	// Position is the account's live perp balance on SubAccounts, in chain units, signed.
+	Position(ctx context.Context, perp, subaccountID string) (*big.Int, error)
 }
 
 type marginVerdict struct {
@@ -213,6 +215,10 @@ func (c *chainMarginChecker) imSurplus(ctx context.Context, srm, subaccountID st
 		return nil, err
 	}
 	return decodeInt256(raw)
+}
+
+func (c *chainMarginChecker) Position(ctx context.Context, perp, subaccountID string) (*big.Int, error) {
+	return c.position(ctx, strings.ToLower(strings.TrimSpace(perp)), subaccountID)
 }
 
 func (c *chainMarginChecker) position(ctx context.Context, perp, subaccountID string) (*big.Int, error) {
