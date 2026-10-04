@@ -14,10 +14,12 @@
  *   deposit    open the unified account: SubAccountCreator.createAndDepositSubAccount with the USDC
  *              into the perp cash under the perp SRM, then escrow.deposit of the cNGN; prints the id
  *              to set as MM_SUBACCOUNT_ID / MM_RECIPIENT_ID
+ *   deposit-cngn <id>  escrow.deposit of the wallet's whole cNGN into an existing unified account
+ *              (the second half of `deposit` when its first half landed and the second did not)
  *
  * Everything here is what the app does for a user, with the MM's key instead of a wallet prompt.
  */
-import { createPublicClient, createWalletClient, encodeAbiParameters, getAddress, http, parseAbi, type Address, type Hex, decodeEventLog } from 'viem';
+import { createPublicClient, createWalletClient, encodeAbiParameters, getAddress, http, nonceManager, parseAbi, type Address, type Hex, decodeEventLog } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { base } from 'viem/chains';
 
@@ -57,7 +59,9 @@ const [phase, ...flags] = process.argv.slice(2);
 const execute = flags.includes('--execute');
 if (!phase) throw new Error('usage: migrate-spot-mm.ts <status|cancel|withdraw|deposit> [--execute]');
 if (!KEY) throw new Error('MM_OWNER_PRIVATE_KEY is not in the environment (run through the SSM wrapper on the box)');
-const owner = privateKeyToAccount(KEY);
+// The relayer's lesson (perp-feeds): a load-balanced RPC can hand out a mined nonce again; viem's
+// nonce manager never reissues one at or below the last it sent.
+const owner = privateKeyToAccount(KEY, { nonceManager });
 const wallet = createWalletClient({ account: owner, chain: base, transport: http(RPC) });
 
 type PerpStack = { srm: Address; cash: Address; escrow: Address; module: Address };
@@ -242,7 +246,34 @@ async function deposit() {
   console.log(`set MM_SUBACCOUNT_ID=${id} and MM_RECIPIENT_ID=${id} (Terraform mm vars) before restarting the market-maker`);
 }
 
-const phases: Record<string, () => Promise<void>> = { status, cancel, withdraw, deposit };
+async function depositCngn() {
+  const id = BigInt(flags.find((f) => /^[0-9]+$/.test(f)) ?? '0');
+  if (id === 0n) throw new Error('deposit-cngn needs the unified account id');
+  const stack = await perpStack();
+  const mgr = await client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'manager', args: [id] });
+  if (mgr.toLowerCase() !== stack.srm.toLowerCase()) throw new Error(`account #${id} is under ${mgr}, not the perp SRM`);
+  const custodian = await client.readContract({ address: MATCHING, abi, functionName: 'subAccountToOwner', args: [id] });
+  if (custodian.toLowerCase() !== owner.address.toLowerCase()) throw new Error(`account #${id} is not the MM's in Matching (owner ${custodian})`);
+  const cngn = await client.readContract({ address: CNGN, abi, functionName: 'balanceOf', args: [owner.address] });
+  if (cngn === 0n) throw new Error('no cNGN in the wallet');
+  console.log(`wallet holds ${cngn} cNGN units; depositing into #${id} via ${stack.escrow}`);
+  if (!execute) {
+    console.log(`dry run: would approve ${stack.escrow} for ${cngn} and call deposit(${id}, ${cngn})`);
+    return;
+  }
+  const send = async (address: Address, functionName: 'approve' | 'deposit', args: readonly unknown[]) => {
+    const hash = await wallet.writeContract({ address, abi, functionName, args } as never);
+    const receipt = await client.waitForTransactionReceipt({ hash });
+    if (receipt.status !== 'success') throw new Error(`${functionName} reverted (${hash})`);
+    return receipt;
+  };
+  await send(CNGN, 'approve', [stack.escrow, cngn]);
+  await send(stack.escrow, 'deposit', [id, cngn]);
+  const held = await ledger(id, stack.escrow);
+  console.log(`ok: #${id} now holds ${held} (18dp) in ${stack.escrow}`);
+}
+
+const phases: Record<string, () => Promise<void>> = { status, cancel, withdraw, deposit, 'deposit-cngn': depositCngn };
 const run = phases[phase];
 if (!run) throw new Error(`unknown phase ${phase}`);
 void run();
