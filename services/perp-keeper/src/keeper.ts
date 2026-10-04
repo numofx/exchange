@@ -10,13 +10,14 @@ import { assessHealth, fmt } from './health.js';
  * stale feed means liquidations are frozen along with trading.
  */
 /** What one pass saw, for /health and the pager: accounts under maintenance margin, and under water. */
-export type PassSummary = { liquidatable: bigint[]; insolvent: bigint[] };
+export type PassSummary = { liquidatable: bigint[]; insolvent: bigint[]; openAuctions: bigint[] };
 
 export async function runOnce(
   config: Config,
   chain: KeeperChain,
   alert: Alerter,
-  summary: PassSummary = { liquidatable: [], insolvent: [] },
+  summary: PassSummary = { liquidatable: [], insolvent: [], openAuctions: [] },
+  now: () => number = Date.now,
 ): Promise<Action[]> {
   // Throws (a failed pass, so /health fails) when the funding account cannot fund a bid.
   await chain.assertFundingAccount();
@@ -38,6 +39,17 @@ export async function runOnce(
       const view = await chain.readAccount(accountId);
       if (view.mm < 0n) summary.liquidatable.push(accountId);
       if (view.mtm < 0n) summary.insolvent.push(accountId);
+      if (view.auction.ongoing) {
+        summary.openAuctions.push(accountId);
+        const openFor = Math.floor(now() / 1000) - Number(view.auction.startTime);
+        if (openFor > config.AUCTION_OPEN_WARN_MS / 1000) {
+          await alert(
+            `auction-open-${accountId}`,
+            `auction on account ${accountId} open for ${Math.floor(openFor / 60)} min (${view.auction.insolvent ? 'insolvent' : 'solvent'}; ` +
+              `mm ${fmt(view.mm)}, bm ${fmt(view.bm)}): the owner cannot trade until it ends`,
+          );
+        }
+      }
       action = decide(view, keeperCash, rules);
     } catch (error) {
       await alert('margin-unreadable', `cannot read margin for account ${accountId} (stale feed?): ${(error as Error).message}`);
@@ -104,7 +116,7 @@ export function toCall(action: Exclude<Action, { kind: 'none' }>, bidderAccount:
 
 function describe(action: Exclude<Action, { kind: 'none' }>): string {
   if (action.kind === 'bid') {
-    return `${action.insolvent ? 'insolvent ' : ''}bid ${fmt(action.percent * 100n)}% (limit ${fmt(action.priceLimit)})`;
+    return `${action.insolvent ? 'insolvent ' : ''}${action.finishing ? 'finishing ' : ''}bid ${fmt(action.percent * 100n)}% (limit ${fmt(action.priceLimit)})`;
   }
   return action.kind;
 }

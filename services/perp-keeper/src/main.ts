@@ -34,14 +34,17 @@ async function main() {
     // From the last pass that read them: the pager (check_perp_pager.py) pages on any insolvent one.
     liquidatableAccounts: [] as string[],
     insolventAccounts: [] as string[],
+    /** Accounts with an auction open at the last pass: the owner cannot trade until it ends. */
+    openAuctions: [] as string[],
   };
 
   const tick = async () => {
     try {
-      const summary: PassSummary = { liquidatable: [], insolvent: [] };
+      const summary: PassSummary = { liquidatable: [], insolvent: [], openAuctions: [] };
       await runOnce(config, chain, alert, summary);
       health.liquidatableAccounts = summary.liquidatable.map(String);
       health.insolventAccounts = summary.insolvent.map(String);
+      health.openAuctions = summary.openAuctions.map(String);
       health.lastPassOk = true;
     } catch (error) {
       health.lastPassOk = false;
