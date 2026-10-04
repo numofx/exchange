@@ -62,21 +62,5 @@ import {
   id       = "numo-feed-publisher-role:numo-${each.value}-ssm-read"
 }
 
-# The unified-account cutover (docs/unified-account-cutover.md) moves the spot market-maker's
-# inventory from its spot account to a unified one by a script on the box
-# (scripts/local-venue/migrate-spot-mm.ts through scripts/ops/run-with-ssm-mm.sh), signing with the
-# MM's own key read from SSM in-process. One parameter, not the /numo/exchange/ path. Remove this
-# grant once the migration is done: the box has no other business with the MM's key.
-data "aws_iam_policy_document" "ops_box_mm_key_read" {
-  statement {
-    sid       = "ReadMMKeyForUnifiedMigration"
-    actions   = ["ssm:GetParameter"]
-    resources = ["${local.ssm_arn_prefix}/numo/exchange/mm_private_key"]
-  }
-}
-
-resource "aws_iam_role_policy" "ops_box_mm_key_read" {
-  name   = "numo-mm-key-ssm-read-unified-migration"
-  role   = data.aws_iam_role.ops_box.id
-  policy = data.aws_iam_policy_document.ops_box_mm_key_read.json
-}
+# The MM-key read grant for the unified migration (ops_box_mm_key_read) was applied 2026-10-04 for
+# the migration of #15 to #26 and removed the same day, as docs/unified-account-cutover.md requires.
