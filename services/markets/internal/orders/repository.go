@@ -40,6 +40,8 @@ type CreateOrderParams struct {
 	Signature       string
 	// PostOnly asks the venue to refuse this order rather than let it take. See Create.
 	PostOnly bool
+	// ReduceOnly: only shrink the account's perp position; see Order.ReduceOnly.
+	ReduceOnly bool
 }
 
 type CancelOrderParams struct {
@@ -75,7 +77,8 @@ type OrderStatusSnapshot struct {
 	// endpoint so a client can confirm the flag was actually recorded rather than assume it: a
 	// service that ignored the field would look identical from the submit side, and the caller
 	// would believe it had a guarantee it does not have.
-	PostOnly bool
+	PostOnly   bool
+	ReduceOnly bool
 }
 
 type Repository struct {
@@ -230,12 +233,13 @@ insert into active_orders (
   expiry,
   action_json,
   signature,
-  status
+  status,
+  reduce_only
 ) values (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
 )
 returning order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
-          desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at, post_only
+          desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at, post_only, reduce_only
 `
 
 	order := Order{}
@@ -260,6 +264,7 @@ returning order_id, owner_address, signer_address, subaccount_id, recipient_id, 
 		params.ActionJSON,
 		params.Signature,
 		StatusActive,
+		params.ReduceOnly,
 	).Scan(
 		&order.OrderID,
 		&order.OwnerAddress,
@@ -281,6 +286,7 @@ returning order_id, owner_address, signer_address, subaccount_id, recipient_id, 
 		&order.Status,
 		&order.CreatedAt,
 		&order.PostOnly,
+		&order.ReduceOnly,
 	); err != nil {
 		return Order{}, mapPGError(err)
 	}
@@ -296,12 +302,12 @@ func (r *Repository) createPostOnly(ctx context.Context, params CreateOrderParam
 insert into active_orders (
   order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side,
   asset_address, sub_id, desired_amount, filled_amount, limit_price, limit_price_ticks,
-  worst_fee, expiry, action_json, signature, status, post_only
+  worst_fee, expiry, action_json, signature, status, post_only, reduce_only
 )
-select $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $15, $16, $17, $18, $19, true
+select $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $15, $16, $17, $18, $19, true, $20
 where not ` + crossCondition + `
 returning order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
-          desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at, post_only
+          desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at, post_only, reduce_only
 `
 
 	order := Order{}
@@ -327,6 +333,7 @@ returning order_id, owner_address, signer_address, subaccount_id, recipient_id, 
 		params.ActionJSON,      // $17
 		params.Signature,       // $18
 		StatusActive,           // $19
+		params.ReduceOnly,      // $20
 	).Scan(
 		&order.OrderID,
 		&order.OwnerAddress,
@@ -348,6 +355,7 @@ returning order_id, owner_address, signer_address, subaccount_id, recipient_id, 
 		&order.Status,
 		&order.CreatedAt,
 		&order.PostOnly,
+		&order.ReduceOnly,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// The insert's WHERE excluded every row, which for this statement can only mean the
@@ -372,7 +380,7 @@ set status = $3,
     cancelled_by = $5
 where owner_address = $1 and nonce = $2 and status = 'active'
 returning order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
-          desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at, post_only
+          desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at, post_only, reduce_only
 `
 
 	order := Order{}
@@ -398,6 +406,7 @@ returning order_id, owner_address, signer_address, subaccount_id, recipient_id, 
 		&order.Status,
 		&order.CreatedAt,
 		&order.PostOnly,
+		&order.ReduceOnly,
 	); err != nil {
 		return Order{}, mapPGError(err)
 	}
@@ -408,7 +417,7 @@ returning order_id, owner_address, signer_address, subaccount_id, recipient_id, 
 func (r *Repository) FindActiveByOwnerNonce(ctx context.Context, params CancelOrderParams) (Order, error) {
 	const query = `
 select order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
-          desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at, post_only
+          desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at, post_only, reduce_only
 from active_orders
 where owner_address = $1 and nonce = $2 and status = 'active'
 `
@@ -435,6 +444,7 @@ where owner_address = $1 and nonce = $2 and status = 'active'
 		&order.Status,
 		&order.CreatedAt,
 		&order.PostOnly,
+		&order.ReduceOnly,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Order{}, ErrNotFound
@@ -454,7 +464,8 @@ select
   filled_amount,
   coalesce(cancel_reason, '') as cancel_reason,
   coalesce(cancelled_at, created_at) as updated_at,
-  post_only
+  post_only,
+  reduce_only
 from active_orders
 where order_id = $1
 `
@@ -468,6 +479,7 @@ where order_id = $1
 		&snapshot.CancelReason,
 		&snapshot.UpdatedAt,
 		&snapshot.PostOnly,
+		&snapshot.ReduceOnly,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return OrderStatusSnapshot{}, ErrNotFound
@@ -704,6 +716,15 @@ func (r *Repository) FinalizeMatchWithPrice(
 	if err := insertTradeFill(ctx, tx, takerOrder, makerOrder, fillPrice, fillAmount, settlement); err != nil {
 		return err
 	}
+	// The ledger moves in the fill's own transaction: a reduce-only order matched next sees this
+	// fill, however recent, and the remainder of a reduce-only order that just flattened its
+	// position is cancelled before anything else can match it.
+	if err := applyPerpLedger(ctx, tx, takerOrder, settlement.Perp); err != nil {
+		return err
+	}
+	if err := applyPerpLedger(ctx, tx, makerOrder, settlement.Perp); err != nil {
+		return err
+	}
 
 	return tx.Commit(ctx)
 }
@@ -732,7 +753,7 @@ func (r *Repository) listBySide(ctx context.Context, assetAddress string, subID 
 
 	query := fmt.Sprintf(`
 select order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
-       desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at, post_only
+       desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at, post_only, reduce_only
 from active_orders
 where asset_address = $1 and sub_id = $2 and side = $3 and status = 'active'
 order by %s
@@ -915,7 +936,7 @@ func lockTopBySide(
 
 	query := fmt.Sprintf(`
 select order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
-       desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at, post_only
+       desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at, post_only, reduce_only
 from active_orders
 where asset_address = $1 and sub_id = $2 and side = $3 and status = 'active'
 order by %s
@@ -1025,7 +1046,7 @@ where status = 'active' and expiry <= $1
 func applyFill(ctx context.Context, tx pgx.Tx, orderID string, fillAmount string) (Order, error) {
 	const selectQuery = `
 select order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
-       desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at, post_only
+       desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at, post_only, reduce_only
 from active_orders
 where order_id = $1 and status = 'matching'
 for update
@@ -1168,6 +1189,7 @@ func scanOrder(row pgx.Row) (Order, error) {
 		&order.Status,
 		&order.CreatedAt,
 		&order.PostOnly,
+		&order.ReduceOnly,
 	); err != nil {
 		return Order{}, mapPGError(err)
 	}

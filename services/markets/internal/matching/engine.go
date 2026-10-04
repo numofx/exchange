@@ -51,6 +51,12 @@ func (e *Engine) Run(ctx context.Context) error {
 		return err
 	}
 
+	// The ledger reduce-only orders are clamped against follows positions the venue did not move:
+	// liquidations, settlement, transfers, from SubAccounts' own events.
+	if indexer := newPositionIndexer(e.cfg, e.orders, e.margin); indexer != nil {
+		go indexer.run(ctx)
+	}
+
 	ticker := time.NewTicker(e.cfg.MatcherPollInterval)
 	defer ticker.Stop()
 
@@ -138,6 +144,7 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 
 	fillPrice := candidate.Maker.LimitPriceTicks
 	logPrice := candidate.Maker.LimitPrice
+	var settledLedger *orders.PerpFillLedger
 	fillAmount, err := minDecimalString(remainingAmount(candidate.Taker), remainingAmount(candidate.Maker))
 	if err != nil {
 		slog.Error("compute fill amount", "market", instrument.Symbol, "error", err)
@@ -161,6 +168,29 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 	}
 
 	executionFill, err := computeExecutionUnits(instrument, *candidate, fillPrice, fillAmount)
+	if err == nil {
+		// A reduce-only leg fills at most its position, as the venue's ledger has it after every fill
+		// it has finalized; the clamped amount goes back through the unit conversion so the chain
+		// sees exactly what the ledger allowed.
+		var ledger *orders.PerpFillLedger
+		if ledger, err = perpLedger(instrument, fillAmount, executionFill.FillAmount); err == nil {
+			var clamped string
+			switch clamped, err = e.clampReduceOnly(ctx, instrument, *candidate, fillAmount, ledger); {
+			case errors.Is(err, errReduceOnlyCancelled):
+				return
+			case err != nil:
+				slog.Error("reduce_only_clamp_failed", "market", instrument.Symbol, "taker_order_id", candidate.Taker.OrderID, "maker_order_id", candidate.Maker.OrderID, "error", err)
+				return
+			case clamped != fillAmount:
+				fillAmount = clamped
+				executionFill, err = computeExecutionUnits(instrument, *candidate, fillPrice, fillAmount)
+				if err == nil {
+					ledger, err = perpLedger(instrument, fillAmount, executionFill.FillAmount)
+				}
+			}
+		}
+		settledLedger = ledger
+	}
 	if err != nil {
 		e.noteMatchFailure(instrument.Symbol, *candidate, "invariant_failed", settlementRevert{})
 		slog.Error(
@@ -240,7 +270,7 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 		defer cancel()
 
 		if shouldFinalizeAfterExecutorError(err) {
-			if finalizeErr := e.orders.FinalizeMatchWithPrice(reconcileCtx, candidate.Taker.OrderID, candidate.Maker.OrderID, logPrice, fillAmount, orders.FillSettlement{TakerFee: takerFee}); finalizeErr != nil {
+			if finalizeErr := e.orders.FinalizeMatchWithPrice(reconcileCtx, candidate.Taker.OrderID, candidate.Maker.OrderID, logPrice, fillAmount, orders.FillSettlement{TakerFee: takerFee, Perp: settledLedger}); finalizeErr != nil {
 				slog.Error("reconcile already-filled match",
 					"market", instrument.Symbol,
 					"taker_order_id", candidate.Taker.OrderID,
@@ -322,7 +352,7 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 
 	reconcileCtx, cancel := detachedContext(ctx, reconciliationTimeout)
 	defer cancel()
-	if err := e.orders.FinalizeMatchWithPrice(reconcileCtx, candidate.Taker.OrderID, candidate.Maker.OrderID, logPrice, fillAmount, orders.FillSettlement{TakerFee: takerFee, TxHash: executorResp.TxHash}); err != nil {
+	if err := e.orders.FinalizeMatchWithPrice(reconcileCtx, candidate.Taker.OrderID, candidate.Maker.OrderID, logPrice, fillAmount, orders.FillSettlement{TakerFee: takerFee, TxHash: executorResp.TxHash, Perp: settledLedger}); err != nil {
 		slog.Error("finalize match", "market", instrument.Symbol, "taker_order_id", candidate.Taker.OrderID, "maker_order_id", candidate.Maker.OrderID, "error", err)
 		return
 	}

@@ -80,6 +80,7 @@ const abi = parseAbi([
   'function getMargin(uint256 accountId, bool isInitial) view returns (int256)',
   'function getAuction(uint256 accountId) view returns ((uint256 accountId, uint256 scenarioId, bool insolvent, bool ongoing, uint256 cachedMM, uint256 startTime, uint256 reservedCash))',
   'function getMarginAndMarkToMarket(uint256 accountId, uint256 scenarioId) view returns (int256 mm, int256 bm, int256 mtm)',
+  'function bid(uint256 accountId, uint256 bidderId, uint256 percentOfAccount, int256 priceLimit, uint256 expectedLastTradeId) returns (uint256 finalPercentage, uint256 cashFromBidder, uint256 cashToBidder)',
   'event DepositedSubAccount(uint256 indexed accountId, address indexed owner)',
 ]);
 
@@ -199,7 +200,7 @@ async function funded(label: string, usdc: bigint) {
 async function send(
   wallet: Awaited<ReturnType<typeof funded>>['wallet'],
   address: Address,
-  functionName: 'approve' | 'createAndDepositSubAccount' | 'donate' | 'createAccount' | 'deposit' | 'transfer' | 'setAdjustmentsPaused',
+  functionName: 'approve' | 'createAndDepositSubAccount' | 'donate' | 'createAccount' | 'deposit' | 'transfer' | 'setAdjustmentsPaused' | 'bid',
   args: readonly unknown[],
 ) {
   const estimate = await client.estimateContractGas({ address, abi, functionName, args, account: wallet.account } as never);
@@ -293,6 +294,49 @@ async function openKeeperAccount(usdcWhole: bigint) {
   console.log(JSON.stringify({ label: 'keeper', address: account.address, subaccountId: id.toString(), usdc: usdcWhole.toString() }));
 }
 
+/**
+ * A competing liquidator takes whatever a solvent auction has left: a 100% bid is capped by the
+ * auction to the proportion that restores buffer margin and terminates it. Needed because the chain
+ * refuses every trade for an account whose auction is ongoing (BM_AccountUnderLiquidation), and a
+ * solvent auction the keeper has bid down to a sliver otherwise stays open for its full window
+ * (fast + slow, 12h15m on this stack): until then the owner cannot close what is left.
+ */
+async function mopAuction(label: string) {
+  const id = readAccounts()[label];
+  if (id === undefined) throw new Error(`no account ${label}`);
+  const usdc = 2_000n * 10n ** 6n;
+  const { account, wallet } = await funded('mopper', usdc);
+  let bidder = readAccounts()['mopper'];
+  if (bidder === undefined) {
+    // A directly owned account under the perp SRM: bid() checks SubAccounts.ownerOf(bidder) == sender.
+    const receipt = await send(wallet, SUB_ACCOUNTS, 'createAccount', [account.address, venue.srm]);
+    const created = receipt.logs
+      .map((log) => {
+        try {
+          return decodeEventLog({ abi, data: log.data, topics: log.topics });
+        } catch {
+          return null;
+        }
+      })
+      .find((decoded) => decoded?.eventName === 'AccountCreated');
+    if (created?.eventName !== 'AccountCreated') throw new Error('mopper: no AccountCreated');
+    bidder = created.args.accountId.toString();
+    await send(wallet, USDC, 'approve', [venue.cash, usdc]);
+    await send(wallet, venue.cash, 'deposit', [BigInt(bidder), usdc]);
+    writeFileSync(accountsFile, JSON.stringify({ ...readAccounts(), mopper: bidder }, null, 2));
+  }
+  const before = await client.readContract({ address: venue.auction, abi, functionName: 'getAuction', args: [BigInt(id)] });
+  if (!before.ongoing) {
+    console.log(`${label} (#${id}): no auction ongoing, nothing to mop`);
+    return;
+  }
+  await send(wallet, venue.auction, 'bid', [BigInt(id), BigInt(bidder), 10n ** 18n, 0n, 0n]);
+  const after = await client.readContract({ address: venue.auction, abi, functionName: 'getAuction', args: [BigInt(id)] });
+  const position = await balance(id, venue.perp);
+  console.log(`mopper (#${bidder}) bid the rest of #${id}'s solvent auction: ongoing ${before.ongoing} -> ${after.ongoing}; ${label} now ${usd(position)} contracts`);
+  if (after.ongoing) throw new Error(`auction of #${id} still ongoing after a full bid`);
+}
+
 async function fundSecurityModule(usdcWhole: bigint) {
   const usdc = usdcWhole * 10n ** 6n;
   const { wallet } = await funded('sm-donor', usdc);
@@ -320,6 +364,14 @@ function nonce() {
  * UI price cNGN per USDC and size in USD; the engine price is 1 / price and the engine side the
  * opposite one. Whole-naira prices keep the arithmetic exact.
  */
+type OrderOptions = {
+  /** Ask the venue to clamp the order to the account's position (the app's Close). */
+  reduceOnly?: boolean;
+  /** Size in the engine's own whole cNGN contracts instead of USD x price (the app's exact close). */
+  engineAmountWhole?: bigint;
+};
+type PlacedOrder = { status: number; orderId: string; body: string };
+
 async function placeOrder(
   label: string,
   side: 'buy' | 'sell',
@@ -327,13 +379,26 @@ async function placeOrder(
   uiSizeUsd: bigint,
   market: OrderMarket = perpMarket(),
   expectation: 'accepted' | 'refused' = 'accepted',
+  options: OrderOptions = {},
 ): Promise<number> {
+  return (await placeOrderDetailed(label, side, uiPrice, uiSizeUsd, market, expectation, options)).status;
+}
+
+async function placeOrderDetailed(
+  label: string,
+  side: 'buy' | 'sell',
+  uiPrice: bigint,
+  uiSizeUsd: bigint,
+  market: OrderMarket = perpMarket(),
+  expectation: 'accepted' | 'refused' = 'accepted',
+  options: OrderOptions = {},
+): Promise<PlacedOrder> {
   const account = keyFor(label);
   const subaccountId = readAccounts()[label];
   if (subaccountId === undefined) throw new Error(`no account for ${label}; run "account ${label}" first`);
 
   const enginePrice = (10n ** 18n + uiPrice / 2n) / uiPrice;
-  const engineAmountWhole = uiSizeUsd * uiPrice;
+  const engineAmountWhole = options.engineAmountWhole ?? uiSizeUsd * uiPrice;
   const worstFee = (WORST_FEE_RATE_E18 + uiPrice / 2n) / uiPrice;
   const engineSide = side === 'buy' ? 'sell' : 'buy';
   const expiry = BigInt(Math.floor(Date.now() / 1000) + 86_400);
@@ -395,6 +460,7 @@ async function placeOrder(
     signer: owner,
     subaccount_id: subaccountId,
   };
+  const orderId = `${market.label}-${crypto.randomUUID()}`;
   const response = await fetch(`${MARKETS}/v1/orders`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -406,7 +472,8 @@ async function placeOrder(
       filled_amount: '0',
       limit_price: formatUnits(enginePrice, 18),
       nonce: orderNonce.toString(),
-      order_id: `${market.label}-${crypto.randomUUID()}`,
+      order_id: orderId,
+      ...(options.reduceOnly ? { reduce_only: true } : {}),
       owner_address: owner,
       recipient_id: subaccountId,
       side: engineSide,
@@ -418,13 +485,72 @@ async function placeOrder(
     }),
   });
   const body = await response.text();
-  console.log(`${label} ${market.label} ${side} $${uiSizeUsd} @ ${uiPrice} cNGN/USDC -> ${response.status} ${body.slice(0, 200)}`);
+  const sizing = options.engineAmountWhole ? `${options.engineAmountWhole} cNGN contracts` : `$${uiSizeUsd}`;
+  console.log(`${label} ${market.label} ${side}${options.reduceOnly ? ' reduce-only' : ''} ${sizing} @ ${uiPrice} cNGN/USDC -> ${response.status} ${body.slice(0, 200)}`);
   if (expectation === 'refused') {
     if (response.ok) throw new Error(`order was accepted but the venue's rule should have refused it`);
-    return response.status;
+    return { status: response.status, orderId, body };
   }
   if (!response.ok) throw new Error(`order refused: ${response.status}`);
-  return response.status;
+  return { status: response.status, orderId, body };
+}
+
+/** The account's signed perp position in chain units: negative is the venue's long USD. */
+async function perpPosition(label: string): Promise<bigint> {
+  const id = readAccounts()[label];
+  if (id === undefined) throw new Error(`no account for ${label}`);
+  return balance(id, getAddress(venue.perp));
+}
+
+/**
+ * The app's Close: a reduce-only market-ish order on the opposite side, sized in the engine's own
+ * whole cNGN contracts from the position passed in (so a caller can hand it a stale read, as a UI
+ * would). Crosses the maker's resting quote one percent through the index.
+ */
+async function closeFrom(label: string, position: bigint, expectation: 'accepted' | 'refused' = 'accepted'): Promise<PlacedOrder> {
+  if (position === 0n) throw new Error(`${label} is flat; nothing to close from`);
+  const index = await uiIndex();
+  const through = (index * 100n) / 10_000n;
+  // Short the cNGN perp (negative) = the venue's long USD, closed by a UI sell (engine buy).
+  const side: 'buy' | 'sell' = position < 0n ? 'sell' : 'buy';
+  const price = side === 'sell' ? index - through : index + through;
+  const contracts = abs(position) / 10n ** 18n;
+  return placeOrderDetailed(label, side, price, 0n, perpMarket(), expectation, { reduceOnly: true, engineAmountWhole: contracts });
+}
+
+async function orderStatus(orderId: string): Promise<{ status: string; filled_amount: string; cancel_reason: string; reduce_only: boolean }> {
+  const response = await fetch(`${MARKETS}/v1/orders/${orderId}`);
+  if (!response.ok) throw new Error(`order ${orderId}: ${response.status}`);
+  return (await response.json()) as { status: string; filled_amount: string; cancel_reason: string; reduce_only: boolean };
+}
+
+/** Waits until none of the orders is active or matching, then reports each one's final state. */
+async function settle(orderIds: string[], timeoutSec = 90) {
+  const deadline = Date.now() + timeoutSec * 1000;
+  for (;;) {
+    const states = await Promise.all(orderIds.map(orderStatus));
+    if (states.every((s) => s.status !== 'active' && s.status !== 'matching')) {
+      states.forEach((s, i) => console.log(`  ${orderIds[i]} -> ${s.status} filled ${s.filled_amount}${s.cancel_reason ? ` (${s.cancel_reason})` : ''}`));
+      return states;
+    }
+    if (Date.now() > deadline) throw new Error(`orders still open after ${timeoutSec}s: ${JSON.stringify(states)}`);
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+  }
+}
+
+/**
+ * The one assertion every close scenario ends on: the account is flat, never flipped. Flat means no
+ * whole contract left: orders are sized in whole cNGN contracts, so the fraction of a contract a
+ * liquidation's proportional bid can leave behind (worth well under a cent) is below anything an
+ * order could reduce, and the venue cancels a reduce-only remainder at that point (reduce_only_done).
+ */
+async function assertFlat(label: string, orderIds: string[]) {
+  const states = await settle(orderIds);
+  const position = await perpPosition(label);
+  if (abs(position) >= 10n ** 18n) throw new Error(`reduce-only FAILED: ${label} ended at ${position} contracts (${position < 0n ? 'long USD' : 'long naira'}), not flat`);
+  if (position !== 0n) console.log(`  ${label} holds ${position} (18dp): ${Number(position) / 1e18} of a contract, below the order unit`);
+  const filled = states.filter((s) => s.status === 'filled' || (s.status === 'cancelled' && s.filled_amount !== '0')).length;
+  console.log(`ok: ${label} is flat on chain; ${filled} of ${orderIds.length} closes carried a fill, the rest were cancelled by the venue`);
 }
 
 async function waitForPosition(label: string) {
@@ -804,6 +930,19 @@ switch (command) {
     await placeOrder('maker', 'sell', index + spread, 2_000n);
     break;
   }
+  case 'take': {
+    // take <label> <buy|sell> <size usd>: cross the maker's quote one percent through the index and
+    // wait for the position to land on chain.
+    const index = await uiIndex();
+    const through = (index * 100n) / 10_000n;
+    const side = (args[1] ?? 'buy') as 'buy' | 'sell';
+    await placeOrder(args[0] ?? 'taker', side, side === 'buy' ? index + through : index - through, BigInt(args[2] ?? '100'));
+    await waitForPosition(args[0] ?? 'taker');
+    break;
+  }
+  case 'wait-position':
+    await waitForPosition(args[0] ?? 'taker');
+    break;
   case 'cross': {
     const index = await uiIndex();
     await placeOrder('taker', 'buy', index + (index * 100n) / 10_000n, 1_000n);
@@ -903,6 +1042,126 @@ switch (command) {
   case 'withdraw-refused':
     await perpWithdraw(args[0] ?? 'taker', BigInt(args[1] ?? '10'), 'refused');
     break;
+  case 'position': {
+    const position = await perpPosition(args[0] ?? 'taker');
+    console.log(JSON.stringify({ label: args[0] ?? 'taker', position: position.toString(), contracts: usd(position) }));
+    break;
+  }
+  case 'close': {
+    // close <label> [accepted|refused]: one reduce-only close sized from a fresh read; ends flat.
+    const label = args[0] ?? 'taker';
+    const expectation = (args[1] ?? 'accepted') as 'accepted' | 'refused';
+    const placed = await closeFrom(label, await perpPosition(label), expectation);
+    if (expectation === 'accepted') await assertFlat(label, [placed.orderId]);
+    else console.log(`ok (refused as expected): ${label} close -> ${placed.status}`);
+    break;
+  }
+  case 'close-from': {
+    // close-from <label> <position chain units> [accepted|refused]: a Close sized from a position
+    // read earlier (what a UI drawn before a liquidation would send). Accepted: must end flat.
+    const label = args[0] ?? 'taker';
+    const stale = BigInt(args[1] ?? '0');
+    const expectation = (args[2] ?? 'accepted') as 'accepted' | 'refused';
+    const placed = await closeFrom(label, stale, expectation);
+    if (expectation === 'accepted') await assertFlat(label, [placed.orderId]);
+    else {
+      if (placed.status !== 422) throw new Error(`stale close: want 422, got ${placed.status}`);
+      console.log(`ok (refused as expected): a Close sized from the pre-liquidation position -> 422`);
+    }
+    break;
+  }
+  case 'mop-auction':
+    await mopAuction(args[0] ?? 'liq');
+    break;
+  case 'wait-reduced': {
+    // wait-reduced <label> <position before> [timeout s]: until a liquidation has taken part of the
+    // position and the auction is over with the account above maintenance margin (or all of it).
+    const label = args[0] ?? 'taker';
+    const before = BigInt(args[1] ?? '0');
+    const timeoutSec = Number(args[2] ?? '600');
+    const id = readAccounts()[label];
+    if (id === undefined) throw new Error(`no account ${label}`);
+    const deadline = Date.now() + timeoutSec * 1000;
+    for (;;) {
+      const position = await balance(id, venue.perp);
+      const auction = await client.readContract({ address: venue.auction, abi, functionName: 'getAuction', args: [BigInt(id)] });
+      const [mm] = await client.readContract({ address: venue.auction, abi, functionName: 'getMarginAndMarkToMarket', args: [BigInt(id), 0n] });
+      if (position === 0n) {
+        console.log(`${label} (#${id}) liquidated in full`);
+        break;
+      }
+      // Reduced and back above maintenance margin is what matters for the Close; a solvent auction
+      // keeps its flag up until its window ends or terminateAuction runs, and a trader closing in
+      // that window is exactly the case under test.
+      if (abs(position) < abs(before) && mm >= 0n) {
+        console.log(`${label} (#${id}) partially liquidated: ${usd(before)} -> ${usd(position)} contracts, above maintenance margin by $${usd(mm).toFixed(2)}, auction ${auction.ongoing ? 'still in its solvent window' : 'over'}`);
+        break;
+      }
+      if (Date.now() > deadline) throw new Error(`${label} (#${id}) not liquidated after ${timeoutSec}s: position ${position}, auction ongoing ${auction.ongoing}, mm ${usd(mm).toFixed(2)}`);
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
+    }
+    break;
+  }
+  case 'close-refused-flat': {
+    // A reduce-only order from a flat account is refused at submission (422), never rests.
+    const label = args[0] ?? 'taker';
+    const index = await uiIndex();
+    const placed = await placeOrderDetailed(label, 'sell', index - index / 100n, 0n, perpMarket(), 'refused', { reduceOnly: true, engineAmountWhole: 1000n });
+    if (placed.status !== 422) throw new Error(`reduce-only from flat: want 422, got ${placed.status}`);
+    console.log(`ok (refused as expected): reduce-only from a flat account -> 422`);
+    break;
+  }
+  case 'close-wrong-side': {
+    // A reduce-only order on the position's own side is refused at submission (422).
+    const label = args[0] ?? 'taker';
+    const position = await perpPosition(label);
+    const index = await uiIndex();
+    const side: 'buy' | 'sell' = position < 0n ? 'buy' : 'sell';
+    const price = side === 'buy' ? index + index / 100n : index - index / 100n;
+    const placed = await placeOrderDetailed(label, side, price, 0n, perpMarket(), 'refused', { reduceOnly: true, engineAmountWhole: 100n });
+    if (placed.status !== 422) throw new Error(`reduce-only on the position's side: want 422, got ${placed.status}`);
+    console.log(`ok (refused as expected): reduce-only that would increase the position -> 422`);
+    break;
+  }
+  case 'close-twice': {
+    // Two rapid Closes, both sized from the same read (the app before its fix): the second can only
+    // be cancelled by the venue, never fill against a flat account.
+    const label = args[0] ?? 'taker';
+    const stale = await perpPosition(label);
+    const first = await closeFrom(label, stale);
+    const second = await closeFrom(label, stale);
+    await assertFlat(label, [first.orderId, second.orderId]);
+    break;
+  }
+  case 'close-concurrent': {
+    // Close from two tabs: two reduce-only closes submitted at the same instant.
+    const label = args[0] ?? 'taker';
+    const stale = await perpPosition(label);
+    const [first, second] = await Promise.all([closeFrom(label, stale), closeFrom(label, stale)]);
+    await assertFlat(label, [first.orderId, second.orderId]);
+    break;
+  }
+  case 'close-after-unseen-fill': {
+    // close-after-unseen-fill <label> <partial usd>: a reducing fill lands that the UI has not
+    // shown, then Close is sized from the stale read; the venue clamps it to what is left.
+    const label = args[0] ?? 'taker';
+    const partialUsd = BigInt(args[1] ?? '300');
+    const stale = await perpPosition(label);
+    const index = await uiIndex();
+    const through = (index * 100n) / 10_000n;
+    const side: 'buy' | 'sell' = stale < 0n ? 'sell' : 'buy';
+    const partial = await placeOrderDetailed(label, side, side === 'sell' ? index - through : index + through, partialUsd);
+    await settle([partial.orderId]);
+    const seen = await perpPosition(label);
+    if (abs(seen) >= abs(stale)) throw new Error(`the partial reduction did not land: ${stale} -> ${seen}`);
+    console.log(`  position moved ${usd(stale)} -> ${usd(seen)} contracts before the UI could show it`);
+    const close = await closeFrom(label, stale);
+    await assertFlat(label, [close.orderId]);
+    const final = await orderStatus(close.orderId);
+    if (final.status !== 'cancelled' || final.cancel_reason !== 'reduce_only_done') throw new Error(`the stale close should have been clamped and its remainder cancelled (reduce_only_done): ${JSON.stringify(final)}`);
+    console.log(`ok: the stale-sized close filled ${final.filled_amount} contracts and its remainder was cancelled (${final.cancel_reason})`);
+    break;
+  }
   case 'hedge': {
     // hedge <label> <cngn whole>: a treasury posts cNGN and goes long USD 1:1 with it, crossing the
     // maker's offer so the position exists (a treasury's natural size; the venue sets no bound).

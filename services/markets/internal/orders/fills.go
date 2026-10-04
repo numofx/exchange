@@ -118,4 +118,6 @@ type FillSettlement struct {
 	TakerFee string
 	// TxHash is the transaction that settled the fill, when the executor reported one.
 	TxHash string
+	// Perp moves the venue's position ledger (perp_positions) with the fill; nil for spot.
+	Perp *PerpFillLedger
 }
