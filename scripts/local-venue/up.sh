@@ -224,7 +224,9 @@ done
 REPORTER
   chmod +x "$DIR/bin/index-status-reporter.sh"
   start index-status-reporter "$DIR/bin/index-status-reporter.sh"
-  wait_for "index-status report" sh -c "curl -sf http://127.0.0.1:$API_PORT/v1/markets | grep -q '\"spot_sample_at\"'"
+  # The venue answers 204 to a report it recorded; the sample shows on /v1/markets only once the perp
+  # block exists (after the index feed is published, below), which unified-rules.sh asserts.
+  wait_for "index-status report accepted" sh -c "[ \"\$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'X-Numo-Index-Token: $INDEX_STATUS_TOKEN' -H 'content-type: application/json' -d '{\"at_ms\": '\$(( \$(date +%s) * 1000 ))', \"usdc_per_cngn\": \"0.000727802037845705\", \"sample_ok\": true}' http://127.0.0.1:$API_PORT/v1/internal/index-status)\" = 204 ]"
 fi
 
 VENUE="pnpm --dir $HERE exec tsx $HERE/venue.ts $DIR"
