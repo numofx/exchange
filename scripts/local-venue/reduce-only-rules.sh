@@ -94,6 +94,10 @@ PRE=$(position_of liq)
 echo "liq position before: $PRE"
 move_index $(python3 -c "print(round($INDEX0 * 0.78))")
 $VENUE wait-reduced liq "$PRE" 900
+# The chain refuses every trade for an account whose auction is still open (BM_AccountUnderLiquidation);
+# a solvent auction bid down to a sliver stays open for its 12h15m window, so a competing liquidator
+# takes the sliver and the auction terminates, as it would on Base.
+$VENUE mop-auction liq
 $VENUE quote
 $VENUE close-from liq "$PRE"
 grep -h "perp_position_adjusted_on_chain\|reduce_only_ledger_resynced\|reduce_only_clamped" "$DIR/logs/markets-matcher.log" | tail -4 | cut -c1-220
