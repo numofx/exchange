@@ -1,0 +1,9 @@
+[
+  {
+    "description": "Matching.setAllowedModule(old wrapped-quote spot TradeModule 0x12423B36\u2026, false) [STEP 8 of the unified-account cutover: retires the module spot traded through before 2026-10-04; the WithdrawalModule stays, so the old accounts remain withdrawable]",
+    "to": "0x9E90A9cD13d859Bd6a08168082FB1F6F7405F191",
+    "value": "0",
+    "data": "0xb1b6282500000000000000000000000012423b366f6f07130961900be00d05ea63acd0710000000000000000000000000000000000000000000000000000000000000000",
+    "digest": "0x87e6b9f680cf9fc94dc1d8c1bc0a264def8a2823638706c8cef43bc7b482917f"
+  }
+]
