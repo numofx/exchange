@@ -276,7 +276,7 @@ $VENUE keeper-account 20000
 (cd "$ROOT/services/perp-keeper" && RPC_URL=$RPC CHAIN_ID=31337 KEEPER_KEY=$KEEPER_KEY \
   KEEPER_ACCOUNT="$(json "$DIR/accounts.json" keeper)" DRY_RUN=false SUB_ACCOUNTS=$SUB_ACCOUNTS SRM=$SRM \
   AUCTION="$(json "$V" auction)" CASH=$CASH PERP=$PERP SECURITY_MODULE_ACCOUNT="$(json "$V" securityModuleAccount)" \
-  START_BLOCK="$(json "$V" blockNumber)" POLL_INTERVAL_MS=5000 HEALTH_PORT=$KEEPER_HEALTH_PORT MAX_BID_USD=2500 \
+  START_BLOCK="$(json "$V" blockNumber)" POLL_INTERVAL_MS=5000 HEALTH_PORT=$KEEPER_HEALTH_PORT MAX_BID_USD=2500 AUCTION_OPEN_WARN_MS="${AUCTION_OPEN_WARN_MS:-600000}" \
   CNGN_ESCROW="$(json "$V" cngnEscrow)" MAX_CNGN_INVENTORY=25000000 \
   start perp-keeper node dist/main.js)
 wait_for "keeper health" sh -c "curl -sf http://127.0.0.1:$KEEPER_HEALTH_PORT/health | grep -q '\"lastPassOk\":true'"
@@ -303,7 +303,7 @@ http.server.HTTPServer(("127.0.0.1", int(sys.argv[2])), H).serve_forever()
 PY
 start pager-capture python3 "$DIR/capture.py" "$DIR/pager-capture.log" 9780
 wait_for "pager capture" curl -sf http://127.0.0.1:9780/ready
-PAGER_ENV="RPC_URL=$RPC KEEPER_HEALTH_URL=http://127.0.0.1:$KEEPER_HEALTH_PORT/health PAGER_PROVIDER=pagerduty
+PAGER_ENV="RPC_URL=$RPC KEEPER_HEALTH_URL=http://127.0.0.1:$KEEPER_HEALTH_PORT/health MATCHER_HEALTH_URL=http://127.0.0.1:$API_PORT/v1/health PAGER_PROVIDER=pagerduty
 PAGERDUTY_URL=http://127.0.0.1:9780/page PAGERDUTY_ROUTING_KEY=local PAGER_HEARTBEAT_URL=http://127.0.0.1:9780/hb
 PAGE_PREFIX=[LOCAL] PAGER_STATE_FILE=$DIR/pager-state.json PERP_INDEX_STATUS_FILE=$DIR/perp-index-status.json ALERT_WEBHOOK_URL="
 rm -f "$DIR/pager-state.json"
@@ -312,7 +312,7 @@ grep -q "GET /hb " "$DIR/pager-capture.log" || { echo "the pager did not ping it
 
 step "enable: every launch gate, then the enable actions as the vault"
 ACTIONS="$DIR/enable-actions.json"
-(cd "$ROOT/contracts/risk-core" && RPC_URL=$RPC KEEPER_HEALTH_URL=http://127.0.0.1:$KEEPER_HEALTH_PORT/health \
+(cd "$ROOT/contracts/risk-core" && RPC_URL=$RPC KEEPER_HEALTH_URL=http://127.0.0.1:$KEEPER_HEALTH_PORT/health MATCHER_HEALTH_URL=http://127.0.0.1:$API_PORT/v1/health \
   PAGER_STATE_FILE="$DIR/pager-state.json" \
   MARKETS_URL=http://127.0.0.1:$API_PORT python3 scripts/ops/propose_perp_enable_batch.py --local \
   --stack "$V" --module "$MODULE_JSON" --write "$ACTIONS")

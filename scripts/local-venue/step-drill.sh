@@ -51,7 +51,7 @@ http.server.HTTPServer(("127.0.0.1", 9778), H).serve_forever()
 PY
 CAPTURE=$!
 trap 'kill $CAPTURE 2>/dev/null || true' EXIT
-PAGER() { (cd "$ROOT/contracts/risk-core" && RPC_URL=$RPC KEEPER_HEALTH_URL="${1:-http://127.0.0.1:9464/health}" \
+PAGER() { (cd "$ROOT/contracts/risk-core" && RPC_URL=$RPC KEEPER_HEALTH_URL="${1:-http://127.0.0.1:9464/health}" MATCHER_HEALTH_URL=http://127.0.0.1:8090/v1/health \
   PAGER_PROVIDER=pagerduty PAGERDUTY_URL=http://127.0.0.1:9778/ PAGERDUTY_ROUTING_KEY=local PAGE_PREFIX="[REHEARSAL] " \
   PAGER_STATE_FILE="$DIR/pager-state.json" PERP_INDEX_STATUS_FILE="$DIR/perp-index-status.json" PAGER_HEARTBEAT_URL=http://127.0.0.1:9778/hb \
   ALERT_WEBHOOK_URL= python3 scripts/ops/check_perp_pager.py --stack "$DIR/venue.json"); }

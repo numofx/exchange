@@ -1070,6 +1070,27 @@ switch (command) {
     }
     break;
   }
+  case 'wait-auction-over': {
+    // wait-auction-over <label> [timeout s]: until the account's auction is no longer ongoing (the
+    // keeper's finishing bid, or terminate), with the position and margin it left.
+    const label = args[0] ?? 'liq';
+    const timeoutSec = Number(args[1] ?? '600');
+    const id = readAccounts()[label];
+    if (id === undefined) throw new Error(`no account ${label}`);
+    const deadline = Date.now() + timeoutSec * 1000;
+    for (;;) {
+      const auction = await client.readContract({ address: venue.auction, abi, functionName: 'getAuction', args: [BigInt(id)] });
+      if (!auction.ongoing) {
+        const position = await balance(id, venue.perp);
+        const [mm] = await client.readContract({ address: venue.auction, abi, functionName: 'getMarginAndMarkToMarket', args: [BigInt(id), 0n] });
+        console.log(`${label} (#${id}) auction over: ${usd(position)} contracts left, above maintenance margin by $${usd(mm).toFixed(2)}`);
+        break;
+      }
+      if (Date.now() > deadline) throw new Error(`${label} (#${id}) auction still ongoing after ${timeoutSec}s`);
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
+    }
+    break;
+  }
   case 'mop-auction':
     await mopAuction(args[0] ?? 'liq');
     break;
