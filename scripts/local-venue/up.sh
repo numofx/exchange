@@ -40,6 +40,7 @@ ANVIL_PORT=8600 PG_PORT=5544 API_PORT=8090 EXEC_PORT=8091 KEEPER_HEALTH_PORT=946
 RPC="http://127.0.0.1:$ANVIL_PORT"
 INDEX_NGN_PER_USD="${INDEX_NGN_PER_USD:-1374}"
 DB="postgres://postgres@127.0.0.1:$PG_PORT/matching_backend?sslmode=disable"
+INDEX_STATUS_TOKEN=local-venue-index-status-token
 
 VAULT=0x1dcA42ab54Bd3862853A821F84B29BF65245F435
 MATCHING=0x9E90A9cD13d859Bd6a08168082FB1F6F7405F191
@@ -181,6 +182,12 @@ QUOTE_ASSET_ADDRESS=$SPOT_QUOTE
 CNGN_SPOT_ASSET_ADDRESS=$SPOT_ASSET
 $SPOT_MANAGER_ENV
 $PERP_MARKETS_ENV
+# The index-lag gate as production runs it (enforced, 100 bps, 300s), fed by the local publisher's
+# spot reports: a pre-check that wrongly runs on spot refuses spot orders here as it would on Base.
+INDEX_STATUS_TOKEN=$INDEX_STATUS_TOKEN
+INDEX_LAG_GATE=true
+INDEX_LAG_MAX_BPS=100
+INDEX_STATUS_MAX_AGE=300s
 ENFORCE_MATCHING_CUSTODY=true
 WITHDRAWAL_MODULE_ADDRESS=0x0a10AE2f5D2482cE1e43bC309D430B8861C2b5aB
 WITHDRAWAL_ASSET_ADDRESSES=$WITHDRAWAL_ASSETS
@@ -234,6 +241,8 @@ INDEX_STATE_FILE=$DIR/perp-index-state.json
 INDEX_STEP_AUDIT_FILE=$DIR/perp-index-steps.jsonl
 INDEX_STATUS_FILE=$DIR/perp-index-status.json
 KEEPER_HEALTH_URL=http://127.0.0.1:$KEEPER_HEALTH_PORT/health
+INDEX_STATUS_PUSH_URL=http://127.0.0.1:$API_PORT/v1/internal/index-status
+INDEX_STATUS_TOKEN=$INDEX_STATUS_TOKEN
 ENV
 (cd "$ROOT/services/perp-feeds" && set -a && . "$DIR/perp-feeds.env" && set +a && \
   start perp-feeds node dist/main.js --local-fixed-price="$INDEX_NGN_PER_USD")
