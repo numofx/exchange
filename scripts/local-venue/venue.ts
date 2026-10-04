@@ -494,11 +494,17 @@ async function settle(orderIds: string[], timeoutSec = 90) {
   }
 }
 
-/** The one assertion every close scenario ends on: the account is exactly flat, never flipped. */
+/**
+ * The one assertion every close scenario ends on: the account is flat, never flipped. Flat means no
+ * whole contract left: orders are sized in whole cNGN contracts, so the fraction of a contract a
+ * liquidation's proportional bid can leave behind (worth well under a cent) is below anything an
+ * order could reduce, and the venue cancels a reduce-only remainder at that point (reduce_only_done).
+ */
 async function assertFlat(label: string, orderIds: string[]) {
   const states = await settle(orderIds);
   const position = await perpPosition(label);
-  if (position !== 0n) throw new Error(`reduce-only FAILED: ${label} ended at ${position} contracts (${position < 0n ? 'long USD' : 'long naira'}), not flat`);
+  if (abs(position) >= 10n ** 18n) throw new Error(`reduce-only FAILED: ${label} ended at ${position} contracts (${position < 0n ? 'long USD' : 'long naira'}), not flat`);
+  if (position !== 0n) console.log(`  ${label} holds ${position} (18dp): ${Number(position) / 1e18} of a contract, below the order unit`);
   const filled = states.filter((s) => s.status === 'filled' || (s.status === 'cancelled' && s.filled_amount !== '0')).length;
   console.log(`ok: ${label} is flat on chain; ${filled} of ${orderIds.length} closes carried a fill, the rest were cancelled by the venue`);
 }
@@ -1037,8 +1043,11 @@ switch (command) {
         console.log(`${label} (#${id}) liquidated in full`);
         break;
       }
-      if (abs(position) < abs(before) && !auction.ongoing && mm >= 0n) {
-        console.log(`${label} (#${id}) partially liquidated: ${usd(before)} -> ${usd(position)} contracts, above maintenance margin by $${usd(mm).toFixed(2)}, auction over`);
+      // Reduced and back above maintenance margin is what matters for the Close; a solvent auction
+      // keeps its flag up until its window ends or terminateAuction runs, and a trader closing in
+      // that window is exactly the case under test.
+      if (abs(position) < abs(before) && mm >= 0n) {
+        console.log(`${label} (#${id}) partially liquidated: ${usd(before)} -> ${usd(position)} contracts, above maintenance margin by $${usd(mm).toFixed(2)}, auction ${auction.ongoing ? 'still in its solvent window' : 'over'}`);
         break;
       }
       if (Date.now() > deadline) throw new Error(`${label} (#${id}) not liquidated after ${timeoutSec}s: position ${position}, auction ongoing ${auction.ongoing}, mm ${usd(mm).toFixed(2)}`);
