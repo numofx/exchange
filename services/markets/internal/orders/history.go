@@ -38,7 +38,7 @@ func (r *Repository) ListOrdersByOwner(ctx context.Context, owner string, before
 select o.order_id, o.owner_address, o.signer_address, o.subaccount_id, o.recipient_id, o.nonce, o.side,
        o.asset_address, o.sub_id, o.desired_amount, o.filled_amount, o.limit_price,
        coalesce(o.limit_price_ticks, ''), o.worst_fee, o.expiry, o.action_json, o.signature, o.status,
-       o.created_at, o.post_only, coalesce(o.cancel_reason, ''), o.cancelled_at,
+       o.created_at, o.post_only, o.reduce_only, coalesce(o.cancel_reason, ''), o.cancelled_at,
        coalesce((
          select sum(tf.price::numeric * tf.size::numeric)::text
          from trade_fills tf
@@ -89,6 +89,7 @@ limit $4
 			&entry.Status,
 			&entry.CreatedAt,
 			&entry.PostOnly,
+			&entry.ReduceOnly,
 			&entry.CancelReason,
 			&entry.CancelledAt,
 			&entry.FilledQuote,
