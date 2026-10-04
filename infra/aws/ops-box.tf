@@ -64,3 +64,28 @@ import {
 
 # The MM-key read grant for the unified migration (ops_box_mm_key_read) was applied 2026-10-04 for
 # the migration of #15 to #26 and removed the same day, as docs/unified-account-cutover.md requires.
+
+# Found 2026-10-04 while removing the migration grant: the role also carries the AWS managed
+# AmazonSSMManagedInstanceCore, which allows ssm:GetParameter and ssm:GetParameters on "*", so the
+# four narrow grants above never gated anything — the box could read every parameter in the account
+# (the market-maker's key under /numo/exchange/ included). An explicit Deny outranks that Allow:
+# parameter reads outside the four paths are refused, and the managed policy keeps doing what the
+# SSM agent needs. The paths are exactly ops_box_ssm_paths, so a new grant above must also be
+# excluded here, or the Deny wins. That is now the procedure for any one-off read the box needs (a
+# migration key, a token): add the path to ops_box_ssm_paths (which also excludes it from the Deny),
+# apply, do the work, remove it, apply again, and confirm with `aws ssm get-parameter` from the box
+# that the read is refused afterwards. A grant added anywhere else stays denied.
+data "aws_iam_policy_document" "ops_box_ssm_deny_outside_paths" {
+  statement {
+    sid           = "DenyParameterReadsOutsideTheGrantedPaths"
+    effect        = "Deny"
+    actions       = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"]
+    not_resources = [for path in values(local.ops_box_ssm_paths) : "${local.ssm_arn_prefix}/numo/${path}/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "ops_box_ssm_deny_outside_paths" {
+  name   = "numo-ops-box-ssm-deny-outside-paths"
+  role   = data.aws_iam_role.ops_box.id
+  policy = data.aws_iam_policy_document.ops_box_ssm_deny_outside_paths.json
+}
