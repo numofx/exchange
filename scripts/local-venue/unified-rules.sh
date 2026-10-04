@@ -57,7 +57,9 @@ sleep 6
 $VENUE spot-order usdc-maker sell $INDEX 10 accepted
 
 step "6. a withdrawal of the perp cash from a spot account pays USDC"
-$VENUE spot-withdraw usdc-maker 10
+# cngn-taker: cash from its spot buy and no resting orders (the maker's resting perp order from
+# step 4 would have the venue hold the withdrawal against it).
+$VENUE spot-withdraw cngn-taker 10
 
 echo
 echo "ok: the unified account holds on the local venue: spot through the perp module, one margin for both, the cash floor, the pause"
