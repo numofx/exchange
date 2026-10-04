@@ -706,7 +706,12 @@ async function perpWithdraw(label: string, whole: bigint, expectation: 'accepted
   const after = await client.readContract({ address: USDC, abi, functionName: 'balanceOf', args: [owner] });
   const cashAfter = await balance(subaccountId, getAddress(venue.cash));
   if (after - before !== amount) throw new Error(`owner received ${after - before}, expected ${amount}`);
-  if (cashBefore - cashAfter !== whole * 10n ** 18n) throw new Error(`account cash fell by ${cashBefore - cashAfter}, expected ${whole * 10n ** 18n}`);
+  // Within a millionth of a dollar: interest on the perp's cash accrues between the two reads now
+  // that cNGN-only accounts borrow their fee, and the withdrawal is exact on top of it.
+  const fell = cashBefore - cashAfter;
+  const expected = whole * 10n ** 18n;
+  const slack = 10n ** 12n;
+  if (fell > expected || fell < expected - slack) throw new Error(`account cash fell by ${fell}, expected ${expected}`);
   console.log(`ok: perp withdrawal paid ${whole} USDC to the owner; account #${subaccountId} cash ${cashBefore / 10n ** 18n} -> ${cashAfter / 10n ** 18n}`);
 }
 
@@ -814,7 +819,7 @@ switch (command) {
     break;
   case 'hedge': {
     // hedge <label> <cngn whole>: a treasury posts cNGN and goes long USD 1:1 with it, crossing the
-    // maker's offer so the position exists (the venue's hedge rule: as much long USD as cNGN, no more).
+    // maker's offer so the position exists (a treasury's natural size; the venue sets no bound).
     const cngnWhole = BigInt(args[1] ?? '2000000');
     await openCngnAccount(args[0] ?? 'treasury', cngnWhole);
     const index = await uiIndex();
