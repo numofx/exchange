@@ -40,6 +40,7 @@ ANVIL_PORT=8600 PG_PORT=5544 API_PORT=8090 EXEC_PORT=8091 KEEPER_HEALTH_PORT=946
 RPC="http://127.0.0.1:$ANVIL_PORT"
 INDEX_NGN_PER_USD="${INDEX_NGN_PER_USD:-1374}"
 DB="postgres://postgres@127.0.0.1:$PG_PORT/matching_backend?sslmode=disable"
+INDEX_STATUS_TOKEN=local-venue-index-status-token
 
 VAULT=0x1dcA42ab54Bd3862853A821F84B29BF65245F435
 MATCHING=0x9E90A9cD13d859Bd6a08168082FB1F6F7405F191
@@ -181,6 +182,12 @@ QUOTE_ASSET_ADDRESS=$SPOT_QUOTE
 CNGN_SPOT_ASSET_ADDRESS=$SPOT_ASSET
 $SPOT_MANAGER_ENV
 $PERP_MARKETS_ENV
+# The index-lag gate as production runs it (enforced, 100 bps, 300s), fed by the local publisher's
+# spot reports: a pre-check that wrongly runs on spot refuses spot orders here as it would on Base.
+INDEX_STATUS_TOKEN=$INDEX_STATUS_TOKEN
+INDEX_LAG_GATE=true
+INDEX_LAG_MAX_BPS=100
+INDEX_STATUS_MAX_AGE=300s
 ENFORCE_MATCHING_CUSTODY=true
 WITHDRAWAL_MODULE_ADDRESS=0x0a10AE2f5D2482cE1e43bC309D430B8861C2b5aB
 WITHDRAWAL_ASSET_ADDRESSES=$WITHDRAWAL_ASSETS
@@ -200,6 +207,27 @@ step "services: execution :$EXEC_PORT, markets api :$API_PORT, matcher"
 (set -a; . "$DIR/markets.env"; set +a; start markets-api "$DIR/bin/markets-api"; start markets-matcher "$DIR/bin/markets-matcher")
 wait_for execution curl -sf http://127.0.0.1:$EXEC_PORT/healthz
 wait_for "markets api" curl -sf http://127.0.0.1:$API_PORT/v1/markets
+
+# What perp-feeds does on Base after every sample: report spot to the venue's index-lag gate. The
+# local publisher runs at a fixed price and takes no samples, so this loop reports that price every
+# 30s in the publisher's format; without it the enforced gate is blind and refuses perp orders.
+if [ "$SPOT_ONLY" = 0 ]; then
+  cat >"$DIR/bin/index-status-reporter.sh" <<REPORTER
+#!/usr/bin/env bash
+USDC_PER_CNGN=\$(python3 -c "print(f'{1 / $INDEX_NGN_PER_USD:.18f}')")
+while :; do
+  curl -s -o /dev/null -X POST -H "X-Numo-Index-Token: $INDEX_STATUS_TOKEN" -H "content-type: application/json" \\
+    -d "{\\"at_ms\\": \$(( \$(date +%s) * 1000 )), \\"usdc_per_cngn\\": \\"\$USDC_PER_CNGN\\", \\"sample_ok\\": true}" \\
+    http://127.0.0.1:$API_PORT/v1/internal/index-status
+  sleep 30
+done
+REPORTER
+  chmod +x "$DIR/bin/index-status-reporter.sh"
+  start index-status-reporter "$DIR/bin/index-status-reporter.sh"
+  # The venue answers 204 to a report it recorded; the sample shows on /v1/markets only once the perp
+  # block exists (after the index feed is published, below), which unified-rules.sh asserts.
+  wait_for "index-status report accepted" sh -c "[ \"\$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'X-Numo-Index-Token: $INDEX_STATUS_TOKEN' -H 'content-type: application/json' -d '{\"at_ms\": '\$(( \$(date +%s) * 1000 ))', \"usdc_per_cngn\": \"0.000727802037845705\", \"sample_ok\": true}' http://127.0.0.1:$API_PORT/v1/internal/index-status)\" = 204 ]"
+fi
 
 VENUE="pnpm --dir $HERE exec tsx $HERE/venue.ts $DIR"
 if [ "$SPOT_ONLY" = 1 ]; then
@@ -234,6 +262,8 @@ INDEX_STATE_FILE=$DIR/perp-index-state.json
 INDEX_STEP_AUDIT_FILE=$DIR/perp-index-steps.jsonl
 INDEX_STATUS_FILE=$DIR/perp-index-status.json
 KEEPER_HEALTH_URL=http://127.0.0.1:$KEEPER_HEALTH_PORT/health
+INDEX_STATUS_PUSH_URL=http://127.0.0.1:$API_PORT/v1/internal/index-status
+INDEX_STATUS_TOKEN=$INDEX_STATUS_TOKEN
 ENV
 (cd "$ROOT/services/perp-feeds" && set -a && . "$DIR/perp-feeds.env" && set +a && \
   start perp-feeds node dist/main.js --local-fixed-price="$INDEX_NGN_PER_USD")
