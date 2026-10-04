@@ -142,6 +142,22 @@ variable "withdrawal_module_address" {
   default = "0x0a10AE2f5D2482cE1e43bC309D430B8861C2b5aB"
 }
 
+# The manager the spot market's accounts live under once spot runs on the perp stack (the unified
+# account): the perp SRM. Empty while spot is on its own stack. Set together with
+# trade_module_address = the perp TradeModule, quote_asset_address = the perp cash and
+# cngn_spot_asset_address = the perp cNGN escrow: the unified cutover moves the four as one.
+variable "spot_margin_manager_address" {
+  type    = string
+  default = ""
+}
+
+# Wrapped assets of a retired spot stack that withdrawals must keep paying out of after a cutover
+# (the old wrapped USDC and spot cNGN escrow), so nobody is stranded on the old accounts.
+variable "legacy_withdrawal_asset_addresses" {
+  type    = list(string)
+  default = []
+}
+
 variable "cngn_spot_asset_address" {
   # Losing this silently disables the only market. The boot guard turns that into a
   # crash; keeping it in Terraform keeps it from being lost in the first place.

@@ -75,12 +75,17 @@ const abi = parseAbi([
   'function totalPosition(address manager) view returns (uint256)',
   'function totalPositionCap(address manager) view returns (uint256)',
   'function getCashToStableExchangeRate() view returns (uint256)',
+  'function setAdjustmentsPaused(bool paused)',
+  'function adjustmentsPaused() view returns (bool)',
+  'function getMargin(uint256 accountId, bool isInitial) view returns (int256)',
   'function getAuction(uint256 accountId) view returns ((uint256 accountId, uint256 scenarioId, bool insolvent, bool ongoing, uint256 cachedMM, uint256 startTime, uint256 reservedCash))',
   'function getMarginAndMarkToMarket(uint256 accountId, uint256 scenarioId) view returns (int256 mm, int256 bm, int256 mtm)',
   'event DepositedSubAccount(uint256 indexed accountId, address indexed owner)',
 ]);
 
 type Venue = {
+  /** up.sh --unified: the spot market trades the cNGN escrow through the perp module against the perp cash. */
+  unified?: boolean;
   perp: Address;
   cash: Address;
   srm: Address;
@@ -110,7 +115,7 @@ type OrderMarket = { asset: Address; module: Address; label: string };
 const perpMarket = (): OrderMarket => ({ asset: getAddress(venue.perp), module: getAddress(venue.tradePerp), label: 'perp' });
 // Base mainnet spot, which the fork inherits: the cNGN escrow is the spot asset, the wrapped-quote
 // TradeModule settles it against wrapped USDC, and accounts live under the spot SRM.
-const SPOT = {
+const MAINNET_SPOT = {
   asset: getAddress('0x9d806fd040a719d27a8e5e77dc5ae0ed1e089493'),
   module: getAddress('0x12423B366F6F07130961900bE00d05Ea63Acd071'),
   wrappedUsdc: getAddress('0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84'),
@@ -118,6 +123,31 @@ const SPOT = {
   srm: getAddress('0x3195Bd7e02d93982bCF8b34DF5B941fFCaE1E49b'),
   withdrawalModule: getAddress('0x0a10AE2f5D2482cE1e43bC309D430B8861C2b5aB'),
 };
+// Under --unified the "spot" stack IS the perp stack: the cNGN escrow as the asset, the perp
+// TradeModule, the perp cash as the quote (what spot's `wrappedUsdc` means there), the perp SRM.
+const SPOT: typeof MAINNET_SPOT = new Proxy(MAINNET_SPOT, {
+  get(target, key: keyof typeof MAINNET_SPOT) {
+    let unified = false;
+    try {
+      unified = venue.unified === true;
+    } catch {
+      unified = false;
+    }
+    if (!unified) return target[key];
+    switch (key) {
+      case 'asset':
+        return getAddress(venue.cngnEscrow!);
+      case 'module':
+        return getAddress(venue.tradePerp);
+      case 'wrappedUsdc':
+        return getAddress(venue.cash);
+      case 'srm':
+        return getAddress(venue.srm);
+      default:
+        return target[key];
+    }
+  },
+});
 const spotMarket = (): OrderMarket => ({ asset: SPOT.asset, module: SPOT.module, label: 'spot' });
 const accountsFile = join(stateDir, 'accounts.json');
 
@@ -169,7 +199,7 @@ async function funded(label: string, usdc: bigint) {
 async function send(
   wallet: Awaited<ReturnType<typeof funded>>['wallet'],
   address: Address,
-  functionName: 'approve' | 'createAndDepositSubAccount' | 'donate' | 'createAccount' | 'deposit' | 'transfer',
+  functionName: 'approve' | 'createAndDepositSubAccount' | 'donate' | 'createAccount' | 'deposit' | 'transfer' | 'setAdjustmentsPaused',
   args: readonly unknown[],
 ) {
   const estimate = await client.estimateContractGas({ address, abi, functionName, args, account: wallet.account } as never);
@@ -540,12 +570,8 @@ async function openSpotAccount(label: string, kind: 'usdc' | 'cngn', whole: bigi
     token = SPOT.cngnToken;
     const decimals = await client.readContract({ address: token, abi, functionName: 'decimals' });
     amount = whole * 10n ** BigInt(decimals);
-    // cNGN comes from the escrow's own holdings, impersonated: fork-only, and only to fund a trader.
-    await client.request({ method: 'anvil_impersonateAccount' as never, params: [SPOT.asset] as never });
-    await client.request({ method: 'anvil_setBalance' as never, params: [SPOT.asset, toHex(10n ** 18n)] as never });
-    const escrow = createWalletClient({ account: SPOT.asset, chain, transport: http(RPC) });
-    await send(escrow as never, token, 'transfer', [account.address, amount]);
-    await client.request({ method: 'anvil_stopImpersonatingAccount' as never, params: [SPOT.asset] as never });
+    // cNGN at the token's balance slot: fork-only, and only to fund a trader.
+    await fundedCngn(label, amount);
   }
   await send(wallet, token, 'approve', [SUBACCOUNT_CREATOR, amount]);
   const receipt = await send(wallet, SUBACCOUNT_CREATOR, 'createAndDepositSubAccount', [asset, amount, SPOT.srm]);
@@ -581,11 +607,7 @@ async function spotDeposit(label: string, kind: 'usdc' | 'cngn', whole: bigint) 
     asset = SPOT.asset;
     token = SPOT.cngnToken;
     amount = whole * 10n ** BigInt(await client.readContract({ address: token, abi, functionName: 'decimals' }));
-    await client.request({ method: 'anvil_impersonateAccount' as never, params: [SPOT.asset] as never });
-    await client.request({ method: 'anvil_setBalance' as never, params: [SPOT.asset, toHex(10n ** 18n)] as never });
-    const escrow = createWalletClient({ account: SPOT.asset, chain, transport: http(RPC) });
-    await send(escrow as never, token, 'transfer', [account.address, amount]);
-    await client.request({ method: 'anvil_stopImpersonatingAccount' as never, params: [SPOT.asset] as never });
+    await fundedCngn(label, amount);
   }
   await send(wallet, token, 'approve', [asset, amount]);
   await send(wallet, asset, 'deposit', [BigInt(id), amount]);
@@ -606,7 +628,8 @@ async function spotBalances(label: string) {
 async function spotCross(uiPrice: bigint, uiSize: bigint) {
   const makerBefore = await spotBalances('usdc-maker');
   const takerBefore = await spotBalances('cngn-taker');
-  const head = await client.getBlockNumber();
+  // Uncached: viem serves getBlockNumber from a 4s cache, which hid a settlement mined within it.
+  const head = await client.getBlockNumber({ cacheTime: 0 });
   await placeOrder('usdc-maker', 'sell', uiPrice, uiSize, spotMarket());
   await placeOrder('cngn-taker', 'buy', uiPrice, uiSize, spotMarket());
 
@@ -640,7 +663,7 @@ async function spotCross(uiPrice: bigint, uiSize: bigint) {
 
   // The settlement: a verifyAndMatch to Matching since the orders went in, with headroom over its use.
   let settled = false;
-  for (let n = head + 1n; n <= (await client.getBlockNumber()); n++) {
+  for (let n = head + 1n; n <= (await client.getBlockNumber({ cacheTime: 0 })); n++) {
     const block = await client.getBlock({ blockNumber: n, includeTransactions: true });
     for (const tx of block.transactions) {
       if (tx.to?.toLowerCase() !== MATCHING.toLowerCase() || !tx.input.startsWith('0x')) continue;
@@ -799,6 +822,69 @@ switch (command) {
   case 'spot-cross':
     await spotCross(BigInt(args[0] ?? '1374'), BigInt(args[1] ?? '100'));
     break;
+  case 'spot-market-check': {
+    // spot-market-check: /v1/markets binds the spot market to the stack venue.json says it should.
+    const expected = { asset: SPOT.asset, module: SPOT.module, quote: SPOT.wrappedUsdc, manager: venue.unified ? SPOT.srm : null };
+    const markets = (await (await fetch(`${MARKETS}/v1/markets`)).json()) as Record<string, string>[];
+    const spot = markets.find((m) => m.contract_type === 'spot');
+    if (!spot) throw new Error('no spot market served');
+    const same = (a: string | undefined, b: Address | null) => (b === null ? true : (a ?? '').toLowerCase() === b.toLowerCase());
+    if (!same(spot.asset_address, expected.asset)) throw new Error(`spot asset ${spot.asset_address}, expected ${expected.asset}`);
+    if (!same(spot.trade_module_address, expected.module)) throw new Error(`spot module ${spot.trade_module_address}, expected ${expected.module}`);
+    if (!same(spot.quote_asset_address, expected.quote)) throw new Error(`spot quote ${spot.quote_asset_address}, expected ${expected.quote}`);
+    if (!same(spot.margin_manager_address, expected.manager)) throw new Error(`spot manager ${spot.margin_manager_address}, expected ${expected.manager}`);
+    console.log(`ok: spot is bound to asset ${expected.asset}, module ${expected.module}, quote ${expected.quote}${expected.manager ? `, manager ${expected.manager}` : ''}`);
+    break;
+  }
+  case 'spot-order': {
+    // spot-order <label> <buy|sell> <ui price> <size usd> [accepted|refused]
+    const expectation = (args[4] ?? 'accepted') as 'accepted' | 'refused';
+    const status = await placeOrder(args[0]!, args[1] as 'buy' | 'sell', BigInt(args[2]!), BigInt(args[3]!), spotMarket(), expectation);
+    console.log(`${expectation === 'accepted' ? 'ok' : 'ok (refused as expected)'}: ${args[0]} spot ${args[1]} $${args[3]} @ ${args[2]} -> ${status}`);
+    break;
+  }
+  case 'spot-overdrawn': {
+    // spot-overdrawn <poor> <rich> <ui price> <size usd>: the poor account, holding less cash than
+    // the size, sells USDC (the engine BUY of cNGN, paid in cash) into the rich account's resting
+    // bid. The venue accepts the order (it does not read balances at submission) and the matcher
+    // refuses the fill as buyer_underfunded, so it never settles: cash cannot be overdrawn by a
+    // spot trade, even with borrowing on under the SRM.
+    const [poor, rich] = [args[0]!, args[1]!];
+    const price = BigInt(args[2]!);
+    const size = BigInt(args[3]!);
+    const poorCashBefore = await balance(readAccounts()[poor]!, SPOT.wrappedUsdc);
+    if (poorCashBefore >= size * 10n ** 18n) throw new Error(`${poor} holds ${poorCashBefore} cash: not overdrawn by a $${size} sell`);
+    await placeOrder(rich, 'buy', price, size, spotMarket());
+    await placeOrder(poor, 'sell', price, size, spotMarket());
+    await new Promise((resolve) => setTimeout(resolve, 20_000));
+    const poorCashAfter = await balance(readAccounts()[poor]!, SPOT.wrappedUsdc);
+    if (poorCashAfter !== poorCashBefore) throw new Error(`${poor}'s cash moved ${poorCashBefore} -> ${poorCashAfter}: the overdrawn sell filled`);
+    const log = readFileSync(join(stateDir, 'logs', 'markets-matcher.log'), 'utf8');
+    if (!log.includes('buyer_underfunded')) throw new Error('the matcher did not report buyer_underfunded');
+    console.log(`ok: ${poor}'s $${size} sell with ${usd(poorCashBefore).toFixed(2)} of cash never filled; the matcher refused it as buyer_underfunded`);
+    break;
+  }
+  case 'margin-of': {
+    // margin-of <label>: the SRM's own view of a unified account: cash, cNGN, IM and MM headroom.
+    const id = readAccounts()[args[0]!]!;
+    const cash = await balance(id, venue.cash);
+    const cngn = venue.cngnEscrow ? await balance(id, venue.cngnEscrow) : 0n;
+    const im = await client.readContract({ address: getAddress(venue.srm), abi, functionName: 'getMargin', args: [BigInt(id), true] });
+    const mm = await client.readContract({ address: getAddress(venue.srm), abi, functionName: 'getMargin', args: [BigInt(id), false] });
+    console.log(JSON.stringify({ label: args[0], subaccountId: id, cash: usd(cash), cngn: usd(cngn), imHeadroomUsd: usd(im), mmHeadroomUsd: usd(mm) }));
+    break;
+  }
+  case 'pause':
+  case 'unpause': {
+    // The SRM guardian pauses every adjustment under the perp SRM; unified, that is spot too.
+    const paused = command === 'pause';
+    const { wallet } = await funded('guardian', 0n);
+    await send(wallet, getAddress(venue.srm), 'setAdjustmentsPaused', [paused]);
+    const now = await client.readContract({ address: getAddress(venue.srm), abi, functionName: 'adjustmentsPaused' });
+    if (now !== paused) throw new Error(`adjustmentsPaused is ${now}, expected ${paused}`);
+    console.log(`ok: srm.adjustmentsPaused = ${now} (guardian)`);
+    break;
+  }
   case 'spot-withdraw':
     await spotWithdraw(args[0] ?? 'usdc-maker', BigInt(args[1] ?? '10'));
     break;
