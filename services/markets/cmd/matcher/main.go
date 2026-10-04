@@ -16,6 +16,11 @@ import (
 )
 
 func main() {
+	// Probe mode: the container health check is this binary calling its own /healthz, since the
+	// runtime image has no shell. It needs no config, database or chain.
+	if isHealthcheckArg(os.Args) {
+		os.Exit(runHealthcheck())
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("load config", "error", err)

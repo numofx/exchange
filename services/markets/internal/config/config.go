@@ -10,10 +10,13 @@ import (
 )
 
 type Config struct {
-	AppEnv                 string
-	APIAddr                string
-	DatabaseURL            string
-	MatcherPollInterval    time.Duration
+	AppEnv              string
+	APIAddr             string
+	DatabaseURL         string
+	MatcherPollInterval time.Duration
+	// MatcherHealthAddr is where the matcher serves its own /healthz (MATCHER_HEALTH_ADDR, default
+	// ":8082"); empty disables it.
+	MatcherHealthAddr      string
 	ChainRPCURL            string
 	ChainID                string
 	MatchingAddress        string
@@ -134,6 +137,7 @@ func Load() (Config, error) {
 		APIAddr:                 getenvDefault("API_ADDR", ":8080"),
 		DatabaseURL:             os.Getenv("DATABASE_URL"),
 		ChainRPCURL:             getenvDefault("CHAIN_RPC_URL", os.Getenv("RPC_URL")),
+		MatcherHealthAddr:       getenvDefault("MATCHER_HEALTH_ADDR", ":8082"),
 		ChainID:                 os.Getenv("CHAIN_ID"),
 		MatchingAddress:         os.Getenv("MATCHING_ADDRESS"),
 		EnforceMatchingCustody:  getenvBool("ENFORCE_MATCHING_CUSTODY", true),
