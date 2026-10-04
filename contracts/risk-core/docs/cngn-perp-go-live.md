@@ -294,19 +294,15 @@ pays it on the perp. The venue lets it post cNGN through the perp stack's **own 
 SRM as a **base asset** valued at the index feed and haircut by a margin factor. Spot's escrow is not
 reused: an asset whitelisted on two managers lets cNGN be moved between stacks by a transfer.
 
-**A cNGN-margined account is a synthetic dollar, and the venue holds it to that.** Two rules in
-markets-service, checked when an order is submitted and again at every fill (`internal/hedge`):
-
-- **Direction:** an account holding cNGN collateral may only open or grow long USD (UI buy, the
-  on-chain short of the cNGN perp) or reduce exposure; any order that would leave it net long naira
-  is refused with `cngn_margin_direction`. Long naira is for USDC-margined accounts, unchanged.
-- **Hedge:** its long-USD notional may not exceed the cNGN it posted, one for one in cNGN, so the
-  account stays dollar-neutral; past that an order is refused with `cngn_margin_hedge`. The ticket
-  shows this as **Hedge**: the dollar value locked, the estimated funding per day and per month at
-  the current rate, and that the hedge covers the naira rate but not a cNGN depeg.
-
-The on-chain haircut (50%) stays as the backstop for accounts created outside the app: it is what
-keeps a directly-created long-naira-on-cNGN account solvent through a 25% step.
+**cNGN margins like USDC, in any direction.** (Simplified 2026-10-04; until then markets-service
+held a cNGN-holding account to long USD only and to no more of it than the cNGN posted, `internal/hedge`.)
+cNGN and USDC both count as margin under the SRM's own check, cNGN at its factor, any direction, at
+the normal maximum leverage. The venue adds nothing on top of the SRM for direction or size. What the
+ticket does: the **Hedge** block is information only (how much of the account's long USD the cNGN
+offsets at the index, what is left exposed to the naira either way, the funding on the offset part),
+and a short (long naira) on an account holding cNGN carries a warning that it doubles the naira
+exposure. The on-chain haircut is therefore the whole protection against the doubled-up direction,
+which is what it was sized for:
 
 **The haircut is 50% (`SIZED_MARGIN_FACTOR = 0.5e18`, IM scale 1).** Sized in
 `CngnPerpCollateralFork.testMarginFactorSizingThroughA25PctStep` on the unhedged direction, which is
@@ -399,7 +395,8 @@ blocks 52112993–52113252: `0xd9b20f1e…` (acceptOwnership), `0xe803ce30…` (
 (`cngn_perp_collateral_address`) and the app, each verified from its running tasks; run the
 mainnet-fork rehearsal with its cNGN scenario against the real escrow. (7) Only then sign
 **batch 5**, the single `setWhitelistManager(srm, true)`: cNGN deposits open. (8) Verify a 1-cNGN
-deposit into a perp account lands, and that a long-naira order from it is refused by the venue.
+deposit into a perp account lands, and that an order from it in either direction is accepted and
+margined by the SRM (done 2026-10-04: 1,000 cNGN into account 25, credited $0.37 at the 0.5 factor).
 
 ## Guardian: exploits only
 
@@ -637,8 +634,9 @@ one solver a side). Their readers were built and removed in exchange#83; the his
 Decided 2026-10-03 after the fork study (`CngnPerpFiveXFork`): IM 20% / MM 12% on USDC and the cNGN
 margin factor 0.35, as one vault batch, because each was sized against the other (at today's MM 20%
 a 0.35 factor would cut a 1:1 hedge's rally room from ~43% to ~18%; at MM 12% the 0.5 factor leaves a
-long-naira account on cNGN insolvent after a 25% step). Hedge mode stays 1:1 in markets-service and
-the app.
+long-naira account on cNGN insolvent after a 25% step; confirmed again on 2026-10-04: 0.5 at 3x and
+0.35 at 5x both solvent through 25%, `testMarginFactorSizingThroughA25PctStep` / `testCngnLongNairaAt5x`).
+The venue has no hedge mode: the app's Hedge block is information only.
 
 **The SecurityModule rule is leverage-aware and read against actual open interest.** The module's
 payout when one whole side is liquidated at maintenance margin after a single 25% step, auction run to

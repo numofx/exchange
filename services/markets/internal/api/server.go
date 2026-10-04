@@ -636,39 +636,6 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		// A cNGN-margined account is a synthetic dollar: long USD only, no more than the cNGN it
-		// posted. Checked here so a refused order never rests, and again at every fill.
-		if instrument.CollateralAssetAddress != "" {
-			// Chain units: the signed action's desiredAmount, and the book's atomic amounts scaled
-			// by the same ratio the invariant check aligned this order with.
-			action, err := parseActionTradeData(req.ActionJSON)
-			if err != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-				return
-			}
-			atomic, _ := new(big.Int).SetString(params.DesiredAmount, 10)
-			scale := big.NewInt(1)
-			if atomic != nil && atomic.Sign() > 0 {
-				scale.Quo(action.DesiredAmount, atomic)
-			}
-			open, _, err := s.orders.SnapshotOpenOrdersByOwner(r.Context(), params.OwnerAddress, 200)
-			if err != nil {
-				slog.Warn("order_submit_open_orders_unreadable", "order_id", params.OrderID, "error", err)
-				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "open orders could not be read; retry shortly"})
-				return
-			}
-			resting := restingPerpDelta(open, instrument.AssetAddress, params.SubaccountID, scale)
-			if err := s.perp.HedgeAllows(r.Context(), instrument, params.SubaccountID, signedDelta(params.Side, action.DesiredAmount), resting); err != nil {
-				if errors.Is(err, errCollateralUnreadable) {
-					slog.Warn("order_submit_collateral_unreadable", "order_id", params.OrderID, "subaccount_id", params.SubaccountID, "error", err)
-					writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
-					return
-				}
-				slog.Info("order_submit_rejected_hedge", "order_id", params.OrderID, "subaccount_id", params.SubaccountID, "error", err)
-				writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
-				return
-			}
-		}
 	}
 	order, err := s.orders.Create(r.Context(), params)
 	if err != nil {
