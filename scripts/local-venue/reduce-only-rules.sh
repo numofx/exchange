@@ -34,6 +34,7 @@ $VENUE account closer 20000
 $VENUE quote
 $VENUE quote
 
+if [ "${SKIP_BASIC:-0}" != 1 ]; then
 step "1. reduce-only from a flat account is refused at submission"
 $VENUE close-refused-flat closer
 
@@ -58,6 +59,8 @@ step "6. Close after a fill the UI has not shown ends flat"
 $VENUE quote
 open closer 1000
 $VENUE close-after-unseen-fill closer 300
+
+fi
 
 json() { python3 -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$@"; }
 position_of() { $VENUE position "$1" | tail -1 | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["position"])'; }
@@ -109,7 +112,10 @@ $VENUE quote
 $VENUE take liq2 buy 1000
 PRE2=$(position_of liq2)
 echo "liq2 position before: $PRE2"
-move_index $(python3 -c "print(round($INDEX1 * 0.55))")
+# Insolvent past a 40% loss on $400 of cash; the index-step procedure caps one step at 5000bps of
+# USDC per cNGN, so the naira strengthens in two accepted steps (30% then 25%, 47.5% in all).
+move_index $(python3 -c "print(round($INDEX1 * 0.70))")
+move_index $(python3 -c "print(round($INDEX1 * 0.70 * 0.75))")
 $VENUE wait-liquidated liq2 900
 $VENUE close-from liq2 "$PRE2" refused
 grep -h "perp_position_adjusted_on_chain" "$DIR/logs/markets-matcher.log" | tail -2 | cut -c1-220
