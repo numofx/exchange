@@ -415,8 +415,8 @@ resource "aws_ecs_task_definition" "market_maker" {
       # RECIPIENT_ID must equal SUBACCOUNT_ID. Under a WrappedERC20Asset quote leg the
       # credit side needs an allowance, so a recipient that is not the trading account
       # reverts; keeping them equal is what the venue actually exercises and tests.
-      { name = "MM_SUBACCOUNT_ID", value = "15" },
-      { name = "MM_RECIPIENT_ID", value = "15" },
+      { name = "MM_SUBACCOUNT_ID", value = var.mm_subaccount_id },
+      { name = "MM_RECIPIENT_ID", value = var.mm_subaccount_id },
 
       # Rungs per side. The binding constraint is inventory, not this: buildLevels walks outward
       # placing ORDER_SIZE * LEVEL_SIZE_MULT^k until the side's budget is spent. At 5 the ladder

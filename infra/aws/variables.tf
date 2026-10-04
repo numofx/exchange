@@ -284,6 +284,13 @@ variable "desired_count_market_maker" {
   }
 }
 
+# The spot market-maker's trading account (its MM_SUBACCOUNT_ID and MM_RECIPIENT_ID). #15 on the spot
+# stack until the unified cutover; the unified account under the perp SRM after it.
+variable "mm_subaccount_id" {
+  type    = string
+  default = "15"
+}
+
 variable "mm_address" {
   description = "Market maker owner and signer address (subaccount 10). Must match the key in /numo/exchange/mm_private_key — preflight.sh asserts it."
   type        = string
