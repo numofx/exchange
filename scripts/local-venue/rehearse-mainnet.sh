@@ -33,10 +33,12 @@ STACK="$ROOT/contracts/risk-core/deployments/8453/CNGN_PERP_STACK.json"
 MODULE="$ROOT/contracts/execution/deployments/8453/CNGN_PERP_TRADE_MODULE.json"
 KEEPER_DIR="$ROOT/services/perp-keeper"
 KEEPER_ENV=""
+UNIFIED=0
 CNGN=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --cngn) CNGN=1; shift ;;
+    --unified) UNIFIED=1; shift ;;
     --fork-url) FORK_URL=$2; shift 2 ;;
     --stack) STACK=$2; shift 2 ;;
     --module) MODULE=$2; shift 2 ;;
@@ -81,7 +83,20 @@ if [ $CNGN = 1 ]; then
   $T cngn-open
   $T cngn-positions
 fi
+if [ $UNIFIED = 1 ]; then
+  step "unified: an account holding cash AND cNGN with a long-naira perp, insolvent after the fall"
+  grep -q "^CNGN_ESCROW=" "$KEEPER_ENV" || { echo "--unified needs CNGN_ESCROW in $KEEPER_ENV" >&2; exit 1; }
+  $T cngn-open
+  $T unified-positions
+fi
 $T crash 4000
+if [ $UNIFIED = 1 ]; then
+  AT_CRASH=$($T status)
+  SM_BEFORE=$(echo "$AT_CRASH" | python3 -c 'import json,sys;print(json.load(sys.stdin)["securityModuleCash"])')
+  MIXED_MM=$(echo "$AT_CRASH" | python3 -c 'import json,sys;print(json.load(sys.stdin)["mixedMaintenanceMargin"])')
+  echo "unified at the crash: mixed maintenance margin $MIXED_MM (18dp, negative = insolvent), SecurityModule cash $SM_BEFORE"
+  [ "${MIXED_MM#-}" != "$MIXED_MM" ] || { echo "REHEARSAL FAILED: the mixed account is not under maintenance margin after the fall" >&2; exit 1; }
+fi
 
 step "the production keeper, CHAIN_ID=31337, until both accounts are liquidated"
 KEEPER_ADDR=$(cast wallet address --private-key "$KEEPER_KEY")
@@ -97,6 +112,8 @@ DONE='"alice":"0","carol":"[1-9][0-9]*","carolInAuction":false,"carolAboveMainte
 # dave ends in a SOLVENT auction (equity just above zero after the fall), which sells what restores
 # margin and leaves a rounding sliver, so "liquidated" is under 100k cNGN left and the auction over.
 [ $CNGN = 1 ] && DONE="$DONE"',.*"treasuryAboveMaintenance":true,"dave":"[0-9]{1,23}","daveInAuction":false'
+# The mixed account is insolvent: the whole position goes in one bid and its auction ends.
+[ $UNIFIED = 1 ] && DONE="$DONE"',.*"mixed":"0","mixedInAuction":false'
 LONG_WARP=0
 for pass in $(seq 1 30); do
   (cd "$KEEPER_DIR" && set -a && . "$KEEPER_ENV" && set +a && unset HEALTH_PORT &&
@@ -122,6 +139,23 @@ if [ $CNGN = 1 ]; then
   echo "$STATUS" | grep -q '"treasuryCngn":"2000000000000000000000000"' || { echo "REHEARSAL FAILED: the hedged treasury lost cNGN" >&2; exit 1; }
   grep -q "keeper-cngn-inventory" "$DIR/keeper.log" || { echo "REHEARSAL FAILED: the keeper did not report the cNGN it was paid in" >&2; exit 1; }
   echo "ok: cNGN: the hedged treasury rode the fall out above margin with its 2M cNGN; the keeper liquidated the long-naira-on-cNGN account and reports holding its cNGN"
+fi
+if [ $UNIFIED = 1 ]; then
+  SM_AFTER=$(echo "$STATUS" | python3 -c 'import json,sys;print(json.load(sys.stdin)["securityModuleCash"])')
+  MIXED_CNGN=$(echo "$STATUS" | python3 -c 'import json,sys;print(json.load(sys.stdin)["mixedCngn"])')
+  python3 - "$SM_BEFORE" "$SM_AFTER" "$MIXED_MM" "$MIXED_CNGN" <<'PY2'
+import sys
+before, after, mm, cngn = (int(x) for x in sys.argv[1:])
+paid = before - after
+# The insolvent auction's price walks to the maintenance-margin deficit by its end: what the
+# SecurityModule pays is at most that (the keeper bids earlier, so usually less), and above zero.
+bound = -mm
+assert paid > 0, f"the SecurityModule paid nothing ({paid}) for an insolvent unified account"
+assert paid <= bound * 105 // 100, f"the SecurityModule paid {paid/1e18:,.2f}, over the terminal bound {bound/1e18:,.2f}"
+assert cngn == 0, f"the mixed account still holds {cngn/1e18:,.0f} cNGN: the bid did not take its spot holding"
+print(f"ok: unified: the SecurityModule paid ${paid/1e18:,.2f} against a terminal bound of ${bound/1e18:,.2f}; the keeper took the whole portfolio, its 500k cNGN included")
+PY2
+  grep -q "keeper-cngn-inventory" "$DIR/keeper.log" || { echo "REHEARSAL FAILED: the keeper did not report the cNGN it inherited" >&2; exit 1; }
 fi
 $T verify-keeper-txs "$KEEPER_ADDR" "$START"
 grep -E "^\[keeper\] #|\[alert\]" "$DIR/keeper.log" | tail -12

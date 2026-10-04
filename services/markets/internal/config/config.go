@@ -57,6 +57,10 @@ type Config struct {
 	DeribitWSURL            string
 
 	CNGNSpotAssetAddress string
+	// SpotMarginManagerAddress is the manager the spot market's accounts live under when spot runs
+	// on the perp stack (the unified account): set to the perp SRM so the venue refuses spot orders
+	// while that SRM is paused and presents the manager to clients. Empty: spot's own stack.
+	SpotMarginManagerAddress string
 
 	// USDCcNGN-PERP, on its own stack (risk-core CNGN_PERP_STACK.json and execution
 	// CNGN_PERP_TRADE_MODULE.json). All four or none: the perp settles through its own TradeModule,
@@ -146,6 +150,7 @@ func Load() (Config, error) {
 		DeribitWSURL:            getenvDefault("DERIBIT_WS_URL", "wss://test.deribit.com/ws/api/v2"),
 
 		CNGNSpotAssetAddress:         strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_SPOT_ASSET_ADDRESS"))),
+		SpotMarginManagerAddress:     strings.ToLower(strings.TrimSpace(os.Getenv("SPOT_MARGIN_MANAGER_ADDRESS"))),
 		CNGNPerpAssetAddress:         strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_ASSET_ADDRESS"))),
 		CNGNPerpTradeModuleAddress:   strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_TRADE_MODULE_ADDRESS"))),
 		CNGNPerpCashAddress:          strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_CASH_ADDRESS"))),
