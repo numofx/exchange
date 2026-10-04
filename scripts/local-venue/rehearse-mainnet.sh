@@ -94,6 +94,7 @@ if [ $UNIFIED = 1 ]; then
   AT_CRASH=$($T status)
   SM_BEFORE=$(echo "$AT_CRASH" | python3 -c 'import json,sys;print(json.load(sys.stdin)["securityModuleCash"])')
   MIXED_MM=$(echo "$AT_CRASH" | python3 -c 'import json,sys;print(json.load(sys.stdin)["mixedMaintenanceMargin"])')
+  ALICE_MM=$(echo "$AT_CRASH" | python3 -c 'import json,sys;print(json.load(sys.stdin)["aliceMaintenanceMargin"])')
   echo "unified at the crash: mixed maintenance margin $MIXED_MM (18dp, negative = insolvent), SecurityModule cash $SM_BEFORE"
   [ "${MIXED_MM#-}" != "$MIXED_MM" ] || { echo "REHEARSAL FAILED: the mixed account is not under maintenance margin after the fall" >&2; exit 1; }
 fi
@@ -143,17 +144,18 @@ fi
 if [ $UNIFIED = 1 ]; then
   SM_AFTER=$(echo "$STATUS" | python3 -c 'import json,sys;print(json.load(sys.stdin)["securityModuleCash"])')
   MIXED_CNGN=$(echo "$STATUS" | python3 -c 'import json,sys;print(json.load(sys.stdin)["mixedCngn"])')
-  python3 - "$SM_BEFORE" "$SM_AFTER" "$MIXED_MM" "$MIXED_CNGN" <<'PY2'
+  python3 - "$SM_BEFORE" "$SM_AFTER" "$MIXED_MM" "$ALICE_MM" "$MIXED_CNGN" <<'PY2'
 import sys
-before, after, mm, cngn = (int(x) for x in sys.argv[1:])
+before, after, mixed_mm, alice_mm, cngn = (int(x) for x in sys.argv[1:])
 paid = before - after
-# The insolvent auction's price walks to the maintenance-margin deficit by its end: what the
-# SecurityModule pays is at most that (the keeper bids earlier, so usually less), and above zero.
-bound = -mm
-assert paid > 0, f"the SecurityModule paid nothing ({paid}) for an insolvent unified account"
-assert paid <= bound * 105 // 100, f"the SecurityModule paid {paid/1e18:,.2f}, over the terminal bound {bound/1e18:,.2f}"
+# The SecurityModule pays every insolvent auction here: alice's from the base scenario and the
+# mixed account's. Each auction's price walks to the maintenance-margin deficit by its end, so the
+# total is at most the two deficits (the keeper bids earlier, so usually less), and above zero.
+bound = max(0, -mixed_mm) + max(0, -alice_mm)
+assert paid > 0, f"the SecurityModule paid nothing ({paid}) for two insolvent accounts"
+assert paid <= bound * 105 // 100, f"the SecurityModule paid {paid/1e18:,.2f}, over the terminal bound {bound/1e18:,.2f} (mixed {-mixed_mm/1e18:,.2f} + alice {-alice_mm/1e18:,.2f})"
 assert cngn == 0, f"the mixed account still holds {cngn/1e18:,.0f} cNGN: the bid did not take its spot holding"
-print(f"ok: unified: the SecurityModule paid ${paid/1e18:,.2f} against a terminal bound of ${bound/1e18:,.2f}; the keeper took the whole portfolio, its 500k cNGN included")
+print(f"ok: unified: the SecurityModule paid ${paid/1e18:,.2f} for alice and the mixed account against a terminal bound of ${bound/1e18:,.2f} (mixed {-mixed_mm/1e18:,.2f}, alice {-alice_mm/1e18:,.2f}); the keeper took the mixed portfolio whole, its 500k cNGN included")
 PY2
   grep -q "keeper-cngn-inventory" "$DIR/keeper.log" || { echo "REHEARSAL FAILED: the keeper did not report the cNGN it inherited" >&2; exit 1; }
 fi

@@ -372,6 +372,8 @@ async function status() {
     carolInAuction: carolAuction.ongoing,
     carolAboveMaintenance: carolMM >= 0n,
     securityModuleCash: (await client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'getBalance', args: [smAccount, CASH, 0n] })).toString(),
+    // alice's maintenance margin, signed: her insolvent auction is also paid by the SecurityModule.
+    aliceMaintenanceMargin: (await client.readContract({ address: auction, abi, functionName: 'getMarginAndMarkToMarket', args: [BigInt(accounts.alice!), 0n] }))[0].toString(),
     ...(accounts.mixed && ESCROW
       ? {
           mixed: await perpOf(accounts.mixed),
