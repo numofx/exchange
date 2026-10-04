@@ -24,8 +24,15 @@ python3 -c "import json,sys; sys.exit(0 if json.load(open('$DIR/venue.json')).ge
 INDEX=$(python3 -c "print(round(1e18 / $(cast call "$(python3 -c "import json;print(json.load(open('$DIR/venue.json'))['indexFeed'])")" 'getSpot()(uint256,uint256)' --rpc-url $RPC | head -1 | cut -d' ' -f1)))")
 echo "index $INDEX cNGN/USDC"
 
-step "1. spot is bound to the perp stack"
+step "1. spot is bound to the perp stack, and the index-lag gate is enforced as on Base"
 $VENUE spot-market-check
+curl -sf http://127.0.0.1:8090/v1/markets | python3 -c "
+import json, sys
+perp = next(m for m in json.load(sys.stdin) if m['contract_type'] == 'perpetual')
+lag = (perp.get('perp') or {}).get('index_lag') or {}
+assert lag.get('enforced') is True, f'the index-lag gate is not enforced on the local venue: {lag}'
+assert lag.get('lag_bps') is not None, f'the venue has no spot sample yet: {lag}'
+print('ok: index-lag gate enforced, lag', lag['lag_bps'], 'bps, sample age', lag.get('sample_age_sec'), 's')"
 
 step "2. a spot trade settles through the perp module"
 $VENUE spot-account usdc-maker usdc 1000
@@ -50,7 +57,9 @@ sleep 6
 $VENUE spot-order usdc-maker sell $INDEX 10 accepted
 
 step "6. a withdrawal of the perp cash from a spot account pays USDC"
-$VENUE spot-withdraw usdc-maker 10
+# cngn-taker: cash from its spot buy and no resting orders (the maker's resting perp order from
+# step 4 would have the venue hold the withdrawal against it).
+$VENUE spot-withdraw cngn-taker 10
 
 echo
 echo "ok: the unified account holds on the local venue: spot through the perp module, one margin for both, the cash floor, the pause"
