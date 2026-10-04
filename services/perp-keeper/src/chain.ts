@@ -344,7 +344,7 @@ export function createKeeperChain(config: Config) {
         mm,
         bm,
         mtm,
-        auction: { ongoing: auction.ongoing, insolvent: auction.insolvent, reservedCash: auction.reservedCash },
+        auction: { ongoing: auction.ongoing, insolvent: auction.insolvent, reservedCash: auction.reservedCash, startTime: auction.startTime },
         canTerminate: false,
         bidPrice: null,
         maxProportion: null,
