@@ -12,9 +12,7 @@ import (
 	"time"
 
 	"github.com/numofx/matching-backend/internal/config"
-	"github.com/numofx/matching-backend/internal/hedge"
 	"github.com/numofx/matching-backend/internal/instruments"
-	"github.com/numofx/matching-backend/internal/orders"
 )
 
 // USDCcNGN-PERP's live state, read from its own stack on chain: mark, index, funding, open interest
@@ -341,86 +339,6 @@ func (r *perpStateReader) collateralAssets(ctx context.Context, market instrumen
 		Total:        e18String(total),
 		DepositsOpen: open.Sign() > 0,
 	}}, factor, nil
-}
-
-// errCollateralUnreadable is a hedge check that could not read the chain: the order is refused
-// with a retry, not let through, since nothing on chain enforces the direction rule.
-var errCollateralUnreadable = errors.New("the account's cNGN collateral could not be read from the chain; retry shortly")
-
-// HedgeAllows is the venue's rule for cNGN-margined accounts at order submission (internal/hedge):
-// only long USD, and no more of it than the cNGN posted. Nil for a market without a collateral
-// asset or an account holding none. delta is what the order adds to the position in CHAIN units
-// (18dp, signed: the engine buyer positive) -- the signed action's own desiredAmount, not the
-// book's atomic one; resting is the net signed remaining amount of the account's open orders on
-// this perp in the same units, so that orders which pass one by one cannot together exceed the
-// hedge. The fill-time check in the matcher is the backstop for what still gets through.
-func (r *perpStateReader) HedgeAllows(ctx context.Context, market instruments.Metadata, subaccountID string, delta, resting *big.Int) error {
-	escrow := strings.ToLower(market.CollateralAssetAddress)
-	if escrow == "" {
-		return nil
-	}
-	account, err := encodeUint256(subaccountID)
-	if err != nil {
-		return err
-	}
-	subAccounts, err := r.chain.subAccountsAddress(ctx)
-	if err != nil {
-		return errCollateralUnreadable
-	}
-	cngn, err := r.word(ctx, subAccounts, sigGetBalance+account+addressArg(escrow)+strings.Repeat("0", 64), 0)
-	if err != nil {
-		return errCollateralUnreadable
-	}
-	if cngn.Sign() <= 0 {
-		return nil
-	}
-	position, err := r.word(ctx, subAccounts, sigGetBalance+account+addressArg(market.AssetAddress)+strings.Repeat("0", 64), 0)
-	if err != nil {
-		return errCollateralUnreadable
-	}
-	if delta == nil || delta.Sign() == 0 {
-		return fmt.Errorf("the order adds nothing to the position")
-	}
-	return hedge.Check(cngn, position, delta, resting)
-}
-
-// signedDelta is what an order adds to the position in chain units: the signed action's
-// desiredAmount, negative for the engine seller.
-func signedDelta(side orders.Side, desired *big.Int) *big.Int {
-	delta := new(big.Int).Set(desired)
-	if side == orders.SideSell {
-		delta.Neg(delta)
-	}
-	return delta
-}
-
-// restingPerpDelta is the net signed remaining amount of an account's open orders on one perp
-// (buys positive, sells negative) in the book's atomic units times `scale` (the atomic-to-chain
-// scale the new order was aligned with): what its position becomes if they all fill.
-func restingPerpDelta(open []orders.Order, assetAddress, subaccountID string, scale *big.Int) *big.Int {
-	net := big.NewInt(0)
-	for _, order := range open {
-		if !strings.EqualFold(order.AssetAddress, assetAddress) || order.SubaccountID != subaccountID {
-			continue
-		}
-		desired, ok := new(big.Int).SetString(order.DesiredAmount, 10)
-		if !ok {
-			continue
-		}
-		filled, ok := new(big.Int).SetString(order.FilledAmount, 10)
-		if !ok {
-			filled = big.NewInt(0)
-		}
-		remaining := new(big.Int).Sub(desired, filled)
-		if remaining.Sign() <= 0 {
-			continue
-		}
-		if order.Side == orders.SideSell {
-			remaining.Neg(remaining)
-		}
-		net.Add(net, remaining.Mul(remaining, scale))
-	}
-	return net
 }
 
 // paused reads the SRM guardian's pause flag, uncached: it is the one input that changes by a
