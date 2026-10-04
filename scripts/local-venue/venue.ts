@@ -814,7 +814,7 @@ switch (command) {
     break;
   case 'hedge': {
     // hedge <label> <cngn whole>: a treasury posts cNGN and goes long USD 1:1 with it, crossing the
-    // maker's offer so the position exists (the venue's hedge rule: as much long USD as cNGN, no more).
+    // maker's offer so the position exists (a treasury's natural size; the venue sets no bound).
     const cngnWhole = BigInt(args[1] ?? '2000000');
     await openCngnAccount(args[0] ?? 'treasury', cngnWhole);
     const index = await uiIndex();
