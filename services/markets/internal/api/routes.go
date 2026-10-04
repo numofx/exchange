@@ -8,6 +8,7 @@ import "github.com/go-chi/chi/v5"
 func (s *Server) routes(integrations *integrationCache) chi.Router {
 	router := chi.NewRouter()
 	router.Get("/healthz", s.handleHealth)
+	router.Get("/v1/health", s.handleHealthReport)
 	router.Get("/v1/markets", s.handleMarkets)
 	router.Get("/v1/book", s.handleBook)
 	router.Get("/v1/trades", s.handleTrades)

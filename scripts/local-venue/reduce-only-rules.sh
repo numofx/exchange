@@ -19,6 +19,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 DIR="${LOCAL_VENUE_DIR:-$ROOT/.local-venue}"
 RPC=http://127.0.0.1:8600
+API_PORT=8090
 VENUE="pnpm --dir $HERE exec tsx $HERE/venue.ts $DIR"
 step() { printf '\n== %s\n' "$*"; }
 [ -f "$DIR/venue.json" ] || { echo "run up.sh first" >&2; exit 1; }
@@ -82,6 +83,23 @@ PYSEED
     exec node dist/main.js --local-fixed-price="$LEVEL") >"$DIR/logs/perp-feeds.log" 2>&1 &
   echo $! >"$DIR/pids/perp-feeds"
   sleep 8
+  # The venue's index-lag gate compares its spot sample with the on-chain index; the local reporter
+  # posts a fixed level, so it must follow the move or the gate refuses every perp order (-2197 bps).
+  kill "$(cat "$DIR/pids/index-status-reporter")" 2>/dev/null || true
+  cat >"$DIR/bin/index-status-reporter.sh" <<REPORTER
+#!/usr/bin/env bash
+USDC_PER_CNGN=\$(python3 -c "print(f'{1 / $LEVEL:.18f}')")
+while :; do
+  curl -s -o /dev/null -X POST -H "X-Numo-Index-Token: local-venue-index-status-token" -H "content-type: application/json" \\
+    -d "{\\"at_ms\\": \$(( \$(date +%s) * 1000 )), \\"usdc_per_cngn\\": \\"\$USDC_PER_CNGN\\", \\"sample_ok\\": true}" \\
+    http://127.0.0.1:$API_PORT/v1/internal/index-status
+  sleep 30
+done
+REPORTER
+  chmod +x "$DIR/bin/index-status-reporter.sh"
+  ("$DIR/bin/index-status-reporter.sh" >/dev/null 2>&1 &
+   echo $! >"$DIR/pids/index-status-reporter")
+  sleep 3
   echo "index now $(index_now) cNGN/USDC"
 }
 

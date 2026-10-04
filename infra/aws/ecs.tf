@@ -196,12 +196,25 @@ resource "aws_ecs_task_definition" "matcher" {
       { name = "EXECUTOR_TIMEOUT", value = "90s" },
       # Hostname preserved from Railway — see internal_namespace.
       { name = "EXECUTOR_URL", value = "http://execution-service.${var.internal_namespace}:8081/execute" },
+      { name = "MATCHER_HEALTH_ADDR", value = ":8082" },
     ])
 
     secrets = [
       { name = "DATABASE_URL", valueFrom = local.secret_arns.database_url },
       { name = "CHAIN_RPC_URL", valueFrom = local.secret_arns.rpc_url },
     ]
+
+    # The matcher answers its own /healthz (503 once its tick loop has stalled for two minutes); the
+    # probe is the binary itself, the image having no shell. With minimum healthy 0 a failing probe
+    # has ECS stop the task and start a fresh one. The pager watches the same heartbeat through
+    # markets-service /v1/health from outside the cluster (check_perp_pager.py, matcher-dead).
+    healthCheck = {
+      command     = ["CMD", "/app/matcher", "-healthcheck"]
+      interval    = 30
+      timeout     = 5
+      retries     = 3
+      startPeriod = 60
+    }
 
     logConfiguration = local.log_options["matcher"]
   }])

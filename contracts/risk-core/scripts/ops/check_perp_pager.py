@@ -110,6 +110,15 @@ GAS_WARN_DAYS = 7.0
 GAS_WARN_REPEAT_SEC = 6 * 3600
 DEFAULT_GAS_WATCH = "executor=0xF68ebcC8934B068655E1A4367Ba6C0e564678703:0.002,relayer=0xC9F1FfdEd29f7051538ad3a72729C3d07F920FDc:0.003"
 KEEPER_GAS_FLOOR_ETH = 0.002  # ~100 liquidation cycles at 3M gas and Base gas prices; the keeper idles at ~0 burn
+# The matcher: a dead one is a venue nobody can close on. It heartbeats service_heartbeats every 5s
+# and markets-service serves that on GET /v1/health (MATCHER_HEALTH_URL); older than MATCHER_DEAD_SEC
+# pages. Its position indexer (reduce-only ledger) reports the block it has applied up to; more than
+# MATCHER_INDEXER_LAG_SEC of Base blocks (2s) behind the pager's own head pages too: the match-time
+# chain read still guards every reduce-only fill, but the ledger the venue trusts is no longer current.
+DEFAULT_MATCHER_HEALTH_URL = "https://api.numofx.com/v1/health"
+MATCHER_DEAD_SEC = 60
+MATCHER_INDEXER_LAG_SEC = 120
+BLOCK_SEC = 2
 SEL_GET_BALANCE = "0x0806e640"  # getBalance(uint256,address,uint256) -- `cast sig`, pinned in --self-test
 # Negative cash across the perp: CashAsset.totalBorrow(), the sum of every account's cash below zero
 # (losses not yet repaid, fees of cNGN-margined accounts, and USDC withdrawn against cNGN on chain).
@@ -173,6 +182,29 @@ def keeper_condition(health: dict | None, now: int, armed: bool = True) -> Condi
   if not health.get("lastPassOk") or age > stale_after:
     return Condition("keeper-unhealthy", f"USDCcNGN-PERP keeper unhealthy: last pass ok={health.get('lastPassOk')} {age}s ago.")
   return None
+
+
+def matcher_conditions(health: dict | None, head_block: int) -> list[Condition]:
+  """Pages for a matcher that stopped heartbeating, and for a position indexer that fell behind."""
+  if health is None:
+    return [Condition("matcher-dead", "USDCcNGN matcher health unreadable (markets-service /v1/health down or unreachable): "
+                      "if the matcher is down, nobody can close.")]
+  matcher = health.get("matcher")
+  if not matcher:
+    return [Condition("matcher-dead", "USDCcNGN matcher has never written a heartbeat: nothing is matching, nobody can close.")]
+  out: list[Condition] = []
+  age = float(matcher.get("age_seconds", 1e9))
+  if age > MATCHER_DEAD_SEC:
+    out.append(Condition("matcher-dead", f"USDCcNGN matcher last heartbeat {age:.0f}s ago: nothing is matching, nobody can close."))
+  indexer = (matcher.get("details") or {}).get("indexer")
+  if indexer and head_block:
+    cursor = int(indexer.get("cursor_block", 0))
+    lag_sec = max(0, head_block - cursor) * BLOCK_SEC
+    if lag_sec > MATCHER_INDEXER_LAG_SEC:
+      out.append(Condition("matcher-indexer-lag", f"perp position indexer is {head_block - cursor} blocks (~{lag_sec}s) behind head"
+                           f"{' (' + indexer['last_error'][:80] + ')' if indexer.get('last_error') else ''}: the reduce-only ledger "
+                           "is stale; the chain read still guards each fill."))
+  return out
 
 
 def keeper_healthy(health: dict | None, now: int) -> bool:
@@ -469,6 +501,14 @@ def check_and_page(stack_path: Path, state: dict) -> int:
       ages[name] = None
 
   health = read_health(os.environ.get("KEEPER_HEALTH_URL"))
+  matcher_health = read_health(os.environ.get("MATCHER_HEALTH_URL", DEFAULT_MATCHER_HEALTH_URL))
+  matcher = matcher_conditions(matcher_health, number)
+  if matcher_health and matcher_health.get("matcher"):
+    m = matcher_health["matcher"]
+    idx = (m.get("details") or {}).get("indexer") or {}
+    print(f"matcher: heartbeat {float(m.get('age_seconds', 0)):.0f}s ago; indexer cursor {idx.get('cursor_block', '?')} vs head {number}")
+  else:
+    print("matcher: health unreadable")
   sm_raw = rpc(url, "eth_call", [{"to": SUB_ACCOUNTS, "data": SEL_GET_BALANCE
                                   + f"{int(stack['securityModuleAccount']):064x}"
                                   + stack["cash"].lower().removeprefix("0x").rjust(64, "0") + "0" * 64}, "latest"])
@@ -545,7 +585,7 @@ def check_and_page(stack_path: Path, state: dict) -> int:
   previous_sm = state.get("smCash")
   active = [c for c in (feed_condition(ages), keeper_condition(health, now, armed), insolvent_condition(health),
                         sm_condition(previous_sm, sm_cash), unwatched_condition(heartbeat_urls()[0]),
-                        peg_condition(read_index_status(), time.time()), coverage, oi, negative_cash, *gas) if c is not None]
+                        peg_condition(read_index_status(), time.time()), coverage, oi, negative_cash, *gas, *matcher) if c is not None]
   to_page, resolved = step_state(state, active, now)
   state["smCash"] = sm_cash
 
@@ -586,6 +626,16 @@ def self_test() -> int:
   assert never.key == "feed-halt" and "index never published" in never.message and "s old" not in never.message
   live = {"dryRun": False, "lastPassOk": True, "lastPassAt": now - 10, "pollIntervalMs": 15_000}
   assert keeper_condition(live, now) is None
+  # Matcher: unreadable or silent pages; a fresh heartbeat with a current indexer does not; a lagging
+  # indexer pages on its own key.
+  assert [c.key for c in matcher_conditions(None, 100)] == ["matcher-dead"]
+  assert [c.key for c in matcher_conditions({"status": "unknown"}, 100)] == ["matcher-dead"]
+  fresh = {"status": "ok", "matcher": {"age_seconds": 4.2, "details": {"indexer": {"cursor_block": 998, "head_block": 1000}}}}
+  assert matcher_conditions(fresh, 1000) == []
+  assert [c.key for c in matcher_conditions({"matcher": {"age_seconds": 61, "details": {}}}, 1000)] == ["matcher-dead"]
+  assert [c.key for c in matcher_conditions({"matcher": {"age_seconds": 4, "details": {"indexer": {"cursor_block": 939}}}}, 1000)] == ["matcher-indexer-lag"]
+  assert matcher_conditions({"matcher": {"age_seconds": 4, "details": {"indexer": {"cursor_block": 940}}}}, 1000) == []
+  assert [c.key for c in matcher_conditions({"matcher": {"age_seconds": 90, "details": {"indexer": {"cursor_block": 1}}}}, 1000)] == ["matcher-dead", "matcher-indexer-lag"]
   assert keeper_condition(None, now).key == "keeper-unhealthy"
   # Not armed (never seen healthy, market closed): neither an absent keeper nor the DRY_RUN smoke
   # is a page. Armed, both are.
