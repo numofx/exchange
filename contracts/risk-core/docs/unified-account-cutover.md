@@ -28,8 +28,14 @@ lifts; a withdrawal of the perp cash from a spot account pays USDC.
 temporary instance with the box's role, the keeper key never leaving AWS): a unified account holding
 $800 cash and 500k cNGN with a 4M cNGN long-naira perp, insolvent after a 40% fall; the production
 keeper takes the whole portfolio, cNGN included, and reports it (`keeper-cngn-inventory`); the
-SecurityModule pays at most the auction's terminal maintenance-margin deficit. _Result: see the
-report for this cutover; this section is filled in when it has run._
+SecurityModule pays at most the auction's terminal maintenance-margin deficit. **Ran 2026-10-04 on
+i-04bc4fc160c41339e (terminated after), branch `feat/unified-spot` at `cc871d0`, PASSED:** at the
+crash the unified account was $622.09 under maintenance margin; the production keeper started its
+auction and took it whole with one insolvent bid (tx `0xc18fd5f4…`), reported
+`keeper-cngn-inventory: 500,000 cNGN`; the SecurityModule paid $696.35 in total for alice's and
+the unified account's auctions against a terminal bound of $1,953.62 (alice $1,331.53 + mixed
+$622.09), the keeper bidding well before the auctions' ends; all 12 keeper transactions were signed
+for chain 31337 and none is valid on Base.
 
 ## Cutover, in order
 
