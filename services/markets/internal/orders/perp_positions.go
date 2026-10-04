@@ -162,3 +162,87 @@ where order_id = $1 and status = 'active'`,
 		order.OrderID, StatusCancelled, CancelReasonReduceOnlyDone, CancelledByVenue)
 	return mapPGError(err)
 }
+
+// SetPerpPosition writes the chain's position over the ledger row, whatever the row said: the
+// match-time resync, when the chain read disagrees with the ledger.
+func (r *Repository) SetPerpPosition(ctx context.Context, subaccountID, assetAddress string, position *big.Int) error {
+	_, err := r.pool.Exec(ctx, `
+insert into perp_positions (subaccount_id, asset_address, position) values ($1, $2, $3::numeric)
+on conflict (subaccount_id, asset_address) do update set position = excluded.position, updated_at = now()`,
+		subaccountID, strings.ToLower(strings.TrimSpace(assetAddress)), position.String())
+	return mapPGError(err)
+}
+
+// ChainPositionAdjustment is one SubAccounts.BalanceAdjusted event for the perp asset.
+type ChainPositionAdjustment struct {
+	SubaccountID string
+	// PostBalance is the account's position after the adjustment, in chain units.
+	PostBalance *big.Int
+	TxHash      string
+	BlockNumber uint64
+}
+
+// ApplyChainAdjustments brings the ledger up to the chain through block `through`, in one
+// transaction with the cursor. An adjustment made by one of the venue's own fills (its transaction
+// is in trade_fills) is skipped: FinalizeMatchWithPrice already moved the ledger for it, or is about
+// to, and setting the post-balance here as well would count the fill twice. Every other adjustment
+// (a liquidation, settlement, a transfer) sets the position to what the chain says it is afterwards.
+func (r *Repository) ApplyChainAdjustments(ctx context.Context, assetAddress string, adjustments []ChainPositionAdjustment, through uint64) (applied int, skipped int, err error) {
+	assetAddress = strings.ToLower(strings.TrimSpace(assetAddress))
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	for _, adjustment := range adjustments {
+		var venueFill bool
+		if err := tx.QueryRow(ctx, `select exists (select 1 from trade_fills where lower(tx_hash) = lower($1))`, adjustment.TxHash).Scan(&venueFill); err != nil {
+			return 0, 0, mapPGError(err)
+		}
+		if venueFill {
+			skipped++
+			continue
+		}
+		if _, err := tx.Exec(ctx, `
+insert into perp_positions (subaccount_id, asset_address, position) values ($1, $2, $3::numeric)
+on conflict (subaccount_id, asset_address) do update set position = excluded.position, updated_at = now()`,
+			adjustment.SubaccountID, assetAddress, adjustment.PostBalance.String()); err != nil {
+			return 0, 0, mapPGError(err)
+		}
+		applied++
+	}
+	if _, err := tx.Exec(ctx, `
+insert into perp_position_cursor (asset_address, block_number) values ($1, $2)
+on conflict (asset_address) do update set block_number = excluded.block_number, updated_at = now()`,
+		assetAddress, int64(through)); err != nil {
+		return 0, 0, mapPGError(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, 0, err
+	}
+	return applied, skipped, nil
+}
+
+// PerpPositionCursor is the last block the indexer has applied for the asset; ok false before the
+// first run.
+func (r *Repository) PerpPositionCursor(ctx context.Context, assetAddress string) (block uint64, ok bool, err error) {
+	var stored int64
+	err = r.pool.QueryRow(ctx, `select block_number from perp_position_cursor where asset_address = $1`,
+		strings.ToLower(strings.TrimSpace(assetAddress))).Scan(&stored)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, mapPGError(err)
+	}
+	return uint64(stored), true, nil
+}
+
+// SetPerpPositionCursor starts (or moves) the indexer's cursor without applying anything.
+func (r *Repository) SetPerpPositionCursor(ctx context.Context, assetAddress string, block uint64) error {
+	_, err := r.pool.Exec(ctx, `
+insert into perp_position_cursor (asset_address, block_number) values ($1, $2)
+on conflict (asset_address) do update set block_number = excluded.block_number, updated_at = now()`,
+		strings.ToLower(strings.TrimSpace(assetAddress)), int64(block))
+	return mapPGError(err)
+}

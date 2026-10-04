@@ -15,3 +15,12 @@ create table if not exists perp_positions (
   updated_at timestamptz not null default now(),
   primary key (subaccount_id, asset_address)
 );
+
+-- Where the matcher's position indexer has read SubAccounts.BalanceAdjusted up to, per perp asset:
+-- liquidations, settlement and transfers move positions without a venue fill, and the ledger follows
+-- them from these events.
+create table if not exists perp_position_cursor (
+  asset_address text primary key,
+  block_number bigint not null,
+  updated_at timestamptz not null default now()
+);

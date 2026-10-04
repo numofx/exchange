@@ -27,6 +27,24 @@ func reduceOnlyCapacity(side orders.Side, position, amountScale *big.Int) *big.I
 	return new(big.Int).Quo(new(big.Int).Abs(position), amountScale)
 }
 
+// effectiveReduceOnlyCapacity is the smaller of what the ledger and what the chain allow a
+// reduce-only leg. Positions also move without a venue fill (a liquidation, perp settlement, a
+// transfer between accounts), and a ledger that missed one would clamp to a size larger than the
+// real position -- the flip again, and most likely for an account the keeper has just bid on. A
+// chain read that lags a fill the venue has already finalized errs the other way, towards a smaller
+// fill, which is the safe side. A nil chain (no RPC) leaves the ledger alone.
+func effectiveReduceOnlyCapacity(side orders.Side, ledger, chain, amountScale *big.Int) *big.Int {
+	fromLedger := reduceOnlyCapacity(side, ledger, amountScale)
+	if chain == nil {
+		return fromLedger
+	}
+	fromChain := reduceOnlyCapacity(side, chain, amountScale)
+	if fromChain.Cmp(fromLedger) < 0 {
+		return fromChain
+	}
+	return fromLedger
+}
+
 // perpLedger describes the fill to the orders repository, which moves the venue's position ledger
 // with it. amountScale is exact: executionFill.FillAmount is fillAmount times the shared scale.
 func perpLedger(instrument instruments.Metadata, fillAmountAtomic, fillAmountChain string) (*orders.PerpFillLedger, error) {
@@ -74,7 +92,28 @@ func (e *Engine) clampReduceOnly(ctx context.Context, instrument instruments.Met
 		if !ok {
 			position = big.NewInt(0)
 		}
-		capacity := reduceOnlyCapacity(leg.Side, position, ledger.AmountScale)
+		// The live position, read in this match cycle. Unreadable means no reduce-only fill this
+		// tick: the pair goes back on the book and is retried, rather than filled on the ledger alone.
+		var chain *big.Int
+		if e.margin != nil {
+			chain, err = e.margin.Position(ctx, ledger.AssetAddress, leg.SubaccountID)
+			if err != nil {
+				return "", fmt.Errorf("read chain position of %s: %w", leg.SubaccountID, err)
+			}
+			if !ok || position.Cmp(chain) != 0 {
+				slog.Warn("reduce_only_ledger_resynced",
+					"market", instrument.Symbol,
+					"subaccount_id", leg.SubaccountID,
+					"ledger_position", position.String(),
+					"chain_position", chain.String(),
+					"ledger_seeded", ok,
+				)
+				if err := e.orders.SetPerpPosition(ctx, leg.SubaccountID, ledger.AssetAddress, chain); err != nil {
+					slog.Error("reduce_only_ledger_resync_failed", "subaccount_id", leg.SubaccountID, "error", err)
+				}
+			}
+		}
+		capacity := effectiveReduceOnlyCapacity(leg.Side, position, chain, ledger.AmountScale)
 		if capacity.Sign() <= 0 {
 			if err := e.orders.CancelByVenue(ctx, leg.OrderID, orders.CancelReasonReduceOnlyNoPosition); err != nil && !errors.Is(err, orders.ErrNotFound) {
 				return "", fmt.Errorf("cancel reduce-only order %s: %w", leg.OrderID, err)
@@ -85,6 +124,7 @@ func (e *Engine) clampReduceOnly(ctx context.Context, instrument instruments.Met
 				"subaccount_id", leg.SubaccountID,
 				"side", leg.Side,
 				"ledger_position", position.String(),
+				"chain_position", bigString(chain),
 				"reason", orders.CancelReasonReduceOnlyNoPosition,
 			)
 			return "", errReduceOnlyCancelled
@@ -95,6 +135,7 @@ func (e *Engine) clampReduceOnly(ctx context.Context, instrument instruments.Met
 				"order_id", leg.OrderID,
 				"subaccount_id", leg.SubaccountID,
 				"ledger_position", position.String(),
+				"chain_position", bigString(chain),
 				"fill_amount_atomic", fill.String(),
 				"clamped_to", capacity.String(),
 			)
@@ -102,4 +143,11 @@ func (e *Engine) clampReduceOnly(ctx context.Context, instrument instruments.Met
 		}
 	}
 	return fill.String(), nil
+}
+
+func bigString(value *big.Int) string {
+	if value == nil {
+		return "unread"
+	}
+	return value.String()
 }

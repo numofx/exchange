@@ -7,7 +7,13 @@
 #   4. two rapid Closes from one stale read end flat: the second is cancelled, never fills
 #   5. Close from two tabs (two concurrent submissions) ends flat
 #   6. Close after a fill the UI has not shown: clamped to what is left, remainder cancelled, flat
-# Every scenario asserts the chain position is exactly zero -- never flipped.
+#   7. the keeper partially liquidates a position (a solvent auction), then a Close sized from the
+#      pre-liquidation position must end flat: the clamp reads the chain, and the indexer has
+#      already followed the liquidation into the ledger
+#   8. the keeper liquidates a position in full, then a Close sized from the old position is refused
+# Every scenario asserts the chain position is exactly zero -- never flipped. 7 and 8 move the index
+# with the perp-feeds index-step procedure, as step-drill.sh does, so they need the plain venue
+# (up.sh without --unified: the unified venue's index-lag gate would hold the perp orders).
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
@@ -53,5 +59,57 @@ $VENUE quote
 open closer 1000
 $VENUE close-after-unseen-fill closer 300
 
+json() { python3 -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]])" "$@"; }
+position_of() { $VENUE position "$1" | tail -1 | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["position"])'; }
+index_now() { python3 -c "print(round(1e18 / $(cast call "$(json "$DIR/venue.json" indexFeed)" 'getSpot()(uint256,uint256)' --rpc-url $RPC | head -1 | cut -d' ' -f1)))"; }
+# move_index <cNGN per USDC>: the publisher stops, the sources' window is seeded at the level, the
+# one-shot index step is accepted (the keeper is live), and the publisher comes back at the level.
+move_index() {
+  local LEVEL=$1
+  kill "$(cat "$DIR/pids/perp-feeds")" 2>/dev/null || true; rm -f "$DIR/pids/perp-feeds"
+  python3 - "$DIR/perp-index-state.json" "$LEVEL" <<'PYSEED'
+import json, sys, time
+now = int(time.time() * 1000)
+samples = [{"price": float(sys.argv[2]), "at": now - (12 - i) * 60_000 + 30_000} for i in range(12)]
+json.dump({"samples": samples, "lastPublished": None}, open(sys.argv[1], "w"))
+PYSEED
+  (cd "$ROOT/services/perp-feeds" && set -a && . "$DIR/perp-feeds.env" && set +a && \
+    node dist/main.js --local-sources="$LEVEL" --accept-index-step --level="$LEVEL" --approved-by=local-reduce-only --reason="reduce-only liquidation scenario") 2>&1 | grep -E "index-step|refused" || true
+  (cd "$ROOT/services/perp-feeds" && set -a && . "$DIR/perp-feeds.env" && set +a && \
+    exec node dist/main.js --local-fixed-price="$LEVEL") >"$DIR/logs/perp-feeds.log" 2>&1 &
+  echo $! >"$DIR/pids/perp-feeds"
+  sleep 8
+  echo "index now $(index_now) cNGN/USDC"
+}
+
+if [ "${SKIP_LIQUIDATION:-0}" != 1 ]; then
+INDEX0=$(index_now)
+step "7. a partial liquidation, then a Close sized from the pre-liquidation position ends flat"
+# $400 of cash behind a $1,000 long USD (2.5x): a 22% stronger naira puts it under the 20%
+# maintenance margin while still solvent, so the auction sells only what restores margin.
+$VENUE account liq 400
+$VENUE quote
+$VENUE take liq buy 1000
+PRE=$(position_of liq)
+echo "liq position before: $PRE"
+move_index $(python3 -c "print(round($INDEX0 * 0.78))")
+$VENUE wait-reduced liq "$PRE" 900
+$VENUE quote
+$VENUE close-from liq "$PRE"
+grep -h "perp_position_adjusted_on_chain\|reduce_only_ledger_resynced\|reduce_only_clamped" "$DIR/logs/markets-matcher.log" | tail -4 | cut -c1-220
+
+step "8. a full liquidation, then a Close sized from the old position is refused"
+INDEX1=$(index_now)
+$VENUE account liq2 400
+$VENUE quote
+$VENUE take liq2 buy 1000
+PRE2=$(position_of liq2)
+echo "liq2 position before: $PRE2"
+move_index $(python3 -c "print(round($INDEX1 * 0.55))")
+$VENUE wait-liquidated liq2 900
+$VENUE close-from liq2 "$PRE2" refused
+grep -h "perp_position_adjusted_on_chain" "$DIR/logs/markets-matcher.log" | tail -2 | cut -c1-220
+fi
+
 echo
-echo "ok: reduce-only holds on the local venue: refused when flat or on the wrong side, clamped to the ledger, never a flip"
+echo "ok: reduce-only holds on the local venue: refused when flat or on the wrong side, clamped to the ledger and the chain, never a flip"
