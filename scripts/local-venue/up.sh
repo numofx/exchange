@@ -303,7 +303,7 @@ http.server.HTTPServer(("127.0.0.1", int(sys.argv[2])), H).serve_forever()
 PY
 start pager-capture python3 "$DIR/capture.py" "$DIR/pager-capture.log" 9780
 wait_for "pager capture" curl -sf http://127.0.0.1:9780/ready
-PAGER_ENV="RPC_URL=$RPC KEEPER_HEALTH_URL=http://127.0.0.1:$KEEPER_HEALTH_PORT/health PAGER_PROVIDER=pagerduty
+PAGER_ENV="RPC_URL=$RPC KEEPER_HEALTH_URL=http://127.0.0.1:$KEEPER_HEALTH_PORT/health MATCHER_HEALTH_URL=http://127.0.0.1:$API_PORT/v1/health PAGER_PROVIDER=pagerduty
 PAGERDUTY_URL=http://127.0.0.1:9780/page PAGERDUTY_ROUTING_KEY=local PAGER_HEARTBEAT_URL=http://127.0.0.1:9780/hb
 PAGE_PREFIX=[LOCAL] PAGER_STATE_FILE=$DIR/pager-state.json PERP_INDEX_STATUS_FILE=$DIR/perp-index-status.json ALERT_WEBHOOK_URL="
 rm -f "$DIR/pager-state.json"
@@ -312,7 +312,7 @@ grep -q "GET /hb " "$DIR/pager-capture.log" || { echo "the pager did not ping it
 
 step "enable: every launch gate, then the enable actions as the vault"
 ACTIONS="$DIR/enable-actions.json"
-(cd "$ROOT/contracts/risk-core" && RPC_URL=$RPC KEEPER_HEALTH_URL=http://127.0.0.1:$KEEPER_HEALTH_PORT/health \
+(cd "$ROOT/contracts/risk-core" && RPC_URL=$RPC KEEPER_HEALTH_URL=http://127.0.0.1:$KEEPER_HEALTH_PORT/health MATCHER_HEALTH_URL=http://127.0.0.1:$API_PORT/v1/health \
   PAGER_STATE_FILE="$DIR/pager-state.json" \
   MARKETS_URL=http://127.0.0.1:$API_PORT python3 scripts/ops/propose_perp_enable_batch.py --local \
   --stack "$V" --module "$MODULE_JSON" --write "$ACTIONS")

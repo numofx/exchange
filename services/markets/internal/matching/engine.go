@@ -53,9 +53,17 @@ func (e *Engine) Run(ctx context.Context) error {
 
 	// The ledger reduce-only orders are clamped against follows positions the venue did not move:
 	// liquidations, settlement, transfers, from SubAccounts' own events.
-	if indexer := newPositionIndexer(e.cfg, e.orders, e.margin); indexer != nil {
+	indexer := newPositionIndexer(e.cfg, e.orders, e.margin)
+	if indexer != nil {
 		go indexer.run(ctx)
 	}
+	// A matcher that silently stops is a venue nobody can close on: it answers its own /healthz for
+	// ECS and writes a heartbeat the pager reads through markets-service.
+	health := newMatcherHealth(indexer)
+	if e.cfg.MatcherHealthAddr != "" {
+		go health.serve(ctx, e.cfg.MatcherHealthAddr)
+	}
+	beat := &heartbeat{orders: e.orders, health: health}
 
 	ticker := time.NewTicker(e.cfg.MatcherPollInterval)
 	defer ticker.Stop()
@@ -74,6 +82,8 @@ func (e *Engine) Run(ctx context.Context) error {
 				}
 				e.tickInstrument(ctx, instrument)
 			}
+			health.ticked()
+			beat.maybeBeat(ctx)
 		}
 	}
 }

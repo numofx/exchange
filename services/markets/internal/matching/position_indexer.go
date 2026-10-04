@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math/big"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/numofx/matching-backend/internal/config"
@@ -37,6 +38,27 @@ type positionIndexer struct {
 	interval      time.Duration
 	confirmations uint64
 	chunk         uint64
+
+	mu   sync.Mutex
+	last indexerStatus
+}
+
+// status is what the indexer last saw: the head it read, the cursor it reached, and the last error.
+func (p *positionIndexer) status() indexerStatus {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.last
+}
+
+func (p *positionIndexer) note(update func(*indexerStatus)) {
+	p.mu.Lock()
+	update(&p.last)
+	if p.last.HeadBlock > p.last.CursorBlock {
+		p.last.LagBlocks = p.last.HeadBlock - p.last.CursorBlock
+	} else {
+		p.last.LagBlocks = 0
+	}
+	p.mu.Unlock()
 }
 
 func newPositionIndexer(cfg config.Config, repo *orders.Repository, margin marginChecker) *positionIndexer {
@@ -62,9 +84,17 @@ func (p *positionIndexer) run(ctx context.Context) {
 	defer ticker.Stop()
 	slog.Info("perp_position_indexer_started", "perp", p.perp, "interval", p.interval, "confirmations", p.confirmations)
 	for {
-		if err := p.tick(ctx); err != nil && ctx.Err() == nil {
+		err := p.tick(ctx)
+		if err != nil && ctx.Err() == nil {
 			slog.Warn("perp_position_indexer_tick_failed", "error", err)
 		}
+		p.note(func(s *indexerStatus) {
+			if err != nil {
+				s.LastError = err.Error()
+			} else {
+				s.LastError = ""
+			}
+		})
 		select {
 		case <-ctx.Done():
 			return
@@ -86,16 +116,24 @@ func (p *positionIndexer) tick(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	p.note(func(s *indexerStatus) {
+		s.HeadBlock = head
+		if ok {
+			s.CursorBlock = cursor
+		}
+	})
 	if !ok {
 		// First run: the ledger is seeded from the chain when an account first submits reduce-only,
 		// so there is nothing to backfill; follow from here.
 		if err := p.orders.SetPerpPositionCursor(ctx, p.perp, through); err != nil {
 			return err
 		}
+		p.note(func(s *indexerStatus) { s.CursorBlock = through; s.LastAppliedAt = time.Now() })
 		slog.Info("perp_position_indexer_cursor_started", "block", through)
 		return nil
 	}
 	if through <= cursor {
+		p.note(func(s *indexerStatus) { s.LastAppliedAt = time.Now() })
 		return nil
 	}
 	subAccounts, err := p.rpc.subAccountsAddress(ctx)
@@ -119,6 +157,7 @@ func (p *positionIndexer) tick(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("apply adjustments %d..%d: %w", from, to, err)
 		}
+		p.note(func(s *indexerStatus) { s.CursorBlock = to; s.LastAppliedAt = time.Now() })
 		if applied > 0 || skipped > 0 {
 			for _, adjustment := range adjustments {
 				slog.Info("perp_position_adjusted_on_chain",
