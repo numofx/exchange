@@ -71,7 +71,10 @@ import {
 # (the market-maker's key under /numo/exchange/ included). An explicit Deny outranks that Allow:
 # parameter reads outside the four paths are refused, and the managed policy keeps doing what the
 # SSM agent needs. The paths are exactly ops_box_ssm_paths, so a new grant above must also be
-# excluded here, or the Deny wins.
+# excluded here, or the Deny wins. That is now the procedure for any one-off read the box needs (a
+# migration key, a token): add the path to ops_box_ssm_paths (which also excludes it from the Deny),
+# apply, do the work, remove it, apply again, and confirm with `aws ssm get-parameter` from the box
+# that the read is refused afterwards. A grant added anywhere else stays denied.
 data "aws_iam_policy_document" "ops_box_ssm_deny_outside_paths" {
   statement {
     sid           = "DenyParameterReadsOutsideTheGrantedPaths"

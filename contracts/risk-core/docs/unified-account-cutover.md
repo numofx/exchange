@@ -45,6 +45,10 @@ Each step is verified before the next. Nothing here moves a user's funds without
    quoting. Cancel its resting orders:
    `migrate-spot-mm.ts cancel --execute` (on the box, through the SSM wrapper that exports
    `MM_OWNER_PRIVATE_KEY` from `/numo/exchange/mm_private_key`; the box role must be able to read it).
+   Since 2026-10-04 the box role carries an explicit Deny on every SSM parameter outside its four
+   paths (`infra/aws/ops-box.tf`, `ops_box_ssm_deny_outside_paths`), so a one-off read like this is
+   granted by adding the path to `ops_box_ssm_paths` (which both allows it and lifts it out of the
+   Deny), applying, and removing it afterwards; a grant written anywhere else stays denied.
 2. **Migrate the MM.** `migrate-spot-mm.ts status` (dry), then `withdraw --execute` (two signed
    WithdrawalModule actions; the venue pays wrapped USDC and spot cNGN to the MM wallet), then
    `deposit --execute` (SubAccountCreator opens the unified account with the USDC into the perp cash
