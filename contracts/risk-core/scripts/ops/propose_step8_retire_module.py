@@ -154,8 +154,14 @@ def confirm(token: str, rpc_url: str, uuid: str) -> int:
   else:
     print(f"no transaction for request {uuid} after {CONFIRM_TIMEOUT_SEC // 60} min (not yet approved?)")
     return 1
-  if module_allowed(rpc_url):
-    print("FAILED: allowedModules(old spot module) still reads true")
+  # The receipt can come from a node a block ahead of the one answering eth_call; give the state
+  # read a few blocks before calling the result wrong (seen 2026-10-04: receipt mined, state stale).
+  for _ in range(6):
+    if not module_allowed(rpc_url):
+      break
+    time.sleep(CONFIRM_POLL_SEC)
+  else:
+    print("FAILED: allowedModules(old spot module) still reads true 30s after the receipt")
     return 1
   print(f"confirmed: Matching.allowedModules({OLD_SPOT_MODULE}) = false. Step 8 done.")
   return 0

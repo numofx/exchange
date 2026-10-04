@@ -82,7 +82,10 @@ Each step is verified before the next. Nothing here moves a user's funds without
    `0x9E90A9cD…`, calldata `0xb1b62825…`, MPCVault digest `0x87e6b9f6…917f`), not yet proposed:
    the operator checks calldata and digest first. The WithdrawalModule is untouched, so accounts on
    the old spot SRM stay withdrawable; only trades through the retired module become impossible,
-   and the venue has not submitted one since the cutover.
+   and the venue has not submitted one since the cutover. **Executed 2026-10-04 ~21:35 UTC** from the vault: tx
+   `0x8979a8b341b16454c56a18828f9032062f3970459bc14c22e80444e1a6bd13e3` (block 52180115,
+   `ModuleAllowed(0x12423B36…, false)`); `allowedModules` reads false for the old module and true for
+   the perp TradeModule and the WithdrawalModule. The cutover is complete.
 
 **Back out** (any step up to 5): re-apply the previous Terraform vars and app envs; migrated balances
 stay where they were put and remain withdrawable either way.
