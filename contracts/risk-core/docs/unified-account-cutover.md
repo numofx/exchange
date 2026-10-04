@@ -26,7 +26,7 @@ lifts; a withdrawal of the perp cash from a spot account pays USDC.
 
 **Mainnet-fork rehearsal** (`scripts/local-venue/rehearse-mainnet.sh --unified --keeper-env …`, on a
 temporary instance with the box's role, the keeper key never leaving AWS): a unified account holding
-$2,000 cash and 500k cNGN with an 8M cNGN long-naira perp, insolvent after a 40% fall; the production
+$800 cash and 500k cNGN with a 4M cNGN long-naira perp, insolvent after a 40% fall; the production
 keeper takes the whole portfolio, cNGN included, and reports it (`keeper-cngn-inventory`); the
 SecurityModule pays at most the auction's terminal maintenance-margin deficit. _Result: see the
 report for this cutover; this section is filled in when it has run._
