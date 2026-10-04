@@ -629,8 +629,9 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": tradingPausedError(instrument.Symbol)})
 			return
 		}
-		// New exposure waits while spot has moved away from the on-chain index (index_lag.go).
-		if s.indexLag != nil {
+		// New exposure waits while spot has moved away from the on-chain index (index_lag.go). The
+		// perp only: a spot market under the same SRM has no index to lag behind.
+		if s.indexLag != nil && instrument.IsPerpetual() {
 			_, raw, err := s.perp.marketState(r.Context(), instrument)
 			if err != nil {
 				slog.Warn("order_submit_index_unreadable", "order_id", params.OrderID, "error", err)
