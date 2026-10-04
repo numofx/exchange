@@ -42,6 +42,11 @@ const envSchema = z.object({
   HEALTH_PORT: z.coerce.number().int().positive().optional(),
   HEALTH_HOST: z.string().default('127.0.0.1'),
   MIN_SOLVENT_DISCOUNT_BPS: z.coerce.bigint().default(200n),
+  /**
+   * An auction open longer than this is alerted (Slack): while it runs the owner cannot trade, so a
+   * long one means the keeper is not finishing it (no cash, no discount, a sliver nobody takes).
+   */
+  AUCTION_OPEN_WARN_MS: z.coerce.number().int().positive().default(10 * 60_000),
   /** Smallest share of an account worth bidding on, as a percentage. */
   MIN_BID_PERCENT: z.coerce.number().positive().max(100).default(1),
   /**

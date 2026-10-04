@@ -10,6 +10,8 @@ export type AuctionView = {
   insolvent: boolean;
   /** Cash already paid into the account by earlier solvent bids. */
   reservedCash: bigint;
+  /** Chain time the auction started, seconds; 0 when none is ongoing. */
+  startTime: bigint;
 };
 
 /** cNGN held as margin, as the SRM sees it: the escrow balance and the index it is valued at. */
@@ -71,6 +73,8 @@ export type Action =
       insolvent: boolean;
       /** Cash DutchAuction requires in the bidding account for this bid (_ensureBidderCashBalance). */
       bidderCash: bigint;
+      /** The bid that takes everything the auction has left and ends it. */
+      finishing?: boolean;
     }
   | { kind: 'none'; accountId: bigint; note?: string };
 
@@ -113,22 +117,17 @@ function decideSolventBid(account: AccountView, keeperCash: bigint, rules: Keepe
   // like the position itself. Netting the haircut here instead would leave an account whose equity
   // is under the haircut unbiddable for the whole solvent phase (12 hours), position open. The
   // haircut is the insolvent rule's, where it sets what the security module pays.
-  const discountBps = ((mtm - bidPrice) * 10_000n) / mtm;
-  if (discountBps < rules.minSolventDiscountBps) {
-    return { kind: 'none', accountId, note: `discount ${discountBps}bps below ${rules.minSolventDiscountBps}bps` };
-  }
-
   const perUnit = bidPrice + abs(account.bm - account.auction.reservedCash);
   const affordable = perUnit === 0n ? ONE : (keeperCash * ONE) / perUnit;
   const room = cngnRoom(account, rules);
   const percent = min(maxProportion, affordable, capToMaxBid(perUnit, rules), room, ONE);
-  // The finishing bid: an earlier bid restored maintenance margin and the auction has only a rounding
-  // sliver left to sell (it ends at BUFFER margin). Below the keeper's minimum, but a live auction
-  // freezes the account for its owner, so the keeper takes the sliver when the cash it pays in is
-  // what restores buffer margin and ends the auction. When the price has decayed too far for that,
-  // the sliver waits: the solvent window ends at maintenance margin, and terminate runs then.
-  const paysIn = (bidPrice * maxProportion) / ONE;
-  if (percent < rules.minBidPercent && percent === maxProportion && maxProportion > 0n && account.mm >= 0n && paysIn >= abs(account.bm)) {
+  // The finishing bid. What the auction will still sell is below the keeper's minimum (an earlier bid
+  // took the rest) and the keeper can take all of it. DutchAuction caps any bid at that proportion
+  // and terminates the auction when a bid reaches it, so this is the bid that frees the account:
+  // while the auction is open the chain refuses every trade for the owner (BM_AccountUnderLiquidation),
+  // and a solvent window runs 12h15m. The discount gate below is waived here -- the amount is a sliver
+  // by construction, and a locked account costs its owner more than a few cents of premium.
+  if (maxProportion > 0n && maxProportion < rules.minBidPercent && percent === maxProportion) {
     return {
       kind: 'bid',
       accountId,
@@ -136,7 +135,13 @@ function decideSolventBid(account: AccountView, keeperCash: bigint, rules: Keepe
       priceLimit: (bidPrice * percent) / ONE + 1n,
       insolvent: false,
       bidderCash: (perUnit * percent) / ONE + 1n,
+      finishing: true,
     };
+  }
+
+  const discountBps = ((mtm - bidPrice) * 10_000n) / mtm;
+  if (discountBps < rules.minSolventDiscountBps) {
+    return { kind: 'none', accountId, note: `discount ${discountBps}bps below ${rules.minSolventDiscountBps}bps` };
   }
   if (percent < rules.minBidPercent) {
     // Say which limit bound: an auction nearly sold out is routine, a keeper out of cash is an alarm.
