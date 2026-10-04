@@ -52,7 +52,9 @@ func DefaultRegistry(cfg config.Config) *Registry {
 			UISizeToEngine:     "engine_amount = ui_size * ui_price",
 			TradeModuleAddress: strings.ToLower(strings.TrimSpace(cfg.TradeModuleAddress)),
 			QuoteAssetAddress:  strings.ToLower(strings.TrimSpace(cfg.QuoteAsset())),
-			Enabled:            strings.TrimSpace(cfg.CNGNSpotAssetAddress) != "",
+			// Set when spot runs on the perp stack (SPOT_MARGIN_MANAGER_ADDRESS = the perp SRM).
+			MarginManagerAddress: strings.ToLower(strings.TrimSpace(cfg.SpotMarginManagerAddress)),
+			Enabled:              strings.TrimSpace(cfg.CNGNSpotAssetAddress) != "",
 		},
 		{
 			// The perp is denominated on chain in USDC per cNGN (~0.00072), sized in cNGN, so PnL lands

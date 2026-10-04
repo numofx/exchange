@@ -114,6 +114,7 @@ resource "aws_ecs_task_definition" "markets" {
       { name = "SERVICE_MODE", value = "api" },
       { name = "API_ADDR", value = ":8080" },
       { name = "CNGN_SPOT_ASSET_ADDRESS", value = var.cngn_spot_asset_address },
+      { name = "SPOT_MARGIN_MANAGER_ADDRESS", value = var.spot_margin_manager_address },
       { name = "CNGN_PERP_ASSET_ADDRESS", value = var.cngn_perp_asset_address },
       { name = "CNGN_PERP_TRADE_MODULE_ADDRESS", value = var.cngn_perp_trade_module_address },
       { name = "CNGN_PERP_CASH_ADDRESS", value = var.cngn_perp_cash_address },
@@ -143,7 +144,7 @@ resource "aws_ecs_task_definition" "markets" {
       # Signed withdrawals (POST /v1/withdrawals): verified here, submitted by execution-service.
       # EXECUTOR_WITHDRAW_TIMEOUT must outlast execution-service's WITHDRAWAL_RECEIPT_TIMEOUT_MS (30s).
       { name = "WITHDRAWAL_MODULE_ADDRESS", value = var.withdrawal_module_address },
-      { name = "WITHDRAWAL_ASSET_ADDRESSES", value = join(",", compact([var.quote_asset_address, var.cngn_spot_asset_address, var.cngn_perp_cash_address])) },
+      { name = "WITHDRAWAL_ASSET_ADDRESSES", value = join(",", compact(concat([var.quote_asset_address, var.cngn_spot_asset_address, var.cngn_perp_cash_address], var.legacy_withdrawal_asset_addresses))) },
       { name = "EXECUTOR_WITHDRAW_URL", value = "http://execution-service.${var.internal_namespace}:8081/withdraw" },
       { name = "EXECUTOR_WITHDRAW_TIMEOUT", value = "45s" },
     ])
@@ -184,6 +185,7 @@ resource "aws_ecs_task_definition" "matcher" {
     environment = concat(local.chain_env, [
       { name = "SERVICE_MODE", value = "matcher" },
       { name = "CNGN_SPOT_ASSET_ADDRESS", value = var.cngn_spot_asset_address },
+      { name = "SPOT_MARGIN_MANAGER_ADDRESS", value = var.spot_margin_manager_address },
       { name = "CNGN_PERP_ASSET_ADDRESS", value = var.cngn_perp_asset_address },
       { name = "CNGN_PERP_TRADE_MODULE_ADDRESS", value = var.cngn_perp_trade_module_address },
       { name = "CNGN_PERP_CASH_ADDRESS", value = var.cngn_perp_cash_address },
@@ -262,7 +264,7 @@ resource "aws_ecs_task_definition" "execution" {
       # once it is configured), and
       # markets-service's EXECUTOR_WITHDRAW_TIMEOUT (45s) must outlast the receipt wait.
       { name = "WITHDRAWAL_MODULE_ADDRESS", value = var.withdrawal_module_address },
-      { name = "WITHDRAWAL_ASSET_ADDRESSES", value = join(",", compact([var.quote_asset_address, var.cngn_spot_asset_address, var.cngn_perp_cash_address])) },
+      { name = "WITHDRAWAL_ASSET_ADDRESSES", value = join(",", compact(concat([var.quote_asset_address, var.cngn_spot_asset_address, var.cngn_perp_cash_address], var.legacy_withdrawal_asset_addresses))) },
       { name = "WITHDRAWAL_RECEIPT_TIMEOUT_MS", value = "30000" },
 
       # Settlement canary. Calls StandardManager.getMargin against a real subaccount on a

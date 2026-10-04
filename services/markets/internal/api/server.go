@@ -78,6 +78,12 @@ type marketPresentation struct {
 	EngineSidePolicy   string `json:"engine_side_policy,omitempty"`
 	UIPriceToEngine    string `json:"ui_price_to_engine,omitempty"`
 	UISizeToEngine     string `json:"ui_size_to_engine,omitempty"`
+	// What an order for this market is signed for and settles in, so a client resolves the stack
+	// from the venue rather than from its own configuration: the TradeModule, its quote asset, and
+	// the manager the market's accounts live under (absent for a spot market on its own stack).
+	TradeModuleAddress   string `json:"trade_module_address,omitempty"`
+	QuoteAssetAddress    string `json:"quote_asset_address,omitempty"`
+	MarginManagerAddress string `json:"margin_manager_address,omitempty"`
 	// Perp is USDCcNGN-PERP's live state from chain; absent for spot, and absent for the perp when
 	// the chain could not be read (a client must treat that as unknown, not as zero).
 	Perp *perpMarketState `json:"perp,omitempty"`
@@ -574,7 +580,10 @@ func (s *Server) handleMarketDiagnostics(w http.ResponseWriter, r *http.Request)
 
 // tradingPausedError is what a perp order gets while the SRM guardian's pause holds. The leading
 // token is stable so clients can map it; the rest is for a human reading the raw response.
-const tradingPausedError = "trading_paused: the venue has paused USDCcNGN-PERP; open positions stay as they are and orders resume when the pause lifts"
+// tradingPausedError names the market: the perp, or spot once it shares the perp SRM.
+func tradingPausedError(symbol string) string {
+	return "trading_paused: the venue has paused " + symbol + "; open positions stay as they are and orders resume when the pause lifts"
+}
 
 func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 	var req createOrderRequest
@@ -609,13 +618,15 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 	// A paused perp cannot settle anything: an order accepted now would rest as phantom depth
 	// until the pause lifts. Refuse it with a reason the ticket can show. A closed (never enabled)
 	// perp still takes resting orders: the enable gate needs a book before it opens the market.
-	if instrument, ok := s.instruments.ByAssetAndSubID(strings.ToLower(params.AssetAddress), params.SubID); ok && instrument.IsPerpetual() && s.perp != nil {
+	// Every market whose accounts live under the perp SRM (the perp, and spot once unified): a
+	// paused SRM settles nothing, so an order accepted now would rest as phantom depth.
+	if instrument, ok := s.instruments.ByAssetAndSubID(strings.ToLower(params.AssetAddress), params.SubID); ok && instrument.MarginManagerAddress != "" && s.perp != nil {
 		paused, err := s.perp.Paused(r.Context(), instrument)
 		if err != nil {
 			slog.Warn("order_submit_pause_unreadable", "order_id", params.OrderID, "error", err)
 		} else if paused {
 			slog.Info("order_submit_rejected_paused", "order_id", params.OrderID, "market", instrument.Symbol)
-			writeJSON(w, http.StatusConflict, map[string]string{"error": tradingPausedError})
+			writeJSON(w, http.StatusConflict, map[string]string{"error": tradingPausedError(instrument.Symbol)})
 			return
 		}
 		// New exposure waits while spot has moved away from the on-chain index (index_lag.go).
@@ -1063,35 +1074,38 @@ func presentOrder(order orders.Order, instrument instruments.Metadata) presented
 
 func presentMarket(market instruments.Metadata) marketPresentation {
 	return marketPresentation{
-		Market:             market.Symbol,
-		ContractType:       market.ContractType,
-		SettlementType:     market.SettlementType,
-		BaseAssetSymbol:    market.BaseAssetSymbol,
-		QuoteAssetSymbol:   market.QuoteAssetSymbol,
-		ExpiryTimestamp:    market.ExpiryTimestamp,
-		PriceSemantics:     market.PriceSemantics,
-		DisplaySemantics:   market.DisplaySemantics,
-		DisplayName:        market.DisplayName,
-		DisplayLabel:       market.DisplayLabel,
-		TickSize:           market.TickSize,
-		MinSize:            market.MinSize,
-		TakerFeeBps:        market.TakerFeeBps,
-		MakerFeeBps:        market.MakerFeeBps,
-		ContractMultiplier: market.ContractMultiplier,
-		SettlementNote:     market.SettlementNote,
-		PricingModel:       market.PricingModel,
-		DisplayPriceKind:   market.DisplayPriceKind,
-		AssetAddress:       strings.ToLower(market.AssetAddress),
-		SubID:              market.SubID,
-		OrderEntrySpec:     market.OrderEntrySpec,
-		UIPriceUnit:        market.UIPriceUnit,
-		UISizeUnit:         market.UISizeUnit,
-		UISideMeaning:      market.UISideMeaning,
-		EnginePriceUnit:    market.EnginePriceUnit,
-		EngineAmountUnit:   market.EngineAmountUnit,
-		EngineSidePolicy:   market.EngineSidePolicy,
-		UIPriceToEngine:    market.UIPriceToEngine,
-		UISizeToEngine:     market.UISizeToEngine,
+		Market:               market.Symbol,
+		ContractType:         market.ContractType,
+		SettlementType:       market.SettlementType,
+		BaseAssetSymbol:      market.BaseAssetSymbol,
+		QuoteAssetSymbol:     market.QuoteAssetSymbol,
+		ExpiryTimestamp:      market.ExpiryTimestamp,
+		PriceSemantics:       market.PriceSemantics,
+		DisplaySemantics:     market.DisplaySemantics,
+		DisplayName:          market.DisplayName,
+		DisplayLabel:         market.DisplayLabel,
+		TickSize:             market.TickSize,
+		MinSize:              market.MinSize,
+		TakerFeeBps:          market.TakerFeeBps,
+		MakerFeeBps:          market.MakerFeeBps,
+		ContractMultiplier:   market.ContractMultiplier,
+		SettlementNote:       market.SettlementNote,
+		PricingModel:         market.PricingModel,
+		DisplayPriceKind:     market.DisplayPriceKind,
+		AssetAddress:         strings.ToLower(market.AssetAddress),
+		SubID:                market.SubID,
+		OrderEntrySpec:       market.OrderEntrySpec,
+		UIPriceUnit:          market.UIPriceUnit,
+		UISizeUnit:           market.UISizeUnit,
+		UISideMeaning:        market.UISideMeaning,
+		EnginePriceUnit:      market.EnginePriceUnit,
+		EngineAmountUnit:     market.EngineAmountUnit,
+		EngineSidePolicy:     market.EngineSidePolicy,
+		UIPriceToEngine:      market.UIPriceToEngine,
+		UISizeToEngine:       market.UISizeToEngine,
+		TradeModuleAddress:   strings.ToLower(market.TradeModuleAddress),
+		QuoteAssetAddress:    strings.ToLower(market.QuoteAssetAddress),
+		MarginManagerAddress: strings.ToLower(market.MarginManagerAddress),
 	}
 }
 
