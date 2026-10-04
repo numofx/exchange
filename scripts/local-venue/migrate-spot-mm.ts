@@ -81,11 +81,12 @@ async function ledger(account: bigint, asset: Address) {
   return client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'getBalance', args: [account, asset, 0n] });
 }
 
-/** The venue's signed authentication frame (wsauth): what GET /v1/orders needs to list the owner's orders. */
+/** The venue's signed authentication frame (wsauth, order-history statement): what GET /v1/orders needs. */
 async function authHeader() {
   const now = Math.floor(Date.now() / 1000);
   const frame = { address: owner.address.toLowerCase(), nonce: `${now}-${Math.random().toString(36).slice(2)}`, issued_at: now, expiry: now + 300 };
-  const message = `${WS_AUTH_DOMAIN} wants you to authenticate for the Numo markets WebSocket.\nAddress: ${frame.address}\nNonce: ${frame.nonce}\nIssued At: ${frame.issued_at}\nExpiration Time: ${frame.expiry}`;
+  // The order-history statement (wsauth OrderHistoryStatement), byte-for-byte as the app signs it.
+  const message = `${WS_AUTH_DOMAIN} wants you to view your Numo order history.\nAddress: ${frame.address}\nNonce: ${frame.nonce}\nIssued At: ${frame.issued_at}\nExpiration Time: ${frame.expiry}`;
   const signature = await owner.signMessage({ message });
   return Buffer.from(JSON.stringify({ ...frame, signature })).toString('base64url');
 }
