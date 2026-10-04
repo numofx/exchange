@@ -80,6 +80,7 @@ const abi = parseAbi([
   'function getMargin(uint256 accountId, bool isInitial) view returns (int256)',
   'function getAuction(uint256 accountId) view returns ((uint256 accountId, uint256 scenarioId, bool insolvent, bool ongoing, uint256 cachedMM, uint256 startTime, uint256 reservedCash))',
   'function getMarginAndMarkToMarket(uint256 accountId, uint256 scenarioId) view returns (int256 mm, int256 bm, int256 mtm)',
+  'function bid(uint256 accountId, uint256 bidderId, uint256 percentOfAccount, int256 priceLimit, uint256 expectedLastTradeId) returns (uint256 finalPercentage, uint256 cashFromBidder, uint256 cashToBidder)',
   'event DepositedSubAccount(uint256 indexed accountId, address indexed owner)',
 ]);
 
@@ -199,7 +200,7 @@ async function funded(label: string, usdc: bigint) {
 async function send(
   wallet: Awaited<ReturnType<typeof funded>>['wallet'],
   address: Address,
-  functionName: 'approve' | 'createAndDepositSubAccount' | 'donate' | 'createAccount' | 'deposit' | 'transfer' | 'setAdjustmentsPaused',
+  functionName: 'approve' | 'createAndDepositSubAccount' | 'donate' | 'createAccount' | 'deposit' | 'transfer' | 'setAdjustmentsPaused' | 'bid',
   args: readonly unknown[],
 ) {
   const estimate = await client.estimateContractGas({ address, abi, functionName, args, account: wallet.account } as never);
@@ -291,6 +292,49 @@ async function openKeeperAccount(usdcWhole: bigint) {
   await send(wallet, venue.cash, 'deposit', [id, usdc]);
   writeFileSync(accountsFile, JSON.stringify({ ...readAccounts(), keeper: id.toString() }, null, 2));
   console.log(JSON.stringify({ label: 'keeper', address: account.address, subaccountId: id.toString(), usdc: usdcWhole.toString() }));
+}
+
+/**
+ * A competing liquidator takes whatever a solvent auction has left: a 100% bid is capped by the
+ * auction to the proportion that restores buffer margin and terminates it. Needed because the chain
+ * refuses every trade for an account whose auction is ongoing (BM_AccountUnderLiquidation), and a
+ * solvent auction the keeper has bid down to a sliver otherwise stays open for its full window
+ * (fast + slow, 12h15m on this stack): until then the owner cannot close what is left.
+ */
+async function mopAuction(label: string) {
+  const id = readAccounts()[label];
+  if (id === undefined) throw new Error(`no account ${label}`);
+  const usdc = 2_000n * 10n ** 6n;
+  const { account, wallet } = await funded('mopper', usdc);
+  let bidder = readAccounts()['mopper'];
+  if (bidder === undefined) {
+    // A directly owned account under the perp SRM: bid() checks SubAccounts.ownerOf(bidder) == sender.
+    const receipt = await send(wallet, SUB_ACCOUNTS, 'createAccount', [account.address, venue.srm]);
+    const created = receipt.logs
+      .map((log) => {
+        try {
+          return decodeEventLog({ abi, data: log.data, topics: log.topics });
+        } catch {
+          return null;
+        }
+      })
+      .find((decoded) => decoded?.eventName === 'AccountCreated');
+    if (created?.eventName !== 'AccountCreated') throw new Error('mopper: no AccountCreated');
+    bidder = created.args.accountId.toString();
+    await send(wallet, USDC, 'approve', [venue.cash, usdc]);
+    await send(wallet, venue.cash, 'deposit', [BigInt(bidder), usdc]);
+    writeFileSync(accountsFile, JSON.stringify({ ...readAccounts(), mopper: bidder }, null, 2));
+  }
+  const before = await client.readContract({ address: venue.auction, abi, functionName: 'getAuction', args: [BigInt(id)] });
+  if (!before.ongoing) {
+    console.log(`${label} (#${id}): no auction ongoing, nothing to mop`);
+    return;
+  }
+  await send(wallet, venue.auction, 'bid', [BigInt(id), BigInt(bidder), 10n ** 18n, 0n, 0n]);
+  const after = await client.readContract({ address: venue.auction, abi, functionName: 'getAuction', args: [BigInt(id)] });
+  const position = await balance(id, venue.perp);
+  console.log(`mopper (#${bidder}) bid the rest of #${id}'s solvent auction: ongoing ${before.ongoing} -> ${after.ongoing}; ${label} now ${usd(position)} contracts`);
+  if (after.ongoing) throw new Error(`auction of #${id} still ongoing after a full bid`);
 }
 
 async function fundSecurityModule(usdcWhole: bigint) {
@@ -1026,6 +1070,9 @@ switch (command) {
     }
     break;
   }
+  case 'mop-auction':
+    await mopAuction(args[0] ?? 'liq');
+    break;
   case 'wait-reduced': {
     // wait-reduced <label> <position before> [timeout s]: until a liquidation has taken part of the
     // position and the auction is over with the account above maintenance margin (or all of it).
