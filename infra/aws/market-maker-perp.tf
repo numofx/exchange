@@ -75,13 +75,16 @@ resource "aws_ecs_task_definition" "market_maker_perp" {
       # the perp. Capital and these limits go up with the OI cap (runbook: Market-maker capital).
       { name = "MM_PERP_MAX_LEVERAGE", value = "1.5" },
       { name = "MM_PERP_QUOTE_WHILE_CLOSED", value = tostring(var.mm_perp_quote_while_closed) },
-      { name = "MM_ORDER_SIZE", value = "1000" },
+      { name = "MM_ORDER_SIZE", value = "116" },
       { name = "MM_MAX_LONG_INVENTORY", value = "6000" },
       { name = "MM_MAX_SHORT_INVENTORY", value = "-6000" },
-      { name = "MM_QUOTE_LEVELS", value = "3" },
-      { name = "MM_HALF_SPREAD_BPS", value = "25" },
-      { name = "MM_LEVEL_SPREAD_STEP_BPS", value = "25" },
-      { name = "MM_LEVEL_SIZE_MULT", value = "1.0" },
+      { name = "MM_QUOTE_LEVELS", value = "10" },
+      { name = "MM_HALF_SPREAD_BPS", value = "15" },
+      { name = "MM_LEVEL_SPREAD_STEP_BPS", value = "10" },
+      { name = "MM_LEVEL_SIZE_MULT", value = "1.2" },
+      # 20 resting quotes replaced 15 s before expiry: 300 s keeps that at ~4 cancels/min against
+      # the 30/min cap (60 s would be ~27/min and skip replaces).
+      { name = "MM_ORDER_EXPIRY_SECONDS", value = "300" },
       # The reference is the venue's own index (the /v1/markets perp block); no external anchor.
       { name = "MM_ANCHOR_SOURCE_TYPE", value = "none" },
       { name = "MM_USDCCNGN_SPOT_EXTERNAL_ANCHOR_ENABLED", value = "false" },
