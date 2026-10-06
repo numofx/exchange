@@ -44,7 +44,7 @@ func (r *Repository) SnapshotTrades(ctx context.Context, assetAddress, subID str
 	)
 	err := r.inRRSnapshot(ctx, func(tx pgx.Tx) error {
 		rows, e := tx.Query(ctx, `
-select trade_id, asset_address, sub_id, price, size, aggressor_side, taker_order_id, maker_order_id, created_at
+select trade_id, asset_address, sub_id, price, size, aggressor_side, taker_order_id, maker_order_id, created_at, tx_hash
 from trade_fills where asset_address = $1 and sub_id = $2
 order by created_at desc, trade_id desc limit $3`, asset, subID, limit)
 		if e != nil {
@@ -54,7 +54,7 @@ order by created_at desc, trade_id desc limit $3`, asset, subID, limit)
 		for rows.Next() {
 			var t TradeFill
 			if e := rows.Scan(&t.TradeID, &t.AssetAddress, &t.SubID, &t.Price, &t.Size,
-				&t.AggressorSide, &t.TakerOrderID, &t.MakerOrderID, &t.CreatedAt); e != nil {
+				&t.AggressorSide, &t.TakerOrderID, &t.MakerOrderID, &t.CreatedAt, &t.TxHash); e != nil {
 				return mapPGError(e)
 			}
 			trades = append(trades, t)
