@@ -784,7 +784,7 @@ limit $4
 
 func (r *Repository) ListTrades(ctx context.Context, assetAddress string, subID string, beforeTradeID int64, limit int32) ([]TradeFill, error) {
 	query := `
-select trade_id, asset_address, sub_id, price, size, aggressor_side, taker_order_id, maker_order_id, created_at
+select trade_id, asset_address, sub_id, price, size, aggressor_side, taker_order_id, maker_order_id, created_at, tx_hash
 from trade_fills
 where asset_address = $1 and sub_id = $2
   and ($3 = 0 or trade_id < $3)
@@ -811,6 +811,7 @@ limit $4
 			&item.TakerOrderID,
 			&item.MakerOrderID,
 			&item.CreatedAt,
+			&item.TxHash,
 		); err != nil {
 			return nil, mapPGError(err)
 		}
