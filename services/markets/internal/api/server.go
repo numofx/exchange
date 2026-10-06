@@ -160,6 +160,9 @@ type presentedTrade struct {
 	TakerOrderID   string                 `json:"taker_order_id,omitempty"`
 	MakerOrderID   string                 `json:"maker_order_id,omitempty"`
 	CreatedAt      time.Time              `json:"created_at"`
+	// TxHash is the settling transaction, for a link to the explorer; omitted for fills recorded
+	// before it was stored. Owner fills (/v1/fills) carry the same field.
+	TxHash         string                 `json:"tx_hash,omitempty"`
 	ContractType   string                 `json:"contract_type,omitempty"`
 	SettlementType string                 `json:"settlement_type,omitempty"`
 	Market         string                 `json:"market,omitempty"`
@@ -954,6 +957,10 @@ func presentTrades(items []orders.TradeFill, instrument instruments.Metadata) []
 	presented := make([]presentedTrade, 0, len(items))
 	for _, item := range items {
 		spotContract, _ := deriveSpotContractFromTrade(item, instrument)
+		txHash := ""
+		if item.TxHash != nil {
+			txHash = *item.TxHash
+		}
 		presented = append(presented, presentedTrade{
 			TradeID:        item.TradeID,
 			AssetAddress:   strings.ToLower(item.AssetAddress),
@@ -964,6 +971,7 @@ func presentTrades(items []orders.TradeFill, instrument instruments.Metadata) []
 			TakerOrderID:   item.TakerOrderID,
 			MakerOrderID:   item.MakerOrderID,
 			CreatedAt:      item.CreatedAt,
+			TxHash:         txHash,
 			ContractType:   instrument.ContractType,
 			SettlementType: instrument.SettlementType,
 			Market:         instrument.Symbol,
