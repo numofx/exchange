@@ -12,6 +12,8 @@ type TradeFill struct {
 	TakerOrderID  string
 	MakerOrderID  string
 	CreatedAt     time.Time
+	// TxHash is the settling transaction; nil for fills recorded before it was stored.
+	TxHash *string
 }
 
 type TradeStats24h struct {
