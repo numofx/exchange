@@ -26,11 +26,18 @@ func TestDefaultRegistryIncludesSpotByAssetAndSubID(t *testing.T) {
 	if item.SettlementType != "spot" {
 		t.Fatalf("spot settlement type = %q", item.SettlementType)
 	}
-	if item.BaseAssetSymbol != "USDC" || item.QuoteAssetSymbol != "cNGN" {
+	if item.BaseAssetSymbol != "cNGN" || item.QuoteAssetSymbol != "USDC" {
 		t.Fatalf("spot unexpected base/quote %q/%q", item.BaseAssetSymbol, item.QuoteAssetSymbol)
 	}
 	if !item.Enabled {
 		t.Fatalf("spot market should be enabled when its asset address is set")
+	}
+	if item.OrderEntrySpec != "cngn_usdc_spot_v1" || item.EngineSidePolicy != "same_as_ui" {
+		t.Fatalf("spot spec/side policy = %q/%q", item.OrderEntrySpec, item.EngineSidePolicy)
+	}
+	perp, ok := registry.BySymbol(CNGNPerpSymbol)
+	if !ok || perp.BaseAssetSymbol != "cNGN" || perp.QuoteAssetSymbol != "USDC" || perp.OrderEntrySpec != "cngn_usdc_perp_v1" {
+		t.Fatalf("perp unexpected base/quote/spec %q/%q/%q", perp.BaseAssetSymbol, perp.QuoteAssetSymbol, perp.OrderEntrySpec)
 	}
 }
 

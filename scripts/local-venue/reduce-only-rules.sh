@@ -25,8 +25,11 @@ step() { printf '\n== %s\n' "$*"; }
 [ -f "$DIR/venue.json" ] || { echo "run up.sh first" >&2; exit 1; }
 [ "$(cast chain-id --rpc-url $RPC)" = 31337 ] || { echo "not the local fork" >&2; exit 1; }
 
-open() { # open <label> <usd>: a long USD position of <usd> taken from the maker's offer, confirmed on chain
-  $VENUE take "$1" buy "$2"
+# Orders are sized in cNGN; a long USD position is a short of the perp. INDEX converts the dollar
+# sizes below at the index as it stands now (7 and 8 move it, and re-read it).
+INDEX=$(python3 -c "print(round(1e18 / $(cast call "$(python3 -c "import json;print(json.load(open('$DIR/venue.json'))['indexFeed'])")" 'getSpot()(uint256,uint256)' --rpc-url $RPC | head -1 | cut -d' ' -f1)))")
+open() { # open <label> <usd>: a long USD position of <usd> (a sell of the perp) taken from the maker's bid, confirmed on chain
+  $VENUE take "$1" sell $(($2 * INDEX))
 }
 
 step "0. accounts and the maker's resting quote"
@@ -59,7 +62,7 @@ $VENUE close-concurrent closer
 step "6. Close after a fill the UI has not shown ends flat"
 $VENUE quote
 open closer 1000
-$VENUE close-after-unseen-fill closer 300
+$VENUE close-after-unseen-fill closer $((300 * INDEX))
 
 fi
 
@@ -110,7 +113,7 @@ step "7. a partial liquidation, then a Close sized from the pre-liquidation posi
 # maintenance margin while still solvent, so the auction sells only what restores margin.
 $VENUE account liq 400
 $VENUE quote
-$VENUE take liq buy 1000
+$VENUE take liq sell $((1000 * INDEX0))
 PRE=$(position_of liq)
 echo "liq position before: $PRE"
 move_index $(python3 -c "print(round($INDEX0 * 0.78))")
@@ -127,7 +130,7 @@ step "8. a full liquidation, then a Close sized from the old position is refused
 INDEX1=$(index_now)
 $VENUE account liq2 400
 $VENUE quote
-$VENUE take liq2 buy 1000
+$VENUE take liq2 sell $((1000 * INDEX1))
 PRE2=$(position_of liq2)
 echo "liq2 position before: $PRE2"
 # Insolvent past a 40% loss on $400 of cash; the index-step procedure caps one step at 5000bps of

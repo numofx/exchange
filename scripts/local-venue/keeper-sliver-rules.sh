@@ -82,7 +82,7 @@ step "1. the keeper finishes its own sliver, then the owner's stale Close ends f
 $VENUE account maker 200000
 $VENUE account liq 400
 $VENUE quote
-$VENUE take liq buy 1000
+$VENUE take liq sell $((1000 * $(index_now)))   # $1,000 long USD: a sell of the perp, sized in cNGN
 PRE=$(position_of liq)
 echo "liq position before: $PRE"
 INDEX0=$(index_now)

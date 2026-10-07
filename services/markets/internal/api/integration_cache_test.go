@@ -181,7 +181,8 @@ insert into active_orders (
 	server := NewServer(cfg, pool, instruments.DefaultRegistry(cfg))
 	clock := &fakeClock{now: time.Unix(1_800_000_000, 0)}
 	router := server.routes(newIntegrationCache(5*time.Second, clock.Now))
-	bids := func() []integrationLevel {
+	// The seeded orders are engine sells of cNGN: the asks.
+	asks := func() []integrationLevel {
 		t.Helper()
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/integrations/orderbook?ticker_id=USDCcNGN-SPOT", nil))
@@ -192,25 +193,25 @@ insert into active_orders (
 		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 			t.Fatalf("unmarshal: %v", err)
 		}
-		return got.Bids
+		return got.Asks
 	}
 
 	insert(0, "0.0005", "500000000000000")
-	before := []integrationLevel{{"2000", "1"}}
-	if got := bids(); !reflect.DeepEqual(got, before) {
+	before := []integrationLevel{{"0.0005", "2000"}}
+	if got := asks(); !reflect.DeepEqual(got, before) {
 		t.Fatalf("first read = %v, want %v", got, before)
 	}
 
-	// A new best bid lands in the database; within the TTL the route must not see it.
+	// A new best ask lands in the database; within the TTL the route must not see it.
 	insert(1, "0.0004", "400000000000000")
 	clock.Advance(4 * time.Second)
-	if got := bids(); !reflect.DeepEqual(got, before) {
+	if got := asks(); !reflect.DeepEqual(got, before) {
 		t.Fatalf("read within TTL = %v, want the cached %v", got, before)
 	}
 
 	clock.Advance(time.Second)
-	after := []integrationLevel{{"2500", "0.8"}, {"2000", "1"}}
-	if got := bids(); !reflect.DeepEqual(got, after) {
+	after := []integrationLevel{{"0.0004", "2000"}, {"0.0005", "2000"}}
+	if got := asks(); !reflect.DeepEqual(got, after) {
 		t.Fatalf("read after TTL = %v, want %v", got, after)
 	}
 }

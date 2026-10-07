@@ -151,7 +151,7 @@ func (r createOrderRequest) toParams(cfg config.Config) (orders.CreateOrderParam
 			return orders.CreateOrderParams{}, fmt.Errorf("side must be 'buy' or 'sell'")
 		}
 	} else if r.OrderEntrySpec != "" || r.UIIntent != nil {
-		return orders.CreateOrderParams{}, fmt.Errorf("order_entry_spec and ui_intent are only supported for the usdc/cngn spot and perp contracts")
+		return orders.CreateOrderParams{}, fmt.Errorf("order_entry_spec and ui_intent are only supported for the cNGN/USDC spot and perp contracts")
 	}
 
 	converter, err := pricing.NewConverter(instrument)

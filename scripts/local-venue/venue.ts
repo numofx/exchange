@@ -6,13 +6,17 @@
  * keys are derived from fixed labels, and USDC is minted by writing its storage: none of it means
  * anything on a real network, and none of it can reach one.
  *
+ * Orders are given as the UI contract gives them (cngn_usdc_*_v1), which is the engine's own
+ * orientation: prices in USDC per cNGN (a decimal such as 0.000728), sizes in whole cNGN, and buy
+ * means buy cNGN. Nothing is inverted on the way to the venue.
+ *
  *   tsx venue.ts <state-dir> account <label> <usdc>   open a perp account (createAndDepositSubAccount)
  *   tsx venue.ts <state-dir> keeper-account <usdc>     the keeper's funding account: created by and owned by
  *                                                       the keeper EOA (not through Matching), then deposited
  *   tsx venue.ts <state-dir> spot-account <label> <usdc|cngn> <whole>   spot account under the spot SRM
  *   tsx venue.ts <state-dir> spot-deposit <label> <usdc|cngn> <whole>   add to an existing spot account
- *   tsx venue.ts <state-dir> spot-quote <label> <buy|sell> <price> <usd> rest a spot order
- *   tsx venue.ts <state-dir> spot-cross [price] [usd] / spot-withdraw <label> <usdc>   spot regression
+ *   tsx venue.ts <state-dir> spot-quote <label> <buy|sell> <price> <cngn> rest a spot order
+ *   tsx venue.ts <state-dir> spot-cross [price] [cngn] / spot-withdraw <label> <usdc>   spot regression
  *   tsx venue.ts <state-dir> withdraw <label> <usdc>   a perp account withdraws margin (WithdrawalModule, perp cash)
  *   tsx venue.ts <state-dir> fund-sm <usdc>            donate to the stack's SecurityModule
  *   tsx venue.ts <state-dir> quote                      maker rests a bid and an ask 0.5% around the index
@@ -37,6 +41,7 @@ import {
   keccak256,
   pad,
   parseAbi,
+  parseUnits,
   toHex,
   type Address,
 } from 'viem';
@@ -345,11 +350,21 @@ async function fundSecurityModule(usdcWhole: bigint) {
   console.log(`security module seeded with $${usdcWhole}`);
 }
 
-/** The index as the UI shows it: cNGN per USDC, rounded to a whole naira. */
-async function uiIndex(): Promise<bigint> {
-  const [usdPerNgn] = await client.readContract({ address: venue.indexFeed, abi, functionName: 'getSpot' });
-  return (10n ** 18n + usdPerNgn / 2n) / usdPerNgn;
+/** The index as the UI shows it and the feed holds it: USDC per cNGN, 18dp. */
+async function indexPrice(): Promise<bigint> {
+  const [usdcPerCngn] = await client.readContract({ address: venue.indexFeed, abi, functionName: 'getSpot' });
+  return usdcPerCngn;
 }
+
+const E18 = 10n ** 18n;
+/** Whole cNGN worth `usd` at `price` (USDC per cNGN, 18dp): how the harness sizes its own orders. */
+const cngnFor = (usd: bigint, price: bigint): bigint => (usd * E18) / price;
+/** The whole-dollar notional of `cngn` at `price`. */
+const usdOf = (cngn: bigint, price: bigint): bigint => (cngn * price) / E18;
+/** A price in USDC per cNGN as the UI prints it. */
+const fmtPrice = (price: bigint) => formatUnits(price, 18);
+/** A CLI price argument: a decimal in USDC per cNGN. */
+const parsePrice = (raw: string) => parseUnits(raw, 18);
 
 let lastNonce = 0n;
 function nonce() {
@@ -360,35 +375,33 @@ function nonce() {
 }
 
 /**
- * A perp order in trading-app's envelope (buildSpotOrderEnvelope with the perp market override):
- * UI price cNGN per USDC and size in USD; the engine price is 1 / price and the engine side the
- * opposite one. Whole-naira prices keep the arithmetic exact.
+ * An order in trading-app's envelope (buildSpotOrderEnvelope, spot or perp). The UI contract is the
+ * engine's own orientation, so the price (USDC per cNGN, 18dp) and the size (whole cNGN) go on
+ * chain as they are, and the side is the engine's side.
  */
 type OrderOptions = {
   /** Ask the venue to clamp the order to the account's position (the app's Close). */
   reduceOnly?: boolean;
-  /** Size in the engine's own whole cNGN contracts instead of USD x price (the app's exact close). */
-  engineAmountWhole?: bigint;
 };
 type PlacedOrder = { status: number; orderId: string; body: string };
 
 async function placeOrder(
   label: string,
   side: 'buy' | 'sell',
-  uiPrice: bigint,
-  uiSizeUsd: bigint,
+  price: bigint,
+  sizeCngn: bigint,
   market: OrderMarket = perpMarket(),
   expectation: 'accepted' | 'refused' = 'accepted',
   options: OrderOptions = {},
 ): Promise<number> {
-  return (await placeOrderDetailed(label, side, uiPrice, uiSizeUsd, market, expectation, options)).status;
+  return (await placeOrderDetailed(label, side, price, sizeCngn, market, expectation, options)).status;
 }
 
 async function placeOrderDetailed(
   label: string,
   side: 'buy' | 'sell',
-  uiPrice: bigint,
-  uiSizeUsd: bigint,
+  price: bigint,
+  sizeCngn: bigint,
   market: OrderMarket = perpMarket(),
   expectation: 'accepted' | 'refused' = 'accepted',
   options: OrderOptions = {},
@@ -397,10 +410,9 @@ async function placeOrderDetailed(
   const subaccountId = readAccounts()[label];
   if (subaccountId === undefined) throw new Error(`no account for ${label}; run "account ${label}" first`);
 
-  const enginePrice = (10n ** 18n + uiPrice / 2n) / uiPrice;
-  const engineAmountWhole = options.engineAmountWhole ?? uiSizeUsd * uiPrice;
-  const worstFee = (WORST_FEE_RATE_E18 + uiPrice / 2n) / uiPrice;
-  const engineSide = side === 'buy' ? 'sell' : 'buy';
+  if (price <= 0n || sizeCngn <= 0n) throw new Error(`${label}: an order needs a positive price and a whole cNGN at least`);
+  // The fee bound per cNGN: the rate on USD notional times the price.
+  const worstFee = (WORST_FEE_RATE_E18 * price) / E18;
   const expiry = BigInt(Math.floor(Date.now() / 1000) + 86_400);
   const orderNonce = nonce();
   const owner = getAddress(account.address);
@@ -425,11 +437,11 @@ async function placeOrderDetailed(
       {
         asset: market.asset,
         subId: 0n,
-        limitPrice: enginePrice,
-        desiredAmount: engineAmountWhole * 10n ** 18n,
+        limitPrice: price,
+        desiredAmount: sizeCngn * E18,
         worstFee,
         recipientId: BigInt(subaccountId),
-        isBid: engineSide === 'buy',
+        isBid: side === 'buy',
       },
     ],
   );
@@ -467,16 +479,16 @@ async function placeOrderDetailed(
     body: JSON.stringify({
       action_json: actionJson,
       asset_address: market.asset,
-      desired_amount: engineAmountWhole.toString(),
+      desired_amount: sizeCngn.toString(),
       expiry: Number(expiry),
       filled_amount: '0',
-      limit_price: formatUnits(enginePrice, 18),
+      limit_price: fmtPrice(price),
       nonce: orderNonce.toString(),
       order_id: orderId,
       ...(options.reduceOnly ? { reduce_only: true } : {}),
       owner_address: owner,
       recipient_id: subaccountId,
-      side: engineSide,
+      side,
       signer_address: owner,
       sub_id: '0',
       subaccount_id: subaccountId,
@@ -485,8 +497,7 @@ async function placeOrderDetailed(
     }),
   });
   const body = await response.text();
-  const sizing = options.engineAmountWhole ? `${options.engineAmountWhole} cNGN contracts` : `$${uiSizeUsd}`;
-  console.log(`${label} ${market.label} ${side}${options.reduceOnly ? ' reduce-only' : ''} ${sizing} @ ${uiPrice} cNGN/USDC -> ${response.status} ${body.slice(0, 200)}`);
+  console.log(`${label} ${market.label} ${side}${options.reduceOnly ? ' reduce-only' : ''} ${sizeCngn} cNGN ($${usdOf(sizeCngn, price)}) @ ${fmtPrice(price)} USDC/cNGN -> ${response.status} ${body.slice(0, 200)}`);
   if (expectation === 'refused') {
     if (response.ok) throw new Error(`order was accepted but the venue's rule should have refused it`);
     return { status: response.status, orderId, body };
@@ -495,7 +506,7 @@ async function placeOrderDetailed(
   return { status: response.status, orderId, body };
 }
 
-/** The account's signed perp position in chain units: negative is the venue's long USD. */
+/** The account's signed perp position in chain units: negative is a short of cNGN. */
 async function perpPosition(label: string): Promise<bigint> {
   const id = readAccounts()[label];
   if (id === undefined) throw new Error(`no account for ${label}`);
@@ -509,13 +520,12 @@ async function perpPosition(label: string): Promise<bigint> {
  */
 async function closeFrom(label: string, position: bigint, expectation: 'accepted' | 'refused' = 'accepted'): Promise<PlacedOrder> {
   if (position === 0n) throw new Error(`${label} is flat; nothing to close from`);
-  const index = await uiIndex();
+  const index = await indexPrice();
   const through = (index * 100n) / 10_000n;
-  // Short the cNGN perp (negative) = the venue's long USD, closed by a UI sell (engine buy).
-  const side: 'buy' | 'sell' = position < 0n ? 'sell' : 'buy';
-  const price = side === 'sell' ? index - through : index + through;
-  const contracts = abs(position) / 10n ** 18n;
-  return placeOrderDetailed(label, side, price, 0n, perpMarket(), expectation, { reduceOnly: true, engineAmountWhole: contracts });
+  // A short (negative) is closed by a buy and a long by a sell, each through the maker's quote.
+  const side: 'buy' | 'sell' = position < 0n ? 'buy' : 'sell';
+  const price = side === 'buy' ? index + through : index - through;
+  return placeOrderDetailed(label, side, price, abs(position) / E18, perpMarket(), expectation, { reduceOnly: true });
 }
 
 async function orderStatus(orderId: string): Promise<{ status: string; filled_amount: string; cancel_reason: string; reduce_only: boolean }> {
@@ -547,7 +557,7 @@ async function settle(orderIds: string[], timeoutSec = 90) {
 async function assertFlat(label: string, orderIds: string[]) {
   const states = await settle(orderIds);
   const position = await perpPosition(label);
-  if (abs(position) >= 10n ** 18n) throw new Error(`reduce-only FAILED: ${label} ended at ${position} contracts (${position < 0n ? 'long USD' : 'long naira'}), not flat`);
+  if (abs(position) >= 10n ** 18n) throw new Error(`reduce-only FAILED: ${label} ended at ${position} contracts (${position < 0n ? 'short cNGN' : 'long cNGN'}), not flat`);
   if (position !== 0n) console.log(`  ${label} holds ${position} (18dp): ${Number(position) / 1e18} of a contract, below the order unit`);
   const filled = states.filter((s) => s.status === 'filled' || (s.status === 'cancelled' && s.filled_amount !== '0')).length;
   console.log(`ok: ${label} is flat on chain; ${filled} of ${orderIds.length} closes carried a fill, the rest were cancelled by the venue`);
@@ -583,28 +593,29 @@ async function fillCap(collateral: 'usdc' | 'cngn' = 'usdc') {
     client.readContract({ address: venue.perp, abi, functionName: 'totalPositionCap', args: [venue.srm] }),
     client.readContract({ address: venue.perp, abi, functionName: 'totalPosition', args: [venue.srm] }),
   ]);
-  const index = await uiIndex();
-  const perSideNgn = (cap - total) / 2n / 10n ** 18n;
-  const uiSize = perSideNgn / index;
-  if (uiSize < 1n) throw new Error(`nothing left under the cap (cap ${cap}, total ${total})`);
+  const index = await indexPrice();
+  // Rounded down to a whole dollar's worth, so a sliver of the cap always stays open.
+  const notionalUsd = usdOf((cap - total) / 2n / E18, index);
+  if (notionalUsd < 1n) throw new Error(`nothing left under the cap (cap ${cap}, total ${total})`);
+  const size = cngnFor(notionalUsd, index);
   if (collateral === 'cngn') {
     // cNGN counts for half its value: initial margin (a third of notional) needs two thirds of the
     // notional in cNGN, plus 1% for the open to clear. The fee and funding land as negative cash.
-    await openCngnAccount('ngn-long', (uiSize * index * 2n * 101n) / 300n);
+    await openCngnAccount('ngn-long', (size * 2n * 101n) / 300n);
   } else {
     // Initial margin is a third of notional; the deposit covers it, the taker fee, and $50.
-    await openAccount('ngn-long', (uiSize * 34n) / 100n + 50n);
+    await openAccount('ngn-long', (notionalUsd * 34n) / 100n + 50n);
   }
-  await openAccount('ngn-short', uiSize + 1_000n);
-  // The NGN long is a UI short: it rests at the index, and the NGN short's UI buy takes it there.
-  await placeOrder('ngn-long', 'sell', index, uiSize);
-  await placeOrder('ngn-short', 'buy', index, uiSize);
+  await openAccount('ngn-short', notionalUsd + 1_000n);
+  // The NGN long's buy rests at the index, and the NGN short's sell takes it there.
+  await placeOrder('ngn-long', 'buy', index, size);
+  await placeOrder('ngn-short', 'sell', index, size);
   await waitForPosition('ngn-long');
   // What was opened, for wait-liquidated to measure what the auction left.
   const opened = await balance(readAccounts()['ngn-long']!, venue.perp);
   writeFileSync(accountsFile, JSON.stringify({ ...readAccounts(), 'ngn-long.opened': opened.toString() }, null, 2));
   const after = await client.readContract({ address: venue.perp, abi, functionName: 'totalPosition', args: [venue.srm] });
-  console.log(`OI ${after / 10n ** 18n} of cap ${cap / 10n ** 18n} NGN (each side $${uiSize} at ${index} cNGN/USDC)`);
+  console.log(`OI ${after / 10n ** 18n} of cap ${cap / 10n ** 18n} NGN (each side ${size} cNGN = $${notionalUsd} at ${fmtPrice(index)} USDC/cNGN)`);
 }
 
 async function report() {
@@ -621,6 +632,7 @@ async function report() {
   );
   console.table(rows);
   const summary = {
+    indexUsdcPerCngn: index === 0n ? 'stale' : fmtPrice(index),
     indexNgnPerUsd: index === 0n ? 'stale' : (1e18 / Number(index)).toFixed(2),
     oiNgn: Number((await client.readContract({ address: venue.perp, abi, functionName: 'totalPosition', args: [venue.srm] })) / 10n ** 18n),
     securityModuleCashUsd: usd(await balance(venue.securityModuleAccount, venue.cash)).toFixed(2),
@@ -746,18 +758,18 @@ async function spotBalances(label: string) {
 }
 
 /**
- * A resting UI sell of USDC, lifted by a UI buy, then checked against the spot fill contract
- * (trading-app README): UI BUY -> dUSDC = +size, dcNGN = -(size x price); UI SELL the reverse. The
- * taker pays the 25bps fee in USDC. Then the settlement transaction must carry the executor's gas
+ * The USDC holder's resting bid for cNGN, hit by the cNGN holder's sell, then checked against the
+ * spot fill contract: BUY -> dcNGN = +size, dUSDC = -(size x price); SELL the reverse. The taker
+ * pays the 25bps fee in USDC. Then the settlement transaction must carry the executor's gas
  * headroom.
  */
-async function spotCross(uiPrice: bigint, uiSize: bigint) {
+async function spotCross(price: bigint, size: bigint) {
   const makerBefore = await spotBalances('usdc-maker');
   const takerBefore = await spotBalances('cngn-taker');
   // Uncached: viem serves getBlockNumber from a 4s cache, which hid a settlement mined within it.
   const head = await client.getBlockNumber({ cacheTime: 0 });
-  await placeOrder('usdc-maker', 'sell', uiPrice, uiSize, spotMarket());
-  await placeOrder('cngn-taker', 'buy', uiPrice, uiSize, spotMarket());
+  await placeOrder('usdc-maker', 'buy', price, size, spotMarket());
+  await placeOrder('cngn-taker', 'sell', price, size, spotMarket());
 
   let makerAfter = makerBefore;
   for (let attempt = 0; attempt < 60 && makerAfter.cngn === makerBefore.cngn; attempt++) {
@@ -765,9 +777,9 @@ async function spotCross(uiPrice: bigint, uiSize: bigint) {
     makerAfter = await spotBalances('usdc-maker');
   }
   const takerAfter = await spotBalances('cngn-taker');
-  const E18 = 10n ** 18n;
-  const usdc = uiSize * E18;
-  const cngn = uiSize * uiPrice * E18;
+  const cngn = size * E18;
+  // Whole cNGN times USDC per cNGN at 18dp is USDC at 18dp, exact: the price goes on chain as it is.
+  const usdc = size * price;
   const delta = {
     maker: { usdc: makerAfter.usdc - makerBefore.usdc, cngn: makerAfter.cngn - makerBefore.cngn },
     taker: { usdc: takerAfter.usdc - takerBefore.usdc, cngn: takerAfter.cngn - takerBefore.cngn },
@@ -778,14 +790,10 @@ async function spotCross(uiPrice: bigint, uiSize: bigint) {
     if (!ok) throw new Error(`spot regression FAILED: ${what}`);
     console.log(`ok: ${what}`);
   };
-  // The engine price is 1/price rounded to 18dp, so the USDC leg can differ from size by that
-  // rounding times the cNGN amount: ~4e-15 USDC here. 1e-12 USDC (1e6 at 18dp) is ample and still exact.
-  const rounding = 1_000_000n;
-  const near = (a: bigint, b: bigint) => (a > b ? a - b : b - a) <= rounding;
-  check(near(delta.maker.usdc, -usdc), 'UI SELL: maker dUSDC = -size (to the engine price rounding)');
-  check(delta.maker.cngn === cngn, 'UI SELL: maker dcNGN = +size x price');
-  check(delta.taker.cngn === -cngn, 'UI BUY: taker dcNGN = -(size x price)');
-  check(delta.taker.usdc <= usdc + rounding && delta.taker.usdc >= usdc - fee, 'UI BUY: taker dUSDC = +size less the taker fee');
+  check(delta.maker.cngn === cngn, 'BUY: maker dcNGN = +size');
+  check(delta.maker.usdc === -usdc, 'BUY: maker dUSDC = -(size x price)');
+  check(delta.taker.cngn === -cngn, 'SELL: taker dcNGN = -size');
+  check(delta.taker.usdc <= usdc && delta.taker.usdc >= usdc - fee, 'SELL: taker dUSDC = +(size x price) less the taker fee');
 
   // The settlement: a verifyAndMatch to Matching since the orders went in, with headroom over its use.
   let settled = false;
@@ -924,19 +932,21 @@ switch (command) {
     await fundSecurityModule(BigInt(args[0] ?? '10000'));
     break;
   case 'quote': {
-    const index = await uiIndex();
+    // $2,000 a side in cNGN, a bid and an ask 0.5% around the index.
+    const index = await indexPrice();
     const spread = (index * 50n) / 10_000n;
-    await placeOrder('maker', 'buy', index - spread, 2_000n);
-    await placeOrder('maker', 'sell', index + spread, 2_000n);
+    const size = cngnFor(2_000n, index);
+    await placeOrder('maker', 'buy', index - spread, size);
+    await placeOrder('maker', 'sell', index + spread, size);
     break;
   }
   case 'take': {
-    // take <label> <buy|sell> <size usd>: cross the maker's quote one percent through the index and
+    // take <label> <buy|sell> <cngn>: cross the maker's quote one percent through the index and
     // wait for the position to land on chain.
-    const index = await uiIndex();
+    const index = await indexPrice();
     const through = (index * 100n) / 10_000n;
     const side = (args[1] ?? 'buy') as 'buy' | 'sell';
-    await placeOrder(args[0] ?? 'taker', side, side === 'buy' ? index + through : index - through, BigInt(args[2] ?? '100'));
+    await placeOrder(args[0] ?? 'taker', side, side === 'buy' ? index + through : index - through, BigInt(args[2] ?? '137400'));
     await waitForPosition(args[0] ?? 'taker');
     break;
   }
@@ -944,8 +954,9 @@ switch (command) {
     await waitForPosition(args[0] ?? 'taker');
     break;
   case 'cross': {
-    const index = await uiIndex();
-    await placeOrder('taker', 'buy', index + (index * 100n) / 10_000n, 1_000n);
+    // The taker sells $1,000 of cNGN one percent through the index, into the maker's bid.
+    const index = await indexPrice();
+    await placeOrder('taker', 'sell', index - (index * 100n) / 10_000n, cngnFor(1_000n, index));
     await waitForPosition('taker');
     break;
   }
@@ -956,10 +967,10 @@ switch (command) {
     await spotDeposit(args[0] ?? 'trader', (args[1] ?? 'cngn') as 'usdc' | 'cngn', BigInt(args[2] ?? '1000'));
     break;
   case 'spot-quote':
-    await placeOrder(args[0] ?? 'trader', (args[1] ?? 'buy') as 'buy' | 'sell', BigInt(args[2] ?? '1374'), BigInt(args[3] ?? '10'), spotMarket());
+    await placeOrder(args[0] ?? 'trader', (args[1] ?? 'buy') as 'buy' | 'sell', parsePrice(args[2] ?? '0.000728'), BigInt(args[3] ?? '13740'), spotMarket());
     break;
   case 'spot-cross':
-    await spotCross(BigInt(args[0] ?? '1374'), BigInt(args[1] ?? '100'));
+    await spotCross(parsePrice(args[0] ?? '0.000728'), BigInt(args[1] ?? '137400'));
     break;
   case 'spot-market-check': {
     // spot-market-check: /v1/markets binds the spot market to the stack venue.json says it should.
@@ -976,31 +987,31 @@ switch (command) {
     break;
   }
   case 'spot-order': {
-    // spot-order <label> <buy|sell> <ui price> <size usd> [accepted|refused]
+    // spot-order <label> <buy|sell> <price usdc per cngn> <cngn> [accepted|refused]
     const expectation = (args[4] ?? 'accepted') as 'accepted' | 'refused';
-    const status = await placeOrder(args[0]!, args[1] as 'buy' | 'sell', BigInt(args[2]!), BigInt(args[3]!), spotMarket(), expectation);
-    console.log(`${expectation === 'accepted' ? 'ok' : 'ok (refused as expected)'}: ${args[0]} spot ${args[1]} $${args[3]} @ ${args[2]} -> ${status}`);
+    const status = await placeOrder(args[0]!, args[1] as 'buy' | 'sell', parsePrice(args[2]!), BigInt(args[3]!), spotMarket(), expectation);
+    console.log(`${expectation === 'accepted' ? 'ok' : 'ok (refused as expected)'}: ${args[0]} spot ${args[1]} ${args[3]} cNGN @ ${args[2]} USDC/cNGN -> ${status}`);
     break;
   }
   case 'spot-overdrawn': {
-    // spot-overdrawn <poor> <rich> <ui price> <size usd>: the poor account, holding less cash than
-    // the size, sells USDC (the engine BUY of cNGN, paid in cash) into the rich account's resting
-    // bid. The venue accepts the order (it does not read balances at submission) and the matcher
-    // refuses the fill as buyer_underfunded, so it never settles: cash cannot be overdrawn by a
-    // spot trade, even with borrowing on under the SRM.
+    // spot-overdrawn <poor> <rich> <price usdc per cngn> <cngn>: the poor account, holding less
+    // cash than the notional, buys cNGN (paid in cash) from the rich account's resting offer. The
+    // venue accepts the order (it does not read balances at submission) and the matcher refuses
+    // the fill as buyer_underfunded, so it never settles: cash cannot be overdrawn by a spot trade,
+    // even with borrowing on under the SRM.
     const [poor, rich] = [args[0]!, args[1]!];
-    const price = BigInt(args[2]!);
+    const price = parsePrice(args[2]!);
     const size = BigInt(args[3]!);
     const poorCashBefore = await balance(readAccounts()[poor]!, SPOT.wrappedUsdc);
-    if (poorCashBefore >= size * 10n ** 18n) throw new Error(`${poor} holds ${poorCashBefore} cash: not overdrawn by a $${size} sell`);
-    await placeOrder(rich, 'buy', price, size, spotMarket());
-    await placeOrder(poor, 'sell', price, size, spotMarket());
+    if (poorCashBefore >= size * price) throw new Error(`${poor} holds ${poorCashBefore} cash: not overdrawn by a ${size} cNGN buy ($${usdOf(size, price)})`);
+    await placeOrder(rich, 'sell', price, size, spotMarket());
+    await placeOrder(poor, 'buy', price, size, spotMarket());
     await new Promise((resolve) => setTimeout(resolve, 20_000));
     const poorCashAfter = await balance(readAccounts()[poor]!, SPOT.wrappedUsdc);
     if (poorCashAfter !== poorCashBefore) throw new Error(`${poor}'s cash moved ${poorCashBefore} -> ${poorCashAfter}: the overdrawn sell filled`);
     const log = readFileSync(join(stateDir, 'logs', 'markets-matcher.log'), 'utf8');
     if (!log.includes('buyer_underfunded')) throw new Error('the matcher did not report buyer_underfunded');
-    console.log(`ok: ${poor}'s $${size} sell with ${usd(poorCashBefore).toFixed(2)} of cash never filled; the matcher refused it as buyer_underfunded`);
+    console.log(`ok: ${poor}'s ${size} cNGN buy ($${usdOf(size, price)}) with ${usd(poorCashBefore).toFixed(2)} of cash never filled; the matcher refused it as buyer_underfunded`);
     break;
   }
   case 'margin-of': {
@@ -1031,12 +1042,12 @@ switch (command) {
     await perpWithdraw(args[0] ?? 'taker', BigInt(args[1] ?? '10'));
     break;
   case 'order': {
-    // order <label> <buy|sell> <size usd> [accepted|refused]: a limit at the index, with the
-    // venue's answer asserted. UI buy is long USD (the on-chain short of the cNGN perp).
-    const index = await uiIndex();
+    // order <label> <buy|sell> <cngn> [accepted|refused]: a limit at the index, with the venue's
+    // answer asserted. A buy is long cNGN, the on-chain long of the perp.
+    const index = await indexPrice();
     const expectation = (args[3] ?? 'accepted') as 'accepted' | 'refused';
-    const status = await placeOrder(args[0] ?? 'trader', (args[1] ?? 'buy') as 'buy' | 'sell', index, BigInt(args[2] ?? '100'), perpMarket(), expectation);
-    console.log(`${expectation === 'accepted' ? 'ok' : 'ok (refused as expected)'}: ${args[0]} ${args[1]} $${args[2]} -> ${status}`);
+    const status = await placeOrder(args[0] ?? 'trader', (args[1] ?? 'buy') as 'buy' | 'sell', index, BigInt(args[2] ?? '137400'), perpMarket(), expectation);
+    console.log(`${expectation === 'accepted' ? 'ok' : 'ok (refused as expected)'}: ${args[0]} ${args[1]} ${args[2]} cNGN -> ${status}`);
     break;
   }
   case 'withdraw-refused':
@@ -1126,8 +1137,8 @@ switch (command) {
   case 'close-refused-flat': {
     // A reduce-only order from a flat account is refused at submission (422), never rests.
     const label = args[0] ?? 'taker';
-    const index = await uiIndex();
-    const placed = await placeOrderDetailed(label, 'sell', index - index / 100n, 0n, perpMarket(), 'refused', { reduceOnly: true, engineAmountWhole: 1000n });
+    const index = await indexPrice();
+    const placed = await placeOrderDetailed(label, 'buy', index + index / 100n, 1000n, perpMarket(), 'refused', { reduceOnly: true });
     if (placed.status !== 422) throw new Error(`reduce-only from flat: want 422, got ${placed.status}`);
     console.log(`ok (refused as expected): reduce-only from a flat account -> 422`);
     break;
@@ -1136,10 +1147,11 @@ switch (command) {
     // A reduce-only order on the position's own side is refused at submission (422).
     const label = args[0] ?? 'taker';
     const position = await perpPosition(label);
-    const index = await uiIndex();
-    const side: 'buy' | 'sell' = position < 0n ? 'buy' : 'sell';
+    const index = await indexPrice();
+    // The position's own side: a short sells more, a long buys more.
+    const side: 'buy' | 'sell' = position < 0n ? 'sell' : 'buy';
     const price = side === 'buy' ? index + index / 100n : index - index / 100n;
-    const placed = await placeOrderDetailed(label, side, price, 0n, perpMarket(), 'refused', { reduceOnly: true, engineAmountWhole: 100n });
+    const placed = await placeOrderDetailed(label, side, price, 100n, perpMarket(), 'refused', { reduceOnly: true });
     if (placed.status !== 422) throw new Error(`reduce-only on the position's side: want 422, got ${placed.status}`);
     console.log(`ok (refused as expected): reduce-only that would increase the position -> 422`);
     break;
@@ -1163,15 +1175,15 @@ switch (command) {
     break;
   }
   case 'close-after-unseen-fill': {
-    // close-after-unseen-fill <label> <partial usd>: a reducing fill lands that the UI has not
+    // close-after-unseen-fill <label> <partial cngn>: a reducing fill lands that the UI has not
     // shown, then Close is sized from the stale read; the venue clamps it to what is left.
     const label = args[0] ?? 'taker';
-    const partialUsd = BigInt(args[1] ?? '300');
+    const partialCngn = BigInt(args[1] ?? '412200');
     const stale = await perpPosition(label);
-    const index = await uiIndex();
+    const index = await indexPrice();
     const through = (index * 100n) / 10_000n;
-    const side: 'buy' | 'sell' = stale < 0n ? 'sell' : 'buy';
-    const partial = await placeOrderDetailed(label, side, side === 'sell' ? index - through : index + through, partialUsd);
+    const side: 'buy' | 'sell' = stale < 0n ? 'buy' : 'sell';
+    const partial = await placeOrderDetailed(label, side, side === 'buy' ? index + through : index - through, partialCngn);
     await settle([partial.orderId]);
     const seen = await perpPosition(label);
     if (abs(seen) >= abs(stale)) throw new Error(`the partial reduction did not land: ${stale} -> ${seen}`);
@@ -1184,16 +1196,14 @@ switch (command) {
     break;
   }
   case 'hedge': {
-    // hedge <label> <cngn whole>: a treasury posts cNGN and goes long USD 1:1 with it, crossing the
-    // maker's offer so the position exists (a treasury's natural size; the venue sets no bound).
+    // hedge <label> <cngn whole>: a treasury posts cNGN and shorts the perp 1:1 with it (long USD),
+    // crossing the maker's bid so the position exists (a treasury's natural size; the venue sets no bound).
     const cngnWhole = BigInt(args[1] ?? '2000000');
     await openCngnAccount(args[0] ?? 'treasury', cngnWhole);
-    const index = await uiIndex();
-    // The 1:1 bound is in cNGN contracts, which scale with the order's price: size from the
-    // crossing price, one dollar under, so rounding never trips the rule.
-    const price = index + (index * 100n) / 10_000n;
-    const sizeUsd = cngnWhole / price - 1n;
-    await placeOrder(args[0] ?? 'treasury', 'buy', price, sizeUsd);
+    const index = await indexPrice();
+    const price = index - (index * 100n) / 10_000n;
+    // A dollar's worth under 1:1, as the app would size it.
+    await placeOrder(args[0] ?? 'treasury', 'sell', price, cngnWhole - cngnFor(1n, price));
     await waitForPosition(args[0] ?? 'treasury');
     break;
   }
