@@ -1,0 +1,11 @@
+[
+  {
+    "description": "perp.setStaticInterestRate(rate) [NGN-over-USD spread 20.00% APR -> -0.002283%/h (-20.00% APR), paid by longs when positive, received by longs when negative]",
+    "to": "0xC74EfC8B4808803dBCF439E76Fde076d56625b8E",
+    "value": "0",
+    "data": "0xffa63d26ffffffffffffffffffffffffffffffffffffffffffffffffffffeb3c3b5c7da9",
+    "digest": "0x2496415f15246a4655471558083b1a962f0b4e1ed8d9e8e52adf54d580e8dac2",
+    "rate_e18": "-22831050228311",
+    "spread_apr": "0.20"
+  }
+]
