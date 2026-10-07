@@ -10,9 +10,10 @@ import (
 )
 
 const (
-	spotOrderEntrySpec          = instruments.SpotOrderEntrySpec
-	spotEngineDecimalScale      = 18
-	spotUIPriceDecimalScale     = 6
+	spotOrderEntrySpec     = instruments.SpotOrderEntrySpec
+	spotEngineDecimalScale = 18
+	// UI prices are USDC per cNGN (~0.00073), so a 6-place scale would keep three digits of them.
+	spotUIPriceDecimalScale     = 10
 	spotUISizeDecimalScale      = 6
 	spotContractComparisonScale = 18
 )
@@ -41,10 +42,10 @@ type spotOrderContractEcho struct {
 	BalanceDelta spotBalanceDeltas `json:"balance_delta"`
 }
 
-// isSpotContractInstrument reports whether the market is quoted in the inverted UI orientation:
-// price in cNGN per USDC, size in USDC notional, side flipped against the engine. Spot and the perp
-// both are -- the perp is USDC per cNGN on chain -- so one translation serves both, keyed on the
-// market's own order_entry_spec. (The name predates the perp; every caller wants this predicate.)
+// isSpotContractInstrument reports whether the market carries the venue's ui_intent contract
+// (cngn_usdc_*_v1): price in USDC per cNGN, size in cNGN, side the engine's own. Spot and the perp
+// both do, keyed on the market's own order_entry_spec. (The name predates the perp; every caller
+// wants this predicate.)
 func isSpotContractInstrument(instrument instruments.Metadata) bool {
 	switch instrument.OrderEntrySpec {
 	case instruments.SpotOrderEntrySpec:
@@ -88,6 +89,8 @@ func validateOrTranslateSpotUIIntent(spec string, orderEntrySpec string, uiInten
 	return translatedEngineSide, translated.EngineOrder.Price, translated.EngineOrder.Amount, nil
 }
 
+// translateSpotUIIntent is the identity: the engine order is the ui_intent, with the price and
+// amount normalized to the engine's scale.
 func translateSpotUIIntent(spec string, uiIntent *spotOrderIntent) (*spotOrderContractEcho, error) {
 	if uiIntent == nil {
 		return nil, fmt.Errorf("ui_intent is required")
@@ -107,20 +110,6 @@ func translateSpotUIIntent(spec string, uiIntent *spotOrderIntent) (*spotOrderCo
 		return nil, err
 	}
 
-	enginePrice := new(big.Rat).Inv(uiPrice)
-	engineAmount := new(big.Rat).Mul(uiSize, uiPrice)
-	engineSide := orders.SideBuy
-	if uiSide == orders.SideBuy {
-		engineSide = orders.SideSell
-	}
-
-	usdcDelta := new(big.Rat).Set(uiSize)
-	cngnDelta := new(big.Rat).Neg(engineAmount)
-	if uiSide == orders.SideSell {
-		usdcDelta.Neg(usdcDelta)
-		cngnDelta.Neg(cngnDelta)
-	}
-
 	return &spotOrderContractEcho{
 		Spec: spec,
 		UIIntent: spotOrderIntent{
@@ -129,15 +118,27 @@ func translateSpotUIIntent(spec string, uiIntent *spotOrderIntent) (*spotOrderCo
 			Size:  normalizeDecimalString(uiIntent.Size),
 		},
 		EngineOrder: spotEngineOrder{
-			Side:   string(engineSide),
-			Price:  formatDecimal(enginePrice, spotEngineDecimalScale),
-			Amount: formatDecimal(engineAmount, spotEngineDecimalScale),
+			Side:   string(uiSide),
+			Price:  formatDecimal(uiPrice, spotEngineDecimalScale),
+			Amount: formatDecimal(uiSize, spotEngineDecimalScale),
 		},
-		BalanceDelta: spotBalanceDeltas{
-			USDC: formatSignedDecimal(usdcDelta, spotUISizeDecimalScale),
-			CNGN: formatSignedDecimal(cngnDelta, spotUISizeDecimalScale),
-		},
+		BalanceDelta: balanceDeltas(uiSide, uiPrice, uiSize),
 	}, nil
+}
+
+// balanceDeltas is what a fill of the whole order moves: a BUY of size S at price P is cNGN +S and
+// USDC -S x P; a SELL is the reverse.
+func balanceDeltas(side orders.Side, price *big.Rat, size *big.Rat) spotBalanceDeltas {
+	cngnDelta := new(big.Rat).Set(size)
+	usdcDelta := new(big.Rat).Neg(new(big.Rat).Mul(size, price))
+	if side == orders.SideSell {
+		cngnDelta.Neg(cngnDelta)
+		usdcDelta.Neg(usdcDelta)
+	}
+	return spotBalanceDeltas{
+		USDC: formatSignedDecimal(usdcDelta, spotUISizeDecimalScale),
+		CNGN: formatSignedDecimal(cngnDelta, spotUISizeDecimalScale),
+	}
 }
 
 func deriveSpotContractFromOrder(order orders.Order, instrument instruments.Metadata) (*spotOrderContractEcho, error) {
@@ -154,9 +155,9 @@ func deriveSpotContractFromTrade(trade orders.TradeFill, instrument instruments.
 	return deriveSpotOrderContractEchoFromEngine(instrument.OrderEntrySpec, trade.AggressorSide, trade.Price, trade.Size)
 }
 
-// deriveSpotOrderContractEchoFromEngine presents an engine order in UI terms. For the perp the
-// balance_delta is the change in USDC/cNGN exposure a fill opens, not a token movement: the same
-// numbers, since the translation is the same, but nothing is delivered.
+// deriveSpotOrderContractEchoFromEngine presents an engine order in UI terms: the same side, price
+// and amount at the UI's scales. For the perp the balance_delta is the change in USDC/cNGN exposure
+// a fill opens, not a token movement: the same numbers, but nothing is delivered.
 func deriveSpotOrderContractEchoFromEngine(spec string, engineSide orders.Side, enginePrice string, engineAmount string) (*spotOrderContractEcho, error) {
 	if engineSide != orders.SideBuy && engineSide != orders.SideSell {
 		return nil, fmt.Errorf("spot engine side must be buy or sell")
@@ -171,36 +172,19 @@ func deriveSpotOrderContractEchoFromEngine(spec string, engineSide orders.Side, 
 		return nil, err
 	}
 
-	uiPrice := new(big.Rat).Inv(enginePriceRat)
-	uiSize := new(big.Rat).Mul(engineAmountRat, enginePriceRat)
-	uiSide := orders.SideSell
-	if engineSide == orders.SideSell {
-		uiSide = orders.SideBuy
-	}
-
-	usdcDelta := new(big.Rat).Set(uiSize)
-	cngnDelta := new(big.Rat).Neg(engineAmountRat)
-	if uiSide == orders.SideSell {
-		usdcDelta.Neg(usdcDelta)
-		cngnDelta.Neg(cngnDelta)
-	}
-
 	return &spotOrderContractEcho{
 		Spec: spec,
 		UIIntent: spotOrderIntent{
-			Side:  string(uiSide),
-			Price: formatDecimal(uiPrice, spotUIPriceDecimalScale),
-			Size:  formatDecimal(uiSize, spotUISizeDecimalScale),
+			Side:  string(engineSide),
+			Price: formatDecimal(enginePriceRat, spotUIPriceDecimalScale),
+			Size:  formatDecimal(engineAmountRat, spotUISizeDecimalScale),
 		},
 		EngineOrder: spotEngineOrder{
 			Side:   string(engineSide),
 			Price:  normalizeDecimalString(enginePrice),
 			Amount: normalizeDecimalString(engineAmount),
 		},
-		BalanceDelta: spotBalanceDeltas{
-			USDC: formatSignedDecimal(usdcDelta, spotUISizeDecimalScale),
-			CNGN: formatSignedDecimal(cngnDelta, spotUISizeDecimalScale),
-		},
+		BalanceDelta: balanceDeltas(engineSide, enginePriceRat, engineAmountRat),
 	}, nil
 }
 

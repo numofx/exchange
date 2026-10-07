@@ -18,9 +18,10 @@ import (
 // USDCcNGN-PERP's live state, read from its own stack on chain: mark, index, funding, open interest
 // and margin rates for /v1/markets, and per-account positions for /v1/positions.
 //
-// Everything is served in both orientations. The engine prices the perp in USDC per cNGN; the venue
-// shows cNGN per USDC with the side flipped. Funding is the one place the flip bites: the chain's rate
-// is paid by NGN-perp LONGS, which are the venue's SHORTS, so ui_long_funding_rate_1h is its negation.
+// The UI orientation is the engine's own: prices in USDC per cNGN, sizes in cNGN, and a UI long is
+// the on-chain long of the cNGN perp. The *_ui fields are the chain's figures at the UI's scales,
+// nothing inverted. ui_long_funding_rate_1h is the chain's rate as it is: positive means the UI long
+// (long cNGN) pays.
 
 const (
 	sigGetIndexPrice          = "0x58c0994a" // getIndexPrice()
@@ -41,7 +42,10 @@ const (
 
 	perpStateTTL = 10 * time.Second
 	perpUIScale  = 6
-	perpE18Scale = 18
+	// perpPriceScale is the UI's price scale: USDC per cNGN is ~0.00072, so six places would keep
+	// two digits of it.
+	perpPriceScale = spotUIPriceDecimalScale
+	perpE18Scale   = 18
 )
 
 var perpE18 = new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
@@ -115,10 +119,12 @@ type presentedCollateral struct {
 type presentedPosition struct {
 	Market       string `json:"market"`
 	SubaccountID string `json:"subaccount_id"`
-	// EnginePosition is the signed NGN-perp balance; UISide/UISize are the venue's view of it.
+	// EnginePosition is the signed cNGN-perp balance (18dp). UISide is "long" when it is positive,
+	// UISize its magnitude in cNGN, and UINotionalUSDC that size at the index, in USDC.
 	EnginePosition string `json:"engine_position"`
 	UISide         string `json:"ui_side"`
 	UISize         string `json:"ui_size"`
+	UINotionalUSDC string `json:"ui_notional_usdc"`
 	MarkPriceUI    string `json:"mark_price_ui"`
 	IndexPriceUI   string `json:"index_price_ui"`
 	UnrealizedPnL  string `json:"unrealized_pnl"`
@@ -126,7 +132,8 @@ type presentedPosition struct {
 	InitialMarginSurplus     string `json:"initial_margin_surplus"`
 	MaintenanceMarginSurplus string `json:"maintenance_margin_surplus"`
 	// LiquidationPriceUI is where the account would fall below maintenance margin if nothing else
-	// changed; empty when no price gets it there. An estimate, for a perp-only account.
+	// changed, in USDC per cNGN; empty when no price gets it there. An estimate, for a perp-only
+	// account.
 	LiquidationPriceUI string `json:"liquidation_price_ui,omitempty"`
 }
 
@@ -272,10 +279,10 @@ func (r *perpStateReader) marketState(ctx context.Context, market instruments.Me
 		PositionCap:            e18String(positionCap),
 		MarkPrice:              e18String(mark),
 		IndexPrice:             e18String(index),
-		MarkPriceUI:            inverseString(mark),
-		IndexPriceUI:           inverseString(index),
+		MarkPriceUI:            uiPriceString(mark),
+		IndexPriceUI:           uiPriceString(index),
 		FundingRate1h:          e18String(funding),
-		UILongFunding1h:        e18String(new(big.Int).Neg(funding)),
+		UILongFunding1h:        e18String(funding),
 		FundingIntervalSeconds: int64(market.FundingInterval / time.Second),
 		OpenInterest:           e18String(oi),
 		OpenInterestUSD:        formatDecimal(new(big.Rat).SetFrac(new(big.Int).Mul(oi, index), new(big.Int).Mul(perpE18, perpE18)), perpUIScale),
@@ -510,26 +517,27 @@ func (r *perpStateReader) position(ctx context.Context, market instruments.Metad
 	}
 
 	uiSide := "short"
-	if size.Sign() < 0 {
-		// short the cNGN perp = long USDC, the venue's long
+	if size.Sign() > 0 {
 		uiSide = "long"
 	}
-	notional := new(big.Rat).SetFrac(new(big.Int).Mul(new(big.Int).Abs(size), raw.index), new(big.Int).Mul(perpE18, perpE18))
+	contracts := new(big.Int).Abs(size)
+	notional := new(big.Rat).SetFrac(new(big.Int).Mul(contracts, raw.index), new(big.Int).Mul(perpE18, perpE18))
 
 	presented := &presentedPosition{
 		Market:                   market.Symbol,
 		SubaccountID:             subaccountID,
 		EnginePosition:           e18String(size),
 		UISide:                   uiSide,
-		UISize:                   formatDecimal(notional, perpUIScale),
-		MarkPriceUI:              inverseString(raw.mark),
-		IndexPriceUI:             inverseString(raw.index),
+		UISize:                   formatDecimal(new(big.Rat).SetFrac(contracts, perpE18), perpUIScale),
+		UINotionalUSDC:           formatDecimal(notional, perpUIScale),
+		MarkPriceUI:              uiPriceString(raw.mark),
+		IndexPriceUI:             uiPriceString(raw.index),
 		UnrealizedPnL:            e18String(pnl),
 		InitialMarginSurplus:     e18String(imSurplus),
 		MaintenanceMarginSurplus: e18String(mmSurplus),
 	}
 	if liq := liquidationPrice(size, raw.mark, raw.mmReq, mmSurplus); liq != nil {
-		presented.LiquidationPriceUI = formatDecimal(new(big.Rat).Inv(liq), perpUIScale)
+		presented.LiquidationPriceUI = formatDecimal(liq, perpPriceScale)
 	}
 	return presented, nil
 }
@@ -599,12 +607,12 @@ func formatSignedE18(value *big.Int, scale int) string {
 	return formatDecimal(rat, scale)
 }
 
-// inverseString is 1/price for an 18dp engine price: cNGN per USDC from USDC per cNGN.
-func inverseString(price *big.Int) string {
+// uiPriceString is an 18dp engine price (USDC per cNGN) at the UI's price scale.
+func uiPriceString(price *big.Int) string {
 	if price.Sign() <= 0 {
 		return ""
 	}
-	return formatDecimal(new(big.Rat).SetFrac(perpE18, price), perpUIScale)
+	return formatDecimal(new(big.Rat).SetFrac(price, perpE18), perpPriceScale)
 }
 
 // handlePositions serves GET /v1/positions?subaccount_id=N: the account's perp positions, read from

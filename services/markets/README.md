@@ -109,10 +109,16 @@ refuses to boot:
 
 Set them on the API **and** the matcher, and set `PERP_TRADE_MODULE_ADDRESS` on execution-service.
 
-- **Orientation.** On chain the perp is USDC per cNGN, sized in cNGN. The venue shows it like spot:
-  cNGN per USDC, sized in USDC notional, side flipped — a UI long is a short of the cNGN perp. Orders
-  use `order_entry_spec: "usdc_cngn_perp_v1"` with the same `ui_intent` translation as spot, and an
-  intent signed for one market's spec is refused on the other's.
+- **Orientation.** The UI contract is the engine's own: prices in USDC per cNGN, sizes in cNGN,
+  and a UI long is the on-chain long of the cNGN perp (`display_name: "cNGN-PERP"`, base
+  `cNGN`, quote `USDC`). Orders carry `order_entry_spec: "cngn_usdc_perp_v1"` and a `ui_intent`
+  (`side`, `price`, `size`) that the venue checks against the engine fields as the identity
+  (`engine_side_policy: same_as_ui`, `engine_price = ui_price`, `engine_amount = ui_size`); an
+  intent signed for one market's spec is refused on the other's. Spot is the same contract under
+  `cngn_usdc_spot_v1` (`display_name: "cNGN-USDC"`). The `spot_contract` echo on orders, fills and
+  trades gives the engine order at the UI's scales (price at ten places, size at six) with a
+  `balance_delta`: a buy of S at P is cNGN +S and USDC −S×P, a sell the reverse (for the perp, the
+  exposure a fill opens).
 - **Module.** A perp order must name the perp module; a spot order the spot module. The matcher
   verifies at boot that the perp module's `quoteAsset()` is `CNGN_PERP_CASH_ADDRESS`.
 - **Closed until enabled.** The stack deploys with position cap 0 and the module not allowlisted,
@@ -126,11 +132,15 @@ Set them on the API **and** the matcher, and set `PERP_TRADE_MODULE_ADDRESS` on 
   both sides: IM surplus now, minus the price-vs-mark leg, the taker fee and the initial margin the
   fill adds. Reducing a position is always allowed. Fails open on RPC errors, like the funding check;
   the SRM is the enforcement.
-- **`/v1/markets`** adds a `perp` object for the perp: mark and index (both orientations), the hourly
-  funding rate (`funding_rate_1h`, paid by NGN longs; `ui_long_funding_rate_1h` is the venue long's
-  view), open interest, margin rates, max leverage, and the module/cash/SRM to sign and deposit for.
-- **`GET /v1/positions?subaccount_id=N`** returns the account's perp position from chain: side and
-  size in UI terms, mark, unrealized PnL, IM/MM surplus and an estimated liquidation price.
+- **`/v1/markets`** adds a `perp` object for the perp: mark and index in USDC per cNGN
+  (`mark_price`/`index_price` at 18 places, `mark_price_ui`/`index_price_ui` at ten), the hourly
+  funding rate (`funding_rate_1h`; `ui_long_funding_rate_1h` is the same number — positive means
+  the long, long cNGN, pays), open interest, margin rates, max leverage, and the module/cash/SRM to
+  sign and deposit for.
+- **`GET /v1/positions?subaccount_id=N`** returns the account's perp position from chain:
+  `engine_position` (signed, cNGN), `ui_side` (`long` when positive), `ui_size` (|position| in
+  cNGN), `ui_notional_usdc` (that size at the index), `mark_price_ui`/`index_price_ui`, unrealized
+  PnL, IM/MM surplus and an estimated `liquidation_price_ui` in USDC per cNGN.
 
 ## Configuration
 
@@ -167,8 +177,9 @@ instrument by exact `(asset_address, sub_id)` and exposes the canonical market s
 
 - `contract_type=spot`
 - `settlement_type=spot`
-- `base_asset_symbol=USDC`
-- `quote_asset_symbol=cNGN`
+- `base_asset_symbol=cNGN`
+- `quote_asset_symbol=USDC`
+- `order_entry_spec=cngn_usdc_spot_v1`: prices in USDC per cNGN, sizes in cNGN, buy = buy cNGN
 
 If `EXPECTED_ORDER_OWNER` or `EXPECTED_ORDER_SIGNER` are set, the API rejects orders whose declared owner/signer do not match those configured addresses. The API also validates that `action_json.owner`, `action_json.signer`, `action_json.subaccount_id`, and `action_json.nonce` match the stored order fields.
 With `ENFORCE_ACTION_DATA_INVARIANTS=true` (default), the API also rejects orders unless:

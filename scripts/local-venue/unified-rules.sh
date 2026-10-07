@@ -22,7 +22,9 @@ step() { printf '\n== %s\n' "$*"; }
 python3 -c "import json,sys; sys.exit(0 if json.load(open('$DIR/venue.json')).get('unified') else 1)" || { echo "the venue is not unified: run up.sh --unified" >&2; exit 1; }
 
 INDEX=$(python3 -c "print(round(1e18 / $(cast call "$(python3 -c "import json;print(json.load(open('$DIR/venue.json'))['indexFeed'])")" 'getSpot()(uint256,uint256)' --rpc-url $RPC | head -1 | cut -d' ' -f1)))")
-echo "index $INDEX cNGN/USDC"
+# Orders are given as the UI gives them: a price in USDC per cNGN, a size in cNGN, buy = buy cNGN.
+PRICE=$(python3 -c "from decimal import Decimal; print(format((Decimal(1) / Decimal($INDEX)).quantize(Decimal('1e-18')), 'f'))")
+echo "index $INDEX cNGN/USDC = $PRICE USDC/cNGN"
 
 step "1. spot is bound to the perp stack, and the index-lag gate is enforced as on Base"
 $VENUE spot-market-check
@@ -37,24 +39,24 @@ print('ok: index-lag gate enforced, lag', lag['lag_bps'], 'bps, sample age', lag
 step "2. a spot trade settles through the perp module"
 $VENUE spot-account usdc-maker usdc 1000
 $VENUE spot-account cngn-taker cngn 400000
-$VENUE spot-cross $INDEX 100
+$VENUE spot-cross $PRICE $((100 * INDEX))
 
 step "3. an overdrawn spot sell never fills (the matcher refuses it as buyer_underfunded)"
 $VENUE spot-account poor usdc 100
-$VENUE spot-overdrawn poor cngn-taker $INDEX 500
+$VENUE spot-overdrawn poor cngn-taker $PRICE $((500 * INDEX))
 
 step "4. cross-margin: the maker's cNGN is credited at the haircut, and it can trade the perp"
 $VENUE spot-deposit usdc-maker cngn 100000
 $VENUE margin-of usdc-maker
-$VENUE order usdc-maker buy 500 accepted
+$VENUE order usdc-maker sell $((500 * INDEX)) accepted
 
 step "5. the guardian's pause stops spot too, and lifts"
 $VENUE pause
 sleep 6   # the api polls the pause
-$VENUE spot-order usdc-maker sell $INDEX 10 refused
+$VENUE spot-order usdc-maker buy $PRICE $((10 * INDEX)) refused
 $VENUE unpause
 sleep 6
-$VENUE spot-order usdc-maker sell $INDEX 10 accepted
+$VENUE spot-order usdc-maker buy $PRICE $((10 * INDEX)) accepted
 
 step "6. a withdrawal of the perp cash from a spot account pays USDC"
 # cngn-taker: cash from its spot buy and no resting orders (the maker's resting perp order from

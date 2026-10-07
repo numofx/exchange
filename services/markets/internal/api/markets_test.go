@@ -59,8 +59,14 @@ func TestHandleMarketsIncludesSpotMetadata(t *testing.T) {
 	if found.LastTradeTimestamp != nil {
 		t.Fatalf("expected nil last_trade_timestamp without trade history, got %+v", found)
 	}
-	if found.BaseAssetSymbol != "USDC" || found.QuoteAssetSymbol != "cNGN" {
+	if found.BaseAssetSymbol != "cNGN" || found.QuoteAssetSymbol != "USDC" {
 		t.Fatalf("spot unexpected base/quote %q/%q", found.BaseAssetSymbol, found.QuoteAssetSymbol)
+	}
+	if found.DisplayName != "cNGN-USDC" || found.UIPriceUnit != "USDC per cNGN" || found.UISizeUnit != "cNGN amount" {
+		t.Fatalf("spot display name/units = %q / %q / %q", found.DisplayName, found.UIPriceUnit, found.UISizeUnit)
+	}
+	if found.EngineSidePolicy != "same_as_ui" || found.UIPriceToEngine != "engine_price = ui_price" || found.UISizeToEngine != "engine_amount = ui_size" {
+		t.Fatalf("spot translation must be the identity: %q / %q / %q", found.EngineSidePolicy, found.UIPriceToEngine, found.UISizeToEngine)
 	}
 	if found.TickSize != "0.000000000000000001" {
 		t.Fatalf("spot tick size = %q", found.TickSize)
@@ -71,7 +77,7 @@ func TestHandleMarketsIncludesSpotMetadata(t *testing.T) {
 	if found.ContractMultiplier != "1" {
 		t.Fatalf("spot contract multiplier = %q", found.ContractMultiplier)
 	}
-	if found.OrderEntrySpec != "usdc_cngn_spot_v1" {
+	if found.OrderEntrySpec != "cngn_usdc_spot_v1" {
 		t.Fatalf("spot order entry spec = %q", found.OrderEntrySpec)
 	}
 }
