@@ -110,7 +110,7 @@ refuses to boot:
 Set them on the API **and** the matcher, and set `PERP_TRADE_MODULE_ADDRESS` on execution-service.
 
 - **Orientation.** The UI contract is the engine's own: prices in USDC per cNGN, sizes in cNGN,
-  and a UI long is the on-chain long of the cNGN perp (`display_name: "cNGN-USDC-PERP"`, base
+  and a UI long is the on-chain long of the cNGN perp (`display_name: "cNGN-PERP"`, base
   `cNGN`, quote `USDC`). Orders carry `order_entry_spec: "cngn_usdc_perp_v1"` and a `ui_intent`
   (`side`, `price`, `size`) that the venue checks against the engine fields as the identity
   (`engine_side_policy: same_as_ui`, `engine_price = ui_price`, `engine_amount = ui_size`); an
