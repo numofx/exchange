@@ -24,19 +24,19 @@ is the chain rate, and the header, ticket and APR suffix flip sign on the next r
 
 | Spread (NGN over USD, APR) | Hourly rate (e18) | Reads as | MPCVault digest |
 | --- | --- | --- | --- |
-| 15% | `-17123287671233` | −0.001712%/h, longs receive | `0x4b355c6cd31b2316b7f6eb1ee3d5be697a4d9516931d0b05e1b1c3547124e306` |
-| **20%** (rendered artifact) | `-22831050228311` | −0.002283%/h, longs receive | `0x2496415f15246a4655471558083b1a962f0b4e1ed8d9e8e52adf54d580e8dac2` |
+| **15%** (rendered artifact) | `-17123287671233` | −0.001712%/h, longs receive | `0x4b355c6cd31b2316b7f6eb1ee3d5be697a4d9516931d0b05e1b1c3547124e306` |
+| 20% | `-22831050228311` | −0.002283%/h, longs receive | `0x2496415f15246a4655471558083b1a962f0b4e1ed8d9e8e52adf54d580e8dac2` |
 | 25% | `-28538812785388` | −0.002854%/h, longs receive | `0xbdd25e0fc9686892ab40dde38284d02007a31e80571309a953cb4536b25415af` |
 | 30% | `-34246575342466` | −0.003425%/h, longs receive | `0x202bbef6856f2ab02fbb40230fad66a2b6ae72139c66cb5e9a6cf0f536f5a284` |
 
-`CNGN_PERP_FUNDING_RATE_VAULT_ACTIONS.json` holds the 20% row. To choose another, re-render
+`CNGN_PERP_FUNDING_RATE_VAULT_ACTIONS.json` holds the 15% row, chosen 2026-10-07 against secondary NGN yields of about 18%. To choose another, re-render
 (`--render --spread-apr 0.25`), commit the artifact, and pass that row's digest to `--propose`. The digest is
 `keccak(to ‖ keccak(calldata))`, as for every earlier batch; compare it with the one MPCVault shows before
 approving.
 
 | # | Target | Function | Argument | Purpose |
 | --- | --- | --- | --- | --- |
-| 0 | PerpAsset (perp)<br>`0xC74EfC8B4808803dBCF439E76Fde076d56625b8E` | `setStaticInterestRate(int256)` | `rate` = `-22831050228311` (−0.002283%/h, 18dp) | Static funding leg with the carry sign corrected: long cNGN receives, long USD pays, about 20% APR on the position. |
+| 0 | PerpAsset (perp)<br>`0xC74EfC8B4808803dBCF439E76Fde076d56625b8E` | `setStaticInterestRate(int256)` | `rate` = `-17123287671233` (−0.001712%/h, 18dp) | Static funding leg with the carry sign corrected: long cNGN receives, long USD pays, about 15% APR on the position. |
 
 ## Gates (the dry run refuses otherwise)
 
@@ -48,7 +48,7 @@ approving.
 ## After it lands
 
 - `GET /v1/markets` → `perp.ui_long_funding_rate_1h` reads the negative rate; the app header shows
-  "1h Funding −0.0023% (−20.0% APR)" and the Long side's ticket row reads "receives". The market maker reads the
+  "1h Funding −0.0017% (−15.0% APR)" and the Long side's ticket row reads "receives". The market maker reads the
   same field and needs no change.
 - Positions accrue the new rate from the next time the contract is touched; `aggregatedFunding` is continuous,
   there is no settlement moment.
