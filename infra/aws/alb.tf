@@ -12,6 +12,13 @@ resource "aws_lb" "main" {
   enable_deletion_protection = true
   drop_invalid_header_fields = true
 
+  access_logs {
+    bucket  = aws_s3_bucket.alb_logs.bucket
+    prefix  = "alb"
+    enabled = true
+  }
+  depends_on = [aws_s3_bucket_policy.alb_logs]
+
   tags = { Name = "${var.name}-alb" }
 }
 
