@@ -81,7 +81,7 @@ func DefaultRegistry(cfg config.Config) *Registry {
 			DisplayPriceKind:       DisplayPriceDirect,
 			DisplaySemantics:       DisplayPriceDirect,
 			DisplayLabel:           "USDC per cNGN",
-			DisplayName:            "cNGN-USDC-PERP",
+			DisplayName:            "cNGN-PERP",
 			SettlementNote:         "USDC-settled perpetual on Base, on its own stack: a CashAsset over real USDC, its own SRM, security module and liquidation auction. PnL and funding settle in that cash; the trade leg moves only the difference between the fill and the mark.",
 			OrderEntrySpec:         PerpOrderEntrySpec,
 			UIPriceUnit:            "USDC per cNGN",

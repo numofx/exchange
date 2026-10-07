@@ -275,7 +275,7 @@ func TestMarketsServesPerpStateInTheEngineOrientation(t *testing.T) {
 	if perp.Perp.UILongFunding1h != "0.0000125" || perp.Perp.UILongFunding1h != perp.Perp.FundingRate1h {
 		t.Fatalf("the UI long pays the chain's positive rate as it is: %+v", perp.Perp)
 	}
-	if perp.BaseAssetSymbol != "cNGN" || perp.QuoteAssetSymbol != "USDC" || perp.DisplayName != "cNGN-USDC-PERP" {
+	if perp.BaseAssetSymbol != "cNGN" || perp.QuoteAssetSymbol != "USDC" || perp.DisplayName != "cNGN-PERP" {
 		t.Fatalf("perp pair = %s/%s %q", perp.BaseAssetSymbol, perp.QuoteAssetSymbol, perp.DisplayName)
 	}
 	if perp.Perp.MaxLeverage != "3" {
