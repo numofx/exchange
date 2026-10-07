@@ -12,8 +12,11 @@ const (
 	CNGNSpotLegacySymbol = "USDC/cNGN"
 	CNGNPerpSymbol       = "USDCcNGN-PERP"
 
-	SpotOrderEntrySpec = "usdc_cngn_spot_v1"
-	PerpOrderEntrySpec = "usdc_cngn_perp_v1"
+	// The UI contract is the engine's own orientation: cNGN is the base, priced in USDC per cNGN,
+	// sized in cNGN, and a UI buy is an engine buy. ui_intent translates to the engine order as the
+	// identity; the specs exist so an intent signed for one market cannot be replayed on the other.
+	SpotOrderEntrySpec = "cngn_usdc_spot_v1"
+	PerpOrderEntrySpec = "cngn_usdc_perp_v1"
 )
 
 func DefaultRegistry(cfg config.Config) *Registry {
@@ -24,8 +27,8 @@ func DefaultRegistry(cfg config.Config) *Registry {
 			SubID:            "0",
 			ContractType:     ContractTypeSpot,
 			SettlementType:   "spot",
-			BaseAssetSymbol:  "USDC",
-			QuoteAssetSymbol: "cNGN",
+			BaseAssetSymbol:  "cNGN",
+			QuoteAssetSymbol: "USDC",
 			TickSize:         "0.000000000000000001",
 			// 25 bps taker, 0 maker. Charged in the trade module's quote asset -- wrapped USDC
 			// since the 2026-09-10 cutover -- and paid to the module's feeRecipient.
@@ -38,18 +41,18 @@ func DefaultRegistry(cfg config.Config) *Registry {
 			PriceSemantics:     PricingModelLinear,
 			DisplayPriceKind:   DisplayPriceDirect,
 			DisplaySemantics:   DisplayPriceDirect,
-			DisplayLabel:       "cNGN per USDC",
-			DisplayName:        "USDC/cNGN Spot",
+			DisplayLabel:       "USDC per cNGN",
+			DisplayName:        "cNGN-USDC",
 			SettlementNote:     "Spot-style orderbook market on Base. Trades exchange WRAPPED_CNGN against the quote asset of the configured TradeModule (TRADE_MODULE_ADDRESS / QUOTE_ASSET_ADDRESS): the internal USDC cash ledger under the cash-quoted module, or the wrapped USDC asset under the wrapped-quote module, in which case both legs are 1:1 token-backed.",
 			OrderEntrySpec:     SpotOrderEntrySpec,
-			UIPriceUnit:        "cNGN per USDC",
-			UISizeUnit:         "USDC notional",
-			UISideMeaning:      "BUY acquires USDC and sells cNGN inventory; SELL delivers USDC and buys cNGN inventory.",
+			UIPriceUnit:        "USDC per cNGN",
+			UISizeUnit:         "cNGN amount",
+			UISideMeaning:      "BUY acquires cNGN and pays USDC; SELL delivers cNGN and receives USDC.",
 			EnginePriceUnit:    "USDC per cNGN",
 			EngineAmountUnit:   "cNGN amount",
-			EngineSidePolicy:   "invert_ui_side",
-			UIPriceToEngine:    "engine_price = 1 / ui_price",
-			UISizeToEngine:     "engine_amount = ui_size * ui_price",
+			EngineSidePolicy:   "same_as_ui",
+			UIPriceToEngine:    "engine_price = ui_price",
+			UISizeToEngine:     "engine_amount = ui_size",
 			TradeModuleAddress: strings.ToLower(strings.TrimSpace(cfg.TradeModuleAddress)),
 			QuoteAssetAddress:  strings.ToLower(strings.TrimSpace(cfg.QuoteAsset())),
 			// Set when spot runs on the perp stack (SPOT_MARGIN_MANAGER_ADDRESS = the perp SRM).
@@ -57,17 +60,16 @@ func DefaultRegistry(cfg config.Config) *Registry {
 			Enabled:              strings.TrimSpace(cfg.CNGNSpotAssetAddress) != "",
 		},
 		{
-			// The perp is denominated on chain in USDC per cNGN (~0.00072), sized in cNGN, so PnL lands
-			// in USDC cash with no conversion. The venue shows it the way it shows spot: cNGN per USDC,
-			// sized in USDC notional, with the side flipped -- a UI long is long USDC, which is short
-			// the cNGN perp. Same translation as spot, so one ticket reads both markets.
+			// The perp is a cNGN perp: denominated on chain in USDC per cNGN (~0.00072), sized in
+			// cNGN, so PnL lands in USDC cash with no conversion. The venue shows it exactly so,
+			// like spot: a UI long is the on-chain long of the cNGN perp.
 			Symbol:                 CNGNPerpSymbol,
 			AssetAddress:           strings.ToLower(strings.TrimSpace(cfg.CNGNPerpAssetAddress)),
 			SubID:                  "0",
 			ContractType:           ContractTypePerpetual,
 			SettlementType:         "cash_settled_perpetual",
-			BaseAssetSymbol:        "USDC",
-			QuoteAssetSymbol:       "cNGN",
+			BaseAssetSymbol:        "cNGN",
+			QuoteAssetSymbol:       "USDC",
 			TickSize:               "0.000000000000000001",
 			TakerFeeBps:            25,
 			MakerFeeBps:            0,
@@ -78,18 +80,18 @@ func DefaultRegistry(cfg config.Config) *Registry {
 			PriceSemantics:         PricingModelLinear,
 			DisplayPriceKind:       DisplayPriceDirect,
 			DisplaySemantics:       DisplayPriceDirect,
-			DisplayLabel:           "cNGN per USDC",
-			DisplayName:            "USDC/cNGN Perpetual",
+			DisplayLabel:           "USDC per cNGN",
+			DisplayName:            "cNGN-USDC-PERP",
 			SettlementNote:         "USDC-settled perpetual on Base, on its own stack: a CashAsset over real USDC, its own SRM, security module and liquidation auction. PnL and funding settle in that cash; the trade leg moves only the difference between the fill and the mark.",
 			OrderEntrySpec:         PerpOrderEntrySpec,
-			UIPriceUnit:            "cNGN per USDC",
-			UISizeUnit:             "USDC notional",
-			UISideMeaning:          "BUY (long) gains when USD strengthens against NGN; SELL (short) gains when NGN strengthens. A UI long is a short of the on-chain cNGN perp.",
+			UIPriceUnit:            "USDC per cNGN",
+			UISizeUnit:             "cNGN contracts",
+			UISideMeaning:          "BUY (long) gains when cNGN strengthens against USD; SELL (short) gains when USD strengthens. A UI long is a long of the on-chain cNGN perp.",
 			EnginePriceUnit:        "USDC per cNGN",
-			EngineAmountUnit:       "NGN contracts",
-			EngineSidePolicy:       "invert_ui_side",
-			UIPriceToEngine:        "engine_price = 1 / ui_price",
-			UISizeToEngine:         "engine_amount = ui_size * ui_price",
+			EngineAmountUnit:       "cNGN contracts",
+			EngineSidePolicy:       "same_as_ui",
+			UIPriceToEngine:        "engine_price = ui_price",
+			UISizeToEngine:         "engine_amount = ui_size",
 			FundingInterval:        time.Hour,
 			TradeModuleAddress:     strings.ToLower(strings.TrimSpace(cfg.CNGNPerpTradeModuleAddress)),
 			QuoteAssetAddress:      strings.ToLower(strings.TrimSpace(cfg.CNGNPerpCashAddress)),

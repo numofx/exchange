@@ -13,14 +13,13 @@ import (
 	"github.com/numofx/matching-backend/internal/orders"
 )
 
-// The /v1/integrations endpoints restate market data in the orientation /v1/markets advertises.
+// The /v1/integrations endpoints restate market data in the orientation /v1/markets advertises,
+// in the shape aggregators read: an aggregated book, a ticker and a trade tape per market.
 //
-// The native endpoints report a spot market the way the matching engine holds it: cNGN is what
-// trades, priced in USDC per cNGN. /v1/markets advertises that same market as USDC/cNGN. An
-// aggregator that reads /v1/book or stats_24h at face value against the advertised pair publishes
-// an inverted book (the engine's bids are orders selling USDC) and a 24h volume that counts cNGN as
-// USDC, about 1,300 times too large. The native shapes stay as they are because the trading UI and
-// the market maker read them; these endpoints are the ones to hand to a third party.
+// Since the cngn_usdc_*_v1 contract the advertised pair is the engine's own -- cNGN is what trades,
+// priced in USDC per cNGN -- so nothing is inverted here any more. What remains is presentation:
+// levels are aggregated and rounded away from the touch, and markets under the ui_intent contract
+// are shown at the UI's price and size scales rather than the engine's 18 places.
 
 const (
 	integrationBookDefaultDepth = 50
@@ -72,56 +71,45 @@ type integrationTradesResponse struct {
 	NextBeforeTradeID int64              `json:"next_before_trade_id,omitempty"`
 }
 
-// marketOrientation maps engine values onto a market's advertised base and quote.
+// marketOrientation maps engine values onto a market's advertised base and quote. The advertised
+// pair is the engine's own, so price, volumes and side pass through; only the scales differ. It uses
+// the same predicate that derives spot_contract, so the two views cannot disagree.
 type marketOrientation struct {
-	// inverted is true when the engine trades the advertised quote asset, priced in the base.
-	// It uses the same predicate that derives spot_contract, so the two views cannot disagree.
-	inverted bool
+	// uiScales is true for markets under the ui_intent contract, shown at the UI's scales.
+	uiScales bool
 }
 
 func orientationFor(market instruments.Metadata) marketOrientation {
-	return marketOrientation{inverted: isSpotContractInstrument(market)}
+	return marketOrientation{uiScales: isSpotContractInstrument(market)}
 }
 
 func (o marketOrientation) priceScale() int {
-	if o.inverted {
+	if o.uiScales {
 		return spotUIPriceDecimalScale
 	}
 	return spotEngineDecimalScale
 }
 
 func (o marketOrientation) baseScale() int {
-	if o.inverted {
+	if o.uiScales {
 		return spotUISizeDecimalScale
 	}
 	return spotEngineDecimalScale
 }
 
-// price converts a positive engine price to base-quoted form.
+// price is the engine price in base-quoted form: the same number.
 func (o marketOrientation) price(enginePrice *big.Rat) *big.Rat {
-	if o.inverted {
-		return new(big.Rat).Inv(enginePrice)
-	}
 	return new(big.Rat).Set(enginePrice)
 }
 
-// volumes splits an engine amount at an engine price into base and target quantities.
+// volumes splits an engine amount at an engine price into base and target quantities: the amount
+// is the base (cNGN) and its notional the target (USDC).
 func (o marketOrientation) volumes(enginePrice *big.Rat, engineAmount *big.Rat) (base *big.Rat, target *big.Rat) {
-	notional := new(big.Rat).Mul(engineAmount, enginePrice)
-	if o.inverted {
-		return notional, new(big.Rat).Set(engineAmount)
-	}
-	return new(big.Rat).Set(engineAmount), notional
+	return new(big.Rat).Set(engineAmount), new(big.Rat).Mul(engineAmount, enginePrice)
 }
 
 func (o marketOrientation) side(engineSide orders.Side) orders.Side {
-	if !o.inverted {
-		return engineSide
-	}
-	if engineSide == orders.SideBuy {
-		return orders.SideSell
-	}
-	return orders.SideBuy
+	return engineSide
 }
 
 // formatDecimalDirected formats a non-negative value at scale, rounding up or down rather than to
@@ -186,18 +174,12 @@ func (s *Server) handleIntegrationOrderbook(w http.ResponseWriter, r *http.Reque
 	}
 
 	orientation := orientationFor(market)
-	// Inverted, the engine's asks are orders buying the base asset. Each engine side is already in
-	// price-time priority, and inverting a price reverses its order, so the lists need no re-sort.
-	bidOrders, askOrders := engineBids, engineAsks
-	if orientation.inverted {
-		bidOrders, askOrders = engineAsks, engineBids
-	}
-
+	// Each engine side is already in price-time priority, so the lists need no re-sort.
 	writeJSON(w, http.StatusOK, integrationOrderbookResponse{
 		TickerID:  market.Symbol,
 		Timestamp: time.Now().UnixMilli(),
-		Bids:      buildIntegrationLevels(bidOrders, orientation, false, depth),
-		Asks:      buildIntegrationLevels(askOrders, orientation, true, depth),
+		Bids:      buildIntegrationLevels(engineBids, orientation, false, depth),
+		Asks:      buildIntegrationLevels(engineAsks, orientation, true, depth),
 	})
 }
 
@@ -310,39 +292,27 @@ func (s *Server) integrationTicker(r *http.Request, market instruments.Metadata)
 		TargetVolume:   "0",
 	}
 
-	// stats.Volume is the engine's traded amount and QuoteVolume its notional. Inverted, the
-	// notional is what the advertised base asset measures.
-	baseVolume, targetVolume := stats.Volume, stats.QuoteVolume
-	if orientation.inverted {
-		baseVolume, targetVolume = stats.QuoteVolume, stats.Volume
-	}
-	if value := optionalDecimal(baseVolume, orientation.baseScale(), false); value != nil {
+	// stats.Volume is the engine's traded amount (the base, cNGN) and QuoteVolume its notional
+	// (the target, USDC).
+	if value := optionalDecimal(stats.Volume, orientation.baseScale(), false); value != nil {
 		ticker.BaseVolume = *value
 	}
-	if value := optionalDecimal(targetVolume, spotEngineDecimalScale, false); value != nil {
+	if value := optionalDecimal(stats.QuoteVolume, spotEngineDecimalScale, false); value != nil {
 		ticker.TargetVolume = *value
 	}
 
 	if len(latest) > 0 {
 		ticker.LastPrice = optionalPrice(latest[0].Price, orientation, false)
 	}
-	high, low := stats.High, stats.Low
-	if orientation.inverted {
-		high, low = low, high
-	}
-	ticker.High = optionalPrice(high, orientation, false)
-	ticker.Low = optionalPrice(low, orientation, false)
+	ticker.High = optionalPrice(stats.High, orientation, false)
+	ticker.Low = optionalPrice(stats.Low, orientation, false)
 
-	bidOrder, askOrder := engineBid, engineAsk
-	if orientation.inverted {
-		bidOrder, askOrder = engineAsk, engineBid
-	}
 	// Rounded the same way as the orderbook's top level, so the two endpoints agree.
-	if bidOrder != nil {
-		ticker.Bid = optionalPrice(bidOrder.LimitPrice, orientation, false)
+	if engineBid != nil {
+		ticker.Bid = optionalPrice(engineBid.LimitPrice, orientation, false)
 	}
-	if askOrder != nil {
-		ticker.Ask = optionalPrice(askOrder.LimitPrice, orientation, true)
+	if engineAsk != nil {
+		ticker.Ask = optionalPrice(engineAsk.LimitPrice, orientation, true)
 	}
 	return ticker, nil
 }

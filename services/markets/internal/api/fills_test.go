@@ -140,7 +140,7 @@ func TestFillsListsOnlyTheSignersFillsNewestFirst(t *testing.T) {
 		_, _ = pool.Exec(context.Background(), "delete from active_orders where order_id like $1", suffix+"%")
 	})
 
-	// Engine sides. On USDCcNGN-SPOT an engine sell of cNGN is the trader buying USDC.
+	// Engine sides, which are the UI's: a sell is the trader selling cNGN for USDC.
 	orderRows := []struct {
 		id, owner, side string
 		subaccount      int
@@ -243,19 +243,19 @@ values ($1, '0', $2, $3, $4, $5, $6)
 		t.Fatalf("page 4 = %v next_before=%q, want empty and no cursor", rows(last), last.NextBefore)
 	}
 
-	// A maker fill is the owner's side, not the aggressor's: order b bought cNGN (the trader sold
-	// USDC) against a taker who sold.
+	// A maker fill is the owner's side, not the aggressor's: order b bought 400 cNGN against a
+	// taker who sold.
 	maker := third.Fills[0]
 	if maker.Side != "buy" || maker.Market == "" || maker.DisplayName == "" || maker.SpotContract == nil {
 		t.Fatalf("maker fill not presented from the owner's order: %+v", maker)
 	}
-	if maker.SpotContract.UIIntent.Side != "sell" || !decimalStringsMatch(maker.SpotContract.UIIntent.Size, "0.3") {
-		t.Fatalf("maker fill ui_intent = %+v, want a 0.3 USDC sell", maker.SpotContract.UIIntent)
+	if maker.SpotContract.UIIntent.Side != "buy" || maker.SpotContract.UIIntent.Size != "400" || maker.SpotContract.UIIntent.Price != "0.00075" {
+		t.Fatalf("maker fill ui_intent = %+v, want a buy of 400 cNGN at 0.00075", maker.SpotContract.UIIntent)
 	}
 	taker := third.Fills[1]
 	if taker.Side != "sell" || taker.SpotContract == nil ||
-		taker.SpotContract.UIIntent.Side != "buy" || !decimalStringsMatch(taker.SpotContract.UIIntent.Size, "0.74") {
-		t.Fatalf("taker fill = %+v, want a 0.74 USDC buy", taker)
+		taker.SpotContract.UIIntent.Side != "sell" || taker.SpotContract.UIIntent.Size != "1000" {
+		t.Fatalf("taker fill = %+v, want a sell of 1000 cNGN", taker)
 	}
 
 	// What each order paid: a taker its recorded fee, a maker nothing, and a taker whose fee was never
