@@ -16,10 +16,10 @@ import (
 	"github.com/numofx/matching-backend/internal/instruments"
 )
 
-// The integration endpoints exist because the native ones report USDCcNGN-SPOT in engine terms
-// (cNGN priced in USDC) while /v1/markets advertises USDC/cNGN. Every expected value below is
-// written in the advertised orientation and worked out by hand from the engine rows seeded, so a
-// handler that passes engine values through, or inverts only some of them, fails here.
+// The integration endpoints restate USDCcNGN-SPOT in the orientation /v1/markets advertises, which
+// since cngn_usdc_spot_v1 is the engine's own: cNGN priced in USDC. Every expected value below is
+// worked out by hand from the engine rows seeded, at the UI's scales, so a handler that inverts
+// anything, or shows the engine's 18 places, fails here.
 func TestIntegrationEndpointsRestateSpotInAdvertisedOrientation(t *testing.T) {
 	pool := openTestPool(t)
 	// Not t.Context(): it is cancelled before t.Cleanup runs.
@@ -43,16 +43,16 @@ func TestIntegrationEndpointsRestateSpotInAdvertisedOrientation(t *testing.T) {
 		side, price, desired, filled, status string
 	}
 	seeded := []engineOrder{
-		// Engine sells of cNGN are orders buying USDC: the advertised bids.
-		{"sell", "0.0003", "3000", "0", "active"},    // bid 3333.333333… rounds down; 0.9 USDC
-		{"sell", "0.0004", "2500", "0", "active"},    // bid 2500; 1 USDC
-		{"sell", "0.0005", "2000", "0", "active"},    // bid 2000; 1 USDC …
-		{"sell", "0.0005", "1000", "0", "active"},    // … same level, +0.5 USDC
+		// Engine sells of cNGN: the asks, lowest first.
+		{"sell", "0.0003", "3000", "0", "active"},    // ask 0.0003; 3000 cNGN
+		{"sell", "0.0004", "2500", "0", "active"},    // ask 0.0004; 2500 cNGN
+		{"sell", "0.0005", "2000", "0", "active"},    // ask 0.0005; 2000 cNGN …
+		{"sell", "0.0005", "1000", "0", "active"},    // … same level, +1000 cNGN
 		{"sell", "0.0002", "9000", "0", "cancelled"}, // not resting: must not appear
-		// Engine buys of cNGN are orders selling USDC: the advertised asks.
-		{"buy", "0.00025", "4000", "1000", "active"}, // ask 4000; remaining 3000 cNGN = 0.75 USDC
-		{"buy", "0.0002", "5000", "0", "active"},     // ask 5000; 1 USDC
-		{"buy", "0.00015", "6000", "0", "active"},    // ask 6666.666666… rounds up; 0.9 USDC
+		// Engine buys of cNGN: the bids, highest first.
+		{"buy", "0.00025", "4000", "1000", "active"}, // bid 0.00025; remaining 3000 cNGN
+		{"buy", "0.0002", "5000", "0", "active"},     // bid 0.0002; 5000 cNGN
+		{"buy", "0.00015", "6000", "0", "active"},    // bid 0.00015; 6000 cNGN
 	}
 	insertOrder := `
 insert into active_orders (
@@ -72,11 +72,11 @@ insert into active_orders (
 		}
 	}
 
-	// Fills, oldest first. Engine sell aggressor = taker bought USDC.
+	// Fills, oldest first. The aggressor side is the taker's side in cNGN.
 	now := time.Now()
 	for i, fill := range []struct{ price, size, aggressor string }{
-		{"0.0005", "2000", "sell"}, // price 2000, 1 USDC, 2000 cNGN, type buy
-		{"0.0004", "2500", "buy"},  // price 2500, 1 USDC, 2500 cNGN, type sell
+		{"0.0005", "2000", "sell"}, // 2000 cNGN for 1 USDC, type sell
+		{"0.0004", "2500", "buy"},  // 2500 cNGN for 1 USDC, type buy
 	} {
 		if _, err := pool.Exec(ctx, `
 insert into trade_fills (asset_address, sub_id, price, size, aggressor_side, taker_order_id, maker_order_id, created_at)
@@ -97,7 +97,7 @@ values ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		return rec
 	}
 
-	t.Run("orderbook bids buy USDC and asks sell it, aggregated and rounded away from the touch", func(t *testing.T) {
+	t.Run("orderbook bids buy cNGN and asks sell it, aggregated and rounded away from the touch", func(t *testing.T) {
 		rec := get(server.handleIntegrationOrderbook, "/v1/integrations/orderbook?ticker_id=USDCcNGN-SPOT")
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
@@ -106,8 +106,8 @@ values ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 			t.Fatalf("unmarshal: %v", err)
 		}
-		wantBids := []integrationLevel{{"3333.333333", "0.9"}, {"2500", "1"}, {"2000", "1.5"}}
-		wantAsks := []integrationLevel{{"4000", "0.75"}, {"5000", "1"}, {"6666.666667", "0.9"}}
+		wantBids := []integrationLevel{{"0.00025", "3000"}, {"0.0002", "5000"}, {"0.00015", "6000"}}
+		wantAsks := []integrationLevel{{"0.0003", "3000"}, {"0.0004", "2500"}, {"0.0005", "3000"}}
 		if !reflect.DeepEqual(got.Bids, wantBids) {
 			t.Errorf("bids = %v, want %v", got.Bids, wantBids)
 		}
@@ -125,17 +125,17 @@ values ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 			t.Fatalf("unmarshal: %v body=%s", err, rec.Body.String())
 		}
-		// Level 2000 holds two orders; depth 3 would include it whole, depth 2 must stop before it.
-		wantBids := []integrationLevel{{"3333.333333", "0.9"}, {"2500", "1"}}
-		if !reflect.DeepEqual(got.Bids, wantBids) {
-			t.Errorf("bids = %v, want %v", got.Bids, wantBids)
+		// Ask 0.0005 holds two orders; depth 3 would include it whole, depth 2 must stop before it.
+		wantAsks := []integrationLevel{{"0.0003", "3000"}, {"0.0004", "2500"}}
+		if !reflect.DeepEqual(got.Asks, wantAsks) {
+			t.Errorf("asks = %v, want %v", got.Asks, wantAsks)
 		}
-		if len(got.Asks) != 2 {
-			t.Errorf("asks = %v, want 2 levels", got.Asks)
+		if len(got.Bids) != 2 {
+			t.Errorf("bids = %v, want 2 levels", got.Bids)
 		}
 	})
 
-	t.Run("tickers report USDC base volume and match the orderbook touch", func(t *testing.T) {
+	t.Run("tickers report cNGN base volume and match the orderbook touch", func(t *testing.T) {
 		rec := get(server.handleIntegrationTickers, "/v1/integrations/tickers")
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
@@ -156,17 +156,16 @@ values ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		}
 		checks := []struct{ field, got, want string }{
 			{"ticker_id", ticker.TickerID, "USDCcNGN-SPOT"},
-			{"base_currency", ticker.BaseCurrency, "USDC"},
-			{"target_currency", ticker.TargetCurrency, "cNGN"},
-			// 1 + 1 USDC. The native stats_24h.volume for the same fills is 4500.
-			{"base_volume", ticker.BaseVolume, "2"},
-			{"target_volume", ticker.TargetVolume, "4500"},
-			{"last_price", str(ticker.LastPrice), "2500"},
-			// Engine high 0.0005 is the advertised low, and engine low 0.0004 the high.
-			{"high", str(ticker.High), "2500"},
-			{"low", str(ticker.Low), "2000"},
-			{"bid", str(ticker.Bid), "3333.333333"},
-			{"ask", str(ticker.Ask), "4000"},
+			{"base_currency", ticker.BaseCurrency, "cNGN"},
+			{"target_currency", ticker.TargetCurrency, "USDC"},
+			// 2000 + 2500 cNGN, for 1 + 1 USDC.
+			{"base_volume", ticker.BaseVolume, "4500"},
+			{"target_volume", ticker.TargetVolume, "2"},
+			{"last_price", str(ticker.LastPrice), "0.0004"},
+			{"high", str(ticker.High), "0.0005"},
+			{"low", str(ticker.Low), "0.0004"},
+			{"bid", str(ticker.Bid), "0.00025"},
+			{"ask", str(ticker.Ask), "0.0003"},
 		}
 		for _, c := range checks {
 			if c.got != c.want {
@@ -175,7 +174,7 @@ values ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		}
 	})
 
-	t.Run("trades are priced in cNGN per USDC with the taker's USDC side", func(t *testing.T) {
+	t.Run("trades are priced in USDC per cNGN with the taker's cNGN side", func(t *testing.T) {
 		rec := get(server.handleIntegrationTrades, "/v1/integrations/trades?ticker_id=USDCcNGN-SPOT")
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
@@ -193,7 +192,7 @@ values ($1, $2, $3, $4, $5, $6, $7, $8)`,
 			gotViews = append(gotViews, view{trade.Price, trade.BaseVolume, trade.TargetVolume, string(trade.Type)})
 		}
 		// Newest first.
-		want := []view{{"2500", "1", "2500", "sell"}, {"2000", "1", "2000", "buy"}}
+		want := []view{{"0.0004", "2500", "1", "buy"}, {"0.0005", "2000", "1", "sell"}}
 		if !reflect.DeepEqual(gotViews, want) {
 			t.Errorf("trades = %v, want %v", gotViews, want)
 		}

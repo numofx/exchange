@@ -239,7 +239,9 @@ assert markets == ['USDCcNGN-SPOT'], f'expected spot only, got {markets}'
 print('ok: /v1/markets serves spot only:', markets)"
   $VENUE spot-account usdc-maker usdc 1000
   $VENUE spot-account cngn-taker cngn 200000
-  $VENUE spot-cross 1374 100
+  # The UI contract is the engine's: a price in USDC per cNGN and a size in cNGN ($100 worth).
+  SPOT_PRICE=$(python3 -c "from decimal import Decimal; print(format((Decimal(1) / Decimal($INDEX_NGN_PER_USD)).quantize(Decimal('1e-18')), 'f'))")
+  $VENUE spot-cross $SPOT_PRICE $((100 * INDEX_NGN_PER_USD))
   $VENUE spot-withdraw usdc-maker 10
   printf '\nSpot regression passed. Logs: %s/logs    Stop: %s/down.sh\n' "$DIR" "$HERE"
   exit 0

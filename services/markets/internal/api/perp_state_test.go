@@ -17,9 +17,9 @@ import (
 
 func e18Int(whole int64) *big.Int { return new(big.Int).Mul(big.NewInt(whole), perpE18) }
 
-// A UI long of $7,200 is a SHORT of 10M cNGN at 0.00072. With $1,540 of maintenance surplus and a
-// 20% MM, it is liquidated when USD falls far enough against NGN: the engine price must RISE.
-func TestLiquidationPriceForAUILongIsAboveTheMarkInEngineTerms(t *testing.T) {
+// A short of 10M cNGN at 0.00072 ($7,200 of notional). With $1,540 of maintenance surplus and a
+// 20% MM, it is liquidated when cNGN strengthens far enough against USD: the price must RISE.
+func TestLiquidationPriceForAShortIsAboveTheMark(t *testing.T) {
 	mark := big.NewInt(720_000_000_000_000)
 	size := new(big.Int).Neg(e18Int(10_000_000))
 	mm := big.NewInt(200_000_000_000_000_000)
@@ -96,7 +96,7 @@ func stubPerpRPC(t *testing.T, position *big.Int) *httptest.Server {
 		case sigGetIndexPrice, sigGetPerpPrice:
 			result = word(mark) + word(perpE18)
 		case sigGetFundingRate:
-			result = word(big.NewInt(12_500_000_000_000)) // 0.0000125/h: NGN longs pay
+			result = word(big.NewInt(12_500_000_000_000)) // 0.0000125/h: longs (long cNGN) pay
 		case sigOpenInterest:
 			result = word(e18Int(10_000_000))
 		case sigAssetDetails:
@@ -247,7 +247,9 @@ func TestMarketsAndPositionsReportCngnCollateralOnceConfigured(t *testing.T) {
 	}
 }
 
-func TestMarketsServesPerpStateWithTheFundingSignFlippedForTheUI(t *testing.T) {
+// The perp block is the chain's own orientation: mark and index in USDC per cNGN at ten places,
+// and the UI long's funding rate is the chain's rate, since the UI long is the on-chain long.
+func TestMarketsServesPerpStateInTheEngineOrientation(t *testing.T) {
 	rpc := stubPerpRPC(t, big.NewInt(0))
 	defer rpc.Close()
 	server := perpServer(t, rpc.URL)
@@ -267,11 +269,14 @@ func TestMarketsServesPerpStateWithTheFundingSignFlippedForTheUI(t *testing.T) {
 	if perp == nil || perp.Perp == nil {
 		t.Fatalf("the perp and its chain state must be served, got %s", recorder.Body.String())
 	}
-	if perp.Perp.MarkPriceUI != "1388.888889" {
-		t.Fatalf("mark in cNGN per USDC = %q, want 1388.888889", perp.Perp.MarkPriceUI)
+	if perp.Perp.MarkPriceUI != "0.00072" || perp.Perp.IndexPriceUI != "0.00072" || perp.Perp.MarkPrice != "0.00072" {
+		t.Fatalf("mark/index in USDC per cNGN = %q/%q (engine %q), want 0.00072", perp.Perp.MarkPriceUI, perp.Perp.IndexPriceUI, perp.Perp.MarkPrice)
 	}
-	if !strings.HasPrefix(perp.Perp.UILongFunding1h, "-") || strings.HasPrefix(perp.Perp.FundingRate1h, "-") {
-		t.Fatalf("NGN longs pay a positive rate, so the venue's long receives it: %+v", perp.Perp)
+	if perp.Perp.UILongFunding1h != "0.0000125" || perp.Perp.UILongFunding1h != perp.Perp.FundingRate1h {
+		t.Fatalf("the UI long pays the chain's positive rate as it is: %+v", perp.Perp)
+	}
+	if perp.BaseAssetSymbol != "cNGN" || perp.QuoteAssetSymbol != "USDC" || perp.DisplayName != "cNGN-PERP" {
+		t.Fatalf("perp pair = %s/%s %q", perp.BaseAssetSymbol, perp.QuoteAssetSymbol, perp.DisplayName)
 	}
 	if perp.Perp.MaxLeverage != "3" {
 		t.Fatalf("33.333%% IM is 3x, got %q", perp.Perp.MaxLeverage)
@@ -284,7 +289,9 @@ func TestMarketsServesPerpStateWithTheFundingSignFlippedForTheUI(t *testing.T) {
 	}
 }
 
-func TestPositionsReportsAnNGNShortAsTheVenuesLong(t *testing.T) {
+// A negative engine position is a short of cNGN, sized in cNGN with its USDC notional beside it,
+// and its liquidation price (where cNGN has strengthened enough) sits above the mark.
+func TestPositionsReportsANegativePositionAsAShort(t *testing.T) {
 	rpc := stubPerpRPC(t, new(big.Int).Neg(e18Int(10_000_000)))
 	defer rpc.Close()
 	server := perpServer(t, rpc.URL)
@@ -301,12 +308,49 @@ func TestPositionsReportsAnNGNShortAsTheVenuesLong(t *testing.T) {
 		t.Fatalf("want one position, got %s", recorder.Body.String())
 	}
 	got := body.Positions[0]
-	if got.UISide != "long" || got.UISize != "7200" {
-		t.Fatalf("10M cNGN short at 0.00072 is a $7,200 UI long, got %+v", got)
+	if got.UISide != "short" || got.UISize != "10000000" || got.UINotionalUSDC != "7200" {
+		t.Fatalf("a 10M cNGN short at 0.00072 is a short of 10,000,000 cNGN worth $7,200, got %+v", got)
 	}
-	// USD must weaken for a USD long to be liquidated: its liquidation price sits below the mark.
-	if got.LiquidationPriceUI != "1178.781925" {
-		t.Fatalf("liquidation price = %q, want 1178.781925 cNGN/USDC (below the 1388.89 mark)", got.LiquidationPriceUI)
+	if got.MarkPriceUI != "0.00072" || got.EnginePosition != "-10000000" {
+		t.Fatalf("mark/engine position = %q/%q", got.MarkPriceUI, got.EnginePosition)
+	}
+	// P = M + 1540 / 1.2e7 = 0.00072 + 0.000128333...: above the mark, at the ten-place scale.
+	if got.LiquidationPriceUI != "0.0008483333" {
+		t.Fatalf("liquidation price = %q, want 0.0008483333 USDC/cNGN (above the 0.00072 mark)", got.LiquidationPriceUI)
+	}
+}
+
+// A positive engine position is the UI long, sized in cNGN; the same rate the market block shows
+// is what it pays.
+func TestPositionsReportsAPositivePositionAsALong(t *testing.T) {
+	rpc := stubPerpRPC(t, e18Int(10_000_000))
+	defer rpc.Close()
+	server := perpServer(t, rpc.URL)
+
+	recorder := httptest.NewRecorder()
+	server.handlePositions(recorder, httptest.NewRequest(http.MethodGet, "/v1/positions?subaccount_id=42", nil))
+	var body struct {
+		Positions []presentedPosition `json:"positions"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v (%s)", err, recorder.Body.String())
+	}
+	if len(body.Positions) != 1 {
+		t.Fatalf("want one position, got %s", recorder.Body.String())
+	}
+	got := body.Positions[0]
+	if got.UISide != "long" || got.UISize != "10000000" || got.UINotionalUSDC != "7200" || got.EnginePosition != "10000000" {
+		t.Fatalf("a 10M cNGN long is a long of 10,000,000 cNGN worth $7,200, got %+v", got)
+	}
+	// A long is liquidated below the mark: P = M - 1540 / (1e7 x 0.8) = 0.00072 - 0.0001925.
+	if got.LiquidationPriceUI != "0.0005275" {
+		t.Fatalf("liquidation price = %q, want 0.0005275 USDC/cNGN (below the 0.00072 mark)", got.LiquidationPriceUI)
+	}
+
+	recorder = httptest.NewRecorder()
+	server.handleMarkets(recorder, httptest.NewRequest(http.MethodGet, "/v1/markets", nil))
+	if !strings.Contains(recorder.Body.String(), `"ui_long_funding_rate_1h":"0.0000125"`) {
+		t.Fatalf("the long pays the chain's rate as it is: %s", recorder.Body.String())
 	}
 }
 
@@ -391,6 +435,3 @@ func TestLiftingAPauseDoesNotOpenAClosedMarket(t *testing.T) {
 	}
 	stubPaused = 0
 }
-
-// The venue's rule for cNGN-margined accounts at order submission: long USD (an engine sell of the
-// cNGN perp) up to the cNGN posted, never long naira; a USDC-margined account is untouched.

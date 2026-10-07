@@ -25,15 +25,16 @@ CNGN=2000000
 VALUE=$((CNGN / INDEX))
 echo "index $INDEX cNGN/USDC; treasury posts $CNGN cNGN = \$$VALUE at the index (\$$((VALUE / 2)) of margin)"
 
+# Orders are sized in cNGN, and a sell of the perp is long USD (short cNGN).
 step "1. long USD on cNGN: accepted past 1:1 with the cNGN posted"
 $VENUE account-cngn treasury $CNGN
-$VENUE order treasury buy $((VALUE + VALUE / 4)) accepted
+$VENUE order treasury sell $((CNGN + CNGN / 4)) accepted
 step "2. long naira on cNGN: accepted (doubles the naira exposure; the app warns, the venue allows)"
 $VENUE account-cngn naira-doubler $CNGN
-$VENUE order naira-doubler sell $((VALUE / 4)) accepted
+$VENUE order naira-doubler buy $((CNGN / 4)) accepted
 step "3. long naira on USDC: accepted"
 $VENUE account usdc-trader 2000
-$VENUE order usdc-trader sell 100 accepted
+$VENUE order usdc-trader buy $((100 * INDEX)) accepted
 step "4. a USDC withdrawal past the account's cash is refused; one within it pays"
 # A fresh account with no orders: a fill's fee would move the cash the check reconciles.
 $VENUE account usdc-holder 100

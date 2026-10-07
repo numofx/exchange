@@ -30,36 +30,46 @@ func TestSpotRegistryGating(t *testing.T) {
 	}
 }
 
-func TestTranslateSpotUIIntentBuy(t *testing.T) {
-	// UI BUY 100 USDC @ 1600 cNGN/USDC -> engine SELL 160000 cNGN @ 1/1600 USDC per cNGN.
-	echo, err := translateSpotUIIntent(spotOrderEntrySpec, &spotOrderIntent{Side: "buy", Price: "1600", Size: "100"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if echo.EngineOrder.Side != string(orders.SideSell) {
-		t.Fatalf("UI BUY must invert to engine SELL, got %q", echo.EngineOrder.Side)
-	}
-	if !decimalStringsMatch(echo.EngineOrder.Price, "0.000625") {
-		t.Fatalf("engine price should be 1/1600, got %q", echo.EngineOrder.Price)
-	}
-	if !decimalStringsMatch(echo.EngineOrder.Amount, "160000") {
-		t.Fatalf("engine amount should be ui_size*ui_price, got %q", echo.EngineOrder.Amount)
-	}
-	if !decimalStringsMatch(echo.BalanceDelta.USDC, "100") || !decimalStringsMatch(echo.BalanceDelta.CNGN, "-160000") {
-		t.Fatalf("UI BUY deltas should be +100 USDC / -160000 cNGN, got %q / %q", echo.BalanceDelta.USDC, echo.BalanceDelta.CNGN)
+// The ui_intent is the engine order: a UI BUY of 160,000 cNGN at 0.000625 USDC per cNGN is an
+// engine BUY of 160,000 cNGN at 0.000625, and fills as cNGN +160,000 / USDC -100. A SELL is the
+// reverse.
+func TestUIIntentIsTheEngineOrderWithTheDeltasSigned(t *testing.T) {
+	for _, tc := range []struct {
+		side, cngn, usdc string
+	}{
+		{"buy", "+160000", "-100"},
+		{"sell", "-160000", "+100"},
+	} {
+		echo, err := translateSpotUIIntent(spotOrderEntrySpec, &spotOrderIntent{Side: tc.side, Price: "0.000625", Size: "160000"})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.side, err)
+		}
+		if echo.EngineOrder.Side != tc.side {
+			t.Fatalf("UI %s must be engine %s, got %q", tc.side, tc.side, echo.EngineOrder.Side)
+		}
+		if !decimalStringsMatch(echo.EngineOrder.Price, "0.000625") {
+			t.Fatalf("engine price must be the ui price, got %q", echo.EngineOrder.Price)
+		}
+		if !decimalStringsMatch(echo.EngineOrder.Amount, "160000") {
+			t.Fatalf("engine amount must be the ui size, got %q", echo.EngineOrder.Amount)
+		}
+		if echo.BalanceDelta.CNGN != tc.cngn || echo.BalanceDelta.USDC != tc.usdc {
+			t.Fatalf("UI %s deltas = cNGN %s / USDC %s, want %s / %s", tc.side, echo.BalanceDelta.CNGN, echo.BalanceDelta.USDC, tc.cngn, tc.usdc)
+		}
 	}
 }
 
-func TestTranslateSpotUIIntentSell(t *testing.T) {
-	echo, err := translateSpotUIIntent(spotOrderEntrySpec, &spotOrderIntent{Side: "sell", Price: "1600", Size: "100"})
+// The history echo is the engine order at the UI's scales: ten places of price, six of size.
+func TestEngineOrderEchoesAtTheUIScales(t *testing.T) {
+	echo, err := deriveSpotOrderContractEchoFromEngine(spotOrderEntrySpec, orders.SideSell, "0.000727802037845705", "1000.5")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if echo.EngineOrder.Side != string(orders.SideBuy) {
-		t.Fatalf("UI SELL must invert to engine BUY, got %q", echo.EngineOrder.Side)
+	if echo.UIIntent.Side != "sell" || echo.UIIntent.Price != "0.000727802" || echo.UIIntent.Size != "1000.5" {
+		t.Fatalf("ui_intent = %+v", echo.UIIntent)
 	}
-	if !decimalStringsMatch(echo.BalanceDelta.USDC, "-100") || !decimalStringsMatch(echo.BalanceDelta.CNGN, "160000") {
-		t.Fatalf("UI SELL deltas should be -100 USDC / +160000 cNGN, got %q / %q", echo.BalanceDelta.USDC, echo.BalanceDelta.CNGN)
+	if echo.BalanceDelta.CNGN != "-1000.5" || echo.BalanceDelta.USDC != "+0.728166" {
+		t.Fatalf("deltas = %+v", echo.BalanceDelta)
 	}
 }
 
@@ -67,31 +77,42 @@ func TestValidateSpotUIIntentMismatch(t *testing.T) {
 	_, _, _, err := validateOrTranslateSpotUIIntent(
 		spotOrderEntrySpec,
 		spotOrderEntrySpec,
-		&spotOrderIntent{Side: "buy", Price: "1600", Size: "100"},
-		orders.SideBuy, // must be engine SELL after inversion
+		&spotOrderIntent{Side: "buy", Price: "0.000625", Size: "160000"},
+		orders.SideSell, // a UI buy is an engine buy
 		"",
 		"",
 	)
 	if err == nil || !strings.Contains(err.Error(), "side does not match") {
 		t.Fatalf("expected side mismatch error, got %v", err)
 	}
+	_, _, _, err = validateOrTranslateSpotUIIntent(
+		spotOrderEntrySpec,
+		spotOrderEntrySpec,
+		&spotOrderIntent{Side: "buy", Price: "0.000625", Size: "160000"},
+		orders.SideBuy,
+		"1600", // the old cNGN-per-USDC price
+		"",
+	)
+	if err == nil || !strings.Contains(err.Error(), "limit_price does not match") {
+		t.Fatalf("expected price mismatch error, got %v", err)
+	}
 }
 
-// The perp shares spot's translation -- USDC per cNGN on chain, cNGN per USDC on screen -- under its
-// own spec: a UI long of 100 USDC at 1,389 cNGN/USDC is an engine SELL of 138,900 cNGN at 1/1389.
-func TestPerpUIIntentTranslatesLikeSpotUnderItsOwnSpec(t *testing.T) {
-	echo, err := translateSpotUIIntent(instruments.PerpOrderEntrySpec, &spotOrderIntent{Side: "buy", Price: "1389", Size: "100"})
+// The perp shares spot's contract under its own spec: a UI long of 138,900 cNGN at 0.00072 is an
+// engine BUY of 138,900 cNGN of the perp at 0.00072.
+func TestPerpUIIntentIsTheEngineOrderUnderItsOwnSpec(t *testing.T) {
+	echo, err := translateSpotUIIntent(instruments.PerpOrderEntrySpec, &spotOrderIntent{Side: "buy", Price: "0.00072", Size: "138900"})
 	if err != nil {
 		t.Fatalf("translate: %v", err)
 	}
 	if echo.Spec != instruments.PerpOrderEntrySpec {
 		t.Fatalf("echo spec = %q, want the perp spec", echo.Spec)
 	}
-	if echo.EngineOrder.Side != string(orders.SideSell) {
-		t.Fatalf("UI long must be an engine SELL of the cNGN perp, got %q", echo.EngineOrder.Side)
+	if echo.EngineOrder.Side != string(orders.SideBuy) {
+		t.Fatalf("UI long must be an engine BUY of the cNGN perp, got %q", echo.EngineOrder.Side)
 	}
-	if !decimalStringsMatch(echo.EngineOrder.Amount, "138900") {
-		t.Fatalf("engine amount = %q, want 138900 cNGN", echo.EngineOrder.Amount)
+	if !decimalStringsMatch(echo.EngineOrder.Amount, "138900") || !decimalStringsMatch(echo.EngineOrder.Price, "0.00072") {
+		t.Fatalf("engine order = %+v, want 138900 cNGN at 0.00072", echo.EngineOrder)
 	}
 }
 
@@ -101,7 +122,7 @@ func TestUIIntentForAnotherMarketsSpecIsRefused(t *testing.T) {
 	_, _, _, err := validateOrTranslateSpotUIIntent(
 		instruments.PerpOrderEntrySpec,
 		spotOrderEntrySpec,
-		&spotOrderIntent{Side: "buy", Price: "1389", Size: "100"},
+		&spotOrderIntent{Side: "buy", Price: "0.00072", Size: "138900"},
 		"",
 		"",
 		"",
