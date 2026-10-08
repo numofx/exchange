@@ -403,21 +403,9 @@ func errFrame(channel, market, code, msg string) wsOut {
 }
 
 // resolveMarketSymbol maps a client market identifier (instrument symbol, or "asset:sub_id")
-// to its instrument metadata.
+// to its instrument metadata: the registry's exact-match lookup, shared with the REST endpoints.
 func (s *Server) resolveMarketSymbol(market string) (instruments.Metadata, bool) {
-	if s.instruments == nil {
-		return instruments.Metadata{}, false
-	}
-	market = strings.TrimSpace(market)
-	if m, ok := s.instruments.BySymbol(market); ok {
-		return m, true
-	}
-	if i := strings.Index(market, ":"); i > 0 {
-		if m, ok := s.instruments.ByAssetAndSubID(strings.ToLower(market[:i]), market[i+1:]); ok {
-			return m, true
-		}
-	}
-	return instruments.Metadata{}, false
+	return s.instruments.Resolve(market)
 }
 
 // presentOwnerOrders presents a cross-market set of an owner's orders, looking up each order's

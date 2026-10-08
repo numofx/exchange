@@ -1,6 +1,9 @@
 package instruments
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 const (
 	ContractTypeSpot      = "spot"
@@ -129,6 +132,52 @@ func (r *Registry) ByAssetAndSubID(assetAddress, subID string) (Metadata, bool) 
 	}
 	item, ok := r.byAssetAndSubID[assetAndSubIDKey(assetAddress, subID)]
 	return item, ok
+}
+
+// Resolve maps a client-supplied market identifier to an enabled instrument by exact match: the
+// instrument's symbol as listed, or the "asset_address:sub_id" form. Nothing else matches -- no
+// prefix, no case-folding of the symbol, and no default market -- so an identifier the venue does
+// not list is refused rather than answered with another market's data. Every endpoint that takes a
+// symbol, market or ticker_id resolves it here. (The address half of the asset form is lower-cased:
+// a hex address has no case of its own.)
+func (r *Registry) Resolve(identifier string) (Metadata, bool) {
+	if r == nil {
+		return Metadata{}, false
+	}
+	identifier = strings.TrimSpace(identifier)
+	if identifier == "" {
+		return Metadata{}, false
+	}
+	if item, ok := r.bySymbol[identifier]; ok && item.servable() {
+		return item, true
+	}
+	if i := strings.Index(identifier, ":"); i > 0 {
+		key := assetAndSubIDKey(strings.ToLower(identifier[:i]), identifier[i+1:])
+		if item, ok := r.byAssetAndSubID[key]; ok && item.servable() {
+			return item, true
+		}
+	}
+	return Metadata{}, false
+}
+
+// Identifiers lists the symbols Resolve accepts, in listing order, for the error that refuses an
+// unknown one.
+func (r *Registry) Identifiers() []string {
+	if r == nil {
+		return nil
+	}
+	out := make([]string, 0, len(r.items))
+	for _, item := range r.items {
+		if item.servable() {
+			out = append(out, item.Symbol)
+		}
+	}
+	return out
+}
+
+// servable reports whether the market can answer a request: enabled, with an asset to read.
+func (m Metadata) servable() bool {
+	return m.Enabled && m.AssetAddress != ""
 }
 
 func assetAndSubIDKey(assetAddress, subID string) string {
