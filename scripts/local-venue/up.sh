@@ -235,7 +235,7 @@ if [ "$SPOT_ONLY" = 1 ]; then
   curl -sf http://127.0.0.1:$API_PORT/v1/markets | python3 -c "
 import json, sys
 markets = [m['market'] for m in json.load(sys.stdin)]
-assert markets == ['USDCcNGN-SPOT'], f'expected spot only, got {markets}'
+assert markets == ['cNGN-USDC'], f'expected spot only, got {markets}'
 print('ok: /v1/markets serves spot only:', markets)"
   $VENUE spot-account usdc-maker usdc 1000
   $VENUE spot-account cngn-taker cngn 200000

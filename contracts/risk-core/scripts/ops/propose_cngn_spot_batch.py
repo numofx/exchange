@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Propose the USDCcNGN-SPOT vault batch to MPCVault for manual approval.
+"""Propose the cNGN-USDC vault batch to MPCVault for manual approval.
 
 Creates signing requests for the eleven actions in
 deployments/8453/CNGN_SPOT_SRM_VAULT_ACTIONS.json. It NEVER signs, executes or broadcasts:
