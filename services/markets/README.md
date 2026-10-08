@@ -93,7 +93,7 @@ Env: `WITHDRAWAL_MODULE_ADDRESS` and `EXECUTOR_WITHDRAW_URL` (both required to e
 `EXECUTOR_WITHDRAW_TIMEOUT` (default 45s; must exceed execution-service's `WITHDRAWAL_RECEIPT_TIMEOUT_MS`).
 Also needs `CHAIN_ID`, `MATCHING_ADDRESS` and `CHAIN_RPC_URL`, whatever `ENFORCE_MATCHING_CUSTODY` says.
 
-## USDCcNGN-PERP
+## cNGN-PERP
 
 A USDC-settled perpetual on its own stack: a CashAsset over real USDC, its own SRM, security module
 and auction (risk-core `CNGN_PERP_STACK.json`), traded through its own TradeModule quoted in that cash
@@ -172,8 +172,15 @@ continues.
 
 The spot market is only enabled when `CNGN_SPOT_ASSET_ADDRESS` is set. The registry resolves the
 instrument by exact `(asset_address, sub_id)` and exposes the canonical market symbol
-(`USDCcNGN-SPOT`). Human-readable pair formatting remains in display fields such as
-`display_name` and `display_label`.
+(`cNGN-USDC`, base-quote: cNGN priced in USDC). Human-readable pair formatting remains in display
+fields such as `display_name` and `display_label`.
+
+Every endpoint that takes a `symbol`, `market` or `ticker_id` resolves it through one exact-match
+lookup (`instruments.Registry.Resolve`): the canonical symbol, a deprecated alias, or
+`asset_address:sub_id`. Anything else is a `400 unknown_market` naming the accepted identifiers;
+nothing falls back to another market. The identifiers the markets were listed under before the
+rename, `USDCcNGN-SPOT` and `USDCcNGN-PERP`, are accepted as deprecated aliases: the response names
+the market canonically and carries `Deprecation: true` and `X-Canonical-Market`.
 
 - `contract_type=spot`
 - `settlement_type=spot`

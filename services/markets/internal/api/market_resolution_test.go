@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/numofx/matching-backend/internal/config"
@@ -30,13 +31,16 @@ func resolutionServer(t *testing.T) *Server {
 // lists. GET /v1/book?symbol=cNGN-PERP once returned the spot book under that name; each of these
 // must now be a 400 that names the identifiers the venue accepts.
 var unknownMarketQueries = []string{
-	"symbol=cNGN-PERP",
-	"symbol=cNGN-USDC",
 	"symbol=usdccngn-spot",
+	"symbol=cngn-perp",
 	"symbol=USDCcNGN",
+	"symbol=cNGN",
 	"symbol=USDCcNGN-SPOT-",
+	"symbol=cNGN-PERP-",
+	"symbol=cNGN-SPOT",
+	"symbol=USDC-cNGN",
 	"symbol=BTC-PERP",
-	"symbol=cNGN-PERP&asset_address=" + resolutionSpotAsset, // a bad symbol is not rescued by a good address
+	"symbol=BTC-PERP&asset_address=" + resolutionSpotAsset, // a bad symbol is not rescued by a good address
 	"asset_address=0xf000000000000000000000000000000000000999",
 	"asset_address=" + resolutionSpotAsset + "&sub_id=7",
 	"", // no market named at all: no default
@@ -75,8 +79,10 @@ func TestMarketDataEndpointsRefuseUnknownMarkets(t *testing.T) {
 func TestResolveMarketAcceptsListedIdentifiersOnly(t *testing.T) {
 	server := resolutionServer(t)
 	cases := map[string]string{
-		"symbol=" + instruments.CNGNSpotSymbol:                     instruments.CNGNSpotSymbol,
-		"symbol=" + instruments.CNGNPerpSymbol:                     instruments.CNGNPerpSymbol,
+		"symbol=cNGN-USDC":                                         instruments.CNGNSpotSymbol,
+		"symbol=cNGN-PERP":                                         instruments.CNGNPerpSymbol,
+		"symbol=USDCcNGN-SPOT":                                     instruments.CNGNSpotSymbol, // deprecated alias
+		"symbol=USDCcNGN-PERP":                                     instruments.CNGNPerpSymbol, // deprecated alias
 		"asset_address=" + resolutionSpotAsset:                     instruments.CNGNSpotSymbol,
 		"asset_address=" + resolutionPerpAsset + "&sub_id=0":       instruments.CNGNPerpSymbol,
 		"asset_address=0xF000000000000000000000000000000000000456": instruments.CNGNPerpSymbol,
@@ -86,6 +92,15 @@ func TestResolveMarketAcceptsListedIdentifiersOnly(t *testing.T) {
 		market, ok := server.resolveMarket(rec, httptest.NewRequest(http.MethodGet, "/v1/book?"+query, nil))
 		if !ok || market.Symbol != want {
 			t.Errorf("resolveMarket(%q) = %q, %v; want %q (%s)", query, market.Symbol, ok, want, rec.Body.String())
+		}
+		// A deprecated alias is answered under the canonical name, and the headers say so; a
+		// canonical identifier or an asset address gets no such header.
+		wantDeprecated := strings.Contains(query, "USDCcNGN")
+		if got := rec.Header().Get("Deprecation") != ""; got != wantDeprecated {
+			t.Errorf("resolveMarket(%q) Deprecation header present = %v, want %v", query, got, wantDeprecated)
+		}
+		if canonical := rec.Header().Get("X-Canonical-Market"); wantDeprecated && canonical != want {
+			t.Errorf("resolveMarket(%q) X-Canonical-Market = %q, want %q", query, canonical, want)
 		}
 	}
 
@@ -104,7 +119,7 @@ func TestIntegrationEndpointsRefuseUnknownTickers(t *testing.T) {
 		"/v1/integrations/trades":    server.handleIntegrationTrades,
 	}
 	for path, handler := range handlers {
-		for _, ticker := range []string{"cNGN-PERP", "cNGN-USDC", "usdccngn-spot", "USDCcNGN", "BTC-PERP"} {
+		for _, ticker := range []string{"usdccngn-spot", "cngn-usdc", "USDCcNGN", "cNGN", "BTC-PERP"} {
 			rec := httptest.NewRecorder()
 			handler(rec, httptest.NewRequest(http.MethodGet, path+"?ticker_id="+ticker, nil))
 			if rec.Code != http.StatusBadRequest {
@@ -118,7 +133,7 @@ func TestIntegrationEndpointsRefuseUnknownTickers(t *testing.T) {
 // for a public channel and for scoping the orders channel alike.
 func TestWebsocketSubscribeRefusesUnknownMarkets(t *testing.T) {
 	server := resolutionServer(t)
-	for _, market := range []string{"cNGN-PERP", "cNGN-USDC", "usdccngn-spot", "USDCcNGN", "BTC-PERP", ""} {
+	for _, market := range []string{"usdccngn-spot", "cngn-perp", "USDCcNGN", "cNGN", "BTC-PERP", ""} {
 		for _, channel := range []string{events.ChannelBook, events.ChannelTrades, events.ChannelOrders} {
 			c := &wsConn{srv: server, out: make(chan wsOut, 1), subs: map[string]*wsSubscription{}, owner: "0xowner"}
 			if channel == events.ChannelOrders && market == "" {
@@ -135,9 +150,12 @@ func TestWebsocketSubscribeRefusesUnknownMarkets(t *testing.T) {
 		}
 	}
 
-	c := &wsConn{srv: server, out: make(chan wsOut, 1), subs: map[string]*wsSubscription{}}
-	filter, meta, ok := c.buildFilter(events.ChannelBook, instruments.CNGNPerpSymbol)
-	if !ok || meta.Symbol != instruments.CNGNPerpSymbol || filter.Market != resolutionPerpAsset+":0" {
-		t.Fatalf("subscribe book %s: ok=%v meta=%q filter=%+v", instruments.CNGNPerpSymbol, ok, meta.Symbol, filter)
+	// The canonical name, its deprecated alias and the asset form all subscribe to the one stream.
+	for _, identifier := range []string{"cNGN-PERP", "USDCcNGN-PERP", resolutionPerpAsset + ":0"} {
+		c := &wsConn{srv: server, out: make(chan wsOut, 1), subs: map[string]*wsSubscription{}}
+		filter, meta, ok := c.buildFilter(events.ChannelBook, identifier)
+		if !ok || meta.Symbol != instruments.CNGNPerpSymbol || filter.Market != resolutionPerpAsset+":0" {
+			t.Fatalf("subscribe book %s: ok=%v meta=%q filter=%+v", identifier, ok, meta.Symbol, filter)
+		}
 	}
 }

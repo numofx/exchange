@@ -39,7 +39,7 @@ type Server struct {
 	orderHistoryAuth wsauth.Verifier
 	// withdrawals serves POST /v1/withdrawals; nil when not fully configured, and the endpoint answers 503.
 	withdrawals *withdrawalService
-	// perp reads USDCcNGN-PERP's chain state for /v1/markets and /v1/positions; nil without a perp.
+	// perp reads cNGN-PERP's chain state for /v1/markets and /v1/positions; nil without a perp.
 	perp *perpStateReader
 	// indexLag is the index-lag gate; nil without INDEX_STATUS_TOKEN.
 	indexLag *indexLagGate
@@ -84,7 +84,7 @@ type marketPresentation struct {
 	TradeModuleAddress   string `json:"trade_module_address,omitempty"`
 	QuoteAssetAddress    string `json:"quote_asset_address,omitempty"`
 	MarginManagerAddress string `json:"margin_manager_address,omitempty"`
-	// Perp is USDCcNGN-PERP's live state from chain; absent for spot, and absent for the perp when
+	// Perp is cNGN-PERP's live state from chain; absent for spot, and absent for the perp when
 	// the chain could not be read (a client must treat that as unknown, not as zero).
 	Perp *perpMarketState `json:"perp,omitempty"`
 }
@@ -175,7 +175,7 @@ type presentedTradeStats struct {
 	Last   string `json:"last,omitempty"`
 	Low    string `json:"low,omitempty"`
 	Volume string `json:"volume,omitempty"`
-	// QuoteVolume is the 24h fill notional in the quote asset (USDC on USDCcNGN-SPOT); volume is in
+	// QuoteVolume is the 24h fill notional in the quote asset (USDC on cNGN-USDC); volume is in
 	// the engine's traded unit.
 	QuoteVolume string `json:"quote_volume,omitempty"`
 }
@@ -922,7 +922,10 @@ func (s *Server) resolveMarket(w http.ResponseWriter, r *http.Request) (instrume
 		return instruments.Metadata{}, false
 	}
 
-	if item, ok := s.instruments.Resolve(identifier); ok {
+	if item, deprecated, ok := s.instruments.ResolveIdentifier(identifier); ok {
+		if deprecated {
+			markDeprecatedIdentifier(w, item)
+		}
 		return item, true
 	}
 	writeJSON(w, http.StatusBadRequest, unknownMarketResponse{
@@ -931,6 +934,14 @@ func (s *Server) resolveMarket(w http.ResponseWriter, r *http.Request) (instrume
 		Markets: s.marketIdentifiers(),
 	})
 	return instruments.Metadata{}, false
+}
+
+// markDeprecatedIdentifier flags a response to a request that named its market by a deprecated
+// alias. The body already carries the canonical name; the headers say the one sent is on its way
+// out and what to send instead.
+func markDeprecatedIdentifier(w http.ResponseWriter, market instruments.Metadata) {
+	w.Header().Set("Deprecation", "true")
+	w.Header().Set("X-Canonical-Market", market.Symbol)
 }
 
 // marketIdentifiers is the registry's accepted symbols, never nil, so the JSON reads as a list.

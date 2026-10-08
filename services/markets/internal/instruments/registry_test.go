@@ -82,13 +82,16 @@ func TestResolveMatchesExactlyOrNotAtAll(t *testing.T) {
 
 	refused := []string{
 		"",
-		"cNGN-PERP",      // the display name, not (yet) an identifier
-		"cNGN-USDC",      // likewise
 		"usdccngn-spot",  // no case-folding of the symbol
+		"cngn-usdc",      // nor of the canonical one
 		"USDCcNGN",       // no prefix match
+		"cNGN",           // likewise
 		"USDCcNGN-SPOT-", // no suffix slack
+		"cNGN-USDC-",     // likewise
 		"USDCcNGN-SPOT:0",
 		"USDC/cNGN",
+		"cNGN-SPOT",
+		"USDC-cNGN",
 		"0xf000000000000000000000000000000000000123",   // the asset form needs its sub_id
 		"0xf000000000000000000000000000000000000123:1", // unknown sub_id
 		"0xf000000000000000000000000000000000000999:0", // unknown asset
@@ -102,6 +105,46 @@ func TestResolveMatchesExactlyOrNotAtAll(t *testing.T) {
 
 	ids := registry.Identifiers()
 	if len(ids) != 2 || ids[0] != CNGNSpotSymbol || ids[1] != CNGNPerpSymbol {
+		t.Fatalf("Identifiers() = %v", ids)
+	}
+}
+
+// The identifiers the markets were listed under before the rename resolve by exact match to the
+// same instruments, flagged deprecated; the canonical symbols are not flagged.
+func TestResolveAcceptsDeprecatedAliasesAsSuchOnly(t *testing.T) {
+	cfg := config.Config{
+		CNGNSpotAssetAddress: "0xF000000000000000000000000000000000000123",
+		CNGNPerpAssetAddress: "0xF000000000000000000000000000000000000456",
+	}
+	registry := DefaultRegistry(cfg)
+
+	cases := []struct {
+		identifier string
+		want       string
+		deprecated bool
+	}{
+		{"cNGN-USDC", CNGNSpotSymbol, false},
+		{"cNGN-PERP", CNGNPerpSymbol, false},
+		{"USDCcNGN-SPOT", CNGNSpotSymbol, true},
+		{"USDCcNGN-PERP", CNGNPerpSymbol, true},
+		{"0xf000000000000000000000000000000000000456:0", CNGNPerpSymbol, false},
+	}
+	for _, c := range cases {
+		item, deprecated, ok := registry.ResolveIdentifier(c.identifier)
+		if !ok || item.Symbol != c.want || deprecated != c.deprecated {
+			t.Errorf("ResolveIdentifier(%q) = %q, deprecated=%v, ok=%v; want %q, deprecated=%v", c.identifier, item.Symbol, deprecated, ok, c.want, c.deprecated)
+		}
+	}
+	if CNGNSpotSymbol != "cNGN-USDC" || CNGNPerpSymbol != "cNGN-PERP" {
+		t.Fatalf("canonical symbols = %q / %q", CNGNSpotSymbol, CNGNPerpSymbol)
+	}
+	for _, alias := range []string{"usdccngn-spot", "USDCCNGN-PERP", "USDCcNGN-SPOT "} {
+		if _, _, ok := registry.ResolveIdentifier(alias); ok && alias != "USDCcNGN-SPOT " {
+			t.Errorf("alias %q matched inexactly", alias)
+		}
+	}
+	// Only the canonical names are advertised.
+	if ids := registry.Identifiers(); len(ids) != 2 || ids[0] != "cNGN-USDC" || ids[1] != "cNGN-PERP" {
 		t.Fatalf("Identifiers() = %v", ids)
 	}
 }
