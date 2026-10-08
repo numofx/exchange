@@ -396,7 +396,7 @@ func TestMarketsReportsTheGuardianPause(t *testing.T) {
 			t.Fatalf("decode: %v", err)
 		}
 		for _, m := range markets {
-			if m.Market == "USDCcNGN-PERP" && m.Perp != nil {
+			if m.Market == "cNGN-PERP" && m.Perp != nil {
 				return m.Perp.TradingEnabled, m.Perp.Paused
 			}
 		}

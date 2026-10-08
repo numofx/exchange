@@ -65,7 +65,7 @@ type Config struct {
 	// while that SRM is paused and presents the manager to clients. Empty: spot's own stack.
 	SpotMarginManagerAddress string
 
-	// USDCcNGN-PERP, on its own stack (risk-core CNGN_PERP_STACK.json and execution
+	// cNGN-PERP, on its own stack (risk-core CNGN_PERP_STACK.json and execution
 	// CNGN_PERP_TRADE_MODULE.json). All four or none: the perp settles through its own TradeModule,
 	// in its own CashAsset, margined by its own SRM, and a partial set would route perp orders
 	// through the spot module or check them against the wrong manager.
@@ -303,7 +303,7 @@ func (c Config) validateTradeModule() error {
 	)
 }
 
-// PerpEnabled reports whether USDCcNGN-PERP is configured. The asset address is the switch; the rest
+// PerpEnabled reports whether cNGN-PERP is configured. The asset address is the switch; the rest
 // of the stack is required alongside it by validatePerpStack.
 func (c Config) PerpEnabled() bool {
 	return strings.TrimSpace(c.CNGNPerpAssetAddress) != ""

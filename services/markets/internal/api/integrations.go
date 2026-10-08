@@ -130,12 +130,13 @@ func (s *Server) resolveIntegrationMarket(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ticker_id is required"})
 		return instruments.Metadata{}, false
 	}
-	// Unlike resolveMarket, never fall back to a default market: an integrator asking for a pair
-	// that does not exist must hear so, not receive another pair's data under its ticker.
-	if s.instruments != nil {
-		if item, ok := s.instruments.BySymbol(tickerID); ok && item.Enabled && item.AssetAddress != "" {
-			return item, true
+	// The registry's exact-match lookup: an integrator asking for a pair that does not exist must
+	// hear so, not receive another pair's data under its ticker.
+	if item, deprecated, ok := s.instruments.ResolveIdentifier(tickerID); ok {
+		if deprecated {
+			markDeprecatedIdentifier(w, item)
 		}
+		return item, true
 	}
 	writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown ticker_id"})
 	return instruments.Metadata{}, false

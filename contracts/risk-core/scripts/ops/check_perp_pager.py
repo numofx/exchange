@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pages the operator's phone for the USDCcNGN-PERP conditions that may need the guardian.
+"""Pages the operator's phone for the cNGN-PERP conditions that may need the guardian.
 
 Run every minute (numo-perp-pager.timer). Each condition pages once when it starts, again every
 REPAGE_SEC while it lasts, and sends a resolved notice when it clears. Every page is mirrored to the
@@ -164,7 +164,7 @@ def feed_condition(ages: dict[str, int | None]) -> Condition | None:
           for name, age in ages.items() if age is None or age == NEVER_PUBLISHED or age > limits[name]]
   if not late:
     return None
-  return Condition("feed-halt", f"USDCcNGN-PERP feed halt: {', '.join(late)}. A stale index halts trading and liquidations.")
+  return Condition("feed-halt", f"cNGN-PERP feed halt: {', '.join(late)}. A stale index halts trading and liquidations.")
 
 
 def keeper_condition(health: dict | None, now: int, armed: bool = True) -> Condition | None:
@@ -174,28 +174,28 @@ def keeper_condition(health: dict | None, now: int, armed: bool = True) -> Condi
   if not armed:
     return None
   if health is None:
-    return Condition("keeper-unhealthy", "USDCcNGN-PERP keeper /health unreachable: nothing is liquidating.")
+    return Condition("keeper-unhealthy", "cNGN-PERP keeper /health unreachable: nothing is liquidating.")
   if health.get("dryRun", True):
-    return Condition("keeper-unhealthy", "USDCcNGN-PERP keeper is in DRY_RUN: it decides but sends nothing.")
+    return Condition("keeper-unhealthy", "cNGN-PERP keeper is in DRY_RUN: it decides but sends nothing.")
   stale_after = 3 * max(int(health.get("pollIntervalMs", 15_000)) // 1000, 20)
   age = now - int(health.get("lastPassAt", 0))
   if not health.get("lastPassOk") or age > stale_after:
-    return Condition("keeper-unhealthy", f"USDCcNGN-PERP keeper unhealthy: last pass ok={health.get('lastPassOk')} {age}s ago.")
+    return Condition("keeper-unhealthy", f"cNGN-PERP keeper unhealthy: last pass ok={health.get('lastPassOk')} {age}s ago.")
   return None
 
 
 def matcher_conditions(health: dict | None, head_block: int) -> list[Condition]:
   """Pages for a matcher that stopped heartbeating, and for a position indexer that fell behind."""
   if health is None:
-    return [Condition("matcher-dead", "USDCcNGN matcher health unreadable (markets-service /v1/health down or unreachable): "
+    return [Condition("matcher-dead", "cNGN matcher health unreadable (markets-service /v1/health down or unreachable): "
                       "if the matcher is down, nobody can close.")]
   matcher = health.get("matcher")
   if not matcher:
-    return [Condition("matcher-dead", "USDCcNGN matcher has never written a heartbeat: nothing is matching, nobody can close.")]
+    return [Condition("matcher-dead", "cNGN matcher has never written a heartbeat: nothing is matching, nobody can close.")]
   out: list[Condition] = []
   age = float(matcher.get("age_seconds", 1e9))
   if age > MATCHER_DEAD_SEC:
-    out.append(Condition("matcher-dead", f"USDCcNGN matcher last heartbeat {age:.0f}s ago: nothing is matching, nobody can close."))
+    out.append(Condition("matcher-dead", f"cNGN matcher last heartbeat {age:.0f}s ago: nothing is matching, nobody can close."))
   indexer = (matcher.get("details") or {}).get("indexer")
   if indexer and head_block:
     cursor = int(indexer.get("cursor_block", 0))
@@ -232,7 +232,7 @@ def gas_condition(name: str, balance: float, burn_per_day: float, floor: float) 
   if balance >= need:
     return None
   runway = f"{balance / burn_per_day:.1f} days" if burn_per_day > 0 else "unknown burn"
-  return Condition(f"low-gas-{name}", f"USDCcNGN-PERP {name} low on gas: {balance:.5f} ETH, burning {burn_per_day:.5f}/day "
+  return Condition(f"low-gas-{name}", f"cNGN-PERP {name} low on gas: {balance:.5f} ETH, burning {burn_per_day:.5f}/day "
                    f"({runway}); needs {need:.5f}. Top it up before it stops {'settling' if name == 'executor' else 'publishing' if name == 'relayer' else 'liquidating'}.")
 
 
@@ -240,7 +240,7 @@ def gas_warning(name: str, balance: float, burn_per_day: float) -> str | None:
   """Slack-only, under 7 days of measured burn."""
   if burn_per_day <= 0 or balance / burn_per_day >= GAS_WARN_DAYS:
     return None
-  return f"USDCcNGN-PERP {name} gas runway {balance / burn_per_day:.1f} days ({balance:.5f} ETH at {burn_per_day:.5f}/day): top up this week."
+  return f"cNGN-PERP {name} gas runway {balance / burn_per_day:.1f} days ({balance:.5f} ETH at {burn_per_day:.5f}/day): top up this week."
 
 
 def sm_covered_one_side_usd(sm_cash_usd: float, im: float) -> float:
@@ -253,7 +253,7 @@ def sm_covered_one_side_usd(sm_cash_usd: float, im: float) -> float:
 def sm_coverage_condition(one_side_usd: float, covered_usd: float, im: float) -> Condition | None:
   if one_side_usd <= 0 or (covered_usd > 0 and one_side_usd < SM_COVERAGE_PAGE_X * covered_usd):
     return None
-  return Condition("sm-coverage", f"USDCcNGN-PERP one-side OI ${one_side_usd:,.0f} is past {SM_COVERAGE_PAGE_X:.1f}x what the SecurityModule "
+  return Condition("sm-coverage", f"cNGN-PERP one-side OI ${one_side_usd:,.0f} is past {SM_COVERAGE_PAGE_X:.1f}x what the SecurityModule "
                    f"covers (${covered_usd:,.0f} at IM {im * 100:.0f}%: a 25% step on that side would cost it more than it holds). "
                    "Fund the SecurityModule, or set cap = current OI.")
 
@@ -262,7 +262,7 @@ def sm_coverage_warning(one_side_usd: float, covered_usd: float, im: float) -> s
   """Slack-only, from coverage up to the page."""
   if covered_usd <= 0 or one_side_usd <= covered_usd or one_side_usd >= SM_COVERAGE_PAGE_X * covered_usd:
     return None
-  return (f"USDCcNGN-PERP one-side OI ${one_side_usd:,.0f} exceeds the ${covered_usd:,.0f} the SecurityModule covers at IM {im * 100:.0f}% "
+  return (f"cNGN-PERP one-side OI ${one_side_usd:,.0f} exceeds the ${covered_usd:,.0f} the SecurityModule covers at IM {im * 100:.0f}% "
           f"(page at {SM_COVERAGE_PAGE_X:.1f}x): fund it before the next step costs more than it holds.")
 
 
@@ -283,18 +283,18 @@ def read_one_side_usd(url: str, stack: dict) -> float:
 
 def oi_condition(one_side_usd: float, keeper_cash_usd: float) -> Condition | None:
   if keeper_cash_usd <= 0:
-    return Condition("oi-vs-keeper", f"USDCcNGN-PERP keeper bid account holds no cash while one side's OI is ${one_side_usd:,.0f}: nothing can take a liquidation.")
+    return Condition("oi-vs-keeper", f"cNGN-PERP keeper bid account holds no cash while one side's OI is ${one_side_usd:,.0f}: nothing can take a liquidation.")
   ratio = one_side_usd / keeper_cash_usd
   if ratio < OI_KEEPER_PAGE_X:
     return None
-  return Condition("oi-vs-keeper", f"USDCcNGN-PERP one-side OI ${one_side_usd:,.0f} is {ratio:.1f}x the keeper's ${keeper_cash_usd:,.0f} cash "
+  return Condition("oi-vs-keeper", f"cNGN-PERP one-side OI ${one_side_usd:,.0f} is {ratio:.1f}x the keeper's ${keeper_cash_usd:,.0f} cash "
                    f"(page at {OI_KEEPER_PAGE_X:.0f}x): top the keeper account up, or set cap = current OI.")
 
 
 def negative_cash_condition(total_borrow_usd: float) -> Condition | None:
   if total_borrow_usd < NEGATIVE_CASH_PAGE_USD:
     return None
-  return Condition("negative-cash", f"USDCcNGN-PERP accounts owe ${total_borrow_usd:,.0f} of negative cash (page at "
+  return Condition("negative-cash", f"cNGN-PERP accounts owe ${total_borrow_usd:,.0f} of negative cash (page at "
                    f"${NEGATIVE_CASH_PAGE_USD:,.0f}): unpaid losses, or USDC borrowed against cNGN around the venue. "
                    "Liquidate or lower the cNGN collateral cap.")
 
@@ -302,7 +302,7 @@ def negative_cash_condition(total_borrow_usd: float) -> Condition | None:
 def negative_cash_warning(total_borrow_usd: float) -> str | None:
   if total_borrow_usd < NEGATIVE_CASH_WARN_USD or total_borrow_usd >= NEGATIVE_CASH_PAGE_USD:
     return None
-  return f"USDCcNGN-PERP accounts owe ${total_borrow_usd:,.0f} of negative cash (warn at ${NEGATIVE_CASH_WARN_USD:,.0f}, page at ${NEGATIVE_CASH_PAGE_USD:,.0f})."
+  return f"cNGN-PERP accounts owe ${total_borrow_usd:,.0f} of negative cash (warn at ${NEGATIVE_CASH_WARN_USD:,.0f}, page at ${NEGATIVE_CASH_PAGE_USD:,.0f})."
 
 
 def read_total_borrow(url: str, stack: dict) -> float:
@@ -314,7 +314,7 @@ def oi_warning(one_side_usd: float, keeper_cash_usd: float) -> str | None:
   """Slack-only, from 2x up to the page."""
   if keeper_cash_usd <= 0 or one_side_usd / keeper_cash_usd < OI_KEEPER_WARN_X or one_side_usd / keeper_cash_usd >= OI_KEEPER_PAGE_X:
     return None
-  return f"USDCcNGN-PERP one-side OI ${one_side_usd:,.0f} is {one_side_usd / keeper_cash_usd:.1f}x the keeper's ${keeper_cash_usd:,.0f} cash: top it up before 3x pages."
+  return f"cNGN-PERP one-side OI ${one_side_usd:,.0f} is {one_side_usd / keeper_cash_usd:.1f}x the keeper's ${keeper_cash_usd:,.0f} cash: top it up before 3x pages."
 
 
 def read_oi_and_keeper(url: str, stack: dict, keeper_account: int) -> tuple[float, float]:
@@ -346,7 +346,7 @@ def insolvent_condition(health: dict | None) -> Condition | None:
   accounts = (health or {}).get("insolventAccounts") or []
   if not accounts:
     return None
-  return Condition("insolvent-account", f"USDCcNGN-PERP insolvent account(s) {', '.join(accounts)}: the SecurityModule will pay.")
+  return Condition("insolvent-account", f"cNGN-PERP insolvent account(s) {', '.join(accounts)}: the SecurityModule will pay.")
 
 
 def peg_condition(status: dict | None, now_wall: float) -> Condition | None:
@@ -357,7 +357,7 @@ def peg_condition(status: dict | None, now_wall: float) -> Condition | None:
   if not status.get("pegGuardTripped"):
     return None
   peg = status.get("peg") or {}
-  return Condition("peg-guard", f"USDCcNGN-PERP index HALTED by the peg guard: cNGN at {peg.get('ngnPerCngn')} NGN, "
+  return Condition("peg-guard", f"cNGN-PERP index HALTED by the peg guard: cNGN at {peg.get('ngnPerCngn')} NGN, "
                    f"{float(peg.get('deviationBps', 0)):.0f}bps from parity. The index will not update until it returns.")
 
 
@@ -372,7 +372,7 @@ def read_index_status() -> dict | None:
 def sm_condition(previous: float | None, current: float) -> Condition | None:
   if previous is None or previous - current < SM_PAYOUT_MIN:
     return None
-  return Condition("sm-payout", f"USDCcNGN-PERP SecurityModule paid ${previous - current:,.2f} (now ${current:,.2f}).")
+  return Condition("sm-payout", f"cNGN-PERP SecurityModule paid ${previous - current:,.2f} (now ${current:,.2f}).")
 
 
 def step_state(state: dict, active: list[Condition], now: int) -> tuple[list[Condition], list[str]]:
@@ -610,7 +610,7 @@ def check_and_page(stack_path: Path, state: dict) -> int:
 def unwatched_condition(heartbeat_url: str | None) -> Condition | None:
   if heartbeat_url:
     return None
-  return Condition("pager-unwatched", "USDCcNGN-PERP pager has no dead-man's switch (PAGER_HEARTBEAT_URL): "
+  return Condition("pager-unwatched", "cNGN-PERP pager has no dead-man's switch (PAGER_HEARTBEAT_URL): "
                    "if the pager itself stops, nothing will tell you.")
 
 
@@ -726,7 +726,7 @@ def self_test() -> int:
 
 
 def main() -> int:
-  ap = argparse.ArgumentParser(description="Page the operator for USDCcNGN-PERP conditions")
+  ap = argparse.ArgumentParser(description="Page the operator for cNGN-PERP conditions")
   ap.add_argument("--self-test", action="store_true")
   ap.add_argument("--test-page", action="store_true", help="send one [TEST] page through the configured pager")
   ap.add_argument("--stack", type=Path, default=STACK_ARTIFACT)

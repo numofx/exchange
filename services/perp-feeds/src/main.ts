@@ -9,7 +9,7 @@ import { assertRpcIsLocal, localPegTicker, localSources, parseFixedPrice, parseL
 import { MarkPublisher } from './mark-publisher.js';
 
 /**
- * The USDCcNGN-PERP price publishers: the index (rate-picker sources → median → 15-minute TWAP →
+ * The cNGN-PERP price publishers: the index (rate-picker sources → median → 15-minute TWAP →
  * inverted to USDC per cNGN) and the mark and impact prices (the venue's own perp book, anchored to
  * that index). One process, one signer, one relayer to fund.
  *

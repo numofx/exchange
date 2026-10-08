@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resolve action 6 of the USDCcNGN-SPOT vault batch to a positive read.
+"""Resolve action 6 of the cNGN-USDC vault batch to a positive read.
 
 Action 6 is `srm.setOracleContingencyParams(marketId, zeroed)`. Its postcondition is
 all-zeros, which is exactly what an untouched market reads, so on-chain state alone

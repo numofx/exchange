@@ -41,6 +41,9 @@ func TestHandleMarketsIncludesSpotMetadata(t *testing.T) {
 		t.Fatal("spot market missing from markets response")
 	}
 
+	if found.Market != "cNGN-USDC" {
+		t.Fatalf("spot market listed as %q, want cNGN-USDC", found.Market)
+	}
 	if found.ContractType != "spot" {
 		t.Fatalf("spot contract type = %q", found.ContractType)
 	}
