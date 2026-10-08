@@ -28,7 +28,7 @@ const RPC = process.env.RPC_URL ?? 'https://mainnet.base.org';
 const KEY = process.env.MM_OWNER_PRIVATE_KEY as Hex | undefined;
 const SPOT_ACCOUNT = BigInt(process.env.MM_SPOT_SUBACCOUNT_ID ?? '15');
 const WS_AUTH_DOMAIN = process.env.WS_AUTH_DOMAIN ?? 'markets.numo.xyz';
-const SPOT_SYMBOL = process.env.SPOT_SYMBOL ?? 'USDCcNGN-SPOT';
+const SPOT_SYMBOL = process.env.SPOT_SYMBOL ?? 'cNGN-USDC';
 
 // Base mainnet, the retired spot stack and the shared custody contracts.
 const MATCHING: Address = '0x9E90A9cD13d859Bd6a08168082FB1F6F7405F191';

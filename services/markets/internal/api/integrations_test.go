@@ -114,7 +114,7 @@ values ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		if !reflect.DeepEqual(got.Asks, wantAsks) {
 			t.Errorf("asks = %v, want %v", got.Asks, wantAsks)
 		}
-		if got.TickerID != "USDCcNGN-SPOT" || got.Timestamp == 0 {
+		if got.TickerID != instruments.CNGNSpotSymbol || got.Timestamp == 0 {
 			t.Errorf("ticker_id/timestamp = %q/%d", got.TickerID, got.Timestamp)
 		}
 	})
@@ -155,7 +155,7 @@ values ($1, $2, $3, $4, $5, $6, $7, $8)`,
 			return *p
 		}
 		checks := []struct{ field, got, want string }{
-			{"ticker_id", ticker.TickerID, "USDCcNGN-SPOT"},
+			{"ticker_id", ticker.TickerID, instruments.CNGNSpotSymbol},
 			{"base_currency", ticker.BaseCurrency, "cNGN"},
 			{"target_currency", ticker.TargetCurrency, "USDC"},
 			// 2000 + 2500 cNGN, for 1 + 1 USDC.
@@ -195,6 +195,42 @@ values ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		want := []view{{"0.0004", "2500", "1", "buy"}, {"0.0005", "2000", "1", "sell"}}
 		if !reflect.DeepEqual(gotViews, want) {
 			t.Errorf("trades = %v, want %v", gotViews, want)
+		}
+	})
+
+	t.Run("the canonical ticker_id and its deprecated alias answer alike, the alias with a Deprecation header", func(t *testing.T) {
+		for _, path := range []string{"/v1/integrations/orderbook?ticker_id=", "/v1/integrations/trades?ticker_id="} {
+			handler := server.handleIntegrationOrderbook
+			if strings.Contains(path, "trades") {
+				handler = server.handleIntegrationTrades
+			}
+			canonical := get(handler, path+"cNGN-USDC")
+			alias := get(handler, path+"USDCcNGN-SPOT")
+			if canonical.Code != http.StatusOK || alias.Code != http.StatusOK {
+				t.Fatalf("%s: status canonical=%d alias=%d", path, canonical.Code, alias.Code)
+			}
+			// The orderbook stamps each response; compare everything else.
+			var canonicalBody, aliasBody map[string]any
+			if err := json.Unmarshal(canonical.Body.Bytes(), &canonicalBody); err != nil {
+				t.Fatalf("%s: decode canonical: %v", path, err)
+			}
+			if err := json.Unmarshal(alias.Body.Bytes(), &aliasBody); err != nil {
+				t.Fatalf("%s: decode alias: %v", path, err)
+			}
+			delete(canonicalBody, "timestamp")
+			delete(aliasBody, "timestamp")
+			if !reflect.DeepEqual(canonicalBody, aliasBody) {
+				t.Errorf("%s: bodies differ\ncanonical=%s\nalias=%s", path, canonical.Body.String(), alias.Body.String())
+			}
+			if !strings.Contains(canonical.Body.String(), `"ticker_id":"cNGN-USDC"`) {
+				t.Errorf("%s: body does not name the market canonically: %s", path, canonical.Body.String())
+			}
+			if canonical.Header().Get("Deprecation") != "" {
+				t.Errorf("%s: canonical request flagged deprecated", path)
+			}
+			if alias.Header().Get("Deprecation") != "true" || alias.Header().Get("X-Canonical-Market") != "cNGN-USDC" {
+				t.Errorf("%s: alias headers = %v", path, alias.Header())
+			}
 		}
 	})
 

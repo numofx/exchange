@@ -31,7 +31,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 SPOT_DETAIL_SLOT = "0x6"
 CNGN_WARN_SEC = 120
 STABLE_WARN_SEC = 3000
-# USDCcNGN-PERP (heartbeats 1200s index, 900s mark, 1200s impacts). Warn with a publish or two of
+# cNGN-PERP (heartbeats 1200s index, 900s mark, 1200s impacts). Warn with a publish or two of
 # margin left: a stale index halts the perp's trading AND its liquidations.
 PERP_INDEX_WARN_SEC = 900
 PERP_MARK_WARN_SEC = 600
@@ -104,7 +104,7 @@ def diff_feed_age(url: str, feed: str) -> int:
 
 
 def check_perp_feeds(url: str) -> list[str]:
-  """USDCcNGN-PERP's four feeds, once its stack is deployed.
+  """cNGN-PERP's four feeds, once its stack is deployed.
 
   The index is checked only while the perp SRM's market actually reads it, like every other spot
   feed here. Mark and impacts are not SRM oracles, so they ride on the index: when the index is live

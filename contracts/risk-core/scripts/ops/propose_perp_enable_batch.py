@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Propose the USDCcNGN-PERP ENABLE batch to MPCVault -- only once every launch gate passes.
+"""Propose the cNGN-PERP ENABLE batch to MPCVault -- only once every launch gate passes.
 
 The perp deploys closed twice over: its OI cap is 0 (closed to every path, including accounts that
 move perp between themselves with SubAccounts.submitTransfers) and its TradeModule is not allowlisted
@@ -363,7 +363,7 @@ def self_test() -> int:
 
 
 def main() -> int:
-  ap = argparse.ArgumentParser(description="Gated proposal of the USDCcNGN-PERP enable batch")
+  ap = argparse.ArgumentParser(description="Gated proposal of the cNGN-PERP enable batch")
   ap.add_argument("--propose", action="store_true", help="create MPCVault signing requests, one at a time")
   ap.add_argument("--self-test", action="store_true")
   ap.add_argument("--local", action="store_true", help="local fork (chain 31337) only; never proposes")
@@ -433,7 +433,7 @@ def main() -> int:
     if not tx_hash:
       raise SystemExit(f"action {i} not approved within the timeout")
     confirm_on_chain(rpc_url, tx_hash)
-  print("\nUSDCcNGN-PERP enabled. markets-service will report trading_enabled within 30s.")
+  print("\ncNGN-PERP enabled. markets-service will report trading_enabled within 30s.")
   return 0
 
 

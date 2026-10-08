@@ -1,6 +1,9 @@
 package instruments
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 const (
 	ContractTypeSpot      = "spot"
@@ -22,17 +25,20 @@ const (
 )
 
 type Metadata struct {
-	Symbol             string `json:"symbol"`
-	AssetAddress       string `json:"asset_address"`
-	SubID              string `json:"sub_id"`
-	ContractType       string `json:"contract_type,omitempty"`
-	SettlementType     string `json:"settlement_type,omitempty"`
-	BaseAssetSymbol    string `json:"base_asset_symbol,omitempty"`
-	QuoteAssetSymbol   string `json:"quote_asset_symbol,omitempty"`
-	ExpiryTimestamp    int64  `json:"expiry_timestamp,omitempty"`
-	LastTradeTimestamp int64  `json:"last_trade_timestamp,omitempty"`
-	TickSize           string `json:"tick_size"`
-	MinSize            string `json:"min_size"`
+	Symbol string `json:"symbol"`
+	// Aliases are deprecated identifiers for this market, accepted on input by exact match and
+	// never emitted: a response always names the market by Symbol.
+	Aliases            []string `json:"-"`
+	AssetAddress       string   `json:"asset_address"`
+	SubID              string   `json:"sub_id"`
+	ContractType       string   `json:"contract_type,omitempty"`
+	SettlementType     string   `json:"settlement_type,omitempty"`
+	BaseAssetSymbol    string   `json:"base_asset_symbol,omitempty"`
+	QuoteAssetSymbol   string   `json:"quote_asset_symbol,omitempty"`
+	ExpiryTimestamp    int64    `json:"expiry_timestamp,omitempty"`
+	LastTradeTimestamp int64    `json:"last_trade_timestamp,omitempty"`
+	TickSize           string   `json:"tick_size"`
+	MinSize            string   `json:"min_size"`
 	// TakerFeeBps and MakerFeeBps are THE fee schedule for this market, in basis points of the
 	// quote notional. Everything downstream reads them from here: the matcher charges them, the
 	// funding check reserves them, and /v1/markets serves them so the UI never carries its own
@@ -73,6 +79,7 @@ type Metadata struct {
 type Registry struct {
 	items           []Metadata
 	bySymbol        map[string]Metadata
+	byAlias         map[string]Metadata
 	byAssetAndSubID map[string]Metadata
 }
 
@@ -80,11 +87,15 @@ func NewRegistry(items []Metadata) *Registry {
 	registry := &Registry{
 		items:           append([]Metadata(nil), items...),
 		bySymbol:        make(map[string]Metadata, len(items)),
+		byAlias:         make(map[string]Metadata),
 		byAssetAndSubID: make(map[string]Metadata, len(items)),
 	}
 
 	for _, item := range items {
 		registry.bySymbol[item.Symbol] = item
+		for _, alias := range item.Aliases {
+			registry.byAlias[alias] = item
+		}
 		if item.AssetAddress != "" && item.SubID != "" {
 			registry.byAssetAndSubID[assetAndSubIDKey(item.AssetAddress, item.SubID)] = item
 		}
@@ -129,6 +140,62 @@ func (r *Registry) ByAssetAndSubID(assetAddress, subID string) (Metadata, bool) 
 	}
 	item, ok := r.byAssetAndSubID[assetAndSubIDKey(assetAddress, subID)]
 	return item, ok
+}
+
+// Resolve maps a client-supplied market identifier to an enabled instrument by exact match: the
+// instrument's symbol as listed, one of its deprecated aliases, or the "asset_address:sub_id"
+// form. Nothing else matches -- no prefix, no case-folding of the symbol, and no default market --
+// so an identifier the venue does not list is refused rather than answered with another market's
+// data. Every endpoint that takes a symbol, market or ticker_id resolves it here. (The address half
+// of the asset form is lower-cased: a hex address has no case of its own.)
+func (r *Registry) Resolve(identifier string) (Metadata, bool) {
+	item, _, ok := r.ResolveIdentifier(identifier)
+	return item, ok
+}
+
+// ResolveIdentifier is Resolve, also reporting whether the identifier was a deprecated alias, so
+// the caller can say so (a Deprecation header) while answering under the canonical name.
+func (r *Registry) ResolveIdentifier(identifier string) (item Metadata, deprecated bool, ok bool) {
+	if r == nil {
+		return Metadata{}, false, false
+	}
+	identifier = strings.TrimSpace(identifier)
+	if identifier == "" {
+		return Metadata{}, false, false
+	}
+	if item, ok := r.bySymbol[identifier]; ok && item.servable() {
+		return item, false, true
+	}
+	if item, ok := r.byAlias[identifier]; ok && item.servable() {
+		return item, true, true
+	}
+	if i := strings.Index(identifier, ":"); i > 0 {
+		key := assetAndSubIDKey(strings.ToLower(identifier[:i]), identifier[i+1:])
+		if item, ok := r.byAssetAndSubID[key]; ok && item.servable() {
+			return item, false, true
+		}
+	}
+	return Metadata{}, false, false
+}
+
+// Identifiers lists the canonical symbols Resolve accepts, in listing order, for the error that
+// refuses an unknown one. Deprecated aliases are accepted but not advertised.
+func (r *Registry) Identifiers() []string {
+	if r == nil {
+		return nil
+	}
+	out := make([]string, 0, len(r.items))
+	for _, item := range r.items {
+		if item.servable() {
+			out = append(out, item.Symbol)
+		}
+	}
+	return out
+}
+
+// servable reports whether the market can answer a request: enabled, with an asset to read.
+func (m Metadata) servable() bool {
+	return m.Enabled && m.AssetAddress != ""
 }
 
 func assetAndSubIDKey(assetAddress, subID string) string {

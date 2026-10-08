@@ -39,7 +39,7 @@ type Server struct {
 	orderHistoryAuth wsauth.Verifier
 	// withdrawals serves POST /v1/withdrawals; nil when not fully configured, and the endpoint answers 503.
 	withdrawals *withdrawalService
-	// perp reads USDCcNGN-PERP's chain state for /v1/markets and /v1/positions; nil without a perp.
+	// perp reads cNGN-PERP's chain state for /v1/markets and /v1/positions; nil without a perp.
 	perp *perpStateReader
 	// indexLag is the index-lag gate; nil without INDEX_STATUS_TOKEN.
 	indexLag *indexLagGate
@@ -84,7 +84,7 @@ type marketPresentation struct {
 	TradeModuleAddress   string `json:"trade_module_address,omitempty"`
 	QuoteAssetAddress    string `json:"quote_asset_address,omitempty"`
 	MarginManagerAddress string `json:"margin_manager_address,omitempty"`
-	// Perp is USDCcNGN-PERP's live state from chain; absent for spot, and absent for the perp when
+	// Perp is cNGN-PERP's live state from chain; absent for spot, and absent for the perp when
 	// the chain could not be read (a client must treat that as unknown, not as zero).
 	Perp *perpMarketState `json:"perp,omitempty"`
 }
@@ -151,15 +151,15 @@ type bookResponse struct {
 }
 
 type presentedTrade struct {
-	TradeID        int64                  `json:"trade_id"`
-	AssetAddress   string                 `json:"asset_address"`
-	SubID          string                 `json:"sub_id"`
-	Price          string                 `json:"price"`
-	Size           string                 `json:"size"`
-	AggressorSide  orders.Side            `json:"aggressor_side"`
-	TakerOrderID   string                 `json:"taker_order_id,omitempty"`
-	MakerOrderID   string                 `json:"maker_order_id,omitempty"`
-	CreatedAt      time.Time              `json:"created_at"`
+	TradeID       int64       `json:"trade_id"`
+	AssetAddress  string      `json:"asset_address"`
+	SubID         string      `json:"sub_id"`
+	Price         string      `json:"price"`
+	Size          string      `json:"size"`
+	AggressorSide orders.Side `json:"aggressor_side"`
+	TakerOrderID  string      `json:"taker_order_id,omitempty"`
+	MakerOrderID  string      `json:"maker_order_id,omitempty"`
+	CreatedAt     time.Time   `json:"created_at"`
 	// TxHash is the settling transaction, for a link to the explorer; omitted for fills recorded
 	// before it was stored. Owner fills (/v1/fills) carry the same field.
 	TxHash         string                 `json:"tx_hash,omitempty"`
@@ -175,7 +175,7 @@ type presentedTradeStats struct {
 	Last   string `json:"last,omitempty"`
 	Low    string `json:"low,omitempty"`
 	Volume string `json:"volume,omitempty"`
-	// QuoteVolume is the 24h fill notional in the quote asset (USDC on USDCcNGN-SPOT); volume is in
+	// QuoteVolume is the 24h fill notional in the quote asset (USDC on cNGN-USDC); volume is in
 	// the engine's traded unit.
 	QuoteVolume string `json:"quote_volume,omitempty"`
 }
@@ -361,9 +361,8 @@ func (s *Server) handleMarkets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleBook(w http.ResponseWriter, r *http.Request) {
-	market := s.resolveMarket(r)
-	if market.AssetAddress == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown market"})
+	market, ok := s.resolveMarket(w, r)
+	if !ok {
 		return
 	}
 
@@ -383,9 +382,8 @@ func (s *Server) handleBook(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTrades(w http.ResponseWriter, r *http.Request) {
-	market := s.resolveMarket(r)
-	if market.AssetAddress == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown market"})
+	market, ok := s.resolveMarket(w, r)
+	if !ok {
 		return
 	}
 
@@ -436,9 +434,8 @@ func (s *Server) handleTrades(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCandles(w http.ResponseWriter, r *http.Request) {
-	market := s.resolveMarket(r)
-	if market.AssetAddress == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown market"})
+	market, ok := s.resolveMarket(w, r)
+	if !ok {
 		return
 	}
 
@@ -888,31 +885,72 @@ func cancelInternalHeaders(r *http.Request) map[string]string {
 	return headers
 }
 
-func (s *Server) resolveMarket(r *http.Request) instruments.Metadata {
-	if s.instruments == nil {
-		return instruments.Metadata{}
-	}
+// unknownMarketResponse is the 400 for a request that names no listed market. It carries the
+// identifiers the venue does accept, so a caller holding a stale or misspelled symbol can see what
+// to send instead of guessing.
+type unknownMarketResponse struct {
+	Error   string   `json:"error"`
+	Message string   `json:"message"`
+	Markets []string `json:"markets"`
+}
 
-	if symbol := strings.TrimSpace(r.URL.Query().Get("symbol")); symbol != "" {
-		if item, ok := s.instruments.BySymbol(symbol); ok {
-			return item
-		}
-	}
+// resolveMarket reads the market a request names -- symbol, or asset_address with an optional
+// sub_id -- through the registry's exact-match lookup, and refuses with a 400 when the request
+// names none or names one the venue does not list. It never falls through to another market: until
+// this, an unknown symbol was answered with the spot book under the caller's own name for it.
+func (s *Server) resolveMarket(w http.ResponseWriter, r *http.Request) (instruments.Metadata, bool) {
+	query := r.URL.Query()
+	symbol := strings.TrimSpace(query.Get("symbol"))
+	assetAddress := strings.TrimSpace(query.Get("asset_address"))
 
-	if assetAddress := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("asset_address"))); assetAddress != "" {
-		subID := strings.TrimSpace(r.URL.Query().Get("sub_id"))
+	var identifier string
+	switch {
+	case symbol != "":
+		identifier = symbol
+	case assetAddress != "":
+		subID := strings.TrimSpace(query.Get("sub_id"))
 		if subID == "" {
 			subID = "0"
 		}
-		if item, ok := s.instruments.ByAssetAndSubID(assetAddress, subID); ok {
-			return item
-		}
+		identifier = assetAddress + ":" + subID
+	default:
+		writeJSON(w, http.StatusBadRequest, unknownMarketResponse{
+			Error:   "unknown_market",
+			Message: "symbol or asset_address is required",
+			Markets: s.marketIdentifiers(),
+		})
+		return instruments.Metadata{}, false
 	}
 
-	if item, ok := s.instruments.BySymbol(instruments.CNGNSpotSymbol); ok {
-		return item
+	if item, deprecated, ok := s.instruments.ResolveIdentifier(identifier); ok {
+		if deprecated {
+			markDeprecatedIdentifier(w, item)
+		}
+		return item, true
 	}
-	return instruments.Metadata{}
+	writeJSON(w, http.StatusBadRequest, unknownMarketResponse{
+		Error:   "unknown_market",
+		Message: "no such market: " + identifier,
+		Markets: s.marketIdentifiers(),
+	})
+	return instruments.Metadata{}, false
+}
+
+// markDeprecatedIdentifier flags a response to a request that named its market by a deprecated
+// alias. The body already carries the canonical name; the headers say the one sent is on its way
+// out and what to send instead.
+func markDeprecatedIdentifier(w http.ResponseWriter, market instruments.Metadata) {
+	w.Header().Set("Deprecation", "true")
+	w.Header().Set("X-Canonical-Market", market.Symbol)
+}
+
+// marketIdentifiers is the registry's accepted symbols, never nil, so the JSON reads as a list.
+func (s *Server) marketIdentifiers() []string {
+	ids := s.instruments.Identifiers()
+	if ids == nil {
+		ids = []string{}
+	}
+	return ids
 }
 
 func writeJSON(w http.ResponseWriter, statusCode int, payload any) {

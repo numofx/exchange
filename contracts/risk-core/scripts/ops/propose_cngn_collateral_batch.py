@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Proposes the cNGN-as-margin vault batches for USDCcNGN-PERP to MPCVault, one action at a time.
+"""Proposes the cNGN-as-margin vault batches for cNGN-PERP to MPCVault, one action at a time.
 
 Batch 4 (configure; deployments/8453/CNGN_PERP_COLLATERAL_VAULT_ACTIONS.json):
   0 escrow.acceptOwnership()                       custody
