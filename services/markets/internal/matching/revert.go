@@ -43,7 +43,7 @@ type settlementRevert struct {
 // derived with `cast sig` from the contract sources (contracts/execution, contracts/risk-core), never
 // by hand.
 //
-// WERC_CannotBeNegative has no arguments and both legs of USDCcNGN-SPOT are WrappedERC20Assets, so it
+// WERC_CannotBeNegative has no arguments and both legs of cNGN-USDC are WrappedERC20Assets, so it
 // cannot say which side is short; it is balance-dependent, not attributable.
 var knownReverts = map[string]settlementRevert{
 	// Can never succeed for the pair.

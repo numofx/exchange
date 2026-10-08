@@ -170,7 +170,12 @@ func (c *wsConn) handleSubscribe(ctx context.Context, in wsIn) {
 		return // buildFilter already sent the error frame
 	}
 
-	key := channel + "|" + strings.TrimSpace(in.Market)
+	// Frames and the subscription key carry the market's canonical symbol, whatever identifier
+	// the client subscribed with (a deprecated alias, or asset:sub_id), so two spellings of one
+	// market are one subscription and every frame names the market the same way /v1/markets does.
+	// An unscoped orders subscription has no market and keeps an empty one.
+	market := meta.Symbol
+	key := channel + "|" + market
 	c.mu.Lock()
 	if _, exists := c.subs[key]; exists {
 		c.mu.Unlock()
@@ -180,7 +185,7 @@ func (c *wsConn) handleSubscribe(ctx context.Context, in wsIn) {
 
 	sub, valid := c.srv.hub.Subscribe(filter) // registration begins buffering immediately
 	if !valid {
-		c.send(errFrame(channel, in.Market, "bad_subscribe", "invalid filter"))
+		c.send(errFrame(channel, market, "bad_subscribe", "invalid filter"))
 		return
 	}
 
@@ -193,27 +198,27 @@ func (c *wsConn) handleSubscribe(ctx context.Context, in wsIn) {
 
 	var boundary int64
 	if in.SinceSeq > 0 {
-		replayed, ok := c.tryResume(ctx, filter, in.SinceSeq, channel, in.Market)
+		replayed, ok := c.tryResume(ctx, filter, in.SinceSeq, channel, market)
 		if ok {
 			boundary = replayed
 		} else {
-			b, err := c.sendSnapshot(ctx, channel, meta, in.Market)
+			b, err := c.sendSnapshot(ctx, channel, meta, market)
 			if err != nil {
-				c.teardownSub(key, "snapshot_failed", in.Market, channel)
+				c.teardownSub(key, "snapshot_failed", market, channel)
 				return
 			}
 			boundary = b
 		}
 	} else {
-		b, err := c.sendSnapshot(ctx, channel, meta, in.Market)
+		b, err := c.sendSnapshot(ctx, channel, meta, market)
 		if err != nil {
-			c.teardownSub(key, "snapshot_failed", in.Market, channel)
+			c.teardownSub(key, "snapshot_failed", market, channel)
 			return
 		}
 		boundary = b
 	}
 
-	go c.forward(subCtx, sub, boundary, channel, in.Market, key)
+	go c.forward(subCtx, sub, boundary, channel, market, key)
 }
 
 // buildFilter validates the channel + market and returns the Hub filter and instrument meta.
@@ -335,13 +340,18 @@ func (c *wsConn) forward(ctx context.Context, sub *events.Sub, boundary int64, c
 }
 
 func (c *wsConn) handleUnsubscribe(in wsIn) {
-	key := strings.ToLower(strings.TrimSpace(in.Channel)) + "|" + strings.TrimSpace(in.Market)
+	// Subscriptions are keyed by canonical symbol, so any identifier for the market finds it.
+	market := strings.TrimSpace(in.Market)
+	if meta, ok := c.srv.resolveMarketSymbol(market); ok {
+		market = meta.Symbol
+	}
+	key := strings.ToLower(strings.TrimSpace(in.Channel)) + "|" + market
 	c.mu.Lock()
 	entry := c.subs[key]
 	c.mu.Unlock()
 	if entry != nil {
 		entry.cancel() // forwarder exits via ctx.Done(); its defer detaches + unsubscribes
-		c.send(wsOut{Type: "ack", Channel: in.Channel, Market: in.Market, Message: "unsubscribed"})
+		c.send(wsOut{Type: "ack", Channel: in.Channel, Market: market, Message: "unsubscribed"})
 	}
 }
 

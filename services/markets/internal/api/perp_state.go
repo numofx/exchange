@@ -15,7 +15,7 @@ import (
 	"github.com/numofx/matching-backend/internal/instruments"
 )
 
-// USDCcNGN-PERP's live state, read from its own stack on chain: mark, index, funding, open interest
+// cNGN-PERP's live state, read from its own stack on chain: mark, index, funding, open interest
 // and margin rates for /v1/markets, and per-account positions for /v1/positions.
 //
 // The UI orientation is the engine's own: prices in USDC per cNGN, sizes in cNGN, and a UI long is

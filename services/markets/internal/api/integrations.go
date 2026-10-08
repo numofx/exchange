@@ -132,7 +132,10 @@ func (s *Server) resolveIntegrationMarket(w http.ResponseWriter, r *http.Request
 	}
 	// The registry's exact-match lookup: an integrator asking for a pair that does not exist must
 	// hear so, not receive another pair's data under its ticker.
-	if item, ok := s.instruments.Resolve(tickerID); ok {
+	if item, deprecated, ok := s.instruments.ResolveIdentifier(tickerID); ok {
+		if deprecated {
+			markDeprecatedIdentifier(w, item)
+		}
 		return item, true
 	}
 	writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown ticker_id"})

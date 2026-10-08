@@ -8,9 +8,18 @@ import (
 )
 
 const (
-	CNGNSpotSymbol       = "USDCcNGN-SPOT"
+	// The market identifiers, in base-quote order: cNGN is the base, priced in USDC per cNGN. These
+	// are what every response and websocket frame carries as market, symbol or ticker_id.
+	CNGNSpotSymbol = "cNGN-USDC"
+	CNGNPerpSymbol = "cNGN-PERP"
+
+	// The identifiers the markets were listed under before the rename, inverted relative to how
+	// they are quoted. Accepted anywhere an identifier is, by exact match, and answered with the
+	// canonical name and a Deprecation header; never emitted.
+	CNGNSpotDeprecatedSymbol = "USDCcNGN-SPOT"
+	CNGNPerpDeprecatedSymbol = "USDCcNGN-PERP"
+
 	CNGNSpotLegacySymbol = "USDC/cNGN"
-	CNGNPerpSymbol       = "USDCcNGN-PERP"
 
 	// The UI contract is the engine's own orientation: cNGN is the base, priced in USDC per cNGN,
 	// sized in cNGN, and a UI buy is an engine buy. ui_intent translates to the engine order as the
@@ -23,6 +32,7 @@ func DefaultRegistry(cfg config.Config) *Registry {
 	items := []Metadata{
 		{
 			Symbol:           CNGNSpotSymbol,
+			Aliases:          []string{CNGNSpotDeprecatedSymbol},
 			AssetAddress:     strings.ToLower(strings.TrimSpace(cfg.CNGNSpotAssetAddress)),
 			SubID:            "0",
 			ContractType:     ContractTypeSpot,
@@ -64,6 +74,7 @@ func DefaultRegistry(cfg config.Config) *Registry {
 			// cNGN, so PnL lands in USDC cash with no conversion. The venue shows it exactly so,
 			// like spot: a UI long is the on-chain long of the cNGN perp.
 			Symbol:                 CNGNPerpSymbol,
+			Aliases:                []string{CNGNPerpDeprecatedSymbol},
 			AssetAddress:           strings.ToLower(strings.TrimSpace(cfg.CNGNPerpAssetAddress)),
 			SubID:                  "0",
 			ContractType:           ContractTypePerpetual,

@@ -50,6 +50,7 @@ type cachedIntegrationResponse struct {
 	contentType string
 	body        []byte
 	expires     time.Time
+	headers     map[string]string
 }
 
 func newIntegrationCache(ttl time.Duration, now func() time.Time) *integrationCache {
@@ -88,6 +89,15 @@ func (c *integrationCache) wrap(handler http.HandlerFunc, params ...string) http
 				contentType: recorder.header.Get("Content-Type"),
 				body:        recorder.body.Bytes(),
 				expires:     c.now().Add(c.ttl),
+			}
+			// A deprecated ticker_id is its own cache key, so its headers travel with its body.
+			for _, name := range deprecationHeaders {
+				if value := recorder.header.Get(name); value != "" {
+					if response.headers == nil {
+						response.headers = map[string]string{}
+					}
+					response.headers[name] = value
+				}
 			}
 			if response.status == http.StatusOK {
 				c.store(key, response)
@@ -136,9 +146,15 @@ func (c *integrationCache) store(key string, response cachedIntegrationResponse)
 	c.entries[key] = response
 }
 
+// deprecationHeaders are the response headers a cached entry keeps besides Content-Type.
+var deprecationHeaders = []string{"Deprecation", "X-Canonical-Market"}
+
 func (c *integrationCache) write(w http.ResponseWriter, response cachedIntegrationResponse) {
 	if response.contentType != "" {
 		w.Header().Set("Content-Type", response.contentType)
+	}
+	for name, value := range response.headers {
+		w.Header().Set(name, value)
 	}
 	if response.status == http.StatusOK {
 		// Lets a CDN or a well-behaved client hold the response as long as this process does.

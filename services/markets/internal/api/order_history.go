@@ -36,7 +36,7 @@ type presentedHistoryOrder struct {
 	presentedOrder
 	CancelReason string     `json:"cancel_reason,omitempty"`
 	CancelledAt  *time.Time `json:"cancelled_at,omitempty"`
-	// FilledQuote is what actually traded, in the quote asset (USDC on USDCcNGN-SPOT), to 6 decimal
+	// FilledQuote is what actually traded, in the quote asset (USDC on cNGN-USDC), to 6 decimal
 	// places. Absent when the order has no fills.
 	FilledQuote string `json:"filled_quote,omitempty"`
 }
