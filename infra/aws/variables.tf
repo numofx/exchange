@@ -51,16 +51,25 @@ variable "api_domain" {
 variable "acm_certificate_arn" {
   description = "Existing ACM cert for api_domain in var.region. Must be ISSUED before the ALB applies."
   type        = string
+  default     = "arn:aws:acm:us-east-1:957261948743:certificate/f77f24ce-52d8-4a19-a0ac-8a8c4487d18c"
 }
+
+# The image defaults below are THE DEPLOYED VALUES, kept current on every deploy. An apply that
+# passes no -var flags must be a no-op; before they existed, every apply had to restate all three
+# images by hand, and one forgotten flag rolled a service back to whatever the operator last
+# remembered. Deploying = build-and-push, then edit the default here, plan, apply, commit.
 
 variable "image_markets" {
   description = "ECR image URI for the Go binary (serves both api and matcher modes)."
   type        = string
+  # 2026-10-08: cNGN-USDC / cNGN-PERP identifiers, unknown symbols refused (exchange #133).
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:76471b687a84"
 }
 
 variable "image_execution" {
   description = "ECR image URI for services/execution."
   type        = string
+  default     = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/execution:9d0aa0f016c8"
 }
 
 variable "secret_backend" {
@@ -265,6 +274,8 @@ variable "desired_count_execution" {
 variable "image_market_maker" {
   description = "Fully qualified mm-bot image, tagged by git SHA. Built from numofx/market-maker."
   type        = string
+  # 2026-10-08: resolves the market under either name across the rename (market-maker #31).
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:aa6a0b0365fa"
 }
 
 variable "subaccounts_address" {

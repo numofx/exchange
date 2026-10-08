@@ -53,7 +53,10 @@ cat <<EOF
 
 pushed ${GIT_SHA}
 
-  terraform apply \\
-    -var="image_markets=${REGISTRY}/${STACK}/markets:${GIT_SHA}" \\
-    -var="image_execution=${REGISTRY}/${STACK}/execution:${GIT_SHA}"
+Set the image_markets / image_execution defaults in variables.tf to
+  ${REGISTRY}/${STACK}/markets:${GIT_SHA}
+  ${REGISTRY}/${STACK}/execution:${GIT_SHA}
+then terraform plan (expect only the task definitions and services for the images that
+changed), apply, and commit variables.tf: the defaults ARE the deployed values, so a
+flag-less apply stays a no-op.
 EOF
