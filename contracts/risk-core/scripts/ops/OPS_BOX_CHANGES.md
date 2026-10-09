@@ -5,6 +5,37 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-09 11:06–11:08 UTC: [TEST] alert drill to the ops channel
+
+**What.** Proved canary alert delivery end to end, after a heads-up in the channel:
+
+1. 11:06:43, heads-up posted to the ops webhook (HTTP 200).
+2. 11:07:43, the deployed canary run through `run-with-ssm.sh` (the real webhook from SSM), with
+   the installed unit's environment plus `EXPECTED_NET_SETTLED_CASH=1` and `--test`. It printed
+   `[TEST] NUMO COLLATERAL BACKING FAILURE` and exited 1.
+3. 11:07:52, all-clear posted (HTTP 200).
+
+Nothing on the box changed. **Pending:** confirmation that all three messages appeared in the
+channel, in order. The canary posts with its own `urllib` call, and its delivery result was not
+captured.
+
+## 2026-10-09 11:05:31 UTC: settlement canary config assertions and --test
+
+**What.** Replaced `contracts/risk-core/scripts/ops/check_settlement_canary.py` with the version
+from `90b08b7` (#145, not yet merged), sha256 `25f06d30…a6a2e2`. The previous version (`d52f1da`,
+deployed at 10:45:13 below) is kept as `….bak-pre145-20261009T110531Z`. The unit file is unchanged.
+Checksum verified on the box before the move, and the selector self-test passed in place.
+
+**Why.** `getMargin` passes on an account that does not exist or holds nothing, which is how this
+canary watched an emptied account 15 for five days. The canary now fails, under the headline
+`NUMO SETTLEMENT CANARY MISCONFIGURED`, if a configured account does not exist, sits under another
+manager, or holds nothing. `--test` prefixes `[TEST] ` to a drill's alert.
+
+**Verified.** Green through systemd at 11:05: `subaccount 26 under the SRM, 2 non-zero balance(s)`,
+the same for 24, then the usual checks.
+
+**Rollback.** Move `check_settlement_canary.py.bak-pre145-20261009T110531Z` back.
+
 ## 2026-10-09 10:45:13 UTC: settlement canary moved to the unified stack
 
 **What.** Replaced two files, copied from `d52f1da` (#139, not yet merged at deploy time). No
