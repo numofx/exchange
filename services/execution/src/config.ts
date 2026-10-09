@@ -49,6 +49,8 @@ const envSchema = z.object({
   // log group, so the webhook IS the alerting path, not a supplement to it.
   ALERT_WEBHOOK_URL: z.string().url().optional().or(z.literal('')),
   SETTLEMENT_CANARY_ALERT_REPEAT_CHECKS: z.coerce.number().int().nonnegative().default(30),
+  // Each watched account's floor in whole USD, by the manager's mark-to-market. See canary.ts.
+  SETTLEMENT_CANARY_MIN_ACCOUNT_USD: z.coerce.number().int().nonnegative().default(10),
   // healthchecks.io check pinged after every check, so a canary that stops checking pages too.
   SETTLEMENT_CANARY_HEARTBEAT_URL: z.string().url().optional().or(z.literal('')),
   // Pinned, not required-zero. See canary.ts: the live value is settled cash that donateBalance
@@ -93,6 +95,7 @@ export type AppConfig = {
     alertWebhookUrl?: string;
     alertRepeatAfterChecks: number;
     heartbeatUrl?: string;
+    minAccountValue: bigint;
     expectedNetSettledCash?: bigint;
     wrapperDeltaExceptions?: Record<string, bigint>;
     feeRecipient?: {
@@ -153,6 +156,7 @@ export function loadConfig(): AppConfig {
           alertWebhookUrl: parsed.ALERT_WEBHOOK_URL ? parsed.ALERT_WEBHOOK_URL : undefined,
           alertRepeatAfterChecks: parsed.SETTLEMENT_CANARY_ALERT_REPEAT_CHECKS,
           heartbeatUrl: parsed.SETTLEMENT_CANARY_HEARTBEAT_URL ? parsed.SETTLEMENT_CANARY_HEARTBEAT_URL : undefined,
+          minAccountValue: BigInt(parsed.SETTLEMENT_CANARY_MIN_ACCOUNT_USD) * 10n ** 18n,
           expectedNetSettledCash: parsed.SETTLEMENT_CANARY_EXPECTED_NET_SETTLED_CASH
             ? BigInt(parsed.SETTLEMENT_CANARY_EXPECTED_NET_SETTLED_CASH)
             : undefined,

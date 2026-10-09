@@ -45,7 +45,7 @@ function healthyInvariantRead(a: { address: string; functionName: string }): unk
     // The configured account exists, sits under MANAGER and holds something.
     case 'subAccounts': return '0x7019244E25FA416e6Ca2ed2F3cA25277aef72843';
     case 'manager': return MANAGER;
-    case 'getAccountBalances': return [{ asset: CASH_, subId: 0n, balance: 1n }];
+    case 'getMarginAndMarkToMarket': return [0n, 660n * 10n ** 18n];
     default: throw new Error(`unexpected call ${a.functionName}`);
   }
 }
@@ -140,7 +140,7 @@ function invariantCanary(overrides: Record<string, bigint> = {}, wrappers = [WRA
           case 'netSettledCash': return v.cashSettled;
           case 'accruedSmFees': return v.cashSmFees;
           case 'totalPosition': return v.wrapperCredited;
-          case 'subAccounts': case 'manager': case 'getAccountBalances': return healthyInvariantRead(a);
+          case 'subAccounts': case 'manager': case 'getMarginAndMarkToMarket': return healthyInvariantRead(a);
           default: throw new Error(`unexpected call ${a.functionName}`);
         }
       },
@@ -583,7 +583,7 @@ test('/healthz reports the canary as disabled when none is wired', async () => {
 
 /** A healthy chain except for what `account` says about the configured account. */
 function accountCanary(
-  account: { manager?: string; balances?: { balance: bigint }[] },
+  account: { manager?: string; value?: bigint },
   opts: { heartbeatUrl?: string; ping?: (url: string) => Promise<void>; postAlert?: (u: string, t: string) => Promise<void> } = {},
 ) {
   return new SettlementCanary({
@@ -602,7 +602,7 @@ function accountCanary(
       readContract: async (a: { address: string; functionName: string }) => {
         if (a.functionName === 'getMargin') return 0n;
         if (a.functionName === 'manager' && account.manager !== undefined) return account.manager;
-        if (a.functionName === 'getAccountBalances' && account.balances) return account.balances;
+        if (a.functionName === 'getMarginAndMarkToMarket' && account.value !== undefined) return [0n, account.value];
         return healthyInvariantRead(a);
       },
     } as never,
@@ -623,14 +623,27 @@ test('an account under another manager fails the canary', async () => {
 });
 
 test('an account holding nothing fails the canary', async () => {
-  const s = await accountCanary({ balances: [] }).check();
+  const s = await accountCanary({ value: 0n }).check();
   assert.equal(s.ok, false);
-  assert.match(s.config_failures.join(' '), /holds nothing/);
+  assert.match(s.config_failures.join(' '), /under the \$10\.000000 floor/);
+});
+
+// Account 15 after the cutover: 0.000781 USD by its manager's mark-to-market. Non-zero, so a
+// zero test passed it; the floor does not.
+test('a dusty account below the floor fails the canary', async () => {
+  const s = await accountCanary({ value: 781_421_734_097_779n }).check();
+  assert.equal(s.ok, false);
+  assert.match(s.config_failures.join(' '), /worth \$0\.000781, under the \$10\.000000 floor/);
+});
+
+test('an account at the floor passes', async () => {
+  const s = await accountCanary({ value: 10n * 10n ** 18n }).check();
+  assert.equal(s.ok, true, s.config_failures.join(' '));
 });
 
 test('a misconfigured canary alerts under its own headline', async () => {
   const sent: string[] = [];
-  await accountCanary({ balances: [] }, { postAlert: async (_u, t) => { sent.push(t); } }).check();
+  await accountCanary({ value: 0n }, { postAlert: async (_u, t) => { sent.push(t); } }).check();
   assert.match(sent[0] ?? '', /^NUMO SETTLEMENT CANARY MISCONFIGURED/);
 });
 
@@ -638,7 +651,7 @@ test('a healthy check pings the heartbeat URL, a failing one pings /fail', async
   const pinged: string[] = [];
   const ping = async (url: string) => { pinged.push(url); };
   await accountCanary({}, { heartbeatUrl: 'https://hc-ping.com/abc', ping }).check();
-  await accountCanary({ balances: [] }, { heartbeatUrl: 'https://hc-ping.com/abc', ping }).check();
+  await accountCanary({ value: 0n }, { heartbeatUrl: 'https://hc-ping.com/abc', ping }).check();
   assert.deepEqual(pinged, ['https://hc-ping.com/abc', 'https://hc-ping.com/abc/fail']);
 });
 

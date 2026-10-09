@@ -46,6 +46,8 @@ Env (or ~/.numo-feeds.env):
                      needs none), and the quote asset. All four required together, or the check
                      is skipped.
   CANARY_ACCOUNTS    comma-separated subaccount ids (default: 26,24)
+  CANARY_MIN_ACCOUNT_USD
+                     each account's floor, by the manager's mark-to-market (default 10)
 
 --test prefixes any alert with "[TEST] ", for a drill sent to the shared channel on purpose.
 
@@ -89,7 +91,7 @@ SEL_POS_ALLOWANCE = "0x4997e514"     # positiveAssetAllowance(uint256,address,ad
 SEL_GET_BALANCE = "0x0806e640"       # getBalance(uint256,address,uint256)
 SEL_SUB_ACCOUNTS = "0x779e5012"      # subAccounts()
 SEL_MANAGER = "0x52981457"           # manager(uint256)
-SEL_GET_ACCOUNT_BALANCES = "0xc7569701"  # getAccountBalances(uint256)
+SEL_MARGIN_AND_MTM = "0x6691bc04"    # getMarginAndMarkToMarket(uint256,bool,uint256)
 
 # AssetWhitelisted(address,uint256,uint8) -- used to discover which assets to check, so a new
 # market is covered without editing this file.
@@ -377,11 +379,11 @@ def check_accounts(url: str, srm: str, accounts: list, problems: list, checked: 
   getMargin succeeds on an account that was never opened and on one that holds nothing: the
   manager reads no feed for either, so check 1 goes green while proving nothing. That is how this
   canary watched an emptied account 15 for five days after the 2026-10-04 cutover. So every
-  configured account must exist, sit under the manager being checked, and hold something.
-
-  A dusty account still passes -- 15 kept 0.0008 of cash -- so this catches a missing or empty
-  account, not a stale one. Keep CANARY_ACCOUNTS on the accounts the makers actually trade from.
+  configured account must exist, sit under the manager being checked, and be worth at least
+  CANARY_MIN_ACCOUNT_USD (default 10) by the manager's own mark-to-market -- a floor, not zero,
+  because the emptied 15 still held 0.0008 of cash and would have passed a non-zero test.
   """
+  floor = float(os.environ.get("CANARY_MIN_ACCOUNT_USD", "10"))
   sub_accounts = "0x" + call(url, srm, SEL_SUB_ACCOUNTS)[26:]
   for account_id in accounts:
     word = f"{account_id:064x}"
@@ -392,14 +394,17 @@ def check_accounts(url: str, srm: str, accounts: list, problems: list, checked: 
     if manager.lower() != srm.lower():
       problems.append(f"subaccount {account_id} is under manager {manager}, not {srm} -- this canary is not watching it")
       continue
-    raw = call(url, sub_accounts, SEL_GET_ACCOUNT_BALANCES + word)[2:]
-    words = [raw[i:i + 64] for i in range(0, len(raw), 64)]
-    count = int(words[1], 16)
-    held = [w for w in (words[2 + 3 * i + 2] for i in range(count)) if int(w, 16) != 0]
-    if not held:
-      problems.append(f"subaccount {account_id} holds nothing -- the manager reads no feed for it, so getMargin proves nothing")
+    word2 = call(url, srm, SEL_MARGIN_AND_MTM + word + f"{1:064x}" + f"{0:064x}")[2:][64:128]
+    mtm = int(word2, 16)
+    if mtm >= 1 << 255:
+      mtm -= 1 << 256
+    if mtm < floor * 10**18:
+      problems.append(
+        f"subaccount {account_id} is worth ${mtm / 1e18:,.6f}, under the ${floor:g} floor "
+        "-- too little held for getMargin on it to prove anything"
+      )
     else:
-      checked.append(f"subaccount {account_id} under the SRM, {len(held)} non-zero balance(s)")
+      checked.append(f"subaccount {account_id} under the SRM, worth ${mtm / 1e18:,.2f}")
 
 
 def alert(webhook: str | None, msg: str) -> None:
@@ -439,7 +444,7 @@ def self_test() -> None:
     "getBalance(uint256,address,uint256)": SEL_GET_BALANCE,
     "subAccounts()": SEL_SUB_ACCOUNTS,
     "manager(uint256)": SEL_MANAGER,
-    "getAccountBalances(uint256)": SEL_GET_ACCOUNT_BALANCES,
+    "getMarginAndMarkToMarket(uint256,bool,uint256)": SEL_MARGIN_AND_MTM,
   }.items():
     actual = "0x" + keccak(signature.encode()).hex()[:8]
     assert actual == expected, f"{signature}: hardcoded {expected}, actual {actual}"

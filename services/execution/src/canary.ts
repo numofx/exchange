@@ -56,12 +56,9 @@ const INVARIANT_ABI = [
     inputs: [{ name: 'accountId', type: 'uint256' }], outputs: [{ type: 'address' }],
   },
   {
-    type: 'function', name: 'getAccountBalances', stateMutability: 'view',
-    inputs: [{ name: 'accountId', type: 'uint256' }],
-    outputs: [{
-      type: 'tuple[]',
-      components: [{ name: 'asset', type: 'address' }, { name: 'subId', type: 'uint256' }, { name: 'balance', type: 'int256' }],
-    }],
+    type: 'function', name: 'getMarginAndMarkToMarket', stateMutability: 'view',
+    inputs: [{ name: 'accountId', type: 'uint256' }, { name: 'isInitial', type: 'bool' }, { name: 'scenarioId', type: 'uint256' }],
+    outputs: [{ type: 'int256' }, { type: 'int256' }],
   },
   {
     type: 'function', name: 'getBalance', stateMutability: 'view',
@@ -180,6 +177,11 @@ export type CanaryOptions = {
   heartbeatUrl?: string;
   /** Injected in tests. */
   ping?: (url: string) => Promise<void>;
+  /**
+   * Each configured account's floor in USD (18dp), by the manager's own mark-to-market. Default
+   * $10. A floor rather than zero: the emptied account 15 still held 0.0008 of cash.
+   */
+  minAccountValue?: bigint;
   /**
    * The value netSettledCash is expected to hold. Alerting on movement rather than on
    * non-zero: the current balance is legitimate settled cash that no available call can
@@ -337,10 +339,9 @@ export class SettlementCanary {
    * getMargin succeeds on an account that was never opened and on one that holds nothing -- the
    * manager reads no feed for either -- so a green margin check proves nothing about them. That
    * is how the canaries watched an emptied account 15 for five days after the 2026-10-04 cutover.
-   * Every configured account must exist, sit under the configured manager, and hold something.
-   *
-   * A dusty account still passes (15 kept 0.0008 of cash): this catches a missing or empty
-   * account, not a stale one.
+   * Every configured account must exist, sit under the configured manager, and be worth at least
+   * minAccountValue by the manager's own mark-to-market -- a floor, not zero, because the emptied
+   * account 15 still held 0.0008 of cash and would have passed a non-zero test.
    */
   private async checkAccounts(): Promise<string[]> {
     const out: string[] = [];
@@ -358,9 +359,12 @@ export class SettlementCanary {
           out.push(`subaccount ${accountId} is under manager ${manager}, not ${this.options.manager} -- the canary is not watching it`);
           continue;
         }
-        const balances = await read<readonly { balance: bigint }[]>(subAccounts, 'getAccountBalances', [BigInt(accountId)]);
-        if (!balances.some((b) => b.balance !== 0n)) {
-          out.push(`subaccount ${accountId} holds nothing -- the manager reads no feed for it, so getMargin proves nothing`);
+        const floor = this.options.minAccountValue ?? 10n * 10n ** 18n;
+        const [, value] = await read<readonly [bigint, bigint]>(this.options.manager, 'getMarginAndMarkToMarket', [BigInt(accountId), true, 0n]);
+        if (value < floor) {
+          out.push(
+            `subaccount ${accountId} is worth $${fmt(value)}, under the $${fmt(floor)} floor -- too little held for getMargin on it to prove anything`,
+          );
         }
       }
     } catch (error) {
