@@ -163,8 +163,8 @@ export type CanaryOptions = {
    */
   expectedNetSettledCash?: bigint;
   /**
-   * The wrapped-quote fee path. All four required together, or the check is skipped: before the
-   * cutover the fee subaccount does not exist, and inventing an id would be worse than no check.
+   * The fee path. All four required together, or the check is skipped: before the cutover the
+   * fee subaccount does not exist, and inventing an id would be worse than no check.
    */
   /**
    * Wrappers permitted a standing, pinned delta between held tokens and credited position,
@@ -431,15 +431,21 @@ export class SettlementCanary {
         return out;
       }
 
-      const allowance = await read<bigint>(subAccounts, 'positiveAssetAllowance', [
-        fee.accountId, owner, fee.quoteAsset, fee.module,
-      ]);
+      // A CashAsset credit needs no allowance -- handleAdjustment returns needAllowance only for a
+      // negative amount (risk-core CashAsset.sol) -- so on a cash-quoted module a zero grant is the
+      // correct state and fees land without one. WrappedERC20Asset needs it on every credit, which
+      // is what the checks below exist for.
+      const cash = await read<`0x${string}`>(this.options.manager, 'cashAsset');
+      const allowance =
+        cash.toLowerCase() === fee.quoteAsset.toLowerCase()
+          ? null
+          : await read<bigint>(subAccounts, 'positiveAssetAllowance', [fee.accountId, owner, fee.quoteAsset, fee.module]);
       if (allowance === 0n) {
         out.push(
           `fee subaccount ${fee.accountId} has NO positive ${fee.quoteAsset} allowance for module ` +
             `${fee.module} — every fee-bearing fill reverts NotEnoughSubIdOrAssetAllowances`,
         );
-      } else if (allowance < 1n << 255n) {
+      } else if (allowance !== null && allowance < 1n << 255n) {
         out.push(
           `fee subaccount ${fee.accountId} allowance is finite (${allowance}) and decrements on every ` +
             'fill — it will run out; re-grant type(uint).max',
@@ -447,7 +453,7 @@ export class SettlementCanary {
       }
 
       // Reported, never alerted on: see fee_accrued on CanarySnapshot. subId 0 is the only sub-id
-      // the wrapped quote asset uses, and the same one the module credits the fee to.
+      // either quote asset uses, and the same one the module credits the fee to.
       const accrued = await read<bigint>(subAccounts, 'getBalance', [fee.accountId, fee.quoteAsset, 0n]);
       this.feeAccrued = accrued.toString();
     } catch (error) {
