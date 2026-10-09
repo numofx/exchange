@@ -71,7 +71,7 @@ const MODULE = '0x44813aD30b2fFC1bB2871Eed9b19F63c8196eD1c';
 const MAXU = (1n << 256n) - 1n;
 
 /** A canary with the fee path configured; overrides break exactly one of its two invariants. */
-function feeCanary(o: { owner?: string; allowance?: bigint; accrued?: bigint } = {}) {
+function feeCanary(o: { owner?: string; allowance?: bigint; accrued?: bigint; quoteAsset?: string } = {}) {
   return new SettlementCanary({
     rpcUrl: config.rpcUrl,
     chainId: config.chainId,
@@ -83,7 +83,7 @@ function feeCanary(o: { owner?: string; allowance?: bigint; accrued?: bigint } =
       accountId: 99n,
       expectedOwner: VAULT as `0x\${string}`,
       module: MODULE as `0x\${string}`,
-      quoteAsset: WRAPPER as `0x\${string}`,
+      quoteAsset: (o.quoteAsset ?? WRAPPER) as `0x\${string}`,
     },
     client: {
       getLogs: async () => [],
@@ -92,7 +92,9 @@ function feeCanary(o: { owner?: string; allowance?: bigint; accrued?: bigint } =
           case 'getMargin': return 0n;
           case 'subAccounts': return SUBACCOUNTS;
           case 'ownerOf': return o.owner ?? VAULT;
-          case 'positiveAssetAllowance': return o.allowance ?? MAXU;
+          case 'positiveAssetAllowance':
+            if (o.quoteAsset === CASH_) throw new Error('allowance read on a cash quote asset');
+            return o.allowance ?? MAXU;
           case 'getBalance': return o.accrued ?? 0n;
           default: return healthyInvariantRead(a);
         }
@@ -471,6 +473,25 @@ test('a finite fee allowance is caught before it runs out', async () => {
   const s = await feeCanary({ allowance: 1_000n }).check();
   assert.equal(s.ok, false);
   assert.match(s.invariant_failures.join(' '), /finite/);
+});
+
+// A CashAsset credit needs no allowance (CashAsset.handleAdjustment asks for one only on a
+// negative amount), so the unified stack's fee account 22 holds a zero grant and still collects.
+// Requiring one there would page "every fee-bearing fill reverts" while fills settle.
+test('a cash-quoted fee path is healthy with no allowance at all', async () => {
+  const s = await feeCanary({ quoteAsset: CASH_, allowance: 0n }).check();
+  assert.equal(s.ok, true, s.invariant_failures.join(' '));
+});
+
+test('a cash-quoted fee path still catches an owner change', async () => {
+  const s = await feeCanary({ quoteAsset: CASH_, owner: '0x000000000000000000000000000000000000dEaD' }).check();
+  assert.equal(s.ok, false);
+  assert.match(s.invariant_failures.join(' '), /OWNER CHANGED/);
+});
+
+test('a cash-quoted fee path still reports accrual', async () => {
+  const s = await feeCanary({ quoteAsset: CASH_, accrued: 419_272_648_378_819_691n }).check();
+  assert.equal(s.fee_accrued, '419272648378819691');
 });
 
 test('a correctly configured fee path is not a failure', async () => {
