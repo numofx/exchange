@@ -14,6 +14,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import type { AppConfig } from './config.js';
 import { createKmsAccount } from '@numo/kms-signer';
 import { createSerialQueue } from './serial-queue.js';
+import { NonceTracker } from './nonce-tracker.js';
 import { assertSignerIsOwner, type SubmittedAction } from './signer-guard.js';
 import type { DepositRequest, DepositResponse, ExecuteMatchRequest, ExecuteMatchResponse, WithdrawRequest } from './types.js';
 import { DepositGate, PROVISIONAL_DEPOSIT_GAS, receiptCostWei } from './deposit-gate.js';
@@ -64,6 +65,8 @@ export class MatchExecutor {
   private readonly walletClient;
   // Settlements, withdrawals and deposits share this EOA's nonce sequence; see serial-queue.ts.
   private readonly enqueueSend = createSerialQueue();
+  // Nonces are tracked locally, inside that queue; see nonce-tracker.ts.
+  private readonly nonces: NonceTracker;
   /** Floor and gas budget for sponsored deposits; undefined unless deposits are configured. */
   readonly depositGate?: DepositGate;
   /**
@@ -106,6 +109,7 @@ export class MatchExecutor {
     });
     this.publicClient = createPublicClient({ chain: this.chain, transport: http(config.rpcUrl) });
     this.walletClient = createWalletClient({ account: this.account, chain: this.chain, transport: http(config.rpcUrl) });
+    this.nonces = new NonceTracker(() => this.publicClient.getTransactionCount({ address: this.account.address, blockTag: 'pending' }));
     if (deps.deposit) {
       this.depositGate = new DepositGate({
         minExecutorWei: deps.deposit.minExecutorWei,
@@ -172,16 +176,32 @@ export class MatchExecutor {
         functionName: 'verifyAndMatch',
         args,
       });
-      return this.walletClient.writeContract({
-        account: this.account,
-        address: this.deps.matchingAddress,
-        abi: options.abi,
-        functionName: 'verifyAndMatch',
-        args,
-        chain: this.chain,
-        gas: withGasHeadroom(estimate),
-      });
+      return this.broadcast((nonce) =>
+        this.walletClient.writeContract({
+          account: this.account,
+          address: this.deps.matchingAddress,
+          abi: options.abi,
+          functionName: 'verifyAndMatch',
+          args,
+          chain: this.chain,
+          gas: withGasHeadroom(estimate),
+          nonce,
+        }),
+      );
     });
+  }
+
+  /** Sends with a locally tracked nonce. Call only inside enqueueSend. */
+  private async broadcast(send: (nonce: number) => Promise<`0x${string}`>): Promise<`0x${string}`> {
+    const nonce = await this.nonces.take();
+    try {
+      const hash = await send(nonce);
+      this.nonces.confirm(nonce);
+      return hash;
+    } catch (error) {
+      this.nonces.forget();
+      throw error;
+    }
   }
 
   async execute(request: ExecuteMatchRequest): Promise<ExecuteMatchResponse> {
@@ -338,7 +358,9 @@ export class MatchExecutor {
       }
       gate.assertBudget();
       if (this.config.dryRun) return undefined;
-      return this.walletClient.writeContract({ account: this.account, address: token, abi: permitAbi, functionName: 'permit', args, chain: this.chain });
+      return this.broadcast((nonce) =>
+        this.walletClient.writeContract({ account: this.account, address: token, abi: permitAbi, functionName: 'permit', args, chain: this.chain, nonce }),
+      );
     });
     if (hash === undefined) return undefined;
     const receipt = await this.publicClient.waitForTransactionReceipt({ hash, timeout: this.config.receiptTimeoutMs });
