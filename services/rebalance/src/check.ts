@@ -15,13 +15,13 @@ import { assessInventory } from './inventory.js';
  * from a real finding, and someone spends their afternoon investigating a venue that is fine.
  */
 export const TEST_PREFIX = '[TEST] ';
-import { latestSnapshot, priceFromSnapshot } from './quote.js';
+import { orderbookQuote, type FetchQuote } from './orderbook.js';
 import { fetchMarkets as defaultFetchMarkets, resolveSpotVenue, type FetchMarkets } from './spot.js';
-import { CNGN, LEDGER_DECIMALS, SUBACCOUNTS, SUBACCOUNTS_ABI, TOKEN_DECIMALS, USDC } from './venue.js';
+import { LEDGER_DECIMALS, SUBACCOUNTS, SUBACCOUNTS_ABI, TOKEN_DECIMALS } from './venue.js';
 
 /**
  * Typed to ReadClients on purpose: tsc then refuses any future edit that reaches for a signer here.
- * `fetchSnapshot` is injectable so the verdict can be tested through this function rather than only
+ * `fetchQuote` is injectable so the verdict can be tested through this function rather than only
  * through assessInventory -- the thresholds, the price source and which escrows count are all
  * decided here, and testing a reimplementation of them proves nothing about this one.
  */
@@ -30,7 +30,7 @@ export async function check(
   clients: ReadClients,
   alert: boolean,
   post: PostAlert = defaultPostAlert,
-  fetchSnapshot: typeof latestSnapshot = latestSnapshot,
+  fetchQuote: FetchQuote = orderbookQuote,
   heartbeat = false,
   /** Marks a message as a drill. Anything posted to a shared channel by hand must carry this. */
   testRun = false,
@@ -45,18 +45,16 @@ export async function check(
 
   const sub = config.MM_SUBACCOUNT_ID;
   const venue = await resolveSpotVenue(config.VENUE_API_URL, sub, clients.publicClient, fetchMarkets);
-  const [rows, snapshot] = await Promise.all([
+  // One whole USDC, priced through the same orderbook a rebalance would trade on, so the
+  // valuation and the trade cannot disagree.
+  const [rows, quote] = await Promise.all([
     clients.publicClient.readContract({ address: SUBACCOUNTS, abi: SUBACCOUNTS_ABI, functionName: 'getAccountBalances', args: [sub] }),
-    fetchSnapshot(config.INDEXER_URL, USDC, CNGN),
+    fetchQuote(config.ORDERBOOK_URL, 10n ** BigInt(TOKEN_DECIMALS)),
   ]);
+  const rate = quote.rate;
   const held = (asset: string) => rows.find((r) => r.asset.toLowerCase() === asset.toLowerCase())?.balance ?? 0n;
   const usdc = held(venue.quoteAsset);
   const cngn = held(venue.cngnEscrow);
-
-  // One whole USDC, priced through the same path a rebalance would use, so the valuation and the
-  // trade cannot disagree.
-  const oneUsdc = 10n ** BigInt(TOKEN_DECIMALS);
-  const rate = priceFromSnapshot(snapshot, oneUsdc, config.MAX_SNAPSHOT_AGE_SECONDS).rate;
 
   const verdict = assessInventory({ usdc, cngn, rate }, {
     cngnMinShare: config.CNGN_MIN_SHARE,
@@ -65,7 +63,7 @@ export async function check(
   }, sub);
 
   console.log(`sub ${sub}      USDC ${formatUnits(usdc, LEDGER_DECIMALS)} / cNGN ${formatUnits(cngn, LEDGER_DECIMALS)}`);
-  console.log(`rate        ${rate.toFixed(4)} (snapshot ${snapshot.snapshotTime.toISOString()})`);
+  console.log(`rate        ${rate.toFixed(4)} (HyperFX orderbook, pessimistic)`);
   console.log(`valued      USDC $${verdict.usdcUsd.toFixed(2)} / cNGN $${verdict.cngnUsd.toFixed(2)} (cNGN ${(verdict.cngnShare * 100).toFixed(1)}%)`);
   console.log(`action      ${verdict.action}`);
   for (const reason of verdict.reasons) console.log(`  - ${reason}`);

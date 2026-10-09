@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import type { Config } from './config.js';
 import { runCommand, type CliDeps } from './cli.js';
-import type { Snapshot } from './quote.js';
+import type { FetchQuote } from './orderbook.js';
 import type { FetchMarkets } from './spot.js';
 
 // The unified stack's spot contracts, as /v1/markets serves them.
@@ -34,17 +34,14 @@ const config = {
 /** 18dp, as SubAccounts reports. */
 const ledger = (units: number) => BigInt(Math.round(units * 1e6)) * 10n ** 12n;
 
-function snapshot(): Snapshot {
-  return {
-    commitment: '0xabc',
-    standardAmount: 1_000_000_000n,
-    medianPrice: 1_368_315_500_000n,
-    lowestPrice: 1_368_315_500_000n,
-    highestPrice: 1_368_315_500_000n,
-    bidCount: 2,
-    snapshotTime: new Date(),
-  };
-}
+/** The orderbook at 1368.3155 cNGN per USDC, deep enough for anything a test asks. */
+const quoteAt: FetchQuote = async (_url, amountIn) => ({
+  amountIn,
+  amountOut: (amountIn * 13_683_155n) / 10_000n,
+  rate: 1368.3155,
+  slippageBps: 5,
+  maxFillableIn: 10n ** 12n,
+});
 
 /** A publicClient for a subaccount under MANAGER holding `usdc` cash and `cngn` escrow. */
 function readClientWith(usdc: bigint, cngn: bigint) {
@@ -74,7 +71,7 @@ function deps(over: Partial<CliDeps> = {}, usdc = ledger(308), cngn = ledger(478
       throw new Error('signingClients must not be constructed for a read-only command');
     },
     post: async () => {},
-    fetchSnapshot: async () => snapshot(),
+    fetchQuote: quoteAt,
     fetchMarkets: markets,
     ...over,
   };

@@ -20,10 +20,10 @@ import { loadConfig, type Config } from './config.js';
 import { cancel } from './cancel.js';
 import { check, TEST_PREFIX } from './check.js';
 import { deposit } from './deposit.js';
-import { latestSnapshot, priceFromSnapshot } from './quote.js';
+import { orderbookQuote, type FetchQuote } from './orderbook.js';
 import { fetchMarkets, type FetchMarkets } from './spot.js';
 import { approve, swap } from './swap.js';
-import { CNGN, TOKEN_DECIMALS, USDC } from './venue.js';
+import { TOKEN_DECIMALS } from './venue.js';
 
 const USAGE = `usage: rebalance <check|quote|approve|swap|cancel|deposit> [amount|commitment] [--execute] [--alert] [--heartbeat] [--test]`;
 
@@ -37,7 +37,7 @@ export type CliDeps = {
   readClients: (config: Config) => ReadClients;
   signingClients: (config: Config) => Promise<Clients>;
   post: PostAlert;
-  fetchSnapshot: typeof latestSnapshot;
+  fetchQuote: FetchQuote;
   fetchMarkets: FetchMarkets;
 };
 
@@ -45,7 +45,7 @@ export const defaultDeps: CliDeps = {
   readClients: createReadClient,
   signingClients: createClients,
   post: postAlert,
-  fetchSnapshot: latestSnapshot,
+  fetchQuote: orderbookQuote,
   fetchMarkets,
 };
 
@@ -59,10 +59,9 @@ export async function runCommand(argv: string[], config: Config, deps: CliDeps =
 
   if (command === 'quote') {
     const amount = parseUnits(arg ?? '20', TOKEN_DECIMALS);
-    const snapshot = await deps.fetchSnapshot(config.INDEXER_URL, USDC, CNGN);
-    const q = priceFromSnapshot(snapshot, amount, config.MAX_SNAPSHOT_AGE_SECONDS);
-    console.log(`snapshot    ${snapshot.snapshotTime.toISOString()} (${(q.ageSeconds / 60).toFixed(1)} min, ${snapshot.bidCount} bids)`);
-    console.log(`dispersion  ${snapshot.lowestPrice} / ${snapshot.medianPrice} / ${snapshot.highestPrice}`);
+    const q = await deps.fetchQuote(config.ORDERBOOK_URL, amount);
+    console.log(`source      HyperFX orderbook (pessimistic: one level fills it all), slippage ${q.slippageBps} bps`);
+    console.log(`depth       up to ${formatUnits(q.maxFillableIn, TOKEN_DECIMALS)} USDC fillable`);
     console.log(`quote       ${formatUnits(amount, TOKEN_DECIMALS)} USDC -> ${formatUnits(q.amountOut, TOKEN_DECIMALS)} cNGN @ ${q.rate.toFixed(4)}`);
     return;
   }
@@ -73,7 +72,7 @@ export async function runCommand(argv: string[], config: Config, deps: CliDeps =
     const wantHeartbeat = argv.includes('--heartbeat');
     const isTest = argv.includes('--test');
     try {
-      return await check(config, deps.readClients(config), wantAlert, deps.post, deps.fetchSnapshot, wantHeartbeat, isTest, deps.fetchMarkets);
+      return await check(config, deps.readClients(config), wantAlert, deps.post, deps.fetchQuote, wantHeartbeat, isTest, deps.fetchMarkets);
     } catch (error) {
       // A check that could not RUN is not a quiet check. Unattended, a crash into a log nobody
       // reads is the same failure as an alert that reaches nobody, so a failed run pages exactly
