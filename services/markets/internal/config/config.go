@@ -70,6 +70,9 @@ type Config struct {
 	DepositMinAmount *big.Int
 	// DepositsPerOwnerPerMinute caps how often one owner can make the venue simulate, and pay gas for, a deposit.
 	DepositsPerOwnerPerMinute int
+	// DepositsPerOwnerPerHour caps the deposits one owner can have the venue submit in a rolling hour. Without it one
+	// wallet at the per-minute rate could spend the executor's whole hourly budget and lock everyone else out.
+	DepositsPerOwnerPerHour int
 	// ExecutorDepositURL is execution-service's POST /deposit.
 	ExecutorDepositURL string
 	// ExecutorDepositTimeout must exceed execution-service's DEPOSIT_RECEIPT_TIMEOUT_MS.
@@ -218,6 +221,7 @@ func Load() (Config, error) {
 	cfg.ExecutorDepositURL = strings.TrimSpace(os.Getenv("EXECUTOR_DEPOSIT_URL"))
 	cfg.ExecutorDepositTimeout = getenvDurationDefault("EXECUTOR_DEPOSIT_TIMEOUT", 45*time.Second)
 	cfg.DepositsPerOwnerPerMinute = getenvIntDefault("DEPOSITS_PER_OWNER_PER_MINUTE", 3)
+	cfg.DepositsPerOwnerPerHour = getenvIntDefault("DEPOSITS_PER_OWNER_PER_HOUR", 6)
 	minDeposit, ok := new(big.Int).SetString(getenvDefault("DEPOSIT_MIN_AMOUNT", "10000000"), 10)
 	if !ok || minDeposit.Sign() <= 0 {
 		return Config{}, fmt.Errorf("DEPOSIT_MIN_AMOUNT must be a positive integer of 6-decimal USDC base units")

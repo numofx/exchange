@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/numofx/matching-backend/internal/config"
@@ -98,7 +99,10 @@ type depositService struct {
 	chain         depositChain
 	submitter     depositSubmitter
 	limiter       *withdrawalLimiter
-	now           func() time.Time
+	// hourly counts deposits submitted to the executor per owner -- the ones the venue may pay gas for. A request
+	// refused before that (a 400, a 401) does not count, so fixing a mistake costs nothing.
+	hourly *ownerHourlyCap
+	now    func() time.Time
 }
 
 func newDepositService(cfg config.Config, signatures signatureChecker) *depositService {
@@ -133,8 +137,49 @@ func newDepositService(cfg config.Config, signatures signatureChecker) *depositS
 			httpClient: &http.Client{Timeout: cfg.ExecutorDepositTimeout},
 		},
 		limiter: newWithdrawalLimiter(cfg.DepositsPerOwnerPerMinute),
+		hourly:  newOwnerHourlyCap(cfg.DepositsPerOwnerPerHour),
 		now:     time.Now,
 	}
+}
+
+// ownerHourlyCap admits at most `limit` recorded events per owner in a rolling hour. Per API task, which is a
+// singleton (desired_count_markets = 1).
+type ownerHourlyCap struct {
+	mu     sync.Mutex
+	limit  int
+	recent map[string][]time.Time
+}
+
+func newOwnerHourlyCap(limit int) *ownerHourlyCap {
+	return &ownerHourlyCap{limit: limit, recent: map[string][]time.Time{}}
+}
+
+func (c *ownerHourlyCap) prune(owner string, now time.Time) []time.Time {
+	kept := c.recent[owner][:0]
+	for _, at := range c.recent[owner] {
+		if now.Sub(at) < time.Hour {
+			kept = append(kept, at)
+		}
+	}
+	c.recent[owner] = kept
+	return kept
+}
+
+// full reports whether the owner has used the hour's allowance, and when the oldest use expires.
+func (c *ownerHourlyCap) full(owner string, now time.Time) (bool, time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	kept := c.prune(owner, now)
+	if len(kept) < c.limit {
+		return false, 0
+	}
+	return true, time.Hour - now.Sub(kept[0])
+}
+
+func (c *ownerHourlyCap) record(owner string, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.recent[owner] = append(c.prune(owner, now), now)
 }
 
 // depositUnitsToLedger is the one place a deposit amount changes units: 6-decimal USDC to the 18-decimal ledger.
@@ -152,7 +197,7 @@ func formatDepositUnits(units *big.Int) string {
 // handleCreateDeposit serves POST /v1/deposits. Every check fails closed, in order:
 //
 //  1. the request itself -- module, owner = signer, expiry, data, asset, amount, manager (400)
-//  2. at most one deposit in flight per owner, and a few a minute (429)
+//  2. at most one deposit in flight per owner, a few a minute, and DEPOSITS_PER_OWNER_PER_HOUR submitted an hour (429)
 //  3. the signature authorizes the action (401)
 //  4. chain pre-checks, each a 400 naming the fix: the nonce is unused; for a top-up, the owner owns the account and
 //     it is under the perp SRM; the owner holds the USDC and has approved the DepositModule for it
@@ -201,6 +246,16 @@ func (s *Server) handleCreateDeposit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if full, retryIn := svc.hourly.full(owner, svc.now()); full {
+		slog.Info("deposit_rejected", "stage", "hourly_cap", "owner", owner)
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", int(retryIn.Seconds())+1))
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{
+			"error": fmt.Sprintf("this owner has made %d deposits in the last hour, the most allowed; retry in %d minutes",
+				svc.hourly.limit, int(retryIn.Minutes())+1),
+		})
+		return
+	}
+
 	if message, err := svc.preflight(r.Context(), req, data); err != nil {
 		slog.Warn("deposit_chain_unreadable", "owner", owner, "subaccount_id", req.Action.SubaccountID, "error", err)
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "the chain could not be read to check this deposit; retry shortly"})
@@ -211,6 +266,8 @@ func (s *Server) handleCreateDeposit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Counted when submitted, success or not: from here the venue may have paid gas.
+	svc.hourly.record(owner, svc.now())
 	receipt, err := svc.submitter.SubmitDeposit(r.Context(), req)
 	if err != nil {
 		writeDepositSubmitError(w, req, svc.moduleAddress, err)
