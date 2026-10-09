@@ -41,10 +41,11 @@ Env (or ~/.numo-feeds.env):
                      direction. Unlisted wrappers must be exactly 1:1. See the exceptions block
                      below for why one exists and why it is pinned rather than tolerated.
   FEE_SUBACCOUNT, FEE_VAULT, FEE_MODULE, FEE_QUOTE_ASSET
-                     the wrapped-quote fee account, its expected owner, the trade module that
-                     must hold a positive allowance on it, and the quote asset. All four
-                     required together, or the check is skipped.
-  CANARY_ACCOUNTS    comma-separated subaccount ids (default: 15)
+                     the fee account, its expected owner, the trade module that must hold a
+                     positive allowance on it (wrapped quote assets only -- a CashAsset credit
+                     needs none), and the quote asset. All four required together, or the check
+                     is skipped.
+  CANARY_ACCOUNTS    comma-separated subaccount ids (default: 26,24)
 
 Run every few minutes via systemd timer (see numo-settlement-canary.timer).
 """
@@ -57,8 +58,11 @@ import sys
 import urllib.request
 from pathlib import Path
 
-DEFAULT_SRM = "0x3195Bd7e02d93982bCF8b34DF5B941fFCaE1E49b"
-DEFAULT_ACCOUNTS = "15"
+# The perp SRM, which both makers' accounts sit under since the 2026-10-04 unified cutover: 26
+# (spot, wrapped cNGN) and 24 (perp position). The retired spot manager was 0x3195Bd7e with
+# account 15, which is now empty and would pass getMargin while proving nothing.
+DEFAULT_SRM = "0xDE0423D0a1E15536265C9513d2e0c10DAb5835D4"
+DEFAULT_ACCOUNTS = "26,24"
 
 # Verified with `cast sig`. A wrong selector here would eth_call into empty space and the
 # node would answer 0x, which this script treats as a failure rather than a pass -- but the
@@ -80,6 +84,7 @@ SEL_SM_FEES = "0xcb5f01da"           # accruedSmFees()
 SEL_OWNER_OF = "0x6352211e"          # ownerOf(uint256)
 SEL_POS_ALLOWANCE = "0x4997e514"     # positiveAssetAllowance(uint256,address,address,address)
 SEL_GET_BALANCE = "0x0806e640"       # getBalance(uint256,address,uint256)
+SEL_SUB_ACCOUNTS = "0x779e5012"      # subAccounts()
 
 # AssetWhitelisted(address,uint256,uint8) -- used to discover which assets to check, so a new
 # market is covered without editing this file.
@@ -296,7 +301,7 @@ def check_wrapper_backing(url: str, srm: str, failures: list, checked: list) -> 
 
 
 def check_fee_recipient(url: str, failures: list, checked: list) -> None:
-  """The wrapped-quote fee path, which fails silently and only under load.
+  """The fee path, which fails silently and only under load.
 
   Two ways it breaks after the cutover, neither visible from a balance:
 
@@ -316,7 +321,8 @@ def check_fee_recipient(url: str, failures: list, checked: list) -> None:
   if not (account and vault and module and quote):
     return
 
-  sub_accounts = "0x" + call(url, os.environ.get("SRM_ADDRESS", DEFAULT_SRM), "0x779e5012")[26:]
+  srm = os.environ.get("SRM_ADDRESS", DEFAULT_SRM)
+  sub_accounts = "0x" + call(url, srm, SEL_SUB_ACCOUNTS)[26:]
   account_word = f"{int(account):064x}"
 
   owner = "0x" + call(url, sub_accounts, SEL_OWNER_OF + account_word)[26:]
@@ -327,7 +333,13 @@ def check_fee_recipient(url: str, failures: list, checked: list) -> None:
     )
     return
 
-  allowance = uint(url, sub_accounts, SEL_POS_ALLOWANCE + account_word + addr_arg(owner) + addr_arg(quote) + addr_arg(module))
+  # A CashAsset credit needs no allowance -- handleAdjustment asks for one only on a negative amount
+  # (risk-core CashAsset.sol) -- so on a cash-quoted module a zero grant is correct and fees land
+  # without one. Only a WrappedERC20Asset quote leg needs the grant checked.
+  cash = "0x" + call(url, srm, SEL_CASH_ASSET)[26:]
+  allowance = None if cash.lower() == quote.lower() else uint(
+    url, sub_accounts, SEL_POS_ALLOWANCE + account_word + addr_arg(owner) + addr_arg(quote) + addr_arg(module)
+  )
   if allowance == 0:
     failures.append(
       f"fee subaccount {account} has NO positive {quote} allowance for module {module} "
@@ -337,7 +349,7 @@ def check_fee_recipient(url: str, failures: list, checked: list) -> None:
 
   # A finite grant is a scheduled outage: allowances decrement on every spend with no max-value
   # exemption. Warn well before it bites rather than at the moment a fill fails.
-  if allowance < (1 << 255):
+  if allowance is not None and allowance < (1 << 255):
     failures.append(
       f"fee subaccount {account} allowance is finite ({allowance}) and decrements on every fill "
       "-- it will run out; re-grant type(uint).max"
@@ -350,9 +362,8 @@ def check_fee_recipient(url: str, failures: list, checked: list) -> None:
   balance = int(call(url, sub_accounts, SEL_GET_BALANCE + account_word + addr_arg(quote) + "0" * 64), 16)
   if balance >= (1 << 255):
     balance -= 1 << 256
-  checked.append(
-    f"fee subaccount {account} vault-owned, unbounded allowance, accrued {balance / 1e18:.6f} of {quote}"
-  )
+  grant = "cash-quoted, no allowance needed" if allowance is None else "unbounded allowance"
+  checked.append(f"fee subaccount {account} vault-owned, {grant}, accrued {balance / 1e18:.6f} of {quote}")
 
 
 def alert(webhook: str | None, msg: str) -> None:
@@ -390,6 +401,7 @@ def self_test() -> None:
     "ownerOf(uint256)": SEL_OWNER_OF,
     "positiveAssetAllowance(uint256,address,address,address)": SEL_POS_ALLOWANCE,
     "getBalance(uint256,address,uint256)": SEL_GET_BALANCE,
+    "subAccounts()": SEL_SUB_ACCOUNTS,
   }.items():
     actual = "0x" + keccak(signature.encode()).hex()[:8]
     assert actual == expected, f"{signature}: hardcoded {expected}, actual {actual}"

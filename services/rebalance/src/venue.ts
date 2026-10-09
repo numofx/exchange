@@ -2,9 +2,10 @@
  * Addresses and ABI fragments for the cNGN rebalance.
  *
  * Every address here was read back off Base rather than copied: the gateway's `host()` matches the
- * SDK's Base config, and the cNGN escrow's `wrappedAsset()` returns the cNGN token below. A
- * WrappedERC20Asset only ever accepts the exact ERC-20 it wraps, and depositing the wrong one
- * leaves tokens with no ledger credit and no way back, so that check is repeated at runtime.
+ * SDK's Base config. The venue's escrows are NOT here -- they move with each cutover, so they are
+ * read from /v1/markets and confirmed on chain (spot.ts). A WrappedERC20Asset only ever accepts the
+ * exact ERC-20 it wraps, and depositing the wrong one leaves tokens with no ledger credit and no
+ * way back, so the escrow's `wrappedAsset()` is checked against CNGN below on every deposit.
  */
 import type { Hex } from 'viem';
 
@@ -12,10 +13,6 @@ import type { Hex } from 'viem';
 export const INTENT_GATEWAY = '0xAe041F7B0CB581876832830baeB6a2Aa2a3C9716' as const;
 export const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' as const;
 export const CNGN = '0x46C85152bFe9f96829aA94755D9f915F9B10EF5F' as const;
-/** WrappedERC20Asset escrow for cNGN — the venue's cNGN leg, and the spot market's asset_address. */
-export const CNGN_ESCROW = '0x9D806fD040a719D27a8E5E77dc5aE0ED1e089493' as const;
-/** WrappedERC20Asset escrow for USDC — the wrapped-quote module's quoteAsset(). */
-export const USDC_ESCROW = '0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84' as const;
 export const SUBACCOUNTS = '0x7019244E25FA416e6Ca2ed2F3cA25277aef72843' as const;
 
 /** Both tokens are 6dp on Base. SubAccounts reports balances in 18dp regardless. */
@@ -40,6 +37,17 @@ export const SUBACCOUNTS_ABI = [{
   name: 'getAccountBalances', type: 'function', stateMutability: 'view',
   inputs: [{ type: 'uint256' }],
   outputs: [{ type: 'tuple[]', components: [{ name: 'asset', type: 'address' }, { name: 'subId', type: 'uint256' }, { name: 'balance', type: 'int256' }] }],
+}, {
+  name: 'manager', type: 'function', stateMutability: 'view', inputs: [{ type: 'uint256' }], outputs: [{ type: 'address' }],
+}] as const;
+
+/** StandardManager reads used to confirm what /v1/markets reports. */
+export const MANAGER_ABI = [{
+  name: 'assetDetails', type: 'function', stateMutability: 'view',
+  inputs: [{ type: 'address' }],
+  outputs: [{ type: 'tuple', components: [{ name: 'isWhitelisted', type: 'bool' }, { name: 'assetType', type: 'uint8' }, { name: 'marketId', type: 'uint256' }] }],
+}, {
+  name: 'cashAsset', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }],
 }] as const;
 
 /**

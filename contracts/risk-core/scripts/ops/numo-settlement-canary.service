@@ -15,19 +15,32 @@ WorkingDirectory=/home/ec2-user/exchange/contracts/risk-core
 ExecStart=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-ssm.sh /usr/bin/python3 scripts/ops/check_settlement_canary.py
 Environment=AWS_REGION=us-east-1
 # Point this at subaccounts that actually hold positions. An empty account makes the manager
-# read no feed, so getMargin passes while proving nothing.
-Environment=CANARY_ACCOUNTS=15
+# read no feed, so getMargin passes while proving nothing. Since the 2026-10-04 unified cutover
+# both makers sit under the perp SRM: 26 (spot, wrapped cNGN) and 24 (perp position). Mirrors
+# SETTLEMENT_CANARY_MANAGER/ACCOUNTS in infra/aws/ecs.tf.
+Environment=SRM_ADDRESS=0xDE0423D0a1E15536265C9513d2e0c10DAb5835D4
+Environment=CANARY_ACCOUNTS=26,24
 
 # Pinned values, mirroring infra/aws/ecs.tf. Both are recorded here rather than only on the box:
 # the first version of this unit carried neither, because they were applied by hand over SSM, and
 # a later git pull on the ops box would have silently reverted them.
 #
-# netSettledCash: non-zero and unretirable. donateBalance burns against totalCash, which already
-# excludes it, so a max donate from the account owner burns exactly 0. Alert on MOVEMENT.
-Environment=EXPECTED_NET_SETTLED_CASH=13682574719999999999990057939082285597678
+# netSettledCash: pinned, alert on MOVEMENT. 0 is the perp CashAsset's live value (read
+# 2026-10-09). The retired spot CashAsset's pin was 13682574719999999999990057939082285597678.
+Environment=EXPECTED_NET_SETTLED_CASH=0
 # Standing exception, 2026-09-10: wrapped USDC permanently holds 5.000000 more than it credited,
 # from tx 0xfcf33112414f44cc53c493e28da4ec57cde8d029ac3920144aceab23dbe5656b (block 51125714) --
 # an ERC20 transfer sent via MPCVault "Send USDC" instead of a deposit() Custom transaction.
 # Unrecoverable: WrappedERC20Asset exposes only deposit and withdraw, both strictly 1:1, has no
 # rescue path, and is not behind a proxy. Pinned so any NEW divergence still fires.
+# Inert since the move to the perp SRM: wrappers are discovered from SRM_ADDRESS's whitelist, and
+# this one belongs to the retired spot stack. Kept so the record stays with the pin.
 Environment=WRAPPER_DELTA_EXCEPTIONS=0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84:5000000000000000000
+
+# The fee path, mirroring SETTLEMENT_CANARY_FEE_* in infra/aws/ecs.tf: account 22 is the live
+# TradeModule's feeRecipient(), vault-owned. The quote asset is the perp CashAsset, so the
+# allowance leg is skipped (a cash credit needs none); ownership is checked and accrual reported.
+Environment=FEE_SUBACCOUNT=22
+Environment=FEE_VAULT=0x1dcA42ab54Bd3862853A821F84B29BF65245F435
+Environment=FEE_MODULE=0xDea968188598BA0E3F58A56C0fdfF338C74F699f
+Environment=FEE_QUOTE_ASSET=0xA74E49b4Ed7cb176bc02ef4D8a1A3240C9aD4272
