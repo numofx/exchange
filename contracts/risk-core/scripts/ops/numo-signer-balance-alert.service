@@ -10,3 +10,6 @@ User=ec2-user
 WorkingDirectory=/home/ec2-user/exchange/contracts/risk-core
 ExecStart=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-heartbeat.sh signer-balance-alert /home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-ssm.sh /usr/bin/python3 scripts/ops/check_signer_balance.py
 Environment=AWS_REGION=us-east-1
+# LOW priority: a finding (exit 1) notifies Pushover without sound; a run that cannot happen or
+# cannot see (exit 2) still pages at high priority. See run-with-heartbeat.sh.
+Environment=HEARTBEAT_FINDING_EXIT=1

@@ -249,3 +249,20 @@ test('the failure reason carries no doubled punctuation', async () => {
   assert.match(posted[0] ?? '', /HTTP request failed\. Inventory is UNKNOWN/);
   assert.doesNotMatch(posted[0] ?? '', /\.\./);
 });
+
+// The heartbeat wrapper pages a due rebalance at LOW priority off exit 1, and a failed run at
+// HIGH priority off exit 2 (the entry point). So 1 must mean "due" and nothing else.
+test('check --exit-code returns 1 when a rebalance is due', async () => {
+  const code = await runCommand(['check', '--exit-code'], config, deps({}, ledger(600), ledger(1_000)));
+  assert.equal(code, 1);
+});
+
+test('check --exit-code returns 0 on a healthy book', async () => {
+  const code = await runCommand(['check', '--exit-code'], config, deps());
+  assert.equal(code, 0);
+});
+
+test('without --exit-code a due rebalance still exits 0', async () => {
+  const code = await runCommand(['check'], config, deps({}, ledger(600), ledger(1_000)));
+  assert.equal(code, 0);
+});

@@ -90,7 +90,7 @@ def main() -> int:
     balance_eth = int(rpc(url, "eth_getBalance", [signer, "latest"]), 16) / 1e18
   except Exception as exc:
     alert(webhook, f"NUMO FEED-SIGNER BALANCE CHECK FAILED\n{signer}: {exc}")
-    return 1
+    return 2
 
   runway = balance_eth / burn if burn > 0 else float("inf")
   if runway < warn_days:
@@ -106,5 +106,12 @@ def main() -> int:
   return 0
 
 
+# Exit codes, read by run-with-heartbeat.sh (HEARTBEAT_FINDING_EXIT=1): 0 healthy, 1 a finding
+# (posted to Slack; paged at LOW priority), 2 the check could not run (paged at HIGH priority, like
+# a missed run -- a monitor that cannot see is not a quiet one).
 if __name__ == "__main__":
-  sys.exit(main())
+  try:
+    sys.exit(main())
+  except Exception as exc:  # noqa: BLE001
+    print(f"signer balance check FAILED to run: {exc}", file=sys.stderr)
+    sys.exit(2)
