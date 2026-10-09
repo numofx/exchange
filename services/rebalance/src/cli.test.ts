@@ -4,14 +4,23 @@ import assert from 'node:assert/strict';
 import type { Config } from './config.js';
 import { runCommand, type CliDeps } from './cli.js';
 import type { Snapshot } from './quote.js';
-import { CNGN_ESCROW, USDC_ESCROW } from './venue.js';
+import type { FetchMarkets } from './spot.js';
+
+// The unified stack's spot contracts, as /v1/markets serves them.
+const CNGN_ESCROW = '0x37c976bb5d4887a714ef19AF6B83e34fe2f37c98';
+const CASH = '0xA74E49b4Ed7cb176bc02ef4D8a1A3240C9aD4272';
+const MANAGER = '0xDE0423D0a1E15536265C9513d2e0c10DAb5835D4';
+const markets: FetchMarkets = async () => [
+  { contract_type: 'spot', base_asset_symbol: 'cNGN', asset_address: CNGN_ESCROW, quote_asset_address: CASH, margin_manager_address: MANAGER },
+];
 
 const config = {
   BASE_RPC_URL: 'http://127.0.0.1:1',
   REBALANCE_KMS_KEY_ID: 'alias/does-not-exist',
   INDEXER_URL: 'http://127.0.0.1:1',
   COPROCESSOR_URL: 'ws://127.0.0.1:1',
-  MM_SUBACCOUNT_ID: 15n,
+  MM_SUBACCOUNT_ID: 26n,
+  VENUE_API_URL: 'http://127.0.0.1:1',
   MAX_SNAPSHOT_AGE_SECONDS: 1800,
   SOLVER_FEE: 35_000n,
   DEADLINE_BLOCKS: 120n,
@@ -37,14 +46,22 @@ function snapshot(): Snapshot {
   };
 }
 
-/** A publicClient that answers getAccountBalances and nothing else. */
+/** A publicClient for a subaccount under MANAGER holding `usdc` cash and `cngn` escrow. */
 function readClientWith(usdc: bigint, cngn: bigint) {
   return {
     publicClient: {
-      readContract: async () => [
-        { asset: USDC_ESCROW, subId: 0n, balance: usdc },
-        { asset: CNGN_ESCROW, subId: 0n, balance: cngn },
-      ],
+      readContract: async (a: { functionName: string }) => {
+        switch (a.functionName) {
+          case 'manager': return MANAGER;
+          case 'assetDetails': return { isWhitelisted: true, assetType: 3, marketId: 1n };
+          case 'cashAsset': return CASH;
+          case 'getAccountBalances': return [
+            { asset: CASH, subId: 0n, balance: usdc },
+            { asset: CNGN_ESCROW, subId: 0n, balance: cngn },
+          ];
+          default: throw new Error(`unexpected call ${a.functionName}`);
+        }
+      },
     },
   } as unknown as ReturnType<CliDeps['readClients']>;
 }
@@ -58,6 +75,7 @@ function deps(over: Partial<CliDeps> = {}, usdc = ledger(308), cngn = ledger(478
     },
     post: async () => {},
     fetchSnapshot: async () => snapshot(),
+    fetchMarkets: markets,
     ...over,
   };
 }

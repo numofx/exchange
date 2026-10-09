@@ -23,7 +23,7 @@ pnpm rebalance check --alert       # ...and post to the ops webhook if so
 pnpm rebalance quote 20            # what the live feed prices it at
 pnpm rebalance approve 20 --execute
 pnpm rebalance swap 20 --execute   # place, auction, fill
-pnpm rebalance deposit --execute   # whole cNGN balance -> subaccount 15
+pnpm rebalance deposit --execute   # whole cNGN balance -> subaccount 26
 pnpm rebalance cancel --execute    # reclaim an unfilled order
 ```
 
@@ -99,7 +99,7 @@ path that reaches nobody while reporting success is the failure this repo keeps 
 The **withdrawal leg** cannot be automated as things stand, and it is worth being precise about why.
 Withdrawals pay out **only to the subaccount owner** — the action data carries just `(asset, amount)`,
 with no recipient — and `assertWithdrawalPolicy` refuses any withdrawal whose signer is not the
-owner (`session-key withdrawals are not supported`). So USDC leaving sub 15 lands at the market
+owner (`session-key withdrawals are not supported`). So USDC leaving sub 26 lands at the market
 maker's wallet, signed by the market maker's key, and no delegation to this signer is possible.
 
 That leaves the operator in the loop for one step: withdraw, then forward to this signer. `check`
