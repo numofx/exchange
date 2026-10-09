@@ -49,13 +49,17 @@ jobs:
         env:
           BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}
         run: |
-          out=$(forge test --match-contract TradeModuleWrappedQuoteForkTest -vv)
-          echo "$out"
-          grep -qE 'Suite result: ok\..*0 skipped' <<<"$out" || {
-            echo "::error::the wrapped-quote fork suite did not run -- is the BASE_RPC_URL secret set?"
-            exit 1
-          }
-          grep -qE 'Suite result: ok\. [1-9][0-9]* passed' <<<"$out" || {
-            echo "::error::the wrapped-quote fork suite reported no passing tests"
-            exit 1
-          }
+          # DepositModuleForkTest is the only proof the live DepositModule opens and funds a perp
+          # account -- what POST /v1/deposits relies on -- so it gets the same guard.
+          for suite in TradeModuleWrappedQuoteForkTest DepositModuleForkTest; do
+            out=$(forge test --match-contract "$suite" -vv)
+            echo "$out"
+            grep -qE 'Suite result: ok\..*0 skipped' <<<"$out" || {
+              echo "::error::$suite did not run -- is the BASE_RPC_URL secret set?"
+              exit 1
+            }
+            grep -qE 'Suite result: ok\. [1-9][0-9]* passed' <<<"$out" || {
+              echo "::error::$suite reported no passing tests"
+              exit 1
+            }
+          done
