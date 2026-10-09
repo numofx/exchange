@@ -1,3 +1,4 @@
+import { installGracefulShutdown } from './shutdown.js';
 import { buildApp } from './app.js';
 import { SettlementCanary } from './canary.js';
 import { loadConfig, loadDeploymentAddresses } from './config.js';
@@ -103,4 +104,13 @@ const app = buildApp({
 app.listen({ host: config.host, port: config.port }).catch((error) => {
   app.log.error(error);
   process.exit(1);
+});
+
+installGracefulShutdown({
+  close: () => app.close(),
+  closeIdleConnections: () => app.server.closeIdleConnections(),
+  stop: () => {
+    canary?.stop();
+    executor.depositGate?.stop();
+  },
 });
