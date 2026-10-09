@@ -285,14 +285,14 @@ resource "aws_ecs_task_definition" "execution" {
       # outage was silent for 6.8 days: services healthy, orders matching, every on-chain
       # settlement reverting.
       #
-      # The account id matters. An empty subaccount has no market holding, so the manager
-      # reads no spot feed and the check passes while proving nothing. 15 is the SRM
-      # account holding wrapped cNGN (market 2) and is the only funded one today, so this
-      # leg exercises market 2 only. Deposit a little wrapped USDC into it to cover market
-      # 1 as well. Until then market 1 is still covered by the ops-side canary, which reads
-      # every market's feed directly rather than inferring it from what someone holds.
-      { name = "SETTLEMENT_CANARY_MANAGER", value = "0x3195Bd7e02d93982bCF8b34DF5B941fFCaE1E49b" },
-      { name = "SETTLEMENT_CANARY_ACCOUNTS", value = "15" },
+      # The account ids matter. An empty subaccount has no market holding, so the manager
+      # reads no spot feed and the check passes while proving nothing -- and getMargin on an id
+      # that was never opened passes too. Since the 2026-10-04 unified cutover both makers sit
+      # under the perp SRM: 26 (spot) holds wrapped cNGN, 24 (perp) holds the perp position,
+      # so between them every feed a settlement reads is exercised. Read from the variables the
+      # makers themselves use, so a repoint cannot leave the canary watching an emptied account.
+      { name = "SETTLEMENT_CANARY_MANAGER", value = var.cngn_perp_srm_address },
+      { name = "SETTLEMENT_CANARY_ACCOUNTS", value = "${var.mm_subaccount_id},${var.mm_perp_subaccount_id}" },
       { name = "SETTLEMENT_CANARY_INTERVAL_MS", value = "60000" },
       # Re-alert after 30 consecutive failing checks (30 minutes at a 60s interval), so one
       # dropped webhook is not silence for the whole outage.
@@ -308,12 +308,11 @@ resource "aws_ecs_task_definition" "execution" {
       # This makes the canary prove "not insolvent by CashAsset's own accounting", NOT 1:1
       # backing. The wrapper invariant is the one that proves 1:1, and it covers only the
       # wrapped assets.
-      { name = "SETTLEMENT_CANARY_EXPECTED_NET_SETTLED_CASH", value = "13682574719999999999990057939082285597678" },
+      #
+      # 0 is the perp CashAsset's live value (read 2026-10-09). The retired spot CashAsset's pin
+      # was 13682574719999999999990057939082285597678; it is not this one's.
+      { name = "SETTLEMENT_CANARY_EXPECTED_NET_SETTLED_CASH", value = "0" },
 
-      # The wrapped-quote fee path, live from the 2026-09-10 cutover. Subaccount 17 is
-      # vault-owned and deliberately NOT in Matching custody: setAssetAllowances keys the grant
-      # by ownerOf(accountId), so a custodied account would key it to the Matching contract and
-      # the vault could not grant one at all.
       # STANDING EXCEPTION, 2026-09-10. The wrapped-USDC contract permanently holds 5.000000
       # USDC more than it has credited, from tx 0xfcf33112414f44cc53c493e28da4ec57cde8d029ac
       # 3920144aceab23dbe5656b (block 51125714): a plain ERC20 transfer sent through MPCVault's
@@ -324,12 +323,20 @@ resource "aws_ecs_task_definition" "execution" {
       # PINNED, not tolerated: healthy at exactly +5e18, red the moment it moves either way.
       # Widening this to "over-backed is fine" would discard the property that caught the
       # transfer within minutes of it happening.
+      #
+      # Kept, but inert since the canary moved to the perp SRM: wrappers are discovered from the
+      # configured manager's whitelist, and this one belongs to the retired spot stack.
       { name = "SETTLEMENT_CANARY_WRAPPER_EXCEPTIONS", value = "0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84:5000000000000000000" },
 
-      { name = "SETTLEMENT_CANARY_FEE_SUBACCOUNT", value = "17" },
+      # The fee path. Subaccount 22 is the live TradeModule's feeRecipient(), vault-owned and
+      # deliberately NOT in Matching custody, so ownership stays checkable. The quote asset is
+      # the perp CashAsset, which needs no positive allowance to credit a fee; the canary skips
+      # that leg for a cash quote asset and still checks the owner and reports accrual. Account
+      # 17 is the retired wrapped-quote module's recipient.
+      { name = "SETTLEMENT_CANARY_FEE_SUBACCOUNT", value = "22" },
       { name = "SETTLEMENT_CANARY_FEE_OWNER", value = "0x1dcA42ab54Bd3862853A821F84B29BF65245F435" },
-      { name = "SETTLEMENT_CANARY_FEE_MODULE", value = "0x12423B366F6F07130961900bE00d05Ea63Acd071" },
-      { name = "SETTLEMENT_CANARY_FEE_QUOTE_ASSET", value = "0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84" },
+      { name = "SETTLEMENT_CANARY_FEE_MODULE", value = var.cngn_perp_trade_module_address },
+      { name = "SETTLEMENT_CANARY_FEE_QUOTE_ASSET", value = var.cngn_perp_cash_address },
       # Reporting, not liveness. Restarting this container does not refresh a stale oracle,
       # and failing the health check would pull the API out of the target group and flap
       # tasks while the real fault sits off-box. The canary's job is to make the halt
