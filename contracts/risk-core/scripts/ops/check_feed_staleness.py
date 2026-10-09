@@ -202,7 +202,7 @@ def main() -> int:
   except Exception as exc:
     # Fail LOUD: without the set we cannot tell an orphan from a feed that is freezing trading.
     alert(webhook, f"NUMO FEED ALERT\nLIVE-FEED LOOKUP FAILED (cannot tell which feeds are in use): {exc}")
-    return 1
+    return 2
 
   problems = []
   for name, addr, warn in feeds:
@@ -225,9 +225,17 @@ def main() -> int:
 
   if problems:
     alert(webhook, "NUMO FEED ALERT\n" + "\n".join(problems))
-    return 1
+    # A feed that could not be read is a blind check, not a stale feed.
+    return 2 if any("FAILED" in p for p in problems) else 1
   return 0
 
 
+# Exit codes, read by run-with-heartbeat.sh (HEARTBEAT_FINDING_EXIT=1): 0 healthy, 1 a finding
+# (posted to Slack; paged at LOW priority), 2 the check could not run (paged at HIGH priority, like
+# a missed run -- a monitor that cannot see is not a quiet one).
 if __name__ == "__main__":
-  sys.exit(main())
+  try:
+    sys.exit(main())
+  except Exception as exc:  # noqa: BLE001
+    print(f"feed staleness check FAILED to run: {exc}", file=sys.stderr)
+    sys.exit(2)

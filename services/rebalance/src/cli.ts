@@ -1,7 +1,7 @@
 /**
  * cNGN rebalance CLI. Every command is a DRY RUN unless `--execute` is passed.
  *
- *   rebalance check   [--alert] [--heartbeat]  is a rebalance due? (for a timer)
+ *   rebalance check   [--alert] [--heartbeat] [--exit-code]  is a rebalance due? (for a timer)
  *   rebalance quote   [amount]           what the live feed prices this at
  *   rebalance approve [amount]           exact-amount USDC allowance to the gateway
  *   rebalance swap    [amount]           place, run the auction, fill
@@ -25,7 +25,7 @@ import { fetchMarkets, type FetchMarkets } from './spot.js';
 import { approve, swap } from './swap.js';
 import { TOKEN_DECIMALS } from './venue.js';
 
-const USAGE = `usage: rebalance <check|quote|approve|swap|cancel|deposit> [amount|commitment] [--execute] [--alert] [--heartbeat] [--test]`;
+const USAGE = `usage: rebalance <check|quote|approve|swap|cancel|deposit> [amount|commitment] [--execute] [--alert] [--heartbeat] [--exit-code] [--test]`;
 
 /**
  * The seams a test needs. `signingClients` is separate from `readClients` so a test can assert it
@@ -49,7 +49,12 @@ export const defaultDeps: CliDeps = {
   fetchMarkets,
 };
 
-export async function runCommand(argv: string[], config: Config, deps: CliDeps = defaultDeps): Promise<void> {
+/**
+ * Resolves to the process exit code. `check --exit-code` exits 1 when a rebalance is due, so the
+ * timer's heartbeat wrapper can page it at low priority; a check that could not run exits 2 (see
+ * the entry point below), which pages at high priority like a missed run.
+ */
+export async function runCommand(argv: string[], config: Config, deps: CliDeps = defaultDeps): Promise<number | void> {
   const execute = argv.includes('--execute');
   const positional = argv.filter((a) => !a.startsWith('--'));
   const command = positional[0];
@@ -72,7 +77,8 @@ export async function runCommand(argv: string[], config: Config, deps: CliDeps =
     const wantHeartbeat = argv.includes('--heartbeat');
     const isTest = argv.includes('--test');
     try {
-      return await check(config, deps.readClients(config), wantAlert, deps.post, deps.fetchQuote, wantHeartbeat, isTest, deps.fetchMarkets);
+      const action = await check(config, deps.readClients(config), wantAlert, deps.post, deps.fetchQuote, wantHeartbeat, isTest, deps.fetchMarkets);
+      return argv.includes('--exit-code') && action !== 'none' ? 1 : 0;
     } catch (error) {
       // A check that could not RUN is not a quiet check. Unattended, a crash into a log nobody
       // reads is the same failure as an alert that reaches nobody, so a failed run pages exactly
@@ -110,8 +116,8 @@ export async function runCommand(argv: string[], config: Config, deps: CliDeps =
   }
 }
 
-async function main(): Promise<void> {
-  await runCommand(process.argv.slice(2), loadConfig());
+async function main(): Promise<number> {
+  return (await runCommand(process.argv.slice(2), loadConfig())) ?? 0;
 }
 
 /**
@@ -134,8 +140,9 @@ export function isEntryPoint(moduleUrl: string, argv1: string | undefined): bool
 }
 
 if (isEntryPoint(import.meta.url, process.argv[1])) {
-  main().catch((e: unknown) => {
+  // 2, not 1: a run that failed is a blind check, and must not read as `--exit-code`'s "due".
+  main().then((code) => { process.exitCode = code; }, (e: unknown) => {
     console.error(String(e instanceof Error ? e.message : e));
-    process.exit(1);
+    process.exit(2);
   });
 }

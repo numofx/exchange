@@ -10,5 +10,8 @@ Description=Numo cNGN rebalance inventory check
 Type=oneshot
 User=ec2-user
 WorkingDirectory=/home/ec2-user/exchange-rebalance
-ExecStart=/home/ec2-user/exchange-rebalance/contracts/risk-core/scripts/ops/run-with-heartbeat.sh rebalance-check /home/ec2-user/exchange-rebalance/contracts/risk-core/scripts/ops/run-with-ssm-readonly.sh /usr/bin/pnpm --dir services/rebalance rebalance check --alert
+ExecStart=/home/ec2-user/exchange-rebalance/contracts/risk-core/scripts/ops/run-with-heartbeat.sh rebalance-check /home/ec2-user/exchange-rebalance/contracts/risk-core/scripts/ops/run-with-ssm-readonly.sh /usr/bin/pnpm --dir services/rebalance rebalance check --alert --exit-code
 Environment=AWS_REGION=us-east-1
+# LOW priority: a due rebalance (exit 1, from --exit-code) notifies Pushover without sound; a run that cannot happen or
+# cannot see (exit 2) still pages at high priority. See run-with-heartbeat.sh.
+Environment=HEARTBEAT_FINDING_EXIT=1
