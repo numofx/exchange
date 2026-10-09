@@ -214,29 +214,3 @@ export function creditedSubaccount(
   const event = events.find((e) => getAddress(e.address) === getAddress(matching) && getAddress(e.args.owner) === owner);
   return event?.args.accountId.toString();
 }
-
-/**
- * At most `limit` deposits broadcast per rolling hour, across all owners: the venue pays gas for every one, so this
- * bounds what a burst of valid deposits can cost before anyone looks. Past it deposits answer 503 until the window
- * clears. Per executor task, which is a singleton.
- */
-export class DepositBudget {
-  private readonly sent: number[] = [];
-  constructor(
-    private readonly limit: number,
-    private readonly now: () => number = Date.now,
-  ) {}
-
-  take(): void {
-    const cutoff = this.now() - 3_600_000;
-    while (this.sent.length > 0 && this.sent[0]! < cutoff) this.sent.shift();
-    if (this.sent.length >= this.limit) {
-      throw new DepositRejectedError(
-        `deposits are paused: the hourly budget of ${this.limit} sponsored deposits is spent; retry later`,
-        undefined,
-        503,
-      );
-    }
-    this.sent.push(this.now());
-  }
-}

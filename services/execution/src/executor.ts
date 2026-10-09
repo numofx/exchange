@@ -16,8 +16,8 @@ import { createKmsAccount } from '@numo/kms-signer';
 import { createSerialQueue } from './serial-queue.js';
 import { assertSignerIsOwner, type SubmittedAction } from './signer-guard.js';
 import type { DepositRequest, DepositResponse, ExecuteMatchRequest, ExecuteMatchResponse, WithdrawRequest } from './types.js';
+import { DepositGate, PROVISIONAL_DEPOSIT_GAS, receiptCostWei } from './deposit-gate.js';
 import {
-  DepositBudget,
   DepositRejectedError,
   assertDepositPolicy,
   buildDepositArgs,
@@ -60,7 +60,8 @@ export class MatchExecutor {
   private readonly walletClient;
   // Settlements, withdrawals and deposits share this EOA's nonce sequence; see serial-queue.ts.
   private readonly enqueueSend = createSerialQueue();
-  private depositBudget?: DepositBudget;
+  /** Floor and gas budget for sponsored deposits; undefined unless deposits are configured. */
+  readonly depositGate?: DepositGate;
   /**
    * Deposits by action hash, so a retried request (a client timeout, a double click) gets the same result instead of
    * a second broadcast. Kept for two hours: an action expires within one, after which it could not be resubmitted
@@ -101,6 +102,15 @@ export class MatchExecutor {
     });
     this.publicClient = createPublicClient({ chain: this.chain, transport: http(config.rpcUrl) });
     this.walletClient = createWalletClient({ account: this.account, chain: this.chain, transport: http(config.rpcUrl) });
+    if (deps.deposit) {
+      this.depositGate = new DepositGate({
+        minExecutorWei: deps.deposit.minExecutorWei,
+        maxGasWeiPerHour: deps.deposit.maxGasWeiPerHour,
+        readBalance: () => this.publicClient.getBalance({ address: this.account.address }),
+        alertWebhookUrl: deps.deposit.alertWebhookUrl,
+        log: (level, message, fields) => process.stdout.write(`${JSON.stringify({ level, msg: message, ...fields })}\n`),
+      });
+    }
   }
 
   /**
@@ -293,7 +303,8 @@ export class MatchExecutor {
     deposit: NonNullable<AppConfig['deposit']>,
   ): Promise<DepositResponse> {
     const data = assertDepositPolicy(request, { ...deposit, nowSeconds: Math.floor(Date.now() / 1000) });
-    this.depositBudget ??= new DepositBudget(deposit.maxPerHour);
+    const gate = this.depositGate!;
+    await gate.check();
 
     const amounts = {
       amount_usdc: formatDepositUnits(data.amount),
@@ -309,7 +320,7 @@ export class MatchExecutor {
         }
         throw error;
       },
-      beforeSend: () => this.depositBudget!.take(),
+      beforeSend: () => gate.assertBudget(),
     });
 
     if (txHash === 'dry-run') {
@@ -317,6 +328,7 @@ export class MatchExecutor {
     }
     try {
       const receipt = await this.publicClient.waitForTransactionReceipt({ hash: txHash, timeout: deposit.receiptTimeoutMs });
+      gate.record(receiptCostWei(receipt));
       const response: DepositResponse = { ...buildReceiptResponse(txHash, receipt), ...amounts };
       if (receipt.status === 'success') {
         response.subaccount_id = creditedSubaccount(request, this.deps.matchingAddress, receipt.logs);
@@ -324,6 +336,8 @@ export class MatchExecutor {
       return response;
     } catch (error) {
       if (error instanceof WaitForTransactionReceiptTimeoutError) {
+        // The outcome is unknown, but the gas may be spent: count a conservative provisional cost.
+        gate.record(PROVISIONAL_DEPOSIT_GAS * (await this.publicClient.getGasPrice().catch(() => 0n)));
         return { accepted: false, tx_hash: txHash, receipt_status: 'timeout', ...amounts };
       }
       throw error;

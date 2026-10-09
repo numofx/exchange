@@ -86,6 +86,8 @@ const canary = config.settlementCanary
     })
   : undefined;
 canary?.start();
+// Reports a deposit pause (executor below its floor, or the hourly gas budget spent) even when nobody is depositing.
+executor.depositGate?.watch(300_000);
 
 const app = buildApp({
   config,

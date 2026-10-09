@@ -6,7 +6,6 @@ import { encodeAbiParameters, encodeEventTopics, parseAbi, type Log } from 'viem
 import { buildApp } from './app.js';
 import type { AppConfig } from './config.js';
 import {
-  DepositBudget,
   DepositRejectedError,
   assertDepositPolicy,
   creditedSubaccount,
@@ -128,15 +127,6 @@ test('a new account is read from Matching\'s DepositedSubAccount for this owner'
 test('a top-up reports the account it named', () => assert.equal(creditedSubaccount(request({ subaccount_id: '24' }), MATCHING, []), '24'));
 test('a missing event is reported as unknown, never guessed', () => assert.equal(creditedSubaccount(request(), MATCHING, []), undefined));
 
-test('the hourly budget refuses the deposit past its limit with a 503, and recovers', () => {
-  let now = 0;
-  const budget = new DepositBudget(2, () => now);
-  budget.take();
-  budget.take();
-  assert.throws(() => budget.take(), (e: unknown) => e instanceof DepositRejectedError && e.status === 503);
-  now = 3_600_001;
-  assert.doesNotThrow(() => budget.take());
-});
 
 const appConfig = {
   port: 0, host: '127.0.0.1', rpcUrl: 'http://127.0.0.1:1', chainId: 8453,
