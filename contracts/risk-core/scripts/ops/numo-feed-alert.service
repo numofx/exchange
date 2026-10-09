@@ -1,9 +1,17 @@
-# One-shot feed staleness check; scheduled by numo-feed-alert.timer.
+# One-shot feed staleness check; scheduled by numo-feed-alert.timer (every minute). Wrapped in
+# run-with-heartbeat.sh, so a run that does not happen pages too.
+#
+# Rewritten 2026-10-09 to what the ops box actually runs: this file had said User=numo and
+# /home/numo/risk-core, which the box has never used.
 [Unit]
 Description=Numo feed staleness check
 
 [Service]
 Type=oneshot
-User=numo
-WorkingDirectory=/home/numo/risk-core
-ExecStart=/usr/bin/python3 scripts/ops/check_feed_staleness.py
+User=ec2-user
+WorkingDirectory=/home/ec2-user/exchange/contracts/risk-core
+ExecStart=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-heartbeat.sh feed-alert /home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-ssm.sh /usr/bin/python3 scripts/ops/check_feed_staleness.py
+Environment=AWS_REGION=us-east-1
+# LOW priority: a finding (exit 1) notifies Pushover without sound; a run that cannot happen or
+# cannot see (exit 2) still pages at high priority. See run-with-heartbeat.sh.
+Environment=HEARTBEAT_FINDING_EXIT=1

@@ -46,8 +46,13 @@ Env (or ~/.numo-feeds.env):
                      needs none), and the quote asset. All four required together, or the check
                      is skipped.
   CANARY_ACCOUNTS    comma-separated subaccount ids (default: 26,24)
+  CANARY_MIN_ACCOUNT_USD
+                     each account's floor, by the manager's mark-to-market (default 10)
 
-Run every few minutes via systemd timer (see numo-settlement-canary.timer).
+--test prefixes any alert with "[TEST] ", for a drill sent to the shared channel on purpose.
+
+Run every few minutes via systemd timer (see numo-settlement-canary.timer), wrapped in
+run-with-heartbeat.sh so a run that does not happen pages too.
 """
 
 from __future__ import annotations
@@ -85,6 +90,8 @@ SEL_OWNER_OF = "0x6352211e"          # ownerOf(uint256)
 SEL_POS_ALLOWANCE = "0x4997e514"     # positiveAssetAllowance(uint256,address,address,address)
 SEL_GET_BALANCE = "0x0806e640"       # getBalance(uint256,address,uint256)
 SEL_SUB_ACCOUNTS = "0x779e5012"      # subAccounts()
+SEL_MANAGER = "0x52981457"           # manager(uint256)
+SEL_MARGIN_AND_MTM = "0x6691bc04"    # getMarginAndMarkToMarket(uint256,bool,uint256)
 
 # AssetWhitelisted(address,uint256,uint8) -- used to discover which assets to check, so a new
 # market is covered without editing this file.
@@ -366,6 +373,40 @@ def check_fee_recipient(url: str, failures: list, checked: list) -> None:
   checked.append(f"fee subaccount {account} vault-owned, {grant}, accrued {balance / 1e18:.6f} of {quote}")
 
 
+def check_accounts(url: str, srm: str, accounts: list, problems: list, checked: list) -> None:
+  """The canary's own configuration, checked against the chain on every run.
+
+  getMargin succeeds on an account that was never opened and on one that holds nothing: the
+  manager reads no feed for either, so check 1 goes green while proving nothing. That is how this
+  canary watched an emptied account 15 for five days after the 2026-10-04 cutover. So every
+  configured account must exist, sit under the manager being checked, and be worth at least
+  CANARY_MIN_ACCOUNT_USD (default 10) by the manager's own mark-to-market -- a floor, not zero,
+  because the emptied 15 still held 0.0008 of cash and would have passed a non-zero test.
+  """
+  floor = float(os.environ.get("CANARY_MIN_ACCOUNT_USD", "10"))
+  sub_accounts = "0x" + call(url, srm, SEL_SUB_ACCOUNTS)[26:]
+  for account_id in accounts:
+    word = f"{account_id:064x}"
+    manager = "0x" + call(url, sub_accounts, SEL_MANAGER + word)[26:]
+    if int(manager, 16) == 0:
+      problems.append(f"subaccount {account_id} does not exist -- getMargin on it passes while proving nothing")
+      continue
+    if manager.lower() != srm.lower():
+      problems.append(f"subaccount {account_id} is under manager {manager}, not {srm} -- this canary is not watching it")
+      continue
+    word2 = call(url, srm, SEL_MARGIN_AND_MTM + word + f"{1:064x}" + f"{0:064x}")[2:][64:128]
+    mtm = int(word2, 16)
+    if mtm >= 1 << 255:
+      mtm -= 1 << 256
+    if mtm < floor * 10**18:
+      problems.append(
+        f"subaccount {account_id} is worth ${mtm / 1e18:,.6f}, under the ${floor:g} floor "
+        "-- too little held for getMargin on it to prove anything"
+      )
+    else:
+      checked.append(f"subaccount {account_id} under the SRM, worth ${mtm / 1e18:,.2f}")
+
+
 def alert(webhook: str | None, msg: str) -> None:
   print(msg, file=sys.stderr)
   if not webhook:
@@ -402,6 +443,8 @@ def self_test() -> None:
     "positiveAssetAllowance(uint256,address,address,address)": SEL_POS_ALLOWANCE,
     "getBalance(uint256,address,uint256)": SEL_GET_BALANCE,
     "subAccounts()": SEL_SUB_ACCOUNTS,
+    "manager(uint256)": SEL_MANAGER,
+    "getMarginAndMarkToMarket(uint256,bool,uint256)": SEL_MARGIN_AND_MTM,
   }.items():
     actual = "0x" + keccak(signature.encode()).hex()[:8]
     assert actual == expected, f"{signature}: hardcoded {expected}, actual {actual}"
@@ -428,9 +471,17 @@ def main() -> int:
 
   self_test()
 
+  test_run = "--test" in sys.argv
   failures: list[str] = []      # cannot price -- the venue is halted
+  misconfigured: list[str] = [] # the canary itself is not watching what it should
   solvency: list[str] = []      # can price, but what it would settle is not there
   checked: list[str] = []
+
+  # 0. the canary's own configuration
+  try:
+    check_accounts(url, srm, accounts, misconfigured, checked)
+  except Exception as exc:
+    misconfigured.append(f"account configuration check FAILED to run: {describe_revert(exc)}")
 
   # 1. the manager path, per account
   for account_id in accounts:
@@ -489,7 +540,7 @@ def main() -> int:
   # Two different emergencies, deliberately not merged into one message. A halt stops trading
   # and is loud on its own; a backing failure lets trading continue against collateral that is
   # not there, which is worse and reads completely differently to whoever is woken up.
-  if failures or solvency:
+  if failures or solvency or misconfigured:
     parts = []
     if failures:
       parts.append(
@@ -506,9 +557,16 @@ def main() -> int:
         "not there.\n\n"
         + "\n".join(f"  - {f}" for f in solvency)
       )
+    if misconfigured:
+      parts.append(
+        "NUMO SETTLEMENT CANARY MISCONFIGURED\n"
+        "The canary is not watching what it should, so its green would mean nothing.\n\n"
+        + "\n".join(f"  - {m}" for m in misconfigured)
+      )
     if checked:
       parts.append("still healthy:\n" + "\n".join(f"  - {c}" for c in checked))
-    alert(webhook, "\n\n".join(parts))
+    # A drill is labelled so nobody investigates a venue that is fine.
+    alert(webhook, ("[TEST] " if test_run else "") + "\n\n".join(parts))
     return 1
 
   print("ok: " + "; ".join(checked))

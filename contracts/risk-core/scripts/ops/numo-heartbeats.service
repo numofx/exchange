@@ -1,0 +1,18 @@
+# Daily: is every monitor's dead-man's switch armed? check_heartbeats.py reports any healthchecks.io
+# check still "new" (never pinged) or "paused", and any expected monitor with no check. Posts to
+# Slack, and exits 1 so its own heartbeat pages too. Paired with numo-heartbeats.timer.
+#
+# HEARTBEAT_EXPECTED lists the checks that must exist. settlement-canary-ecs is added once the
+# execution-service image that pings it is deployed (#138 onward); until then it would sit in "new"
+# and this would page daily about a known state.
+[Unit]
+Description=Numo heartbeat arming check
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/home/ec2-user/exchange/contracts/risk-core
+ExecStart=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-heartbeat.sh heartbeats /home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-ssm-readonly.sh /usr/bin/python3 scripts/ops/check_heartbeats.py
+Environment=AWS_REGION=us-east-1
+Environment=HEARTBEAT_EXPECTED=settlement-canary,feed-alert,signer-balance-alert,rebalance-check,heartbeats
+Environment=HEARTBEAT_SELF=heartbeats

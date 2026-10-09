@@ -8,7 +8,7 @@ import { formatUnits } from 'viem';
 import { postAlert as defaultPostAlert, type PostAlert } from './alert.js';
 import type { ReadClients } from './clients.js';
 import type { Config } from './config.js';
-import { assessInventory } from './inventory.js';
+import { assessInventory, type Verdict } from './inventory.js';
 
 /**
  * Prefix for anything fired by hand into a shared channel. Without it a drill is indistinguishable
@@ -35,7 +35,7 @@ export async function check(
   /** Marks a message as a drill. Anything posted to a shared channel by hand must carry this. */
   testRun = false,
   fetchMarkets: FetchMarkets = defaultFetchMarkets,
-): Promise<void> {
+): Promise<Verdict['action']> {
   // Validated BEFORE anything is read, not at the point of sending. Checked only when an alert
   // was due, a --alert run with no webhook configured looks healthy for as long as the inventory
   // is healthy, and fails for the first time on the run that finally had something to say.
@@ -75,9 +75,10 @@ export async function check(
   const shouldPost = heartbeat || (alert && verdict.action !== 'none');
   if (!shouldPost) {
     if (!alert && verdict.action !== 'none') console.log('\n(pass --alert to post this to the ops webhook)');
-    return;
+    return verdict.action;
   }
   const prefix = `${testRun ? TEST_PREFIX : ''}${verdict.action === 'none' ? 'heartbeat — ' : ''}`;
   await post(config.ALERT_WEBHOOK_URL as string, `${prefix}${verdict.message}`);
   console.log(heartbeat && verdict.action === 'none' ? 'heartbeat posted' : 'alert posted');
+  return verdict.action;
 }
