@@ -20,7 +20,11 @@ import { DepositGate, PROVISIONAL_DEPOSIT_GAS, receiptCostWei } from './deposit-
 import {
   DepositRejectedError,
   assertDepositPolicy,
+  assertPermitPolicy,
   buildDepositArgs,
+  buildPermitArgs,
+  permitAbi,
+  wrappedAssetAbi,
   creditedSubaccount,
   depositActionHash,
   depositRevertErrorsAbi,
@@ -298,13 +302,64 @@ export class MatchExecutor {
     return result;
   }
 
+  /**
+   * Submits the deposit's USDC permit when the allowance does not already cover it, and waits for it to mine so the
+   * deposit's simulation sees the allowance. Returns the permit's hash, or undefined when it was not needed.
+   *
+   * Already covered -- an earlier approve, or this very permit submitted first by someone else (front-run) -- means
+   * the permit is skipped, not failed. A permit the token refuses (expired, a spent permit nonce, not signed by the
+   * owner for the DepositModule) is a 422 naming it, unless the allowance has meanwhile become enough.
+   */
+  private async submitPermitIfNeeded(
+    request: DepositRequest,
+    module: `0x${string}`,
+    data: { amount: bigint; asset: `0x${string}` },
+    gate: DepositGate,
+  ): Promise<`0x${string}` | undefined> {
+    const token = (await this.publicClient.readContract({ address: data.asset, abi: wrappedAssetAbi, functionName: 'wrappedAsset' })) as `0x${string}`;
+    const covered = async () =>
+      ((await this.publicClient.readContract({
+        address: token,
+        abi: permitAbi,
+        functionName: 'allowance',
+        args: [getAddress(request.action.owner), getAddress(module)],
+      })) as bigint) >= data.amount;
+    if (await covered()) return undefined;
+
+    const args = buildPermitArgs(request, module);
+    const hash = await this.enqueueSend(async () => {
+      try {
+        await this.publicClient.simulateContract({ account: this.account, address: token, abi: permitAbi, functionName: 'permit', args });
+      } catch (error) {
+        if (await covered()) return undefined;
+        const reason = describeSimulationRevert(error);
+        if (reason !== undefined) throw new DepositRejectedError(`permit would revert: ${reason}`, `permit: ${reason}`);
+        throw error;
+      }
+      gate.assertBudget();
+      if (this.config.dryRun) return undefined;
+      return this.walletClient.writeContract({ account: this.account, address: token, abi: permitAbi, functionName: 'permit', args, chain: this.chain });
+    });
+    if (hash === undefined) return undefined;
+    const receipt = await this.publicClient.waitForTransactionReceipt({ hash, timeout: this.config.receiptTimeoutMs });
+    // The permit is sponsored gas too: it counts against the same hourly budget as the deposit.
+    gate.record(receiptCostWei(receipt));
+    if (receipt.status !== 'success' && !(await covered())) {
+      throw new DepositRejectedError('the permit transaction reverted and the allowance does not cover the deposit', 'permit: reverted');
+    }
+    return hash;
+  }
+
   private async submitDeposit(
     request: DepositRequest,
     deposit: NonNullable<AppConfig['deposit']>,
   ): Promise<DepositResponse> {
-    const data = assertDepositPolicy(request, { ...deposit, nowSeconds: Math.floor(Date.now() / 1000) });
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const data = assertDepositPolicy(request, { ...deposit, nowSeconds });
+    if (request.permit) assertPermitPolicy(request.permit, data.amount, nowSeconds);
     const gate = this.depositGate!;
     await gate.check();
+    const permitTxHash = request.permit ? await this.submitPermitIfNeeded(request, deposit.moduleAddress, data, gate) : undefined;
 
     const amounts = {
       amount_usdc: formatDepositUnits(data.amount),
@@ -322,6 +377,7 @@ export class MatchExecutor {
       },
       beforeSend: () => gate.assertBudget(),
     });
+    if (permitTxHash) (amounts as Record<string, string>).permit_tx_hash = permitTxHash;
 
     if (txHash === 'dry-run') {
       return { accepted: true, tx_hash: 'dry-run', ...amounts };
