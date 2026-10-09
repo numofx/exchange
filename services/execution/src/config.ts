@@ -1,7 +1,7 @@
 import 'dotenv/config';
 
 import { z } from 'zod';
-import { getAddress } from 'viem';
+import { getAddress, parseEther } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { getDeployment } from '@numo/abis';
 
@@ -35,6 +35,21 @@ const envSchema = z.object({
   // Shorter than RECEIPT_TIMEOUT_MS because a trader is waiting on it. markets-service's EXECUTOR_TIMEOUT on the
   // API task must exceed it, or the API gives up on a withdrawal that is still in flight.
   WITHDRAWAL_RECEIPT_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+  // Signed deposits (POST /deposit). Off unless DEPOSITS_ENABLED is "true" and the module, the assets and the
+  // manager are all named; see deposit.ts. The venue pays gas for every deposit, so it is opt-in and budgeted.
+  DEPOSITS_ENABLED: z.union([z.literal('true'), z.literal('false')]).default('false'),
+  DEPOSIT_MODULE_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
+  DEPOSIT_ASSET_ADDRESSES: z.string().default(''),
+  DEPOSIT_MANAGER_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
+  // In 6-decimal USDC base units: 10 USDC. Below this a sponsored deposit costs more in gas than it is worth.
+  DEPOSIT_MIN_AMOUNT: z.coerce.bigint().default(10_000_000n),
+  // Gas, in ETH, sponsored deposits may spend per rolling hour across all owners, measured from their receipts;
+  // past it, 503 until the window clears.
+  DEPOSIT_MAX_GAS_ETH_PER_HOUR: z.string().regex(/^\d+(\.\d+)?$/).default('0.002'),
+  // Deposits stop while the executor holds less than this, in ETH, so settlement keeps a reserve well above the perp
+  // pager's 0.002 ETH low-gas page. The same EOA settles every trade.
+  DEPOSIT_MIN_EXECUTOR_ETH: z.string().regex(/^\d+(\.\d+)?$/).default('0.006'),
+  DEPOSIT_RECEIPT_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
   // Settlement canary. Unset SETTLEMENT_CANARY_MANAGER disables it entirely, so a chain
   // or environment without a risk manager is not forced to invent one.
   SETTLEMENT_CANARY_MANAGER: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
@@ -87,6 +102,18 @@ export type AppConfig = {
   withdrawalModuleAddress?: `0x${string}`;
   withdrawalAssetAddresses: `0x${string}`[];
   withdrawalReceiptTimeoutMs: number;
+  /** Undefined unless DEPOSITS_ENABLED and every address is set. */
+  deposit?: {
+    moduleAddress: `0x${string}`;
+    assetAddresses: `0x${string}`[];
+    managerAddress: `0x${string}`;
+    minAmount: bigint;
+    maxGasWeiPerHour: bigint;
+    minExecutorWei: bigint;
+    receiptTimeoutMs: number;
+    /** The ops webhook; "deposits paused" and "resumed" are posted here. */
+    alertWebhookUrl?: string;
+  };
   settlementCanary?: {
     manager: `0x${string}`;
     accountIds: number[];
@@ -147,6 +174,7 @@ export function loadConfig(): AppConfig {
       : undefined,
     withdrawalAssetAddresses: parseAddressList('WITHDRAWAL_ASSET_ADDRESSES', parsed.WITHDRAWAL_ASSET_ADDRESSES),
     withdrawalReceiptTimeoutMs: parsed.WITHDRAWAL_RECEIPT_TIMEOUT_MS,
+    deposit: parseDepositConfig(parsed),
     settlementCanary: parsed.SETTLEMENT_CANARY_MANAGER
       ? {
           manager: getAddress(parsed.SETTLEMENT_CANARY_MANAGER) as `0x${string}`,
@@ -248,6 +276,35 @@ function parseAccountIds(raw: string): number[] {
     throw new Error('SETTLEMENT_CANARY_MANAGER is set but SETTLEMENT_CANARY_ACCOUNTS is empty');
   }
   return ids;
+}
+
+function parseDepositConfig(parsed: {
+  DEPOSITS_ENABLED: 'true' | 'false';
+  DEPOSIT_MODULE_ADDRESS?: string;
+  DEPOSIT_ASSET_ADDRESSES: string;
+  DEPOSIT_MANAGER_ADDRESS?: string;
+  DEPOSIT_MIN_AMOUNT: bigint;
+  DEPOSIT_MAX_GAS_ETH_PER_HOUR: string;
+  DEPOSIT_MIN_EXECUTOR_ETH: string;
+  DEPOSIT_RECEIPT_TIMEOUT_MS: number;
+  ALERT_WEBHOOK_URL?: string;
+}): AppConfig['deposit'] {
+  if (parsed.DEPOSITS_ENABLED !== 'true') return undefined;
+  const assets = parseAddressList('DEPOSIT_ASSET_ADDRESSES', parsed.DEPOSIT_ASSET_ADDRESSES);
+  // Enabled but incomplete is a misconfiguration, not "off": refuse to start rather than serve a half-checked policy.
+  if (!parsed.DEPOSIT_MODULE_ADDRESS || !parsed.DEPOSIT_MANAGER_ADDRESS || assets.length === 0) {
+    throw new Error('DEPOSITS_ENABLED is true but DEPOSIT_MODULE_ADDRESS, DEPOSIT_MANAGER_ADDRESS or DEPOSIT_ASSET_ADDRESSES is unset');
+  }
+  return {
+    moduleAddress: getAddress(parsed.DEPOSIT_MODULE_ADDRESS) as `0x${string}`,
+    assetAddresses: assets,
+    managerAddress: getAddress(parsed.DEPOSIT_MANAGER_ADDRESS) as `0x${string}`,
+    minAmount: parsed.DEPOSIT_MIN_AMOUNT,
+    maxGasWeiPerHour: parseEther(parsed.DEPOSIT_MAX_GAS_ETH_PER_HOUR),
+    minExecutorWei: parseEther(parsed.DEPOSIT_MIN_EXECUTOR_ETH),
+    alertWebhookUrl: parsed.ALERT_WEBHOOK_URL ? parsed.ALERT_WEBHOOK_URL : undefined,
+    receiptTimeoutMs: parsed.DEPOSIT_RECEIPT_TIMEOUT_MS,
+  };
 }
 
 export function loadDeploymentAddresses(chainId: number): {
