@@ -177,6 +177,43 @@ export function depositActionHash(request: DepositRequest): `0x${string}` {
   );
 }
 
+export const permitAbi = parseAbi([
+  'function permit(address owner, address spender, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s)',
+  'function allowance(address owner, address spender) view returns (uint256)',
+]);
+export const wrappedAssetAbi = parseAbi(['function wrappedAsset() view returns (address)']);
+
+/** The permit's own checks, before anything is read: it must cover the amount and still be live. */
+export function assertPermitPolicy(permit: NonNullable<DepositRequest['permit']>, amount: bigint, nowSeconds: number): void {
+  if (BigInt(permit.value) < amount) {
+    throw new DepositRejectedError(
+      `permit.value ${formatDepositUnits(BigInt(permit.value))} USDC is below the deposit amount ${formatDepositUnits(amount)} USDC`,
+    );
+  }
+  if (BigInt(permit.deadline) < BigInt(nowSeconds)) {
+    throw new DepositRejectedError('permit has expired');
+  }
+}
+
+/** permit(owner, spender, value, deadline, v, r, s) with the spender fixed to the DepositModule. */
+export function buildPermitArgs(
+  request: DepositRequest,
+  module: `0x${string}`,
+): readonly [`0x${string}`, `0x${string}`, bigint, bigint, number, `0x${string}`, `0x${string}`] {
+  const permit = request.permit!;
+  const sig = permit.signature;
+  const v = Number.parseInt(sig.slice(130, 132), 16);
+  return [
+    getAddress(request.action.owner),
+    getAddress(module),
+    BigInt(permit.value),
+    BigInt(permit.deadline),
+    v < 27 ? v + 27 : v,
+    `0x${sig.slice(2, 66)}`,
+    `0x${sig.slice(66, 130)}`,
+  ] as const;
+}
+
 /** `verifyAndMatch` arguments for one deposit. The module ignores `actionData`. */
 export function buildDepositArgs(request: DepositRequest) {
   const { action } = request;

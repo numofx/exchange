@@ -245,7 +245,8 @@ func TestDepositRequestRules(t *testing.T) {
 
 func TestDepositRefusesUnknownFields(t *testing.T) {
 	h := newDepositHarness()
-	body := map[string]any{"action": validDeposit().Action, "signature": validDeposit().Signature, "permit": "0x"}
+	// The spender is fixed by the venue, so a client that sends one is told so rather than ignored.
+	body := map[string]any{"action": validDeposit().Action, "signature": validDeposit().Signature, "spender": "0x"}
 	expectDeposit(t, postDeposit(t, h.server, body), http.StatusBadRequest, "invalid JSON body")
 }
 
@@ -588,4 +589,57 @@ func TestPgDepositStore(t *testing.T) {
 	if _, claimed, _ := store.Claim(ctx, rec); claimed {
 		t.Fatal("a confirmed deposit was reclaimed")
 	}
+}
+
+// ---- Phase 2: the permit path
+
+func withPermit(value *big.Int, deadline int64) depositRequest {
+	req := validDeposit()
+	req.Permit = &depositPermit{Value: value.String(), Deadline: strconv.FormatInt(deadline, 10), Signature: "0x" + strings.Repeat("cd", 64) + "1b"}
+	return req
+}
+
+func TestDepositWithAPermitNeedsNoPriorAllowance(t *testing.T) {
+	h := newDepositHarness()
+	h.chain.allowance = big.NewInt(0)
+	expectDeposit(t, postDeposit(t, h.server, withPermit(usdc(1_000), testWithdrawalNow.Unix()+600)), http.StatusOK, "")
+	if h.submitter.received == nil || h.submitter.received.Permit == nil {
+		t.Fatal("the permit must be forwarded to the executor")
+	}
+}
+
+func TestDepositWithoutAPermitStillNeedsTheAllowance(t *testing.T) {
+	h := newDepositHarness()
+	h.chain.allowance = big.NewInt(0)
+	expectDeposit(t, postDeposit(t, h.server, validDeposit()), http.StatusBadRequest, "approve")
+}
+
+func TestDepositPermitRules(t *testing.T) {
+	for name, tc := range map[string]struct {
+		req  depositRequest
+		want string
+	}{
+		"a permit below the amount": {withPermit(usdc(999), testWithdrawalNow.Unix()+600), "below the deposit amount"},
+		"an expired permit":         {withPermit(usdc(1_000), testWithdrawalNow.Unix()-1), "permit has expired"},
+		"a malformed permit signature": {func() depositRequest {
+			r := withPermit(usdc(1_000), testWithdrawalNow.Unix()+600)
+			r.Permit.Signature = "0x1234"
+			return r
+		}(), "65-byte"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newDepositHarness()
+			expectDeposit(t, postDeposit(t, h.server, tc.req), http.StatusBadRequest, tc.want)
+			if h.submitter.received != nil {
+				t.Fatal("a refused permit reached the executor")
+			}
+		})
+	}
+}
+
+// What the executor reports when USDC refuses the permit (seen on the Base fork: "EIP2612: invalid signature").
+func TestDepositRefusedPermitMapsToA400(t *testing.T) {
+	h := newDepositHarness()
+	h.submitter.err = &executorWithdrawError{Status: http.StatusUnprocessableEntity, Message: "permit would revert", Revert: "permit: EIP2612: invalid signature"}
+	expectDeposit(t, postDeposit(t, h.server, withPermit(usdc(1_000), testWithdrawalNow.Unix()+600)), http.StatusBadRequest, "refused the permit")
 }
