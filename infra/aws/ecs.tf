@@ -407,9 +407,9 @@ resource "aws_ecs_task_definition" "market_maker" {
       # Arrives paused, exactly as it runs on Railway today. Unpausing is the last
       # step of the cutover and a deliberate one, never a side effect of deploying.
       # Unpaused at the 2026-09-10 cutover, after the wrapped-quote smoke test settled with
-      # no cash movement on any account. Subaccount 15 is two-sided for the first time --
-      # 5000 cNGN and ~3 wrapped USDC -- because the quote leg is the wrapper rather than
-      # cash the maker could see but never spend.
+      # no cash movement on any account. Subaccount 15 (then the maker's) became two-sided for
+      # the first time -- 5000 cNGN and ~3 wrapped USDC -- because the quote leg was the wrapper
+      # rather than cash the maker could see but never spend.
       # Unpaused 2026-09-10 after the 25 bps taker schedule went live on markets-service. The
       # pause before it drained six orders signed worstFee 0, which would have reverted
       # TM_FeeTooHigh against the new schedule.
@@ -426,15 +426,15 @@ resource "aws_ecs_task_definition" "market_maker" {
       { name = "MM_MARKET_SYMBOL", value = "USDCcNGN-SPOT" },
       { name = "MM_OWNER_ADDRESS", value = var.mm_address },
       { name = "MM_SIGNER_ADDRESS", value = var.mm_address },
-      # Subaccount 15, not 10. Ten is DeliverableFXManager-managed, and the vault
-      # de-whitelisted DFXM on the CashAsset (block 51109818), so every cash adjustment
-      # on it now reverts MW_UnknownManager -- the market maker could quote but never
-      # settle. Fifteen is SRM-managed, held in Matching custody, and signed by the same
-      # MM key, and it holds the cNGN inventory (4999) the maker needs.
+      # Subaccount 26: the unified account under the perp SRM since the 2026-10-04 cutover,
+      # held in Matching custody and signed by the MM key. It holds the maker's perp cash and
+      # wrapped cNGN. History: 10 was DeliverableFXManager-managed and stopped settling when
+      # the vault de-whitelisted DFXM on the CashAsset (block 51109818); 15, on the retired
+      # spot SRM, replaced it until the cutover and is now empty.
       #
-      # RECIPIENT_ID must equal SUBACCOUNT_ID. Under a WrappedERC20Asset quote leg the
-      # credit side needs an allowance, so a recipient that is not the trading account
-      # reverts; keeping them equal is what the venue actually exercises and tests.
+      # RECIPIENT_ID must equal SUBACCOUNT_ID. It was required under the wrapped-quote leg,
+      # where a credit needs an allowance and a separate recipient reverted. Cash credits need
+      # none, but keeping them equal is still what the venue exercises and tests.
       { name = "MM_SUBACCOUNT_ID", value = var.mm_subaccount_id },
       { name = "MM_RECIPIENT_ID", value = var.mm_subaccount_id },
 
