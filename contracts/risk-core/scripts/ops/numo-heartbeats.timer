@@ -1,0 +1,10 @@
+[Unit]
+Description=Check once a day that every monitor's heartbeat is armed
+
+[Timer]
+OnCalendar=*-*-* 09:00:00 UTC
+Persistent=true
+AccuracySec=5min
+
+[Install]
+WantedBy=timers.target

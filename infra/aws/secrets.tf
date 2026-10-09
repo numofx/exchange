@@ -95,6 +95,11 @@ locals {
     # sender is a systemd timer or a container. Adding it here is what grants the execution role
     # read access: the IAM policy in ecs.tf scopes to values(local.secret_arns).
     alert_webhook_url = "${local.ssm_arn_prefix}/numo/feeds/alert_webhook_url"
+
+    # The settlement canary's healthchecks.io check (canary.ts pings it after every check), beside the
+    # ops-box monitors' under /numo/pager/heartbeats. Must exist before the apply that adds it, or
+    # the execution task cannot start.
+    settlement_canary_heartbeat_url = "${local.ssm_arn_prefix}/numo/pager/heartbeats/settlement-canary-ecs"
   }
 }
 

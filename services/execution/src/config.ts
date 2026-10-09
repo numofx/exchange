@@ -49,6 +49,8 @@ const envSchema = z.object({
   // log group, so the webhook IS the alerting path, not a supplement to it.
   ALERT_WEBHOOK_URL: z.string().url().optional().or(z.literal('')),
   SETTLEMENT_CANARY_ALERT_REPEAT_CHECKS: z.coerce.number().int().nonnegative().default(30),
+  // healthchecks.io check pinged after every check, so a canary that stops checking pages too.
+  SETTLEMENT_CANARY_HEARTBEAT_URL: z.string().url().optional().or(z.literal('')),
   // Pinned, not required-zero. See canary.ts: the live value is settled cash that donateBalance
   // cannot retire, so the useful signal is movement, not presence. Unset disables the pin.
   SETTLEMENT_CANARY_EXPECTED_NET_SETTLED_CASH: z.string().regex(/^-?\d+$/).optional().or(z.literal('')),
@@ -90,6 +92,7 @@ export type AppConfig = {
     failsHealthcheck: boolean;
     alertWebhookUrl?: string;
     alertRepeatAfterChecks: number;
+    heartbeatUrl?: string;
     expectedNetSettledCash?: bigint;
     wrapperDeltaExceptions?: Record<string, bigint>;
     feeRecipient?: {
@@ -149,6 +152,7 @@ export function loadConfig(): AppConfig {
           failsHealthcheck: parsed.SETTLEMENT_CANARY_FAILS_HEALTHCHECK === 'true',
           alertWebhookUrl: parsed.ALERT_WEBHOOK_URL ? parsed.ALERT_WEBHOOK_URL : undefined,
           alertRepeatAfterChecks: parsed.SETTLEMENT_CANARY_ALERT_REPEAT_CHECKS,
+          heartbeatUrl: parsed.SETTLEMENT_CANARY_HEARTBEAT_URL ? parsed.SETTLEMENT_CANARY_HEARTBEAT_URL : undefined,
           expectedNetSettledCash: parsed.SETTLEMENT_CANARY_EXPECTED_NET_SETTLED_CASH
             ? BigInt(parsed.SETTLEMENT_CANARY_EXPECTED_NET_SETTLED_CASH)
             : undefined,

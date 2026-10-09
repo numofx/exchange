@@ -52,6 +52,18 @@ const INVARIANT_ABI = [
     outputs: [{ type: 'uint256' }],
   },
   {
+    type: 'function', name: 'manager', stateMutability: 'view',
+    inputs: [{ name: 'accountId', type: 'uint256' }], outputs: [{ type: 'address' }],
+  },
+  {
+    type: 'function', name: 'getAccountBalances', stateMutability: 'view',
+    inputs: [{ name: 'accountId', type: 'uint256' }],
+    outputs: [{
+      type: 'tuple[]',
+      components: [{ name: 'asset', type: 'address' }, { name: 'subId', type: 'uint256' }, { name: 'balance', type: 'int256' }],
+    }],
+  },
+  {
     type: 'function', name: 'getBalance', stateMutability: 'view',
     inputs: [
       { name: 'accountId', type: 'uint256' },
@@ -118,6 +130,11 @@ export type CanarySnapshot = {
    */
   invariant_failures: string[];
   /**
+   * The canary's own configuration, checked against the chain: an account that does not exist,
+   * sits under another manager, or holds nothing makes getMargin pass while proving nothing.
+   */
+  config_failures: string[];
+  /**
    * What the fee subaccount holds of the module's quote asset, in 18dp, or null when the fee
    * recipient is not configured or could not be read.
    *
@@ -155,6 +172,14 @@ export type CanaryOptions = {
   announceOnStart?: boolean;
   /** Injected in tests. */
   postAlert?: (url: string, text: string) => Promise<void>;
+  /**
+   * healthchecks.io check URL. Pinged after every completed check -- `<url>` when ok, `<url>/fail`
+   * when not -- so a canary that stops checking (a dead loop, a stopped task) pages when the
+   * check's grace period runs out, and one that fails pages at once.
+   */
+  heartbeatUrl?: string;
+  /** Injected in tests. */
+  ping?: (url: string) => Promise<void>;
   /**
    * The value netSettledCash is expected to hold. Alerting on movement rather than on
    * non-zero: the current balance is legitimate settled cash that no available call can
@@ -195,6 +220,7 @@ export class SettlementCanary {
   private wrappers: `0x${string}`[] | undefined;
   private readonly log: NonNullable<CanaryOptions['log']>;
   private readonly postAlert: NonNullable<CanaryOptions['postAlert']>;
+  private readonly ping: NonNullable<CanaryOptions['ping']>;
   private timer: NodeJS.Timeout | undefined;
   /** Set by checkFeeRecipient on each pass; null whenever the read did not happen or failed. */
   private feeAccrued: string | null = null;
@@ -214,6 +240,7 @@ export class SettlementCanary {
       });
     this.log = options.log ?? (() => {});
     this.postAlert = options.postAlert ?? defaultPostAlert;
+    this.ping = options.ping ?? defaultPing;
     this.snapshotValue = {
       enabled: true,
       ok: null,
@@ -222,6 +249,7 @@ export class SettlementCanary {
       account_ids: options.accountIds,
       failures: [],
       invariant_failures: [],
+      config_failures: [],
       fee_accrued: null,
       consecutive_failures: 0,
     };
@@ -259,8 +287,9 @@ export class SettlementCanary {
       }
     }
 
+    const config_failures = await this.checkAccounts();
     const invariant_failures = await this.checkInvariants();
-    const ok = failures.length === 0 && invariant_failures.length === 0;
+    const ok = failures.length === 0 && invariant_failures.length === 0 && config_failures.length === 0;
     const wasOk = this.snapshotValue.ok;
     this.snapshotValue = {
       enabled: true,
@@ -270,6 +299,7 @@ export class SettlementCanary {
       account_ids: this.options.accountIds,
       failures,
       invariant_failures,
+      config_failures,
       fee_accrued: this.feeAccrued,
       // Counts checks, not accounts: one bad account for ten checks reads as ten, which is
       // what an alert threshold should be counting.
@@ -282,12 +312,61 @@ export class SettlementCanary {
       manager: this.options.manager,
       failures,
       invariant_failures,
+      config_failures,
       fee_accrued: this.feeAccrued,
       consecutive_failures: this.snapshotValue.consecutive_failures,
     });
 
     await this.maybeAlert(ok, wasOk);
+    await this.heartbeat(ok);
     return this.snapshotValue;
+  }
+
+  /** Never throws: a heartbeat service that is down must not stop the canary checking. */
+  private async heartbeat(ok: boolean): Promise<void> {
+    const url = this.options.heartbeatUrl;
+    if (!url) return;
+    try {
+      await this.ping(ok ? url : `${url.replace(/\/$/, '')}/fail`);
+    } catch (error) {
+      this.log('error', 'settlement_canary_heartbeat_failed', { error: describe(error) });
+    }
+  }
+
+  /**
+   * getMargin succeeds on an account that was never opened and on one that holds nothing -- the
+   * manager reads no feed for either -- so a green margin check proves nothing about them. That
+   * is how the canaries watched an emptied account 15 for five days after the 2026-10-04 cutover.
+   * Every configured account must exist, sit under the configured manager, and hold something.
+   *
+   * A dusty account still passes (15 kept 0.0008 of cash): this catches a missing or empty
+   * account, not a stale one.
+   */
+  private async checkAccounts(): Promise<string[]> {
+    const out: string[] = [];
+    const read = <T>(address: `0x${string}`, functionName: string, args: readonly unknown[] = []) =>
+      (this.client.readContract as (a: unknown) => Promise<unknown>)({ address, abi: INVARIANT_ABI, functionName, args }) as Promise<T>;
+    try {
+      const subAccounts = await read<`0x${string}`>(this.options.manager, 'subAccounts');
+      for (const accountId of this.options.accountIds) {
+        const manager = await read<`0x${string}`>(subAccounts, 'manager', [BigInt(accountId)]);
+        if (BigInt(manager) === 0n) {
+          out.push(`subaccount ${accountId} does not exist -- getMargin on it passes while proving nothing`);
+          continue;
+        }
+        if (manager.toLowerCase() !== this.options.manager.toLowerCase()) {
+          out.push(`subaccount ${accountId} is under manager ${manager}, not ${this.options.manager} -- the canary is not watching it`);
+          continue;
+        }
+        const balances = await read<readonly { balance: bigint }[]>(subAccounts, 'getAccountBalances', [BigInt(accountId)]);
+        if (!balances.some((b) => b.balance !== 0n)) {
+          out.push(`subaccount ${accountId} holds nothing -- the manager reads no feed for it, so getMargin proves nothing`);
+        }
+      }
+    } catch (error) {
+      out.push(`account configuration check failed to run: ${describe(error)}`);
+    }
+    return out;
   }
 
   /**
@@ -491,23 +570,27 @@ export class SettlementCanary {
       .map((f) => `  - subaccount ${f.account_id}: ${f.error}`)
       .join('\n');
     const invariantDetail = this.snapshotValue.invariant_failures.map((f) => `  - ${f}`).join('\n');
+    const configDetail = this.snapshotValue.config_failures.map((f) => `  - ${f}`).join('\n');
     // Two different emergencies. A halt stops trading and is loud on its own; a backing failure
     // lets trading continue against collateral that is not there.
     const halted = this.snapshotValue.failures.length > 0;
+    const misconfigured = !halted && this.snapshotValue.invariant_failures.length === 0;
 
     const text = announced
       ? `NUMO SETTLEMENT CANARY STARTED\ngetMargin succeeds on ${this.options.manager}. Watching subaccount(s) ${this.options.accountIds.join(', ')}.`
       : recovered
       ? `NUMO SETTLEMENT CANARY RECOVERED\ngetMargin succeeds again on ${this.options.manager}.`
       : [
-          halted ? 'NUMO SETTLEMENT HALTED' : 'NUMO COLLATERAL BACKING FAILURE',
+          halted ? 'NUMO SETTLEMENT HALTED' : misconfigured ? 'NUMO SETTLEMENT CANARY MISCONFIGURED' : 'NUMO COLLATERAL BACKING FAILURE',
           halted
             ? 'The risk manager cannot price a live subaccount, so on-chain settlement is failing.\nOrders will keep matching off-chain and every fill will revert, silently.'
+            : misconfigured
+            ? 'The canary is not watching what it should, so its green would mean nothing.'
             : 'The venue can still price and settle — and that is the problem. Ledger balances are\nnot matched by the tokens behind them, so fills continue against collateral that is\nnot there.',
           '',
           `manager: ${this.options.manager}`,
           `consecutive failing checks: ${failures}`,
-          [detail, invariantDetail].filter(Boolean).join('\n'),
+          [detail, invariantDetail, configDetail].filter(Boolean).join('\n'),
         ].join('\n');
 
     try {
@@ -531,6 +614,11 @@ async function defaultPostAlert(url: string, text: string): Promise<void> {
   if (!response.ok) throw new Error(`webhook returned ${response.status}`);
 }
 
+async function defaultPing(url: string): Promise<void> {
+  const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+  if (!response.ok) throw new Error(`heartbeat returned ${response.status}`);
+}
+
 export const DISABLED_CANARY: CanarySnapshot = {
   enabled: false,
   ok: null,
@@ -539,6 +627,7 @@ export const DISABLED_CANARY: CanarySnapshot = {
   account_ids: [],
   failures: [],
   invariant_failures: [],
+  config_failures: [],
   fee_accrued: null,
   consecutive_failures: 0,
 };

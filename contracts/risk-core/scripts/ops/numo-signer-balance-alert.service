@@ -8,5 +8,5 @@ Description=Numo feed-signer gas balance check
 Type=oneshot
 User=ec2-user
 WorkingDirectory=/home/ec2-user/exchange/contracts/risk-core
-ExecStart=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-ssm.sh /usr/bin/python3 scripts/ops/check_signer_balance.py
+ExecStart=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-heartbeat.sh signer-balance-alert /home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-ssm.sh /usr/bin/python3 scripts/ops/check_signer_balance.py
 Environment=AWS_REGION=us-east-1
