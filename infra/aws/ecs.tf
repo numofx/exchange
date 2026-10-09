@@ -147,7 +147,7 @@ resource "aws_ecs_task_definition" "markets" {
       { name = "WITHDRAWAL_ASSET_ADDRESSES", value = join(",", compact(concat([var.quote_asset_address, var.cngn_spot_asset_address, var.cngn_perp_cash_address], var.legacy_withdrawal_asset_addresses))) },
       { name = "EXECUTOR_WITHDRAW_URL", value = "http://execution-service.${var.internal_namespace}:8081/withdraw" },
       { name = "EXECUTOR_WITHDRAW_TIMEOUT", value = "45s" },
-    ])
+    ], local.markets_deposit_env)
 
     secrets = [
       { name = "INDEX_STATUS_TOKEN", valueFrom = local.secret_arns.index_status_token },
@@ -347,7 +347,9 @@ resource "aws_ecs_task_definition" "execution" {
       # gated by the task role's kms:Sign grant rather than by knowing its name. Gated on
       # executor_kms_signing, NOT on the key existing -- creating a key must not change how the
       # running service signs. Never alongside PRIVATE_KEY; the service refuses both at boot.
-      var.executor_kms_signing ? [{ name = "EXECUTOR_KMS_KEY_ID", value = aws_kms_key.executor[0].arn }] : []
+      var.executor_kms_signing ? [{ name = "EXECUTOR_KMS_KEY_ID", value = aws_kms_key.executor[0].arn }] : [],
+      # Sponsored deposits; empty unless deposits_enabled (deposits.tf).
+      local.execution_deposit_env,
     )
 
     secrets = concat(
