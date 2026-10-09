@@ -3,14 +3,14 @@
 # service rather than a second symbol on the spot one, so each can be stopped, resized or rolled
 # back without touching the other's book.
 #
-# It starts with desired_count 0. The account id is only known once the MM EOA has opened and
-# funded it (createAndDepositSubAccount(perpCash, 4,000e6, perpSRM)); set mm_perp_subaccount_id
-# and desired_count_market_maker_perp = 1 in the operator-local counts.auto.tfvars together.
+# The account is #24, opened and funded by the MM EOA on 2026-10-01
+# (createAndDepositSubAccount(perpCash, 4,000e6, perpSRM)). The replica count stays operator-local
+# (desired_count_market_maker_perp in counts.auto.tfvars); the account id is a default here.
 
 variable "mm_perp_subaccount_id" {
-  description = "The market maker's perp account under the perp SRM, held by Matching, owned by mm_address. Empty until step 20 opens it."
+  description = "The market maker's perp account under the perp SRM, held by Matching, owned by mm_address. Opened at step 20 (2026-10-01)."
   type        = string
-  default     = ""
+  default     = "24"
 }
 
 variable "desired_count_market_maker_perp" {
@@ -31,11 +31,11 @@ variable "mm_perp_quote_while_closed" {
   description = <<-EOT
     Rest quotes while /v1/markets reports trading_enabled false. True for the launch: the enable
     gate needs a two-sided book of at least $1k within 2% of the index before the vault opens the
-    market, and the matcher skips a closed market so the quotes only rest. Set false after step
-    22, so a market the guardian closes is not quoted into.
+    market, and the matcher skips a closed market so the quotes only rest. False since step 22
+    (2026-10-01), so a market the guardian closes is not quoted into.
   EOT
   type        = bool
-  default     = true
+  default     = false
 }
 
 resource "aws_ecs_task_definition" "market_maker_perp" {
@@ -70,9 +70,10 @@ resource "aws_ecs_task_definition" "market_maker_perp" {
       { name = "MM_RECIPIENT_ID", value = var.mm_perp_subaccount_id },
 
       # Runbook step 20 (launch size): $4,000 of cash, 1.5x leverage (the SRM allows 3x), so
-      # $6,000 gross, and inventory bounded at +/- $6,000 to match. Three $1,000 rungs a side rest
-      # $3,000 inside the enable gate's 2% band (it needs $1,000). Sizes and inventory are USDC on
-      # the perp. Capital and these limits go up with the OI cap (runbook: Market-maker capital).
+      # $6,000 gross, and inventory bounded at +/- $6,000 to match. Ten rungs a side, 116 growing
+      # 1.2x per rung (15 bps out, 10 bps further each), rest ~$3,011 a side within 105 bps -- inside
+      # the enable gate's 2% band (it needs $1,000). Sizes and inventory are USDC on the perp.
+      # Capital and these limits go up with the OI cap (runbook: Market-maker capital).
       { name = "MM_PERP_MAX_LEVERAGE", value = "1.5" },
       { name = "MM_PERP_QUOTE_WHILE_CLOSED", value = tostring(var.mm_perp_quote_while_closed) },
       { name = "MM_ORDER_SIZE", value = "116" },
