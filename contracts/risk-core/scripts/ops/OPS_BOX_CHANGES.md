@@ -5,6 +5,66 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-09 11:12–11:24 UTC: heartbeats for every ops-box monitor, and a rebalance-check timer
+
+From #145 (`90b08b7`, then the fix `61f2ff4`), not yet merged at install time.
+
+**healthchecks.io** (the project that already holds the perp pager's check; Pushover and email
+integrations on every new check, as on the pager's):
+
+| check | timeout | grace | pinged by |
+|---|---|---|---|
+| `settlement-canary` | 5 min | 5 min | `numo-settlement-canary.service` |
+| `feed-alert` | 1 min | 3 min | `numo-feed-alert.service` |
+| `signer-balance-alert` | 6 h | 1 h | `numo-signer-balance-alert.service` |
+| `rebalance-check` | 15 min | 15 min | `numo-rebalance-check.service` (new) |
+| `heartbeats` | 1 day | 2 h | `numo-heartbeats.service` (new) |
+
+Deleted the signup sample check "My First Check" (status new, 0 pings, nothing behind it): the
+arming job would have paged about it every day.
+
+**SSM** (under `/numo/pager`, the one new-to-the-box path its role may read; no IAM change):
+`healthchecks_api_key` (read-only; a write was tested and refused with 401) and
+`healthchecks_api_key_rw` (used to create the checks, not read by the box), both written by the
+operator. The checks' ping URLs are at `heartbeats/<check name>`.
+
+**On the box:**
+
+- New checkout `~/exchange-rebalance` at `90b08b7`, clean; `pnpm install --frozen-lockfile --filter
+  cngn-rebalance...` and `@numo/kms-signer` built. It is the rebalance timer's working directory.
+  A third checkout, which is what #143 is for.
+- Copied into `~/exchange/contracts/risk-core/scripts/ops/` (untracked there):
+  `run-with-heartbeat.sh` (`7eccb26b…`), `run-with-ssm-readonly.sh` (`7c49116c…`),
+  `check_heartbeats.py` (`f57c21a8…`, then `33e773ba…` from `61f2ff4`).
+- Units into `/etc/systemd/system/`, with backups `*.bak-pre145-20261009T111946Z` where one existed:
+  `numo-settlement-canary.service` (`d2988f7a…`), `numo-feed-alert.service` (`ecbd2db1…`), and
+  `numo-signer-balance-alert.service` (`679bac91…`), each now wrapped in `run-with-heartbeat.sh`;
+  new `numo-rebalance-check.service`/`.timer` (`0cdfa180…`/`fcc62173…`) and
+  `numo-heartbeats.service`/`.timer` (`e00f02ab…`, then `170a4969…` from `61f2ff4`/`ab980b63…`).
+  Then `daemon-reload`, and `enable --now` for both new timers. Every file was sha256-verified on
+  the box before any was moved into place.
+
+**The fix at 11:22:41.** On its first run the arming job's own check is still "new" (the success
+ping is sent after it exits), so it flagged itself. It now skips its own check (`HEARTBEAT_SELF`).
+Caught before it ran.
+
+**Verified (a first ping from every check).** By 11:24 every check read `up` on the healthchecks.io
+API: settlement-canary, feed-alert, signer-balance-alert (started by hand rather than waiting for
+13:08), rebalance-check (account 26, rate 1357.32, action none), and heartbeats (`ok: 6 checks, all
+armed`).
+
+**Behaviour change.** A monitor that exits non-zero now pages Pushover through healthchecks.io as
+well as posting to Slack: a stale live feed, feed-signer gas under 7 days (it was at 8.8 at
+install), a canary finding, or a rebalance that is due or failed to run.
+
+**Not yet.** `settlement-canary-ecs` (the execution-service canary's own heartbeat) is created at
+the #138 apply: its SSM parameter must exist before that apply, and the check would sit in "new"
+until the image that pings it runs.
+
+**Rollback.** Move each `.bak-pre145-*`/`.bak-pre61f2ff4-*` back; `systemctl disable --now
+numo-rebalance-check.timer numo-heartbeats.timer`; remove the two new units and `daemon-reload`;
+pause the five checks in healthchecks.io so they do not page.
+
 ## 2026-10-09 11:06–11:08 UTC: [TEST] alert drill to the ops channel
 
 **What.** Proved canary alert delivery end to end, after a heads-up in the channel:
