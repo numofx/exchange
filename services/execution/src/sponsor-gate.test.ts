@@ -3,13 +3,16 @@ import assert from 'node:assert/strict';
 
 import { parseEther } from 'viem';
 
-import { DepositGate, receiptCostWei } from './deposit-gate.js';
+import { SponsorGate, receiptCostWei } from './sponsor-gate.js';
 import { DepositRejectedError } from './deposit.js';
+import { WithdrawalRejectedError } from './withdrawal.js';
 
 function gate(balanceEth: string, opts: { now?: () => number } = {}) {
   const posted: string[] = [];
   let balance = parseEther(balanceEth);
-  const g = new DepositGate({
+  const g = new SponsorGate({
+    subject: 'deposits',
+    reject: (message) => new DepositRejectedError(message, undefined, 503),
     minExecutorWei: parseEther('0.006'),
     maxGasWeiPerHour: parseEther('0.002'),
     readBalance: async () => balance,
@@ -79,4 +82,55 @@ test('a receipt costs gasUsed x effectiveGasPrice plus the L1 fee when present',
   assert.equal(receiptCostWei({ gasUsed: 467_000n, effectiveGasPrice: 6_000_000n }), 2_802_000_000_000n);
   assert.equal(receiptCostWei({ gasUsed: 467_000n, effectiveGasPrice: 6_000_000n, l1Fee: 1_000n }), 2_802_000_001_000n);
   assert.equal(receiptCostWei({ gasUsed: 1n, effectiveGasPrice: 1n, l1Fee: '0x10' }), 17n);
+});
+
+// ---- withdrawals: their own budget, and no floor
+
+function withdrawalGate(balanceEth: string) {
+  const posted: string[] = [];
+  const g = new SponsorGate({
+    subject: 'withdrawals',
+    reject: (message) => new WithdrawalRejectedError(message, undefined, 503),
+    maxGasWeiPerHour: parseEther('0.002'),
+    readBalance: async () => parseEther(balanceEth),
+    alertWebhookUrl: 'https://hooks.example.invalid/x',
+    post: async (_u, text) => { posted.push(text); },
+  });
+  return { g, posted };
+}
+
+const withdrawal503 = (pattern: RegExp) => (e: unknown) =>
+  e instanceof WithdrawalRejectedError && e.status === 503 && pattern.test(e.message);
+
+test('withdrawals have no executor floor: a nearly empty executor still lets users withdraw', async () => {
+  const { g, posted } = withdrawalGate('0.0001');
+  await g.check();
+  assert.equal(posted.length, 0);
+});
+
+test('without a floor the balance is never read, so an unreadable RPC cannot refuse a withdrawal', async () => {
+  const g = new SponsorGate({
+    subject: 'withdrawals',
+    reject: (message) => new WithdrawalRejectedError(message, undefined, 503),
+    maxGasWeiPerHour: parseEther('0.002'),
+    readBalance: async () => { throw new Error('rpc down'); },
+  });
+  await g.check();
+});
+
+test('withdrawals pause at their own hourly gas budget, with their own alert', async () => {
+  const { g, posted } = withdrawalGate('1');
+  g.record(parseEther('0.002'));
+  await assert.rejects(g.check(), withdrawal503(/^withdrawals are paused: sponsored withdrawals spent 0\.002 ETH/));
+  assert.throws(() => g.assertBudget(), withdrawal503(/withdrawals are paused/));
+  assert.match(posted[0]!, /^NUMO WITHDRAWALS PAUSED/);
+  assert.match(posted[0]!, /Settlement and deposits are unaffected/);
+});
+
+test('the deposit and withdrawal budgets are separate', async () => {
+  const deposits = gate('1').g;
+  const withdrawals = withdrawalGate('1').g;
+  deposits.record(parseEther('0.002'));
+  await assert.rejects(deposits.check(), is503(/deposits are paused/));
+  await withdrawals.check();
 });

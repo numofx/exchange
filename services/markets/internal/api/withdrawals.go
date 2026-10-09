@@ -249,7 +249,8 @@ func writeWithdrawalSubmitError(w http.ResponseWriter, req withdrawalRequest, er
 			writeJSON(w, http.StatusUnprocessableEntity, body)
 			return
 		case http.StatusServiceUnavailable:
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "withdrawals are not enabled on the executor"})
+			// The executor names why: not enabled, or paused at the hourly withdrawal gas budget.
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": nonEmpty(rejected.Message, "withdrawals are not enabled on the executor")})
 			return
 		}
 	}
@@ -479,7 +480,8 @@ func (l *withdrawalLimiter) release(owner string) {
 }
 
 // executorWithdrawError is execution-service refusing a withdrawal outright: 422 when it breaks policy or the
-// simulation reverted (Revert names the revert), 503 when withdrawals are not enabled there.
+// simulation reverted (Revert names the revert), 503 when withdrawals are not enabled there or are paused at the
+// hourly gas budget.
 type executorWithdrawError struct {
 	Status  int
 	Message string
