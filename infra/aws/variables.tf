@@ -103,8 +103,10 @@ variable "trade_module_address" {
   # orders resting for the old module stop being matchable the moment this changes.
   #
   # Cutover 2026-09-10: 0x44813aD3 (cash-quoted) -> 0x12423B36 (wrapped-USDC-quoted).
+  # Unified cutover 2026-10-04: 0x12423B36 -> 0xDea96818, the perp TradeModule, so spot settles on
+  # the perp stack. Applied from operator-local tfvars at the time and recorded here 2026-10-09.
   type    = string
-  default = "0x12423B366F6F07130961900bE00d05Ea63Acd071"
+  default = "0xDea968188598BA0E3F58A56C0fdfF338C74F699f"
 }
 
 variable "quote_asset_address" {
@@ -115,6 +117,7 @@ variable "quote_asset_address" {
   #
   #   cash-quoted module    0x44813aD3...  ->  CashAsset            0x6B232A2155Bd0C9bf741dB4cf8E7e8A0176A6fc6
   #   wrapped-quote module  0x12423B36...  ->  WRAPPED_USDC_DELIV.  0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84
+  #   perp module (unified) 0xDea96818...  ->  perp CashAsset       0xA74E49b4Ed7cb176bc02ef4D8a1A3240C9aD4272
   #
   # Set at the 2026-09-10 cutover. This also turns the pre-trade funding check ON, which was
   # inert while it was empty -- watch for funding_check_enabled in the markets logs. The
@@ -122,7 +125,7 @@ variable "quote_asset_address" {
   # disagrees with it, so a half-applied pair fails loudly instead of judging every buyer
   # against a ledger the trade does not touch.
   type    = string
-  default = "0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84"
+  default = "0xA74E49b4Ed7cb176bc02ef4D8a1A3240C9aD4272"
 }
 
 variable "cash_asset_address" {
@@ -154,24 +157,28 @@ variable "withdrawal_module_address" {
 # The manager the spot market's accounts live under once spot runs on the perp stack (the unified
 # account): the perp SRM. Empty while spot is on its own stack. Set together with
 # trade_module_address = the perp TradeModule, quote_asset_address = the perp cash and
-# cngn_spot_asset_address = the perp cNGN escrow: the unified cutover moves the four as one.
+# cngn_spot_asset_address = the perp cNGN escrow: the unified cutover moves the four as one, and
+# did so on 2026-10-04.
 variable "spot_margin_manager_address" {
   type    = string
-  default = ""
+  default = "0xDE0423D0a1E15536265C9513d2e0c10DAb5835D4"
 }
 
 # Wrapped assets of a retired spot stack that withdrawals must keep paying out of after a cutover
 # (the old wrapped USDC and spot cNGN escrow), so nobody is stranded on the old accounts.
 variable "legacy_withdrawal_asset_addresses" {
   type    = list(string)
-  default = []
+  default = ["0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84", "0x9d806fd040a719d27a8e5e77dc5ae0ed1e089493"]
 }
 
 variable "cngn_spot_asset_address" {
   # Losing this silently disables the only market. The boot guard turns that into a
   # crash; keeping it in Terraform keeps it from being lost in the first place.
+  #
+  # Since the unified cutover (2026-10-04) this is the perp cNGN escrow, the same contract as
+  # cngn_perp_collateral_address. The spot stack's escrow 0x9D806fD0 is now a legacy withdrawal asset.
   type    = string
-  default = "0x9D806fD040a719D27a8E5E77dc5aE0ED1e089493"
+  default = "0x37c976bb5d4887a714ef19AF6B83e34fe2f37c98"
 }
 
 # USDCcNGN-PERP, on its own stack, live on Base since 2026-09-30. The defaults ARE the deployed
@@ -202,19 +209,20 @@ variable "cngn_perp_srm_address" {
 # The perp's cNGN collateral escrow (risk-core CNGN_PERP_COLLATERAL.json `escrow`). Set it only
 # once the vault batch that whitelists it on the perp SRM has executed: markets-service then lists
 # it under the perp's collateral_assets and reads each account's cNGN, and accepts withdrawals
-# from it. Empty means cash-only margin.
+# from it. Empty means cash-only margin. Whitelisted by vault batch 4 on 2026-10-03.
 variable "cngn_perp_collateral_address" {
   type    = string
-  default = ""
+  default = "0x37c976bb5d4887a714ef19AF6B83e34fe2f37c98"
 }
 
 # The index-lag gate (markets-service api/index_lag.go). The publisher reports every spot sample to
 # the api; with the gate on, a new perp order is refused while that sample is more than
-# index_lag_max_bps from the on-chain index, or while no fresh sample exists. Off by default so the
-# reports can be watched on /v1/markets (perp.index_lag) before anything is refused.
+# index_lag_max_bps from the on-chain index, or while no fresh sample exists. On in production since
+# 2026-10-04 (markets-service task definition 28 onward); set false to watch the reports on
+# /v1/markets (perp.index_lag) without refusing anything.
 variable "index_lag_gate" {
   type    = bool
-  default = false
+  default = true
 }
 
 variable "index_lag_max_bps" {
@@ -296,11 +304,12 @@ variable "desired_count_market_maker" {
   }
 }
 
-# The spot market-maker's trading account (its MM_SUBACCOUNT_ID and MM_RECIPIENT_ID). #15 on the spot
-# stack until the unified cutover; the unified account under the perp SRM after it.
+# The spot market-maker's trading account (its MM_SUBACCOUNT_ID and MM_RECIPIENT_ID): #26, the
+# unified account under the perp SRM, since the 2026-10-04 cutover. #15, on the retired spot stack,
+# is empty.
 variable "mm_subaccount_id" {
   type    = string
-  default = "15"
+  default = "26"
 }
 
 variable "mm_address" {
