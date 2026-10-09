@@ -9,8 +9,8 @@
  *
  * The nonce used is the higher of what this process last broadcast (+1) and the chain's pending count: a lagging node
  * can no longer hand out a used nonce, and a transaction sent from the same key by anything else is still respected.
- * Only a confirmed broadcast advances it. Any send failure forgets the local value, so the next send re-reads the
- * chain instead of trusting a guess -- a broadcast that failed may or may not have consumed its nonce.
+ * Only confirm() advances it; broadcast.ts decides, per failure, whether a nonce was used (confirm) or given back
+ * (nothing), so a failure before the broadcast never leaves a gap.
  *
  * Not safe on its own across concurrent callers: every take/confirm/forget runs inside the executor's serial queue.
  */
@@ -24,13 +24,8 @@ export class NonceTracker {
     return this.next === undefined ? chain : Math.max(this.next, chain);
   }
 
-  /** The broadcast with this nonce was accepted. */
+  /** This nonce is used: broadcast, or found taken. */
   confirm(nonce: number): void {
     this.next = nonce + 1;
-  }
-
-  /** A broadcast failed: the next send re-reads the chain. */
-  forget(): void {
-    this.next = undefined;
   }
 }

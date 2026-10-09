@@ -4,6 +4,7 @@ import {
   createWalletClient,
   defineChain,
   encodeAbiParameters,
+  encodeFunctionData,
   getAddress,
   http,
   type Abi,
@@ -15,6 +16,7 @@ import type { AppConfig } from './config.js';
 import { createKmsAccount } from '@numo/kms-signer';
 import { createSerialQueue } from './serial-queue.js';
 import { NonceTracker } from './nonce-tracker.js';
+import { broadcastWithNonce } from './broadcast.js';
 import { assertSignerIsOwner, type SubmittedAction } from './signer-guard.js';
 import type { DepositRequest, DepositResponse, ExecuteMatchRequest, ExecuteMatchResponse, WithdrawRequest } from './types.js';
 import { DepositGate, PROVISIONAL_DEPOSIT_GAS, receiptCostWei } from './deposit-gate.js';
@@ -176,32 +178,34 @@ export class MatchExecutor {
         functionName: 'verifyAndMatch',
         args,
       });
-      return this.broadcast((nonce) =>
-        this.walletClient.writeContract({
-          account: this.account,
-          address: this.deps.matchingAddress,
-          abi: options.abi,
-          functionName: 'verifyAndMatch',
-          args,
-          chain: this.chain,
-          gas: withGasHeadroom(estimate),
-          nonce,
-        }),
-      );
+      return this.broadcast({
+        address: this.deps.matchingAddress,
+        abi: options.abi,
+        functionName: 'verifyAndMatch',
+        args,
+        gas: withGasHeadroom(estimate),
+      });
     });
   }
 
   /** Sends with a locally tracked nonce. Call only inside enqueueSend. */
-  private async broadcast(send: (nonce: number) => Promise<`0x${string}`>): Promise<`0x${string}`> {
-    const nonce = await this.nonces.take();
-    try {
-      const hash = await send(nonce);
-      this.nonces.confirm(nonce);
-      return hash;
-    } catch (error) {
-      this.nonces.forget();
-      throw error;
-    }
+  private broadcast(call: { address: `0x${string}`; abi: Abi; functionName: string; args: readonly unknown[]; gas?: bigint }): Promise<`0x${string}`> {
+    const data = encodeFunctionData({ abi: call.abi, functionName: call.functionName, args: call.args } as never);
+    return broadcastWithNonce({
+      nonces: this.nonces,
+      sign: async (nonce) => {
+        const prepared = await this.walletClient.prepareTransactionRequest({
+          account: this.account,
+          chain: this.chain,
+          to: call.address,
+          data,
+          gas: call.gas,
+          nonce,
+        } as never);
+        return this.walletClient.signTransaction(prepared as never) as Promise<`0x${string}`>;
+      },
+      sendRaw: (serializedTransaction) => this.walletClient.sendRawTransaction({ serializedTransaction }),
+    });
   }
 
   async execute(request: ExecuteMatchRequest): Promise<ExecuteMatchResponse> {
@@ -358,9 +362,7 @@ export class MatchExecutor {
       }
       gate.assertBudget();
       if (this.config.dryRun) return undefined;
-      return this.broadcast((nonce) =>
-        this.walletClient.writeContract({ account: this.account, address: token, abi: permitAbi, functionName: 'permit', args, chain: this.chain, nonce }),
-      );
+      return this.broadcast({ address: token, abi: permitAbi as Abi, functionName: 'permit', args });
     });
     if (hash === undefined) return undefined;
     const receipt = await this.publicClient.waitForTransactionReceipt({ hash, timeout: this.config.receiptTimeoutMs });
