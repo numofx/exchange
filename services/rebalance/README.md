@@ -29,16 +29,20 @@ pnpm rebalance cancel --execute    # reclaim an unfilled order
 
 ## Things that are not obvious
 
-**Never use the SDK's quote for this pair.** `@hyperbridge/sdk` 2.8.13 prices phantom pairs off the
-V1 `phantomOrderPriceSnapshots` table, which froze on 2026-08-08 at 1393.0 — 1,617 identical rows —
-and its only validation is that the timestamp parses. The live feed is
-`phantomOrderPriceSnapshotV2s`, which the SDK never mentions. `quote.ts` reads V2 and refuses
-anything older than `MAX_SNAPSHOT_AGE_SECONDS`.
+**Prices come from the HyperFX orderbook, not the indexer.** The indexer's V2 snapshot feed
+(`phantomOrderPriceSnapshotV2s`) was removed from nexus.indexer.polytope.technology; the V1 table
+it replaced is still frozen at 1393.0 from 2026-08-08. `@hyperbridge/sdk` 2.8.24 prices from
+`https://orderbook.hyperfx.finance/mainnet/graphql` instead, and `check` and `quote` do the same
+(`orderbook.ts`, `ORDERBOOK_URL`), taking the *pessimistic* quote: the one price at which a single
+level fills the whole amount.
 
-**It is an RFQ, not an order book.** `low == median == high` on every snapshot and `bidCount` is 2,
-so there is no depth to walk. What the auction adds is competition: solvers may bid *above* the
-required output and the surplus is split 40% to us, 60% to the gateway — so fills come in slightly
-better than the quote, never worse.
+**`swap` is not migrated.** It still prices off the removed V2 feed, so it fails before placing
+anything. Moving it means the SDK upgrade that placement depends on and a small real fill to prove
+it, which is its own change.
+
+**Solvers compete.** What the auction adds is that solvers may bid *above* the required output and
+the surplus is split 40% to us, 60% to the gateway — so fills come in slightly better than the
+quote, never worse.
 
 **A bundler is required.** `executeBest` submits the winning bid as an ERC-4337 UserOperation.
 Without a bundler URL it places the order, fails instantly with `Bundler URL not configured`, and

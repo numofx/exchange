@@ -21,6 +21,8 @@ const schema = z.object({
   /** KMS key that signs. Never the executor key: this one holds float, that one settles trades. */
   REBALANCE_KMS_KEY_ID: z.string().min(1).default('alias/numo-exchange-rebalance'),
   INDEXER_URL: z.string().url().default('https://nexus.indexer.polytope.technology/'),
+  /** HyperFX orderbook: where `check` and `quote` price USDC -> cNGN (orderbook.ts). */
+  ORDERBOOK_URL: z.string().url().default('https://orderbook.hyperfx.finance/mainnet/graphql'),
   COPROCESSOR_URL: z.string().min(1).default('wss://nexus.rpc.polytope.technology'),
   /**
    * Subaccount the proceeds are deposited into — the spot market maker's. #26, under the perp SRM,
