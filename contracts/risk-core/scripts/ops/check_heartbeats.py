@@ -19,6 +19,7 @@ Env:
   HEALTHCHECKS_API_KEY  read-only API key for the project (SSM /numo/pager/healthchecks_api_key)
   HEARTBEAT_EXPECTED    comma-separated check names that must exist (they match the names under
                         SSM /numo/pager/heartbeats/)
+  HEARTBEAT_SELF        this job's own check name, which is not judged (see findings())
   ALERT_WEBHOOK_URL     Slack/Discord-compatible webhook (optional; prints only if unset)
   HEALTHCHECKS_API      default https://healthchecks.io/api/v3
 """
@@ -33,13 +34,18 @@ import urllib.request
 UNARMED = ("new", "paused")
 
 
-def findings(checks: list[dict], expected: list[str]) -> list[str]:
+def findings(checks: list[dict], expected: list[str], own: str = "") -> list[str]:
+  """`own` is this job's own check. It is "new" during its first run -- run-with-heartbeat.sh sends
+  the success ping only after this exits -- so judging it here would page about itself. Its state
+  is reported by its own ping instead."""
   out = []
   names = {c.get("name", "") for c in checks}
   for name in expected:
     if name not in names:
       out.append(f"no healthchecks.io check named '{name}' -- that monitor has no dead-man's switch at all")
   for c in checks:
+    if own and c.get("name") == own:
+      continue
     if c.get("status") in UNARMED:
       why = "has never been pinged" if c["status"] == "new" else "is paused"
       out.append(f"check '{c.get('name', '?')}' {why} -- it will never page, whatever happens to its monitor")
@@ -75,6 +81,9 @@ def self_test() -> None:
   assert not any("signer-balance-alert" in f for f in got), "down is healthchecks.io's to page, not this job's"
   assert not any("settlement-canary" in f for f in got), got
   assert findings([{"name": "a", "status": "up"}], ["a"]) == []
+  # Its own check, new on its first run, is not a finding; anyone else's still is.
+  assert findings([{"name": "heartbeats", "status": "new"}], ["heartbeats"], own="heartbeats") == []
+  assert findings([{"name": "x", "status": "new"}], [], own="heartbeats") != []
 
 
 def main() -> int:
@@ -88,7 +97,7 @@ def main() -> int:
     return 2
   expected = [n.strip() for n in os.environ.get("HEARTBEAT_EXPECTED", "").split(",") if n.strip()]
   checks = fetch_checks(os.environ.get("HEALTHCHECKS_API", "https://healthchecks.io/api/v3"), key)
-  found = findings(checks, expected)
+  found = findings(checks, expected, os.environ.get("HEARTBEAT_SELF", "").strip())
   prefix = "[TEST] " if "--test" in sys.argv else ""
   if found:
     post(os.environ.get("ALERT_WEBHOOK_URL"),

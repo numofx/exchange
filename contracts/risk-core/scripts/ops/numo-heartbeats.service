@@ -15,3 +15,4 @@ WorkingDirectory=/home/ec2-user/exchange/contracts/risk-core
 ExecStart=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-heartbeat.sh heartbeats /home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-ssm-readonly.sh /usr/bin/python3 scripts/ops/check_heartbeats.py
 Environment=AWS_REGION=us-east-1
 Environment=HEARTBEAT_EXPECTED=settlement-canary,feed-alert,signer-balance-alert,rebalance-check,heartbeats
+Environment=HEARTBEAT_SELF=heartbeats
