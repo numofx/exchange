@@ -1,9 +1,10 @@
 /**
  * Runs tasks one at a time, in the order they were queued.
  *
- * The executor EOA has one nonce sequence. Settlements and withdrawals both send from it, and viem reads the next
- * nonce from the RPC at send time, so two sends in flight at once can take the same nonce and one replaces or
- * rejects the other. A task covers simulate-and-broadcast; waiting for the receipt happens after, once the nonce
+ * The executor EOA has one nonce sequence. Settlements, withdrawals and deposits all send from it, so two sends in
+ * flight at once could take the same nonce and one replace or reject the other. Ordering alone is not enough: a
+ * load-balanced RPC can report a stale pending count right after a broadcast, so the nonce itself is tracked locally
+ * inside this queue (nonce-tracker.ts). A task covers simulate-and-broadcast; waiting for the receipt happens after, once the nonce
  * is spoken for, so a slow block does not hold up the next send.
  */
 export function createSerialQueue() {
