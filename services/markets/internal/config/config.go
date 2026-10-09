@@ -77,10 +77,12 @@ type Config struct {
 	ExecutorDepositURL string
 	// ExecutorDepositTimeout must exceed execution-service's DEPOSIT_RECEIPT_TIMEOUT_MS.
 	ExecutorDepositTimeout time.Duration
-	ExpectedOrderOwner     string
-	ExpectedOrderSigner    string
-	DeribitBaseURL         string
-	DeribitWSURL           string
+	// AlertWebhookURL is the ops webhook (ALERT_WEBHOOK_URL) the matcher posts settlement failures to. Empty: off.
+	AlertWebhookURL     string
+	ExpectedOrderOwner  string
+	ExpectedOrderSigner string
+	DeribitBaseURL      string
+	DeribitWSURL        string
 
 	CNGNSpotAssetAddress string
 	// SpotMarginManagerAddress is the manager the spot market's accounts live under when spot runs
@@ -214,6 +216,7 @@ func Load() (Config, error) {
 	cfg.ExecutorWithdrawTimeout = getenvDurationDefault("EXECUTOR_WITHDRAW_TIMEOUT", 45*time.Second)
 	cfg.WithdrawalAssetAddresses = withdrawalAssets(cfg)
 
+	cfg.AlertWebhookURL = strings.TrimSpace(os.Getenv("ALERT_WEBHOOK_URL"))
 	cfg.DepositsEnabled = getenvBool("DEPOSITS_ENABLED", false)
 	cfg.DepositModuleAddress = strings.ToLower(strings.TrimSpace(os.Getenv("DEPOSIT_MODULE_ADDRESS")))
 	cfg.DepositAssetAddresses = getenvCSV("DEPOSIT_ASSET_ADDRESSES", cfg.CNGNPerpCashAddress)

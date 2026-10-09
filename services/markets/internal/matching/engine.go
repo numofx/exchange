@@ -3,6 +3,7 @@ package matching
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/big"
 	"strings"
@@ -24,6 +25,7 @@ type Engine struct {
 	funding  fundingChecker
 	margin   marginChecker
 	perpGate *perpTradingGate
+	alerts   *settlementAlerter
 }
 
 const reconciliationTimeout = 5 * time.Second
@@ -38,6 +40,7 @@ func NewEngine(cfg config.Config, pool *pgxpool.Pool) *Engine {
 		funding:  newFundingChecker(cfg),
 		margin:   newMarginChecker(cfg),
 		perpGate: newPerpTradingGate(cfg),
+		alerts:   newSettlementAlerter(cfg.AlertWebhookURL),
 	}
 }
 
@@ -288,6 +291,7 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 					"executor_error", err,
 					"error", finalizeErr,
 				)
+				e.alerts.NeedsResolution("Filled on chain, but recording it failed: the book and the chain disagree.", instrument.Symbol, candidate.Taker.OrderID, candidate.Maker.OrderID, finalizeErr)
 				return
 			}
 
@@ -321,10 +325,12 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 				"maker_order_id", candidate.Maker.OrderID,
 				"error", err,
 			)
+			e.alerts.NeedsResolution("Outcome unknown: the orders are left reserved until resolved against the chain.", instrument.Symbol, candidate.Taker.OrderID, candidate.Maker.OrderID, err)
 			return
 		}
 
 		e.noteMatchFailure(instrument.Symbol, *candidate, "executor_error", classifySettlementRevert(err))
+		e.alerts.Failed(instrument.Symbol, "executor_error", candidate.Taker.OrderID, candidate.Maker.OrderID, err)
 		slog.Error("submit match", "market", instrument.Symbol, "taker_order_id", candidate.Taker.OrderID, "maker_order_id", candidate.Maker.OrderID, "error", err)
 		_ = e.orders.ReleaseMatchAfterFailure(reconcileCtx, candidate.Taker.OrderID, candidate.Maker.OrderID)
 		return
@@ -347,6 +353,7 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 	// transaction, which the book cannot detect on its own afterwards.
 	if !executorResp.Accepted {
 		e.noteMatchFailure(instrument.Symbol, *candidate, "executor_not_accepted", settlementRevert{})
+		e.alerts.Failed(instrument.Symbol, "executor_not_accepted", candidate.Taker.OrderID, candidate.Maker.OrderID, fmt.Errorf("receipt_status %s, tx %s", executorResp.ReceiptStatus, executorResp.TxHash))
 		slog.Error("executor did not accept match",
 			"market", instrument.Symbol,
 			"taker_order_id", candidate.Taker.OrderID,
@@ -364,6 +371,7 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 	defer cancel()
 	if err := e.orders.FinalizeMatchWithPrice(reconcileCtx, candidate.Taker.OrderID, candidate.Maker.OrderID, logPrice, fillAmount, orders.FillSettlement{TakerFee: takerFee, TxHash: executorResp.TxHash, Perp: settledLedger}); err != nil {
 		slog.Error("finalize match", "market", instrument.Symbol, "taker_order_id", candidate.Taker.OrderID, "maker_order_id", candidate.Maker.OrderID, "error", err)
+		e.alerts.NeedsResolution(fmt.Sprintf("Settled on chain (tx %s), but recording it failed: the book and the chain disagree.", executorResp.TxHash), instrument.Symbol, candidate.Taker.OrderID, candidate.Maker.OrderID, err)
 		return
 	}
 
@@ -378,6 +386,7 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 
 	release = false
 	e.backoff.clear(candidate.Taker, candidate.Maker)
+	e.alerts.Settled()
 
 	slog.Info("match executed",
 		"market", instrument.Symbol,
