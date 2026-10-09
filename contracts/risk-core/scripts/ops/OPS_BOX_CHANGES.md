@@ -5,6 +5,52 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-09 14:58 UTC: low-priority Pushover drill
+
+Ran the real `check_signer_balance.py` with `WARN_RUNWAY_DAYS=100` (forcing a finding) through
+`run-with-heartbeat.sh`'s low-priority path, as `[TEST]`, under a throwaway name. The webhook was
+empty so nothing went to Slack, and the real checks were not touched. The wrapper wrote its
+"sent" state, which it does only after Pushover's API accepts the message. **Pending:**
+confirmation that a *silent* `[TEST] numo test-drill (low priority)` notification arrived.
+
+## 2026-10-09 14:56:35 UTC: $10 account floor, and the priority split
+
+From #145 (`aa2a49c`). Backups are `*.bak-preaa2a49c-20261009T145635Z`.
+
+- **Canary floor.** `check_settlement_canary.py` (`a310ea6e…`): each watched account must be worth at
+  least `CANARY_MIN_ACCOUNT_USD` (default $10) by the manager's own `getMarginAndMarkToMarket`, in
+  place of the non-zero test. Proved live: under its old configuration (old SRM, account 15) the
+  canary fails with `subaccount 15 is worth $0.000781, under the $10 floor`. Under the current one,
+  26 ($660.19) and 24 ($4,000.32) pass.
+- **Priority split.**
+  - *High*: canary findings, missed runs, monitors that could not run, and the arming job, all
+    through healthchecks.io's Pushover integration.
+  - *Low* (priority -1, silent): a stale feed, low signer gas, a due rebalance. The wrapper sends
+    these to Pushover itself, using `/numo/pager/pushover_*`, once when a finding starts and at most
+    every 6 h while it lasts, and pings the check as a success because the monitor ran.
+  - To tell the two apart, the monitors now exit 1 for a finding and 2 for "could not run":
+    - `check_feed_staleness.py` (`d227ec4b…`) is `main`'s version plus that change. It replaces the
+      box's hand-edited 2026-09-22 copy (blob `86d9b42`), so this file now matches the repo. The perp
+      section it adds skips on this checkout, which lacks `CNGN_PERP_STACK.json`; the perp pager
+      covers those feeds.
+    - `check_signer_balance.py` (`5ace796c…`).
+    - The rebalance CLI gains `check --exit-code`.
+  - Units `numo-feed-alert` (`aaaeb8a2…`), `numo-signer-balance-alert` (`54c1ee75…`) and
+    `numo-rebalance-check` (`f9532a50…`) set `HEARTBEAT_FINDING_EXIT=1`. The rebalance unit now
+    runs `node --import tsx` directly: `pnpm` reports any failing script as exit 1, which would have
+    turned a failed run into a low-priority "due".
+  - `~/exchange-rebalance` moved to `aa2a49c`, clean; dependencies unchanged.
+- **Verified.** All four monitors ran through systemd with exit 0 at 14:57, and every check is `up`.
+- **Not verifiable by API.** The healthchecks.io Pushover integration's own priority, which sets
+  the level of every *high* page. It must be set to High in the dashboard.
+
+## 2026-10-09 14:50 UTC: high-priority phone drill
+
+Created a throwaway check `[TEST] drill` (Pushover and email), pinged it up at 14:50:31 and failed
+it at 14:50:36. The healthchecks.io flip log shows up, then down at 14:50:37, so the down
+notification was sent. The check was deleted afterwards. **Pending:** confirmation of the phone
+alert.
+
 ## 2026-10-09 11:12–11:24 UTC: heartbeats for every ops-box monitor, and a rebalance-check timer
 
 From #145 (`90b08b7`, then the fix `61f2ff4`), not yet merged at install time.
