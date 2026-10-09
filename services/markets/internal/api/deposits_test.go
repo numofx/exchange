@@ -125,6 +125,7 @@ func newDepositHarness() *depositHarness {
 				chain:         chain,
 				submitter:     submitter,
 				limiter:       newWithdrawalLimiter(3),
+				hourly:        newOwnerHourlyCap(6),
 				now:           func() time.Time { return testWithdrawalNow },
 			},
 		},
@@ -363,4 +364,51 @@ func TestDepositChainReaderAgainstBase(t *testing.T) {
 	if allowance, err := chain.TokenAllowance(ctx, testUSDCToken, mm, testDepositModule); err != nil || allowance == nil {
 		t.Fatalf("allowance read failed: %v", err)
 	}
+}
+
+// One wallet at the per-minute rate could spend the executor's whole hourly budget; the per-owner hourly cap stops it.
+func TestDepositPerOwnerHourlyCap(t *testing.T) {
+	h := newDepositHarness()
+	clock := testWithdrawalNow
+	h.server.deposits.now = func() time.Time { return clock }
+	post := func(nonce int) *httptest.ResponseRecorder {
+		req := validDeposit()
+		req.Action.Nonce = strconv.Itoa(nonce)
+		req.Action.Expiry = strconv.FormatInt(clock.Unix()+600, 10)
+		return postDeposit(t, h.server, req)
+	}
+	for i := 1; i <= 6; i++ {
+		clock = clock.Add(time.Minute) // stay under the per-minute limit; only the hourly cap is in play
+		expectDeposit(t, post(i), http.StatusOK, "")
+	}
+	clock = clock.Add(time.Minute)
+	rec := post(7)
+	expectDeposit(t, rec, http.StatusTooManyRequests, "6 deposits in the last hour")
+	if rec.Header().Get("Retry-After") == "" {
+		t.Fatal("a capped deposit must say when to retry")
+	}
+	// Once the first of the six is an hour old, the owner may deposit again.
+	clock = testWithdrawalNow.Add(time.Hour + 2*time.Minute)
+	expectDeposit(t, post(8), http.StatusOK, "")
+}
+
+// Requests refused before submission cost the venue nothing, so they do not use up the hour.
+func TestDepositHourlyCapCountsOnlySubmittedDeposits(t *testing.T) {
+	h := newDepositHarness()
+	clock := testWithdrawalNow
+	h.server.deposits.now = func() time.Time { return clock }
+	h.chain.allowance = big.NewInt(0) // every request fails preflight
+	for i := 1; i <= 10; i++ {
+		clock = clock.Add(time.Minute)
+		req := validDeposit()
+		req.Action.Nonce = strconv.Itoa(i)
+		req.Action.Expiry = strconv.FormatInt(clock.Unix()+600, 10)
+		expectDeposit(t, postDeposit(t, h.server, req), http.StatusBadRequest, "approve")
+	}
+	h.chain.allowance = usdc(5_000)
+	clock = clock.Add(time.Minute)
+	req := validDeposit()
+	req.Action.Nonce = "11"
+	req.Action.Expiry = strconv.FormatInt(clock.Unix()+600, 10)
+	expectDeposit(t, postDeposit(t, h.server, req), http.StatusOK, "")
 }
