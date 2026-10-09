@@ -63,6 +63,7 @@ const executor = await MatchExecutor.create(config, {
   tradeModuleAddress,
   additionalTradeModules: config.perpTradeModuleAddress ? [config.perpTradeModuleAddress] : [],
   withdrawal,
+  deposit: config.deposit,
 });
 
 const canary = config.settlementCanary
@@ -94,6 +95,7 @@ const app = buildApp({
   canary,
   withdrawer: withdrawal ? executor : undefined,
   withdrawal,
+  depositor: config.deposit ? executor : undefined,
 });
 
 app.listen({ host: config.host, port: config.port }).catch((error) => {

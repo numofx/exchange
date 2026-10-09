@@ -15,7 +15,18 @@ import type { AppConfig } from './config.js';
 import { createKmsAccount } from '@numo/kms-signer';
 import { createSerialQueue } from './serial-queue.js';
 import { assertSignerIsOwner, type SubmittedAction } from './signer-guard.js';
-import type { ExecuteMatchRequest, ExecuteMatchResponse, WithdrawRequest } from './types.js';
+import type { DepositRequest, DepositResponse, ExecuteMatchRequest, ExecuteMatchResponse, WithdrawRequest } from './types.js';
+import {
+  DepositBudget,
+  DepositRejectedError,
+  assertDepositPolicy,
+  buildDepositArgs,
+  creditedSubaccount,
+  depositActionHash,
+  depositRevertErrorsAbi,
+  depositUnitsToLedger,
+  formatDepositUnits,
+} from './deposit.js';
 import {
   WithdrawalRejectedError,
   assertWithdrawalPolicy,
@@ -38,6 +49,8 @@ export type ExecutorDependencies = {
     moduleAddress: `0x${string}`;
     assetAddresses: readonly `0x${string}`[];
   };
+  /** Sponsored deposits. Absent unless DEPOSITS_ENABLED; `deposit` then refuses. */
+  deposit?: NonNullable<AppConfig['deposit']>;
 };
 
 export class MatchExecutor {
@@ -45,8 +58,15 @@ export class MatchExecutor {
   private readonly chain;
   private readonly publicClient;
   private readonly walletClient;
-  // Settlements and withdrawals share this EOA's nonce sequence; see serial-queue.ts.
+  // Settlements, withdrawals and deposits share this EOA's nonce sequence; see serial-queue.ts.
   private readonly enqueueSend = createSerialQueue();
+  private depositBudget?: DepositBudget;
+  /**
+   * Deposits by action hash, so a retried request (a client timeout, a double click) gets the same result instead of
+   * a second broadcast. Kept for two hours: an action expires within one, after which it could not be resubmitted
+   * anyway. Per executor task, which is a singleton.
+   */
+  private readonly depositsByHash = new Map<`0x${string}`, { at: number; result: Promise<DepositResponse> }>();
 
   /**
    * Resolves the signing account, then builds the executor.
@@ -96,7 +116,12 @@ export class MatchExecutor {
    */
   private async submitVerifyAndMatch(
     args: readonly [readonly SubmittedAction[], readonly `0x${string}`[], `0x${string}`],
-    options: { abi: Abi; onSimulationError?: (error: unknown) => never },
+    options: {
+      abi: Abi;
+      onSimulationError?: (error: unknown) => never;
+      /** Runs after a successful simulation, before anything is broadcast. May throw to stop the send. */
+      beforeSend?: () => void;
+    },
   ): Promise<`0x${string}` | 'dry-run'> {
     assertSignerIsOwner(args[0]);
 
@@ -113,6 +138,8 @@ export class MatchExecutor {
         options.onSimulationError?.(error);
         throw error;
       }
+
+      options.beforeSend?.();
 
       if (this.config.dryRun) {
         return 'dry-run' as const;
@@ -228,6 +255,76 @@ export class MatchExecutor {
     } catch (error) {
       if (error instanceof WaitForTransactionReceiptTimeoutError) {
         return { accepted: false, tx_hash: txHash, receipt_status: 'timeout' };
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Submits one user-signed deposit through `Matching.verifyAndMatch`, the venue paying gas.
+   *
+   * Policy first (deposit.ts), then a simulation with the module's and the CashAsset's errors in the ABI, so a deposit
+   * the chain would revert is refused by name and costs nothing. The hourly budget is spent only after the simulation
+   * passes. Idempotent on the action hash: the same signed request returns the same result and is never sent twice.
+   */
+  deposit(request: DepositRequest): Promise<DepositResponse> {
+    const deposit = this.deps.deposit;
+    if (!deposit) {
+      return Promise.reject(new DepositRejectedError('deposits are not enabled on this executor', undefined, 503));
+    }
+    const hash = depositActionHash(request);
+    const now = Date.now();
+    for (const [key, entry] of this.depositsByHash) {
+      if (now - entry.at > 2 * 3_600_000) this.depositsByHash.delete(key);
+    }
+    const existing = this.depositsByHash.get(hash);
+    if (existing) {
+      return existing.result;
+    }
+    const result = this.submitDeposit(request, deposit);
+    this.depositsByHash.set(hash, { at: now, result });
+    // A refusal or an RPC failure sent nothing, so the same request may be tried again; only a broadcast is final.
+    result.catch(() => this.depositsByHash.delete(hash));
+    return result;
+  }
+
+  private async submitDeposit(
+    request: DepositRequest,
+    deposit: NonNullable<AppConfig['deposit']>,
+  ): Promise<DepositResponse> {
+    const data = assertDepositPolicy(request, { ...deposit, nowSeconds: Math.floor(Date.now() / 1000) });
+    this.depositBudget ??= new DepositBudget(deposit.maxPerHour);
+
+    const amounts = {
+      amount_usdc: formatDepositUnits(data.amount),
+      amount_units: data.amount.toString(),
+      credited_cash_e18: depositUnitsToLedger(data.amount).toString(),
+    };
+    const txHash = await this.submitVerifyAndMatch(buildDepositArgs(request), {
+      abi: [...this.deps.matchingAbi, ...depositRevertErrorsAbi] as Abi,
+      onSimulationError: (error) => {
+        const revert = describeSimulationRevert(error);
+        if (revert !== undefined) {
+          throw new DepositRejectedError(`deposit would revert: ${revert}`, revert);
+        }
+        throw error;
+      },
+      beforeSend: () => this.depositBudget!.take(),
+    });
+
+    if (txHash === 'dry-run') {
+      return { accepted: true, tx_hash: 'dry-run', ...amounts };
+    }
+    try {
+      const receipt = await this.publicClient.waitForTransactionReceipt({ hash: txHash, timeout: deposit.receiptTimeoutMs });
+      const response: DepositResponse = { ...buildReceiptResponse(txHash, receipt), ...amounts };
+      if (receipt.status === 'success') {
+        response.subaccount_id = creditedSubaccount(request, this.deps.matchingAddress, receipt.logs);
+      }
+      return response;
+    } catch (error) {
+      if (error instanceof WaitForTransactionReceiptTimeoutError) {
+        return { accepted: false, tx_hash: txHash, receipt_status: 'timeout', ...amounts };
       }
       throw error;
     }

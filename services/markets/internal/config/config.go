@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"os"
 	"strconv"
 	"strings"
@@ -54,10 +55,29 @@ type Config struct {
 	// It must exceed that service's WITHDRAWAL_RECEIPT_TIMEOUT_MS, or the API reports an unknown
 	// outcome for a withdrawal that was about to land.
 	ExecutorWithdrawTimeout time.Duration
-	ExpectedOrderOwner      string
-	ExpectedOrderSigner     string
-	DeribitBaseURL          string
-	DeribitWSURL            string
+	// Signed deposits (POST /v1/deposits), through the deployed DepositModule with the venue paying gas. Off unless
+	// DEPOSITS_ENABLED; when on and anything below is missing, the endpoint answers 503 rather than half-check.
+	DepositsEnabled bool
+	// DepositModuleAddress is the DepositModule every signed deposit must target.
+	DepositModuleAddress string
+	// DepositAssetAddresses are the wrapped assets a deposit may pay into, lowercased: DEPOSIT_ASSET_ADDRESSES, or by
+	// default the perp's CashAsset alone. The chain also accepts the cNGN escrow; this allowlist is what refuses it.
+	DepositAssetAddresses []string
+	// DepositManagerAddress is the only manager a new account may be opened under: DEPOSIT_MANAGER_ADDRESS, or by
+	// default the perp SRM.
+	DepositManagerAddress string
+	// DepositMinAmount is the smallest deposit, in 6-decimal USDC base units (DEPOSIT_MIN_AMOUNT, default 10 USDC).
+	DepositMinAmount *big.Int
+	// DepositsPerOwnerPerMinute caps how often one owner can make the venue simulate, and pay gas for, a deposit.
+	DepositsPerOwnerPerMinute int
+	// ExecutorDepositURL is execution-service's POST /deposit.
+	ExecutorDepositURL string
+	// ExecutorDepositTimeout must exceed execution-service's DEPOSIT_RECEIPT_TIMEOUT_MS.
+	ExecutorDepositTimeout time.Duration
+	ExpectedOrderOwner     string
+	ExpectedOrderSigner    string
+	DeribitBaseURL         string
+	DeribitWSURL           string
 
 	CNGNSpotAssetAddress string
 	// SpotMarginManagerAddress is the manager the spot market's accounts live under when spot runs
@@ -190,6 +210,19 @@ func Load() (Config, error) {
 	cfg.ExecutorTimeout = getenvDurationDefault("EXECUTOR_TIMEOUT", 5*time.Second)
 	cfg.ExecutorWithdrawTimeout = getenvDurationDefault("EXECUTOR_WITHDRAW_TIMEOUT", 45*time.Second)
 	cfg.WithdrawalAssetAddresses = withdrawalAssets(cfg)
+
+	cfg.DepositsEnabled = getenvBool("DEPOSITS_ENABLED", false)
+	cfg.DepositModuleAddress = strings.ToLower(strings.TrimSpace(os.Getenv("DEPOSIT_MODULE_ADDRESS")))
+	cfg.DepositAssetAddresses = getenvCSV("DEPOSIT_ASSET_ADDRESSES", cfg.CNGNPerpCashAddress)
+	cfg.DepositManagerAddress = strings.ToLower(strings.TrimSpace(getenvDefault("DEPOSIT_MANAGER_ADDRESS", cfg.CNGNPerpSRMAddress)))
+	cfg.ExecutorDepositURL = strings.TrimSpace(os.Getenv("EXECUTOR_DEPOSIT_URL"))
+	cfg.ExecutorDepositTimeout = getenvDurationDefault("EXECUTOR_DEPOSIT_TIMEOUT", 45*time.Second)
+	cfg.DepositsPerOwnerPerMinute = getenvIntDefault("DEPOSITS_PER_OWNER_PER_MINUTE", 3)
+	minDeposit, ok := new(big.Int).SetString(getenvDefault("DEPOSIT_MIN_AMOUNT", "10000000"), 10)
+	if !ok || minDeposit.Sign() <= 0 {
+		return Config{}, fmt.Errorf("DEPOSIT_MIN_AMOUNT must be a positive integer of 6-decimal USDC base units")
+	}
+	cfg.DepositMinAmount = minDeposit
 
 	cfg.EventsPruneHorizon = getenvDurationDefault("EVENTS_PRUNE_HORIZON", 2*time.Hour)
 	cfg.EventsPruneInterval = getenvDurationDefault("EVENTS_PRUNE_INTERVAL", 5*time.Minute)
