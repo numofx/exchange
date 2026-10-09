@@ -21,6 +21,7 @@ import { cancel } from './cancel.js';
 import { check, TEST_PREFIX } from './check.js';
 import { deposit } from './deposit.js';
 import { latestSnapshot, priceFromSnapshot } from './quote.js';
+import { fetchMarkets, type FetchMarkets } from './spot.js';
 import { approve, swap } from './swap.js';
 import { CNGN, TOKEN_DECIMALS, USDC } from './venue.js';
 
@@ -37,6 +38,7 @@ export type CliDeps = {
   signingClients: (config: Config) => Promise<Clients>;
   post: PostAlert;
   fetchSnapshot: typeof latestSnapshot;
+  fetchMarkets: FetchMarkets;
 };
 
 export const defaultDeps: CliDeps = {
@@ -44,6 +46,7 @@ export const defaultDeps: CliDeps = {
   signingClients: createClients,
   post: postAlert,
   fetchSnapshot: latestSnapshot,
+  fetchMarkets,
 };
 
 export async function runCommand(argv: string[], config: Config, deps: CliDeps = defaultDeps): Promise<void> {
@@ -70,7 +73,7 @@ export async function runCommand(argv: string[], config: Config, deps: CliDeps =
     const wantHeartbeat = argv.includes('--heartbeat');
     const isTest = argv.includes('--test');
     try {
-      return await check(config, deps.readClients(config), wantAlert, deps.post, deps.fetchSnapshot, wantHeartbeat, isTest);
+      return await check(config, deps.readClients(config), wantAlert, deps.post, deps.fetchSnapshot, wantHeartbeat, isTest, deps.fetchMarkets);
     } catch (error) {
       // A check that could not RUN is not a quiet check. Unattended, a crash into a log nobody
       // reads is the same failure as an alert that reaches nobody, so a failed run pages exactly
@@ -103,7 +106,7 @@ export async function runCommand(argv: string[], config: Config, deps: CliDeps =
     case 'approve': return approve(config, clients, parseUnits(arg ?? '20', TOKEN_DECIMALS), execute);
     case 'swap': return swap(config, clients, parseUnits(arg ?? '20', TOKEN_DECIMALS), execute);
     case 'cancel': return cancel(config, clients, arg, execute);
-    case 'deposit': return deposit(config, clients, arg ? parseUnits(arg, TOKEN_DECIMALS) : undefined, execute);
+    case 'deposit': return deposit(config, clients, arg ? parseUnits(arg, TOKEN_DECIMALS) : undefined, execute, deps.fetchMarkets);
     default: throw new Error(`unknown command "${command}"\n${USAGE}`);
   }
 }

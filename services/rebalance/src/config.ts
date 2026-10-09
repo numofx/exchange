@@ -22,8 +22,17 @@ const schema = z.object({
   REBALANCE_KMS_KEY_ID: z.string().min(1).default('alias/numo-exchange-rebalance'),
   INDEXER_URL: z.string().url().default('https://nexus.indexer.polytope.technology/'),
   COPROCESSOR_URL: z.string().min(1).default('wss://nexus.rpc.polytope.technology'),
-  /** Subaccount the proceeds are deposited into — the market maker's. */
-  MM_SUBACCOUNT_ID: z.coerce.bigint().default(15n),
+  /**
+   * Subaccount the proceeds are deposited into — the spot market maker's. #26, under the perp SRM,
+   * since the 2026-10-04 unified cutover (infra/aws mm_subaccount_id). Checked at runtime against
+   * the spot market's manager, so a retired account is refused rather than deposited into.
+   */
+  MM_SUBACCOUNT_ID: z.coerce.bigint().default(26n),
+  /**
+   * The venue API. The spot market's escrow, quote asset and manager are read from its
+   * /v1/markets, which serves the same Terraform variables the venue and the makers run on.
+   */
+  VENUE_API_URL: z.string().url().default('https://api.numofx.com'),
   /**
    * Refuse to trade on a snapshot older than this. The SDK has no such guard — it checks only
    * that the timestamp parses, which is how its V1 feed served a 40-day-old price without
