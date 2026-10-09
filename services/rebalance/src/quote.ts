@@ -1,5 +1,8 @@
 /**
- * Prices USDC -> cNGN off HyperFX's live phantom-order snapshot.
+ * Prices USDC -> cNGN off HyperFX's phantom-order snapshot. Used by `swap` only, and currently
+ * DEAD: the indexer removed `phantomOrderPriceSnapshotV2s` (checked 2026-10-09), so this throws
+ * and `swap` fails before placing anything. `check` and `quote` price from the orderbook instead
+ * (orderbook.ts). What follows is the history of why this existed.
  *
  * Deliberately not `IntentGateway.quote()`. @hyperbridge/sdk 2.8.13 prices this pair from the V1
  * `phantomOrderPriceSnapshots` table, which froze on 2026-08-08 at 1393.0 — 1,617 identical rows —
