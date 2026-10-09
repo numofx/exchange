@@ -279,3 +279,13 @@ func pubkeyToAddress(pub *secp256k1.PublicKey) string {
 	sum := keccak(uncompressed[1:])
 	return "0x" + hex.EncodeToString(sum[12:])
 }
+
+// ActionHash is Matching.getActionHash: the action's EIP-712 struct hash, 0x-prefixed. It identifies a signed action
+// across services -- execution-service keys its deposit idempotency on the same value.
+func ActionHash(a Action) (string, error) {
+	hash, err := actionStructHash(a)
+	if err != nil {
+		return "", err
+	}
+	return "0x" + hex.EncodeToString(hash), nil
+}
