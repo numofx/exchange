@@ -10,35 +10,46 @@
 import { formatUnits, type Hex } from 'viem';
 import { waitFor, type Clients } from './clients.js';
 import type { Config } from './config.js';
-import { CNGN, CNGN_ESCROW, ERC20_ABI, ESCROW_ABI, LEDGER_DECIMALS, SUBACCOUNTS, SUBACCOUNTS_ABI, TOKEN_DECIMALS } from './venue.js';
+import { fetchMarkets as defaultFetchMarkets, resolveSpotVenue, type FetchMarkets } from './spot.js';
+import { CNGN, ERC20_ABI, ESCROW_ABI, LEDGER_DECIMALS, SUBACCOUNTS, SUBACCOUNTS_ABI, TOKEN_DECIMALS } from './venue.js';
 
-export async function deposit(config: Config, clients: Clients, amountArg: bigint | undefined, execute: boolean): Promise<void> {
+export async function deposit(
+  config: Config,
+  clients: Clients,
+  amountArg: bigint | undefined,
+  execute: boolean,
+  fetchMarkets: FetchMarkets = defaultFetchMarkets,
+): Promise<void> {
   const { account, publicClient, walletClient } = clients;
   const sub = config.MM_SUBACCOUNT_ID;
+  // Resolved and confirmed before anything else is read, so a retired account or escrow fails here
+  // with the reason rather than as a deposit to the wrong place.
+  const { cngnEscrow: escrow, manager } = await resolveSpotVenue(config.VENUE_API_URL, sub, publicClient, fetchMarkets);
 
   const ledgerBalance = async (blockNumber?: bigint): Promise<bigint> => {
     const rows = await publicClient.readContract({
       address: SUBACCOUNTS, abi: SUBACCOUNTS_ABI, functionName: 'getAccountBalances',
       args: [sub], ...(blockNumber ? { blockNumber } : {}),
     });
-    return rows.find((r) => r.asset.toLowerCase() === CNGN_ESCROW.toLowerCase())?.balance ?? 0n;
+    return rows.find((r) => r.asset.toLowerCase() === escrow.toLowerCase())?.balance ?? 0n;
   };
 
   const [held, wrapped] = await Promise.all([
     publicClient.readContract({ address: CNGN, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] }),
-    publicClient.readContract({ address: CNGN_ESCROW, abi: ESCROW_ABI, functionName: 'wrappedAsset' }),
+    publicClient.readContract({ address: escrow, abi: ESCROW_ABI, functionName: 'wrappedAsset' }),
   ]);
   // A WrappedERC20Asset accepts only the exact token it wraps. Depositing the wrong one leaves
   // tokens with no ledger credit and no way to get them back, so this is checked every time
   // rather than trusted from the constant above.
   if ((wrapped as Hex).toLowerCase() !== CNGN.toLowerCase()) {
-    throw new Error(`escrow ${CNGN_ESCROW} wraps ${String(wrapped)}, not ${CNGN}`);
+    throw new Error(`escrow ${escrow} wraps ${String(wrapped)}, not ${CNGN}`);
   }
 
   // Default to the whole balance: this leg exists to leave nothing stranded on the signer.
   const amount = amountArg ?? held;
   const before = await ledgerBalance();
   console.log(`signer      ${account.address}`);
+  console.log(`escrow      ${escrow} (manager ${manager})`);
   console.log(`cNGN held   ${formatUnits(held, TOKEN_DECIMALS)}`);
   console.log(`depositing  ${formatUnits(amount, TOKEN_DECIMALS)} cNGN -> subaccount ${sub}`);
   console.log(`sub ${sub}      ${formatUnits(before, LEDGER_DECIMALS)} cNGN (18dp ledger)`);
@@ -47,20 +58,20 @@ export async function deposit(config: Config, clients: Clients, amountArg: bigin
   if (amount > held) throw new Error(`holding ${formatUnits(held, TOKEN_DECIMALS)} cNGN, cannot deposit ${formatUnits(amount, TOKEN_DECIMALS)}`);
 
   if (!execute) {
-    console.log(`\nwould send:\n  1. ${CNGN} approve(${CNGN_ESCROW}, ${amount})\n  2. ${CNGN_ESCROW} deposit(${sub}, ${amount})`);
+    console.log(`\nwould send:\n  1. ${CNGN} approve(${escrow}, ${amount})\n  2. ${escrow} deposit(${sub}, ${amount})`);
     console.log('\n(dry run; pass --execute to send)');
     return;
   }
 
-  const allowance = () => publicClient.readContract({ address: CNGN, abi: ERC20_ABI, functionName: 'allowance', args: [account.address, CNGN_ESCROW] });
+  const allowance = () => publicClient.readContract({ address: CNGN, abi: ERC20_ABI, functionName: 'allowance', args: [account.address, escrow] });
   if ((await allowance()) < amount) {
-    const hash = await walletClient.writeContract({ account, chain: walletClient.chain, address: CNGN, abi: ERC20_ABI, functionName: 'approve', args: [CNGN_ESCROW, amount] });
+    const hash = await walletClient.writeContract({ account, chain: walletClient.chain, address: CNGN, abi: ERC20_ABI, functionName: 'approve', args: [escrow, amount] });
     console.log(`approve tx  ${hash}`);
     await publicClient.waitForTransactionReceipt({ hash });
     await waitFor(async () => (await allowance()) >= amount, { what: 'cNGN allowance' });
   }
 
-  const { request } = await publicClient.simulateContract({ address: CNGN_ESCROW, abi: ESCROW_ABI, functionName: 'deposit', args: [sub, amount], account });
+  const { request } = await publicClient.simulateContract({ address: escrow, abi: ESCROW_ABI, functionName: 'deposit', args: [sub, amount], account });
   const hash = await walletClient.writeContract(request);
   console.log(`deposit tx  ${hash}`);
   const receipt = await publicClient.waitForTransactionReceipt({ hash });

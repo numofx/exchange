@@ -16,7 +16,8 @@ import { assessInventory } from './inventory.js';
  */
 export const TEST_PREFIX = '[TEST] ';
 import { latestSnapshot, priceFromSnapshot } from './quote.js';
-import { CNGN, CNGN_ESCROW, LEDGER_DECIMALS, SUBACCOUNTS, SUBACCOUNTS_ABI, TOKEN_DECIMALS, USDC, USDC_ESCROW } from './venue.js';
+import { fetchMarkets as defaultFetchMarkets, resolveSpotVenue, type FetchMarkets } from './spot.js';
+import { CNGN, LEDGER_DECIMALS, SUBACCOUNTS, SUBACCOUNTS_ABI, TOKEN_DECIMALS, USDC } from './venue.js';
 
 /**
  * Typed to ReadClients on purpose: tsc then refuses any future edit that reaches for a signer here.
@@ -33,6 +34,7 @@ export async function check(
   heartbeat = false,
   /** Marks a message as a drill. Anything posted to a shared channel by hand must carry this. */
   testRun = false,
+  fetchMarkets: FetchMarkets = defaultFetchMarkets,
 ): Promise<void> {
   // Validated BEFORE anything is read, not at the point of sending. Checked only when an alert
   // was due, a --alert run with no webhook configured looks healthy for as long as the inventory
@@ -42,24 +44,27 @@ export async function check(
   }
 
   const sub = config.MM_SUBACCOUNT_ID;
+  const venue = await resolveSpotVenue(config.VENUE_API_URL, sub, clients.publicClient, fetchMarkets);
   const [rows, snapshot] = await Promise.all([
     clients.publicClient.readContract({ address: SUBACCOUNTS, abi: SUBACCOUNTS_ABI, functionName: 'getAccountBalances', args: [sub] }),
     fetchSnapshot(config.INDEXER_URL, USDC, CNGN),
   ]);
-  const held = (escrow: string) => rows.find((r) => r.asset.toLowerCase() === escrow.toLowerCase())?.balance ?? 0n;
+  const held = (asset: string) => rows.find((r) => r.asset.toLowerCase() === asset.toLowerCase())?.balance ?? 0n;
+  const usdc = held(venue.quoteAsset);
+  const cngn = held(venue.cngnEscrow);
 
   // One whole USDC, priced through the same path a rebalance would use, so the valuation and the
   // trade cannot disagree.
   const oneUsdc = 10n ** BigInt(TOKEN_DECIMALS);
   const rate = priceFromSnapshot(snapshot, oneUsdc, config.MAX_SNAPSHOT_AGE_SECONDS).rate;
 
-  const verdict = assessInventory({ usdc: held(USDC_ESCROW), cngn: held(CNGN_ESCROW), rate }, {
+  const verdict = assessInventory({ usdc, cngn, rate }, {
     cngnMinShare: config.CNGN_MIN_SHARE,
     cngnFloorUsd: config.CNGN_FLOOR_USD,
     haltNetInventoryUsd: config.HALT_NET_INVENTORY_USD,
   }, sub);
 
-  console.log(`sub ${sub}      USDC ${formatUnits(held(USDC_ESCROW), LEDGER_DECIMALS)} / cNGN ${formatUnits(held(CNGN_ESCROW), LEDGER_DECIMALS)}`);
+  console.log(`sub ${sub}      USDC ${formatUnits(usdc, LEDGER_DECIMALS)} / cNGN ${formatUnits(cngn, LEDGER_DECIMALS)}`);
   console.log(`rate        ${rate.toFixed(4)} (snapshot ${snapshot.snapshotTime.toISOString()})`);
   console.log(`valued      USDC $${verdict.usdcUsd.toFixed(2)} / cNGN $${verdict.cngnUsd.toFixed(2)} (cNGN ${(verdict.cngnShare * 100).toFixed(1)}%)`);
   console.log(`action      ${verdict.action}`);
