@@ -74,6 +74,7 @@ const canary = config.settlementCanary
       intervalMs: config.settlementCanary.intervalMs,
       alertWebhookUrl: config.settlementCanary.alertWebhookUrl,
       alertRepeatAfterChecks: config.settlementCanary.alertRepeatAfterChecks,
+      heartbeatUrl: config.settlementCanary.heartbeatUrl,
       expectedNetSettledCash: config.settlementCanary.expectedNetSettledCash,
       wrapperDeltaExceptions: config.settlementCanary.wrapperDeltaExceptions,
       feeRecipient: config.settlementCanary.feeRecipient,

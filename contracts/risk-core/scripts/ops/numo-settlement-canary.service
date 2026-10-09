@@ -12,7 +12,7 @@ Description=Numo settlement canary (getMargin + spot feeds)
 Type=oneshot
 User=ec2-user
 WorkingDirectory=/home/ec2-user/exchange/contracts/risk-core
-ExecStart=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-ssm.sh /usr/bin/python3 scripts/ops/check_settlement_canary.py
+ExecStart=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-heartbeat.sh settlement-canary /home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-ssm.sh /usr/bin/python3 scripts/ops/check_settlement_canary.py
 Environment=AWS_REGION=us-east-1
 # Point this at subaccounts that actually hold positions. An empty account makes the manager
 # read no feed, so getMargin passes while proving nothing. Since the 2026-10-04 unified cutover

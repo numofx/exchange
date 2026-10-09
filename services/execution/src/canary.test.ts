@@ -42,6 +42,10 @@ function healthyInvariantRead(a: { address: string; functionName: string }): unk
     case 'netSettledCash': return 0n;
     case 'accruedSmFees': return 0n;
     case 'totalPosition': return 5_000_000_000_000_000_000_000n;
+    // The configured account exists, sits under MANAGER and holds something.
+    case 'subAccounts': return '0x7019244E25FA416e6Ca2ed2F3cA25277aef72843';
+    case 'manager': return MANAGER;
+    case 'getAccountBalances': return [{ asset: CASH_, subId: 0n, balance: 1n }];
     default: throw new Error(`unexpected call ${a.functionName}`);
   }
 }
@@ -136,6 +140,7 @@ function invariantCanary(overrides: Record<string, bigint> = {}, wrappers = [WRA
           case 'netSettledCash': return v.cashSettled;
           case 'accruedSmFees': return v.cashSmFees;
           case 'totalPosition': return v.wrapperCredited;
+          case 'subAccounts': case 'manager': case 'getAccountBalances': return healthyInvariantRead(a);
           default: throw new Error(`unexpected call ${a.functionName}`);
         }
       },
@@ -574,4 +579,73 @@ test('/healthz reports the canary as disabled when none is wired', async () => {
   assert.equal(body.settlement_canary.ok, null);
 
   await app.close();
+});
+
+/** A healthy chain except for what `account` says about the configured account. */
+function accountCanary(
+  account: { manager?: string; balances?: { balance: bigint }[] },
+  opts: { heartbeatUrl?: string; ping?: (url: string) => Promise<void>; postAlert?: (u: string, t: string) => Promise<void> } = {},
+) {
+  return new SettlementCanary({
+    rpcUrl: config.rpcUrl,
+    chainId: config.chainId,
+    manager: MANAGER,
+    accountIds: [26],
+    intervalMs: 60_000,
+    announceOnStart: false,
+    alertWebhookUrl: opts.postAlert ? 'https://hooks.example.invalid/abc' : undefined,
+    postAlert: opts.postAlert,
+    heartbeatUrl: opts.heartbeatUrl,
+    ping: opts.ping,
+    client: {
+      getLogs: async () => [],
+      readContract: async (a: { address: string; functionName: string }) => {
+        if (a.functionName === 'getMargin') return 0n;
+        if (a.functionName === 'manager' && account.manager !== undefined) return account.manager;
+        if (a.functionName === 'getAccountBalances' && account.balances) return account.balances;
+        return healthyInvariantRead(a);
+      },
+    } as never,
+  });
+}
+
+// getMargin passes on all three of these, which is exactly why they must fail on their own.
+test('an account that does not exist fails the canary', async () => {
+  const s = await accountCanary({ manager: '0x0000000000000000000000000000000000000000' }).check();
+  assert.equal(s.ok, false);
+  assert.match(s.config_failures.join(' '), /does not exist/);
+});
+
+test('an account under another manager fails the canary', async () => {
+  const s = await accountCanary({ manager: '0xDE0423D0a1E15536265C9513d2e0c10DAb5835D4' }).check();
+  assert.equal(s.ok, false);
+  assert.match(s.config_failures.join(' '), /is under manager/);
+});
+
+test('an account holding nothing fails the canary', async () => {
+  const s = await accountCanary({ balances: [] }).check();
+  assert.equal(s.ok, false);
+  assert.match(s.config_failures.join(' '), /holds nothing/);
+});
+
+test('a misconfigured canary alerts under its own headline', async () => {
+  const sent: string[] = [];
+  await accountCanary({ balances: [] }, { postAlert: async (_u, t) => { sent.push(t); } }).check();
+  assert.match(sent[0] ?? '', /^NUMO SETTLEMENT CANARY MISCONFIGURED/);
+});
+
+test('a healthy check pings the heartbeat URL, a failing one pings /fail', async () => {
+  const pinged: string[] = [];
+  const ping = async (url: string) => { pinged.push(url); };
+  await accountCanary({}, { heartbeatUrl: 'https://hc-ping.com/abc', ping }).check();
+  await accountCanary({ balances: [] }, { heartbeatUrl: 'https://hc-ping.com/abc', ping }).check();
+  assert.deepEqual(pinged, ['https://hc-ping.com/abc', 'https://hc-ping.com/abc/fail']);
+});
+
+test('a heartbeat service that is down does not stop the canary', async () => {
+  const s = await accountCanary({}, {
+    heartbeatUrl: 'https://hc-ping.com/abc',
+    ping: async () => { throw new Error('503'); },
+  }).check();
+  assert.equal(s.ok, true);
 });
