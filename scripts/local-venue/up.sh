@@ -23,7 +23,12 @@
 #   up.sh --unified     spot on the perp stack: the spot market's asset is the perp's cNGN escrow, its
 #                       module the perp TradeModule and its quote the perp cash, so one account under
 #                       the perp SRM trades spot and perp and all of it is margin. What the unified
-#                       cutover configures on mainnet (unified-rules.sh then checks it).
+#                       cutover configures on mainnet (unified-rules.sh then checks it), and what
+#                       mainnet has run since 2026-10-04.
+#
+# Without --unified, spot stays on Base's own pre-cutover spot stack (retired on mainnet
+# 2026-10-04). That is still the default because reduce-only-rules.sh and keeper-sliver-rules.sh
+# need it: the unified venue's index-lag gate would hold their perp orders.
 set -euo pipefail
 SPOT_ONLY=0
 UNIFIED=0
@@ -148,8 +153,9 @@ else
   PERP_MARKETS_ENV="" PERP_EXEC_ENV="" CASH="" CNGN_ESCROW=""
 fi
 
-# The spot market's stack: Base's own (the fork inherits it), or the perp's under --unified. The
-# legacy spot assets stay withdrawable either way, as they must on mainnet after the cutover.
+# The spot market's stack: Base's own pre-cutover stack (the fork inherits it; retired on mainnet
+# 2026-10-04), or the perp's under --unified, which is what mainnet runs. The legacy spot assets
+# stay withdrawable either way, as they are on mainnet after the cutover.
 SPOT_ASSET=${SPOT_ASSET:-0x9d806fd040a719d27a8e5e77dc5ae0ed1e089493}
 SPOT_MODULE=${SPOT_MODULE:-0x12423B366F6F07130961900bE00d05Ea63Acd071}
 SPOT_QUOTE=${SPOT_QUOTE:-0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84}

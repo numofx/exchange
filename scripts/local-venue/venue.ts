@@ -119,8 +119,9 @@ const venue = new Proxy({} as Venue, {
 /** What an order is signed for: the traded asset and the TradeModule that settles it. */
 type OrderMarket = { asset: Address; module: Address; label: string };
 const perpMarket = (): OrderMarket => ({ asset: getAddress(venue.perp), module: getAddress(venue.tradePerp), label: 'perp' });
-// Base mainnet spot, which the fork inherits: the cNGN escrow is the spot asset, the wrapped-quote
-// TradeModule settles it against wrapped USDC, and accounts live under the spot SRM.
+// Base's pre-cutover spot stack, which the fork inherits and up.sh uses without --unified: the cNGN
+// escrow is the spot asset, the wrapped-quote TradeModule settles it against wrapped USDC, and
+// accounts live under the spot SRM. Retired on mainnet 2026-10-04; --unified is what mainnet runs.
 const MAINNET_SPOT = {
   asset: getAddress('0x9d806fd040a719d27a8e5e77dc5ae0ed1e089493'),
   module: getAddress('0x12423B366F6F07130961900bE00d05Ea63Acd071'),
