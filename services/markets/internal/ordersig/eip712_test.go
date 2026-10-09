@@ -123,3 +123,17 @@ func TestMalformedInputsAreRejected(t *testing.T) {
 		})
 	}
 }
+
+// Matching.getActionHash for this action on Base (cast call, 2026-10-09) -- the same value execution-service's
+// deposit.test.ts pins, so both services key a deposit identically.
+func TestActionHashIsMatchingGetActionHash(t *testing.T) {
+	owner := "0xeaBca823B4d35d8F2eac09edB55C42D8077fbFcA"
+	got, err := ActionHash(Action{
+		SubaccountID: "0", Nonce: "7", Module: "0x6540f8d9Eb599b045C05E45cb6a5B1730a806658",
+		Data:   "0x000000000000000000000000000000000000000000000000000000003b9aca00000000000000000000000000a74e49b4ed7cb176bc02ef4d8a1a3240c9ad4272000000000000000000000000de0423d0a1e15536265c9513d2e0c10dab5835d4",
+		Expiry: "1789400600", Owner: owner, Signer: owner,
+	})
+	if err != nil || got != "0x1a818d052cdee2d89d3ce55092946f7ae24a0d22a3324c646c1d88ee74aba98c" {
+		t.Fatalf("ActionHash = %s, %v", got, err)
+	}
+}

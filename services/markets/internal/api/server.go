@@ -235,7 +235,7 @@ func NewServer(cfg config.Config, pool *pgxpool.Pool, registry *instruments.Regi
 		custody:     newCustodyChecker(cfg),
 		signatures:  signatures,
 		withdrawals: newWithdrawalService(cfg, signatures),
-		deposits:    newDepositService(cfg, signatures),
+		deposits:    newDepositService(cfg, signatures, pool),
 		perp:        newPerpStateReader(cfg),
 		indexLag:    newIndexLagGate(cfg),
 		hub:         events.NewHub(pool, cfg, slog.Default()),
