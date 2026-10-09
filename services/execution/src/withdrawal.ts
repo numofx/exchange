@@ -30,6 +30,8 @@ export class WithdrawalRejectedError extends Error {
     message: string,
     /** The revert the simulation hit, by name when known. Absent for a policy rejection. */
     readonly revert?: string,
+    /** 422 for policy or a revert; 503 while withdrawals are paused at their hourly gas budget. */
+    readonly status: 422 | 503 = 422,
   ) {
     super(message);
     this.name = 'WithdrawalRejectedError';

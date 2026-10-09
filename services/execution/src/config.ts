@@ -35,6 +35,9 @@ const envSchema = z.object({
   // Shorter than RECEIPT_TIMEOUT_MS because a trader is waiting on it. markets-service's EXECUTOR_TIMEOUT on the
   // API task must exceed it, or the API gives up on a withdrawal that is still in flight.
   WITHDRAWAL_RECEIPT_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+  // ETH of gas sponsored withdrawals may spend per rolling hour, measured from receipts; past it, 503. Separate from
+  // the deposit budget, and with no executor floor: a user can always withdraw while the executor can pay.
+  WITHDRAWAL_MAX_GAS_ETH_PER_HOUR: z.string().regex(/^\d+(\.\d+)?$/).default('0.002'),
   // Signed deposits (POST /deposit). Off unless DEPOSITS_ENABLED is "true" and the module, the assets and the
   // manager are all named; see deposit.ts. The venue pays gas for every deposit, so it is opt-in and budgeted.
   DEPOSITS_ENABLED: z.union([z.literal('true'), z.literal('false')]).default('false'),
@@ -102,6 +105,8 @@ export type AppConfig = {
   withdrawalModuleAddress?: `0x${string}`;
   withdrawalAssetAddresses: `0x${string}`[];
   withdrawalReceiptTimeoutMs: number;
+  withdrawalMaxGasWeiPerHour: bigint;
+  alertWebhookUrl?: string;
   /** Undefined unless DEPOSITS_ENABLED and every address is set. */
   deposit?: {
     moduleAddress: `0x${string}`;
@@ -174,6 +179,8 @@ export function loadConfig(): AppConfig {
       : undefined,
     withdrawalAssetAddresses: parseAddressList('WITHDRAWAL_ASSET_ADDRESSES', parsed.WITHDRAWAL_ASSET_ADDRESSES),
     withdrawalReceiptTimeoutMs: parsed.WITHDRAWAL_RECEIPT_TIMEOUT_MS,
+    withdrawalMaxGasWeiPerHour: parseEther(parsed.WITHDRAWAL_MAX_GAS_ETH_PER_HOUR),
+    alertWebhookUrl: parsed.ALERT_WEBHOOK_URL ? parsed.ALERT_WEBHOOK_URL : undefined,
     deposit: parseDepositConfig(parsed),
     settlementCanary: parsed.SETTLEMENT_CANARY_MANAGER
       ? {

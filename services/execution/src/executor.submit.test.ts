@@ -40,6 +40,7 @@ const config: AppConfig = {
   receiptTimeoutMs: 60_000,
   withdrawalAssetAddresses: [],
   withdrawalReceiptTimeoutMs: 30_000,
+  withdrawalMaxGasWeiPerHour: 2_000_000_000_000_000n,
 };
 
 const deps = {
@@ -52,7 +53,7 @@ const deps = {
   ]),
   matchingAddress: MATCHING as `0x${string}`,
   tradeModuleAddress: TRADE_MODULE as `0x${string}`,
-  withdrawal: { moduleAddress: WITHDRAWAL_MODULE as `0x${string}`, assetAddresses: [WRAPPED_USDC as `0x${string}`] },
+  withdrawal: { moduleAddress: WITHDRAWAL_MODULE as `0x${string}`, assetAddresses: [WRAPPED_USDC as `0x${string}`], maxGasWeiPerHour: 2_000_000_000_000_000n },
 };
 
 const executor = () => MatchExecutor.create({ ...config }, deps);
@@ -133,6 +134,16 @@ test('withdrawal: an owner-signed withdrawal is unchanged — it reaches the RPC
   // rethrown rather than being reported as a withdrawal that would revert.
   assert.ok(!(error instanceof WithdrawalRejectedError), `transport failure misreported as a revert: ${String(error)}`);
   assert.match(String((error as Error).message), /HTTP request failed/);
+});
+
+// The wiring, not the gate: withdraw() itself must consult the executor's withdrawal budget, before any RPC.
+test('withdrawal: once the hourly gas budget is spent, withdraw() answers 503 without touching the chain', async () => {
+  const e = await executor();
+  e.withdrawalGate!.record(2_000_000_000_000_000n);
+  const error = await errorFrom(() => e.withdraw(withdrawRequest(OWNER)));
+  assert.ok(error instanceof WithdrawalRejectedError, `expected WithdrawalRejectedError, got ${String(error)}`);
+  assert.equal(error.status, 503);
+  assert.match(error.message, /withdrawals are paused: sponsored withdrawals spent 0\.002 ETH/);
 });
 
 test('withdrawal: a non-owner signer is refused, by the pre-existing policy check', async () => {
