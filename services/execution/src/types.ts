@@ -108,6 +108,19 @@ export type WithdrawRequest = z.infer<typeof withdrawRequestSchema>;
 export const depositRequestSchema = z.object({
   action: actionSchema,
   signature: signatureSchema,
+  /**
+   * Optional EIP-2612 permit on Base USDC from action.owner to the DepositModule, for a deposit with no prior approve.
+   * The spender is not sent: the executor always submits the permit with the DepositModule as spender, so a permit
+   * signed for anything else fails. Skipped when the allowance already covers the deposit (an earlier approve, or this
+   * permit already submitted by someone else).
+   */
+  permit: z
+    .object({
+      value: decimalStringSchema,
+      deadline: decimalStringSchema,
+      signature: z.string().regex(/^0x[0-9a-fA-F]{130}$/, 'expected a 65-byte permit signature'),
+    })
+    .optional(),
 });
 
 export type DepositRequest = z.infer<typeof depositRequestSchema>;
@@ -122,6 +135,8 @@ export type DepositResponse = ExecuteMatchResponse & {
   amount_units: string;
   /** What the account's cash is credited, at the ledger's 18 decimals. */
   credited_cash_e18: string;
+  /** The permit transaction, when the deposit carried a permit and it was needed. */
+  permit_tx_hash?: string;
 };
 
 export type ExecuteMatchResponse = {

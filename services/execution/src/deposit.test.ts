@@ -8,6 +8,8 @@ import type { AppConfig } from './config.js';
 import {
   DepositRejectedError,
   assertDepositPolicy,
+  assertPermitPolicy,
+  buildPermitArgs,
   creditedSubaccount,
   decodeDepositData,
   depositActionHash,
@@ -163,4 +165,24 @@ test('POST /deposit answers a refusal with its own status and the revert name', 
 test('POST /deposit refuses a malformed body with a 400', async () => {
   const res = await app({ deposit: async () => { throw new Error('not reached'); } }).inject({ method: 'POST', url: '/deposit', payload: { action: {} } });
   assert.equal(res.statusCode, 400);
+});
+
+// ---- Phase 2: the permit path
+
+const SIG = `0x${'11'.repeat(32)}${'22'.repeat(32)}1b` as const;
+
+test('a permit must cover the deposit amount', () => {
+  assert.throws(() => assertPermitPolicy({ value: '999999999', deadline: String(NOW + 60), signature: SIG }, 1_000_000_000n, NOW), /below the deposit amount/);
+  assert.doesNotThrow(() => assertPermitPolicy({ value: '1000000000', deadline: String(NOW + 60), signature: SIG }, 1_000_000_000n, NOW));
+});
+
+test('an expired permit is refused', () => {
+  assert.throws(() => assertPermitPolicy({ value: '1000000000', deadline: String(NOW - 1), signature: SIG }, 1_000_000_000n, NOW), /permit has expired/);
+});
+
+test('the permit is submitted with the DepositModule as spender and the signature split into v, r, s', () => {
+  const args = buildPermitArgs({ ...request(), permit: { value: '1000000000', deadline: '1789400600', signature: SIG } }, DEPOSIT_MODULE);
+  assert.deepEqual(args, [OWNER, DEPOSIT_MODULE, 1_000_000_000n, 1_789_400_600n, 27, `0x${'11'.repeat(32)}`, `0x${'22'.repeat(32)}`]);
+  // A 0/1 recovery id is normalised to 27/28.
+  assert.equal(buildPermitArgs({ ...request(), permit: { value: '1', deadline: '1', signature: `${SIG.slice(0, 130)}01` } }, DEPOSIT_MODULE)[4], 28);
 });

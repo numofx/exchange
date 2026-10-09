@@ -57,6 +57,15 @@ var maxUint256 = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewI
 type depositRequest struct {
 	Action    withdrawalAction `json:"action"`
 	Signature string           `json:"signature"`
+	// Permit is an optional EIP-2612 permit on USDC from action.owner to the DepositModule, for a deposit with no
+	// prior approve. The spender is not sent: the executor always submits it with the DepositModule as spender.
+	Permit *depositPermit `json:"permit,omitempty"`
+}
+
+type depositPermit struct {
+	Value     string `json:"value"`
+	Deadline  string `json:"deadline"`
+	Signature string `json:"signature"`
 }
 
 // depositReceipt is the answer: execution-service's receipt, the account credited, and the amount in each unit.
@@ -76,6 +85,8 @@ type depositReceipt struct {
 	AmountUSDC      string `json:"amount_usdc"`
 	AmountUnits     string `json:"amount_units"`
 	CreditedCashE18 string `json:"credited_cash_e18"`
+	// PermitTxHash is the permit's transaction, when the deposit carried one and it was needed.
+	PermitTxHash string `json:"permit_tx_hash,omitempty"`
 }
 
 type depositData struct {
@@ -332,7 +343,7 @@ func (s *Server) handleCreateDeposit(w http.ResponseWriter, r *http.Request) {
 		writeDepositSubmitError(w, req, svc.moduleAddress, err)
 		return
 	}
-	rec.TxHash, rec.BlockNumber, rec.SubaccountID = receipt.TxHash, receipt.BlockNumber, receipt.SubaccountID
+	rec.TxHash, rec.PermitTxHash, rec.BlockNumber, rec.SubaccountID = receipt.TxHash, receipt.PermitTxHash, receipt.BlockNumber, receipt.SubaccountID
 	switch receipt.ReceiptStatus {
 	case "success":
 		rec.Status = depositConfirmed
@@ -486,6 +497,26 @@ func (svc *depositService) validate(req depositRequest) (depositData, error) {
 	if !isSignatureHex(req.Signature) {
 		return depositData{}, errors.New("signature must be hex of at least 65 bytes")
 	}
+	if req.Permit != nil {
+		value, err := parseUint256Decimal("permit.value", req.Permit.Value)
+		if err != nil {
+			return depositData{}, err
+		}
+		if value.Cmp(data.amount) < 0 {
+			return depositData{}, fmt.Errorf("permit.value %s USDC is below the deposit amount %s USDC",
+				formatDepositUnits(value), formatDepositUnits(data.amount))
+		}
+		deadline, err := parseUint256Decimal("permit.deadline", req.Permit.Deadline)
+		if err != nil {
+			return depositData{}, err
+		}
+		if deadline.Cmp(big.NewInt(now)) < 0 {
+			return depositData{}, errors.New("permit has expired")
+		}
+		if sig := strings.TrimSpace(req.Permit.Signature); len(sig) != 2+130 || !isSignatureHex(sig) {
+			return depositData{}, errors.New("permit.signature must be a 65-byte hex signature")
+		}
+	}
 	return data, nil
 }
 
@@ -539,7 +570,8 @@ func (svc *depositService) preflight(ctx context.Context, req depositRequest, da
 	if err != nil {
 		return "", err
 	}
-	if allowance.Cmp(data.amount) < 0 {
+	// With a permit the executor sets the allowance itself; without one it must already be there.
+	if allowance.Cmp(data.amount) < 0 && req.Permit == nil {
 		return fmt.Sprintf("the owner's USDC allowance to the deposit module is %s USDC, less than the %s USDC deposit; "+
 			"approve %s for at least the amount first", formatDepositUnits(allowance), formatDepositUnits(data.amount), svc.moduleAddress), nil
 	}
@@ -563,6 +595,9 @@ func depositRevertMessage(revert, module string) (string, bool) {
 	}
 	// USDC reverts with require strings, not custom errors.
 	switch lower := strings.ToLower(revert); {
+	case strings.HasPrefix(lower, "permit:"):
+		return "USDC refused the permit (expired, already used, or not signed by action.owner for the deposit module " +
+			module + "), and the allowance does not cover the deposit; sign a fresh permit or approve the module", true
 	case strings.Contains(lower, "exceeds allowance"):
 		return fmt.Sprintf("the owner's USDC allowance to the deposit module is below the amount; approve %s first", module), true
 	case strings.Contains(lower, "exceeds balance"):
