@@ -202,6 +202,8 @@ resource "aws_ecs_task_definition" "matcher" {
     secrets = [
       { name = "DATABASE_URL", valueFrom = local.secret_arns.database_url },
       { name = "CHAIN_RPC_URL", valueFrom = local.secret_arns.rpc_url },
+      # Settlement failures post here (internal/matching/settlement_alert.go): the canary's channel.
+      { name = "ALERT_WEBHOOK_URL", valueFrom = local.secret_arns.alert_webhook_url },
     ]
 
     # The matcher answers its own /healthz (503 once its tick loop has stalled for two minutes); the
@@ -241,9 +243,12 @@ resource "aws_ecs_task_definition" "execution" {
   task_role_arn            = aws_iam_role.task.arn
 
   container_definitions = jsonencode([{
-    name         = "execution-service"
-    image        = var.image_execution
-    essential    = true
+    name      = "execution-service"
+    image     = var.image_execution
+    essential = true
+    # Long enough for an in-flight settlement to finish its send and receipt wait (RECEIPT_TIMEOUT_MS, 60s) after
+    # SIGTERM; shutdown.ts drains instead of exiting. Fargate's maximum. The default (30s) SIGKILLed mid-send.
+    stopTimeout  = 120
     portMappings = [{ containerPort = 8081, protocol = "tcp" }]
 
     environment = concat(local.chain_env, [
