@@ -359,6 +359,7 @@ resource "aws_ecs_task_definition" "execution" {
         # The canary's only route to a person. There is no CloudWatch alarm on this log group, so
         # without this a failing canary writes a line nobody reads.
         { name = "ALERT_WEBHOOK_URL", valueFrom = local.secret_arns.alert_webhook_url },
+        { name = "SETTLEMENT_CANARY_HEARTBEAT_URL", valueFrom = local.secret_arns.settlement_canary_heartbeat_url },
       ]
     )
 

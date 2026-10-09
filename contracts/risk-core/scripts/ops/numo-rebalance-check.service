@@ -1,0 +1,20 @@
+# Is the spot market maker's inventory due a rebalance? (services/rebalance `check --alert`). Posts to
+# Slack when it is, or when the check cannot run. Read-only: run-with-ssm-readonly.sh hands it the
+# RPC and the webhook, no signing key. Wrapped in run-with-heartbeat.sh, so a run that does not
+# happen pages too -- before 2026-10-09 nothing scheduled this at all. Paired with
+# numo-rebalance-check.timer.
+#
+# node directly, not `pnpm rebalance`: pnpm reports any failing script as exit 1, which would turn
+# a run that could not happen (exit 2, high priority) into a due rebalance (exit 1, low).
+[Unit]
+Description=Numo cNGN rebalance inventory check
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/home/ec2-user/exchange-rebalance/services/rebalance
+ExecStart=/home/ec2-user/exchange-rebalance/contracts/risk-core/scripts/ops/run-with-heartbeat.sh rebalance-check /home/ec2-user/exchange-rebalance/contracts/risk-core/scripts/ops/run-with-ssm-readonly.sh /usr/bin/node --import tsx src/cli.ts check --alert --exit-code
+Environment=AWS_REGION=us-east-1
+# LOW priority: a due rebalance (exit 1, from --exit-code) notifies Pushover without sound; a run that cannot happen or
+# cannot see (exit 2) still pages at high priority. See run-with-heartbeat.sh.
+Environment=HEARTBEAT_FINDING_EXIT=1
