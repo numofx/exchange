@@ -5,6 +5,143 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-09 14:58 UTC: low-priority Pushover drill
+
+Ran the real `check_signer_balance.py` with `WARN_RUNWAY_DAYS=100` (forcing a finding) through
+`run-with-heartbeat.sh`'s low-priority path, as `[TEST]`, under a throwaway name. The webhook was
+empty so nothing went to Slack, and the real checks were not touched. The wrapper wrote its
+"sent" state, which it does only after Pushover's API accepts the message. **Pending:**
+confirmation that a *silent* `[TEST] numo test-drill (low priority)` notification arrived.
+
+## 2026-10-09 14:56:35 UTC: $10 account floor, and the priority split
+
+From #145 (`aa2a49c`). Backups are `*.bak-preaa2a49c-20261009T145635Z`.
+
+- **Canary floor.** `check_settlement_canary.py` (`a310ea6e…`): each watched account must be worth at
+  least `CANARY_MIN_ACCOUNT_USD` (default $10) by the manager's own `getMarginAndMarkToMarket`, in
+  place of the non-zero test. Proved live: under its old configuration (old SRM, account 15) the
+  canary fails with `subaccount 15 is worth $0.000781, under the $10 floor`. Under the current one,
+  26 ($660.19) and 24 ($4,000.32) pass.
+- **Priority split.**
+  - *High*: canary findings, missed runs, monitors that could not run, and the arming job, all
+    through healthchecks.io's Pushover integration.
+  - *Low* (priority -1, silent): a stale feed, low signer gas, a due rebalance. The wrapper sends
+    these to Pushover itself, using `/numo/pager/pushover_*`, once when a finding starts and at most
+    every 6 h while it lasts, and pings the check as a success because the monitor ran.
+  - To tell the two apart, the monitors now exit 1 for a finding and 2 for "could not run":
+    - `check_feed_staleness.py` (`d227ec4b…`) is `main`'s version plus that change. It replaces the
+      box's hand-edited 2026-09-22 copy (blob `86d9b42`), so this file now matches the repo. The perp
+      section it adds skips on this checkout, which lacks `CNGN_PERP_STACK.json`; the perp pager
+      covers those feeds.
+    - `check_signer_balance.py` (`5ace796c…`).
+    - The rebalance CLI gains `check --exit-code`.
+  - Units `numo-feed-alert` (`aaaeb8a2…`), `numo-signer-balance-alert` (`54c1ee75…`) and
+    `numo-rebalance-check` (`f9532a50…`) set `HEARTBEAT_FINDING_EXIT=1`. The rebalance unit now
+    runs `node --import tsx` directly: `pnpm` reports any failing script as exit 1, which would have
+    turned a failed run into a low-priority "due".
+  - `~/exchange-rebalance` moved to `aa2a49c`, clean; dependencies unchanged.
+- **Verified.** All four monitors ran through systemd with exit 0 at 14:57, and every check is `up`.
+- **Not verifiable by API.** The healthchecks.io Pushover integration's own priority, which sets
+  the level of every *high* page. It must be set to High in the dashboard.
+
+## 2026-10-09 14:50 UTC: high-priority phone drill
+
+Created a throwaway check `[TEST] drill` (Pushover and email), pinged it up at 14:50:31 and failed
+it at 14:50:36. The healthchecks.io flip log shows up, then down at 14:50:37, so the down
+notification was sent. The check was deleted afterwards. **Pending:** confirmation of the phone
+alert.
+
+## 2026-10-09 11:12–11:24 UTC: heartbeats for every ops-box monitor, and a rebalance-check timer
+
+From #145 (`90b08b7`, then the fix `61f2ff4`), not yet merged at install time.
+
+**healthchecks.io** (the project that already holds the perp pager's check; Pushover and email
+integrations on every new check, as on the pager's):
+
+| check | timeout | grace | pinged by |
+|---|---|---|---|
+| `settlement-canary` | 5 min | 5 min | `numo-settlement-canary.service` |
+| `feed-alert` | 1 min | 3 min | `numo-feed-alert.service` |
+| `signer-balance-alert` | 6 h | 1 h | `numo-signer-balance-alert.service` |
+| `rebalance-check` | 15 min | 15 min | `numo-rebalance-check.service` (new) |
+| `heartbeats` | 1 day | 2 h | `numo-heartbeats.service` (new) |
+
+Deleted the signup sample check "My First Check" (status new, 0 pings, nothing behind it): the
+arming job would have paged about it every day.
+
+**SSM** (under `/numo/pager`, the one new-to-the-box path its role may read; no IAM change):
+`healthchecks_api_key` (read-only; a write was tested and refused with 401) and
+`healthchecks_api_key_rw` (used to create the checks, not read by the box), both written by the
+operator. The checks' ping URLs are at `heartbeats/<check name>`.
+
+**On the box:**
+
+- New checkout `~/exchange-rebalance` at `90b08b7`, clean; `pnpm install --frozen-lockfile --filter
+  cngn-rebalance...` and `@numo/kms-signer` built. It is the rebalance timer's working directory.
+  A third checkout, which is what #143 is for.
+- Copied into `~/exchange/contracts/risk-core/scripts/ops/` (untracked there):
+  `run-with-heartbeat.sh` (`7eccb26b…`), `run-with-ssm-readonly.sh` (`7c49116c…`),
+  `check_heartbeats.py` (`f57c21a8…`, then `33e773ba…` from `61f2ff4`).
+- Units into `/etc/systemd/system/`, with backups `*.bak-pre145-20261009T111946Z` where one existed:
+  `numo-settlement-canary.service` (`d2988f7a…`), `numo-feed-alert.service` (`ecbd2db1…`), and
+  `numo-signer-balance-alert.service` (`679bac91…`), each now wrapped in `run-with-heartbeat.sh`;
+  new `numo-rebalance-check.service`/`.timer` (`0cdfa180…`/`fcc62173…`) and
+  `numo-heartbeats.service`/`.timer` (`e00f02ab…`, then `170a4969…` from `61f2ff4`/`ab980b63…`).
+  Then `daemon-reload`, and `enable --now` for both new timers. Every file was sha256-verified on
+  the box before any was moved into place.
+
+**The fix at 11:22:41.** On its first run the arming job's own check is still "new" (the success
+ping is sent after it exits), so it flagged itself. It now skips its own check (`HEARTBEAT_SELF`).
+Caught before it ran.
+
+**Verified (a first ping from every check).** By 11:24 every check read `up` on the healthchecks.io
+API: settlement-canary, feed-alert, signer-balance-alert (started by hand rather than waiting for
+13:08), rebalance-check (account 26, rate 1357.32, action none), and heartbeats (`ok: 6 checks, all
+armed`).
+
+**Behaviour change.** A monitor that exits non-zero now pages Pushover through healthchecks.io as
+well as posting to Slack: a stale live feed, feed-signer gas under 7 days (it was at 8.8 at
+install), a canary finding, or a rebalance that is due or failed to run.
+
+**Not yet.** `settlement-canary-ecs` (the execution-service canary's own heartbeat) is created at
+the #138 apply: its SSM parameter must exist before that apply, and the check would sit in "new"
+until the image that pings it runs.
+
+**Rollback.** Move each `.bak-pre145-*`/`.bak-pre61f2ff4-*` back; `systemctl disable --now
+numo-rebalance-check.timer numo-heartbeats.timer`; remove the two new units and `daemon-reload`;
+pause the five checks in healthchecks.io so they do not page.
+
+## 2026-10-09 11:06–11:08 UTC: [TEST] alert drill to the ops channel
+
+**What.** Proved canary alert delivery end to end, after a heads-up in the channel:
+
+1. 11:06:43, heads-up posted to the ops webhook (HTTP 200).
+2. 11:07:43, the deployed canary run through `run-with-ssm.sh` (the real webhook from SSM), with
+   the installed unit's environment plus `EXPECTED_NET_SETTLED_CASH=1` and `--test`. It printed
+   `[TEST] NUMO COLLATERAL BACKING FAILURE` and exited 1.
+3. 11:07:52, all-clear posted (HTTP 200).
+
+Nothing on the box changed. **Pending:** confirmation that all three messages appeared in the
+channel, in order. The canary posts with its own `urllib` call, and its delivery result was not
+captured.
+
+## 2026-10-09 11:05:31 UTC: settlement canary config assertions and --test
+
+**What.** Replaced `contracts/risk-core/scripts/ops/check_settlement_canary.py` with the version
+from `90b08b7` (#145, not yet merged), sha256 `25f06d30…a6a2e2`. The previous version (`d52f1da`,
+deployed at 10:45:13 below) is kept as `….bak-pre145-20261009T110531Z`. The unit file is unchanged.
+Checksum verified on the box before the move, and the selector self-test passed in place.
+
+**Why.** `getMargin` passes on an account that does not exist or holds nothing, which is how this
+canary watched an emptied account 15 for five days. The canary now fails, under the headline
+`NUMO SETTLEMENT CANARY MISCONFIGURED`, if a configured account does not exist, sits under another
+manager, or holds nothing. `--test` prefixes `[TEST] ` to a drill's alert.
+
+**Verified.** Green through systemd at 11:05: `subaccount 26 under the SRM, 2 non-zero balance(s)`,
+the same for 24, then the usual checks.
+
+**Rollback.** Move `check_settlement_canary.py.bak-pre145-20261009T110531Z` back.
+
 ## 2026-10-09 10:45:13 UTC: settlement canary moved to the unified stack
 
 **What.** Replaced two files, copied from `d52f1da` (#139, not yet merged at deploy time). No
