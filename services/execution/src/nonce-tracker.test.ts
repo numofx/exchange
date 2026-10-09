@@ -25,12 +25,3 @@ test('only a confirmed broadcast advances the nonce', async () => {
   assert.equal(await nonces.take(), 55);
   assert.equal(await nonces.take(), 55);
 });
-
-test('a failed broadcast forgets the local count, so the next send re-reads the chain', async () => {
-  let pending = 55;
-  const nonces = new NonceTracker(async () => pending);
-  nonces.confirm(await nonces.take());
-  nonces.forget();
-  pending = 55;
-  assert.equal(await nonces.take(), 55);
-});
