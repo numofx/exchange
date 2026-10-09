@@ -2,8 +2,9 @@
 # DepositModule with the executor paying gas (numofx/exchange#147, #148). Off unless deposits_enabled: with it false
 # neither task definition gains a variable, so this file plans as no change.
 #
-# The gas is paid by the existing executor EOA (the KMS key that settles trades and withdrawals). Top it up before
-# enabling; the perp pager's low-gas-executor check pages below its floor. Rolling deposits off is a redeploy: turn
+# The gas is paid by the existing executor EOA (the KMS key that settles trades and withdrawals). Deposits pause below
+# deposit_min_executor_eth or past deposit_max_gas_eth_per_hour, and post "NUMO DEPOSITS PAUSED" to the same
+# ALERT_WEBHOOK_URL the settlement canary uses; the perp pager's low-gas-executor check pages separately at 0.002 ETH. Rolling deposits off is a redeploy: turn
 # markets-service off first, wait for its old task to STOP (wait-for-rollout.sh), then execution-service.
 
 variable "deposits_enabled" {
@@ -24,10 +25,16 @@ variable "deposit_min_amount" {
   default     = "10000000"
 }
 
-variable "deposit_max_per_hour" {
-  description = "Sponsored deposits the executor broadcasts per rolling hour across all owners; past it, 503."
-  type        = number
-  default     = 20
+variable "deposit_max_gas_eth_per_hour" {
+  description = "ETH of gas sponsored deposits (and their permits) may spend per rolling hour, measured from receipts; past it, 503."
+  type        = string
+  default     = "0.002"
+}
+
+variable "deposit_min_executor_eth" {
+  description = "Deposits pause while the executor holds less than this, keeping a settlement reserve above the pager's 0.002 ETH page."
+  type        = string
+  default     = "0.006"
 }
 
 variable "deposits_per_owner_per_minute" {
@@ -64,7 +71,8 @@ locals {
     { name = "DEPOSIT_ASSET_ADDRESSES", value = var.cngn_perp_cash_address },
     { name = "DEPOSIT_MANAGER_ADDRESS", value = var.cngn_perp_srm_address },
     { name = "DEPOSIT_MIN_AMOUNT", value = var.deposit_min_amount },
-    { name = "DEPOSIT_MAX_PER_HOUR", value = tostring(var.deposit_max_per_hour) },
+    { name = "DEPOSIT_MAX_GAS_ETH_PER_HOUR", value = var.deposit_max_gas_eth_per_hour },
+    { name = "DEPOSIT_MIN_EXECUTOR_ETH", value = var.deposit_min_executor_eth },
     { name = "DEPOSIT_RECEIPT_TIMEOUT_MS", value = "30000" },
   ] : []
 }
