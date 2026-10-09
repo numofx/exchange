@@ -39,6 +39,8 @@ type Server struct {
 	orderHistoryAuth wsauth.Verifier
 	// withdrawals serves POST /v1/withdrawals; nil when not fully configured, and the endpoint answers 503.
 	withdrawals *withdrawalService
+	// deposits serves POST /v1/deposits; nil unless DEPOSITS_ENABLED and fully configured, and the endpoint answers 503.
+	deposits *depositService
 	// perp reads cNGN-PERP's chain state for /v1/markets and /v1/positions; nil without a perp.
 	perp *perpStateReader
 	// indexLag is the index-lag gate; nil without INDEX_STATUS_TOKEN.
@@ -233,6 +235,7 @@ func NewServer(cfg config.Config, pool *pgxpool.Pool, registry *instruments.Regi
 		custody:     newCustodyChecker(cfg),
 		signatures:  signatures,
 		withdrawals: newWithdrawalService(cfg, signatures),
+		deposits:    newDepositService(cfg, signatures),
 		perp:        newPerpStateReader(cfg),
 		indexLag:    newIndexLagGate(cfg),
 		hub:         events.NewHub(pool, cfg, slog.Default()),

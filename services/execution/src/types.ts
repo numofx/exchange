@@ -100,6 +100,30 @@ export const withdrawRequestSchema = z.object({
 
 export type WithdrawRequest = z.infer<typeof withdrawRequestSchema>;
 
+/**
+ * One user-signed DepositModule action: subaccount_id 0 opens a perp margin account under the perp SRM and funds it,
+ * any other id tops that account up. `data` is abi.encode(uint256 amount, address asset, address
+ * managerForNewAccount), with the amount in 6-decimal USDC base units. See deposit.ts.
+ */
+export const depositRequestSchema = z.object({
+  action: actionSchema,
+  signature: signatureSchema,
+});
+
+export type DepositRequest = z.infer<typeof depositRequestSchema>;
+
+/** A mined (or timed-out) deposit, with the account it credited and the amount in both units. */
+export type DepositResponse = ExecuteMatchResponse & {
+  /** The account credited: the new one for subaccount_id 0. Absent until the receipt is known. */
+  subaccount_id?: string;
+  /** USDC, as a decimal string with 6 places. */
+  amount_usdc: string;
+  /** The same amount in 6-decimal base units, as signed. */
+  amount_units: string;
+  /** What the account's cash is credited, at the ledger's 18 decimals. */
+  credited_cash_e18: string;
+};
+
 export type ExecuteMatchResponse = {
   // False when the transaction was mined and reverted. The matcher must not
   // record a fill for one of these, so it is not a `true` literal any more.
