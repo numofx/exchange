@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"golang.org/x/crypto/sha3"
 
 	"github.com/numofx/matching-backend/internal/ordersig"
@@ -95,6 +96,26 @@ func (f *fakeDepositSubmitter) SubmitDeposit(_ context.Context, request depositR
 	return f.receipt, f.err
 }
 
+type fakeDepositReceipts struct {
+	mined, success bool
+	account        string
+}
+
+func (f *fakeDepositReceipts) DepositOutcome(context.Context, string, string) (bool, bool, string, string, error) {
+	return f.mined, f.success, "52400000", f.account, nil
+}
+
+// countingSubmitter counts submissions, which is what idempotency is about.
+type countingSubmitter struct {
+	*fakeDepositSubmitter
+	calls int
+}
+
+func (c *countingSubmitter) SubmitDeposit(ctx context.Context, r depositRequest) (depositReceipt, error) {
+	c.calls++
+	return c.fakeDepositSubmitter.SubmitDeposit(ctx, r)
+}
+
 type depositHarness struct {
 	server     *Server
 	chain      *fakeDepositChain
@@ -126,6 +147,8 @@ func newDepositHarness() *depositHarness {
 				submitter:     submitter,
 				limiter:       newWithdrawalLimiter(3),
 				hourly:        newOwnerHourlyCap(6),
+				store:         newMemDepositStore(),
+				receipts:      &fakeDepositReceipts{},
 				now:           func() time.Time { return testWithdrawalNow },
 			},
 		},
@@ -411,4 +434,158 @@ func TestDepositHourlyCapCountsOnlySubmittedDeposits(t *testing.T) {
 	req.Action.Nonce = "11"
 	req.Action.Expiry = strconv.FormatInt(clock.Unix()+600, 10)
 	expectDeposit(t, postDeposit(t, h.server, req), http.StatusOK, "")
+}
+
+// ---- persistence and status (migration 000018)
+
+func counted(h *depositHarness) *countingSubmitter {
+	c := &countingSubmitter{fakeDepositSubmitter: h.submitter}
+	h.server.deposits.submitter = c
+	return c
+}
+
+func getDeposit(t *testing.T, server *Server, hash string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/v1/deposits/"+hash, nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("action_hash", hash)
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	rec := httptest.NewRecorder()
+	server.handleGetDeposit(rec, req)
+	return rec
+}
+
+func actionHashOf(t *testing.T, req depositRequest) string {
+	t.Helper()
+	hash, err := ordersig.ActionHash(withdrawalOrdersigAction(req.Action))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hash
+}
+
+func TestDepositReplayIsAnsweredFromTheRecordAndNeverResubmitted(t *testing.T) {
+	h := newDepositHarness()
+	sub := counted(h)
+	first := postDeposit(t, h.server, validDeposit())
+	expectDeposit(t, first, http.StatusOK, `"status":"confirmed"`)
+	// Preflight would now fail (the nonce is spent on chain); a replay must not get that far.
+	h.chain.nonceUsed = true
+	again := postDeposit(t, h.server, validDeposit())
+	expectDeposit(t, again, http.StatusOK, `"status":"confirmed"`)
+	expectDeposit(t, again, http.StatusOK, `"tx_hash":"0xd5"`)
+	if sub.calls != 1 {
+		t.Fatalf("submitted %d times, want 1", sub.calls)
+	}
+}
+
+// A restart: a new service sharing the same store answers the replay without resubmitting.
+func TestDepositReplaySurvivesARestart(t *testing.T) {
+	h := newDepositHarness()
+	expectDeposit(t, postDeposit(t, h.server, validDeposit()), http.StatusOK, "")
+	restarted := newDepositHarness()
+	restarted.server.deposits.store = h.server.deposits.store
+	sub := counted(restarted)
+	expectDeposit(t, postDeposit(t, restarted.server, validDeposit()), http.StatusOK, `"status":"confirmed"`)
+	if sub.calls != 0 {
+		t.Fatal("a restarted service resubmitted a deposit it had already recorded")
+	}
+}
+
+func TestARejectedDepositMayBeRetried(t *testing.T) {
+	h := newDepositHarness()
+	sub := counted(h)
+	h.submitter.err = &executorWithdrawError{Status: http.StatusServiceUnavailable, Message: "deposits are paused: the executor holds 0.005 ETH"}
+	expectDeposit(t, postDeposit(t, h.server, validDeposit()), http.StatusServiceUnavailable, "paused")
+	if rec, _, _ := h.server.deposits.store.Get(context.Background(), actionHashOf(t, validDeposit())); rec.Status != depositRejected {
+		t.Fatalf("record status = %s, want rejected", rec.Status)
+	}
+	h.submitter.err = nil
+	expectDeposit(t, postDeposit(t, h.server, validDeposit()), http.StatusOK, `"status":"confirmed"`)
+	if sub.calls != 2 {
+		t.Fatalf("submitted %d times, want 2 (refused, then retried)", sub.calls)
+	}
+}
+
+// A receipt that timed out resolves on a later GET, from the chain, with the new account.
+func TestATimedOutDepositResolvesOnGet(t *testing.T) {
+	h := newDepositHarness()
+	h.submitter.receipt = depositReceipt{Accepted: false, TxHash: "0xd6", ReceiptStatus: "timeout", AmountUSDC: "1000.000000", AmountUnits: "1000000000", CreditedCashE18: "1000000000000000000000"}
+	expectDeposit(t, postDeposit(t, h.server, validDeposit()), http.StatusOK, `"status":"submitted"`)
+	hash := actionHashOf(t, validDeposit())
+	expectDeposit(t, getDeposit(t, h.server, hash), http.StatusOK, `"status":"submitted"`) // not mined yet
+	*h.server.deposits.receipts.(*fakeDepositReceipts) = fakeDepositReceipts{mined: true, success: true, account: "31"}
+	rec := getDeposit(t, h.server, hash)
+	expectDeposit(t, rec, http.StatusOK, `"status":"confirmed"`)
+	expectDeposit(t, rec, http.StatusOK, `"subaccount_id":"31"`)
+	expectDeposit(t, rec, http.StatusOK, `"amount_usdc":"1000.000000"`)
+	if stored, _, _ := h.server.deposits.store.Get(context.Background(), hash); stored.Status != depositConfirmed || stored.SubaccountID != "31" {
+		t.Fatalf("the resolved outcome must be saved: %+v", stored)
+	}
+}
+
+func TestAnInFlightDepositAnswers202(t *testing.T) {
+	h := newDepositHarness()
+	sub := counted(h)
+	_, _, _ = h.server.deposits.store.Claim(context.Background(), depositRecord{ActionHash: actionHashOf(t, validDeposit()), Owner: "x", Nonce: "7", SubaccountIDRequested: "0", AmountUnits: "1000000000"})
+	expectDeposit(t, postDeposit(t, h.server, validDeposit()), http.StatusAccepted, `"status":"pending"`)
+	if sub.calls != 0 {
+		t.Fatal("an in-flight deposit was submitted twice")
+	}
+}
+
+func TestAnUnconfirmableSubmissionIsRecordedUnknown(t *testing.T) {
+	h := newDepositHarness()
+	h.submitter.err = errors.New("connection reset")
+	expectDeposit(t, postDeposit(t, h.server, validDeposit()), http.StatusBadGateway, "retry the same signed request")
+	expectDeposit(t, getDeposit(t, h.server, actionHashOf(t, validDeposit())), http.StatusOK, `"status":"unknown"`)
+}
+
+func TestGetDepositNotFoundAndMalformed(t *testing.T) {
+	h := newDepositHarness()
+	expectDeposit(t, getDeposit(t, h.server, "0x"+strings.Repeat("ab", 32)), http.StatusNotFound, "no deposit")
+	expectDeposit(t, getDeposit(t, h.server, "0x1234"), http.StatusBadRequest, "64 hex digits")
+}
+
+func TestDepositedSubAccountTopic(t *testing.T) {
+	h := sha3.NewLegacyKeccak256()
+	h.Write([]byte("DepositedSubAccount(uint256,address)"))
+	if got := "0x" + hex.EncodeToString(h.Sum(nil)); got != topicDepositedSubAccount {
+		t.Fatalf("topic %s, constant %s", got, topicDepositedSubAccount)
+	}
+}
+
+// The Postgres store itself, against the migrated test database.
+func TestPgDepositStore(t *testing.T) {
+	pool := openTestPool(t)
+	store := &pgDepositStore{pool: pool}
+	ctx := context.Background()
+	hash := fmt.Sprintf("0x%064x", time.Now().UnixNano())
+	rec := depositRecord{ActionHash: hash, Owner: "0xowner", Nonce: "7", SubaccountIDRequested: "0", AmountUnits: "1000000000"}
+
+	got, claimed, err := store.Claim(ctx, rec)
+	if err != nil || !claimed || got.Status != depositPending || got.AmountUnits != "1000000000" {
+		t.Fatalf("claim = %+v %v %v", got, claimed, err)
+	}
+	if _, claimed, _ := store.Claim(ctx, rec); claimed {
+		t.Fatal("a pending deposit was claimed twice")
+	}
+	got.Status, got.Error = depositRejected, "paused"
+	if err := store.Save(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	if again, claimed, err := store.Claim(ctx, rec); err != nil || !claimed || again.Status != depositPending || again.Error != "" {
+		t.Fatalf("a rejected deposit must be reclaimable: %+v %v %v", again, claimed, err)
+	}
+	got.Status, got.TxHash, got.SubaccountID, got.Error = depositConfirmed, "0xd5", "27", ""
+	if err := store.Save(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	read, found, err := store.Get(ctx, hash)
+	if err != nil || !found || read.Status != depositConfirmed || read.TxHash != "0xd5" || read.SubaccountID != "27" {
+		t.Fatalf("get = %+v %v %v", read, found, err)
+	}
+	if _, claimed, _ := store.Claim(ctx, rec); claimed {
+		t.Fatal("a confirmed deposit was reclaimed")
+	}
 }

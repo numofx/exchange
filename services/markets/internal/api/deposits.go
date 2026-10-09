@@ -15,6 +15,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/numofx/matching-backend/internal/config"
 	"github.com/numofx/matching-backend/internal/ordersig"
 )
@@ -42,6 +45,8 @@ const (
 	sigWrapped     = "0xd9a1836a" // wrappedAsset()
 	sigBalanceOf   = "0x70a08231" // balanceOf(address)
 	sigAllowanceOf = "0xdd62ed3e" // allowance(address,address)
+	// topicDepositedSubAccount is DepositedSubAccount(uint256,address), which Matching emits for a new account.
+	topicDepositedSubAccount = "0x043a568d47b1a65cdc989ff14c921411b62abf40132dc4b5e78675ba8d0bc9df"
 )
 
 var maxUint256 = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
@@ -56,6 +61,10 @@ type depositRequest struct {
 
 // depositReceipt is the answer: execution-service's receipt, the account credited, and the amount in each unit.
 type depositReceipt struct {
+	// ActionHash is Matching.getActionHash of the signed action: the key for GET /v1/deposits/{action_hash}.
+	ActionHash string `json:"action_hash,omitempty"`
+	// Status is the record's: pending, submitted, confirmed, reverted, rejected or unknown (migration 000018).
+	Status        string `json:"status,omitempty"`
 	Accepted      bool   `json:"accepted"`
 	TxHash        string `json:"tx_hash"`
 	ReceiptStatus string `json:"receipt_status,omitempty"`
@@ -89,6 +98,13 @@ type depositSubmitter interface {
 	SubmitDeposit(ctx context.Context, request depositRequest) (depositReceipt, error)
 }
 
+// depositReceipts reads a broadcast deposit's outcome from the chain, for a record whose receipt was not known when
+// it was answered. mined false means not yet; account is the new subaccount from Matching's DepositedSubAccount for
+// owner, when there is one.
+type depositReceipts interface {
+	DepositOutcome(ctx context.Context, txHash, owner string) (mined, success bool, block, account string, err error)
+}
+
 // depositService is everything POST /v1/deposits needs. Nil unless DEPOSITS_ENABLED and fully configured; the
 // endpoint then answers 503.
 type depositService struct {
@@ -98,6 +114,8 @@ type depositService struct {
 	minAmount     *big.Int
 	chain         depositChain
 	submitter     depositSubmitter
+	store         depositStore
+	receipts      depositReceipts
 	limiter       *withdrawalLimiter
 	// hourly counts deposits submitted to the executor per owner -- the ones the venue may pay gas for. A request
 	// refused before that (a 400, a 401) does not count, so fixing a mistake costs nothing.
@@ -105,7 +123,7 @@ type depositService struct {
 	now    func() time.Time
 }
 
-func newDepositService(cfg config.Config, signatures signatureChecker) *depositService {
+func newDepositService(cfg config.Config, signatures signatureChecker, pool *pgxpool.Pool) *depositService {
 	if !cfg.DepositsEnabled {
 		return nil
 	}
@@ -118,20 +136,23 @@ func newDepositService(cfg config.Config, signatures signatureChecker) *depositS
 	}
 	// Every check must be able to run. A deposit spends the venue's gas and moves the trader's funds, so a missing
 	// verifier or chain reader disables it rather than letting a request through half-checked.
-	if signatures == nil || !isHexAddress(cfg.MatchingAddress) || strings.TrimSpace(cfg.ChainRPCURL) == "" {
-		slog.Warn("deposits_disabled", "reason", "signature verifier, MATCHING_ADDRESS or CHAIN_RPC_URL is not configured")
+	if signatures == nil || !isHexAddress(cfg.MatchingAddress) || strings.TrimSpace(cfg.ChainRPCURL) == "" || pool == nil {
+		slog.Warn("deposits_disabled", "reason", "signature verifier, MATCHING_ADDRESS, CHAIN_RPC_URL or the database is not configured")
 		return nil
 	}
+	reader := &chainDepositReader{chainCustodyChecker: &chainCustodyChecker{
+		rpcURL:          strings.TrimSpace(cfg.ChainRPCURL),
+		matchingAddress: strings.ToLower(strings.TrimSpace(cfg.MatchingAddress)),
+		httpClient:      &http.Client{Timeout: 5 * time.Second},
+	}}
 	return &depositService{
 		moduleAddress: module,
 		assets:        cfg.DepositAssetAddresses,
 		manager:       manager,
 		minAmount:     cfg.DepositMinAmount,
-		chain: &chainDepositReader{chainCustodyChecker: &chainCustodyChecker{
-			rpcURL:          strings.TrimSpace(cfg.ChainRPCURL),
-			matchingAddress: strings.ToLower(strings.TrimSpace(cfg.MatchingAddress)),
-			httpClient:      &http.Client{Timeout: 5 * time.Second},
-		}},
+		chain:         reader,
+		receipts:      reader,
+		store:         &pgDepositStore{pool: pool},
 		submitter: &executorDepositClient{
 			url:        strings.TrimSpace(cfg.ExecutorDepositURL),
 			httpClient: &http.Client{Timeout: cfg.ExecutorDepositTimeout},
@@ -225,6 +246,22 @@ func (s *Server) handleCreateDeposit(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	actionHash, err := ordersig.ActionHash(withdrawalOrdersigAction(req.Action))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// The same signed request again -- a retry after a timeout, a double click, a restart in between -- is answered
+	// from what already happened, never resubmitted. A rejected one (nothing was sent) may be tried again.
+	if existing, found, err := svc.store.Get(r.Context(), actionHash); err != nil {
+		slog.Warn("deposit_store_unreadable", "action_hash", actionHash, "error", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "deposits could not be read; retry shortly"})
+		return
+	} else if found && existing.Status != depositRejected {
+		svc.writeRecord(r.Context(), w, existing)
+		return
+	}
 
 	owner := strings.ToLower(strings.TrimSpace(req.Action.Owner))
 	if !svc.limiter.acquire(owner, svc.now()) {
@@ -266,16 +303,124 @@ func (s *Server) handleCreateDeposit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	rec, claimed, err := svc.store.Claim(r.Context(), depositRecord{
+		ActionHash: actionHash, Owner: owner, Nonce: strings.TrimSpace(req.Action.Nonce),
+		SubaccountIDRequested: strings.TrimSpace(req.Action.SubaccountID), AmountUnits: data.amount.String(),
+	})
+	if err != nil {
+		slog.Warn("deposit_store_unwritable", "action_hash", actionHash, "error", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "the deposit could not be recorded; nothing was sent; retry shortly"})
+		return
+	}
+	if !claimed {
+		// Another request for this action got here first.
+		svc.writeRecord(r.Context(), w, rec)
+		return
+	}
+
 	// Counted when submitted, success or not: from here the venue may have paid gas.
 	svc.hourly.record(owner, svc.now())
 	receipt, err := svc.submitter.SubmitDeposit(r.Context(), req)
 	if err != nil {
+		rec.Status, rec.Error, rec.Revert = depositUnknown, err.Error(), ""
+		var rejected *executorWithdrawError
+		if errors.As(err, &rejected) && (rejected.Status == http.StatusUnprocessableEntity || rejected.Status == http.StatusServiceUnavailable) {
+			// Refused before anything was broadcast: the same request may be retried.
+			rec.Status, rec.Error, rec.Revert = depositRejected, rejected.Message, rejected.Revert
+		}
+		svc.save(r.Context(), rec)
 		writeDepositSubmitError(w, req, svc.moduleAddress, err)
 		return
 	}
-	slog.Info("deposit_submitted", "owner", owner, "subaccount_id", receipt.SubaccountID, "amount_usdc", receipt.AmountUSDC,
-		"tx_hash", receipt.TxHash, "receipt_status", receipt.ReceiptStatus, "accepted", receipt.Accepted)
+	rec.TxHash, rec.BlockNumber, rec.SubaccountID = receipt.TxHash, receipt.BlockNumber, receipt.SubaccountID
+	switch receipt.ReceiptStatus {
+	case "success":
+		rec.Status = depositConfirmed
+	case "reverted":
+		rec.Status = depositReverted
+	default:
+		rec.Status = depositSubmitted
+	}
+	svc.save(r.Context(), rec)
+	receipt.ActionHash, receipt.Status = actionHash, rec.Status
+	slog.Info("deposit_submitted", "owner", owner, "action_hash", actionHash, "status", rec.Status, "subaccount_id", receipt.SubaccountID,
+		"amount_usdc", receipt.AmountUSDC, "tx_hash", receipt.TxHash)
 	writeJSON(w, http.StatusOK, receipt)
+}
+
+func (svc *depositService) save(ctx context.Context, rec depositRecord) {
+	if err := svc.store.Save(ctx, rec); err != nil {
+		// The answer to this request is still right; only a later GET would be stale.
+		slog.Error("deposit_store_save_failed", "action_hash", rec.ActionHash, "status", rec.Status, "error", err)
+	}
+}
+
+// handleGetDeposit serves GET /v1/deposits/{action_hash}: the deposit's record, with a broadcast deposit whose receipt
+// was not known re-read from the chain first.
+func (s *Server) handleGetDeposit(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	svc := s.deposits
+	if svc == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "deposits are not enabled"})
+		return
+	}
+	hash := strings.ToLower(strings.TrimSpace(chi.URLParam(r, "action_hash")))
+	if len(hash) != 66 || !strings.HasPrefix(hash, "0x") || !isHexString(hash[2:]) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "action_hash must be 0x followed by 64 hex digits"})
+		return
+	}
+	rec, found, err := svc.store.Get(r.Context(), hash)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "deposits could not be read; retry shortly"})
+		return
+	}
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no deposit with this action_hash"})
+		return
+	}
+	svc.writeRecord(r.Context(), w, rec)
+}
+
+// writeRecord answers from a stored deposit: 202 while it is pending, 200 otherwise. A submitted (or unknown, with a
+// hash) deposit is re-read from the chain first, so a receipt that timed out resolves on the next read.
+func (svc *depositService) writeRecord(ctx context.Context, w http.ResponseWriter, rec depositRecord) {
+	if (rec.Status == depositSubmitted || rec.Status == depositUnknown) && rec.TxHash != "" && svc.receipts != nil {
+		mined, success, block, account, err := svc.receipts.DepositOutcome(ctx, rec.TxHash, rec.Owner)
+		if err != nil {
+			slog.Warn("deposit_receipt_unreadable", "action_hash", rec.ActionHash, "tx_hash", rec.TxHash, "error", err)
+		} else if mined {
+			rec.Status, rec.BlockNumber = depositReverted, block
+			if success {
+				rec.Status = depositConfirmed
+				if rec.SubaccountIDRequested != "0" {
+					rec.SubaccountID = rec.SubaccountIDRequested
+				} else if account != "" {
+					rec.SubaccountID = account
+				}
+			}
+			svc.save(ctx, rec)
+		}
+	}
+	units, _ := new(big.Int).SetString(rec.AmountUnits, 10)
+	if units == nil {
+		units = new(big.Int)
+	}
+	status := http.StatusOK
+	if rec.Status == depositPending {
+		status = http.StatusAccepted
+	}
+	writeJSON(w, status, map[string]any{
+		"action_hash": rec.ActionHash, "status": rec.Status, "owner": rec.Owner, "nonce": rec.Nonce,
+		"subaccount_id_requested": rec.SubaccountIDRequested, "subaccount_id": rec.SubaccountID,
+		"tx_hash": rec.TxHash, "permit_tx_hash": rec.PermitTxHash, "block_number": rec.BlockNumber,
+		"amount_usdc": formatDepositUnits(units), "amount_units": units.String(), "credited_cash_e18": depositUnitsToLedger(units).String(),
+		"error": rec.Error, "revert": rec.Revert, "created_at": rec.CreatedAt, "updated_at": rec.UpdatedAt,
+	})
+}
+
+func isHexString(s string) bool {
+	_, err := hex.DecodeString(s)
+	return err == nil
 }
 
 // validate refuses what is malformed or off-policy before any chain read.
@@ -541,6 +686,58 @@ func (c *chainDepositReader) TokenAllowance(ctx context.Context, token, owner, s
 		return nil, err
 	}
 	return unsignedWord(raw)
+}
+
+// DepositOutcome reads eth_getTransactionReceipt. A null result is "not mined yet".
+func (c *chainDepositReader) DepositOutcome(ctx context.Context, txHash, owner string) (bool, bool, string, string, error) {
+	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "eth_getTransactionReceipt", "params": []any{txHash}})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.rpcURL, bytes.NewReader(body))
+	if err != nil {
+		return false, false, "", "", err
+	}
+	req.Header.Set("content-type", "application/json")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return false, false, "", "", err
+	}
+	defer resp.Body.Close()
+	var payload struct {
+		Result *struct {
+			Status      string `json:"status"`
+			BlockNumber string `json:"blockNumber"`
+			Logs        []struct {
+				Address string   `json:"address"`
+				Topics  []string `json:"topics"`
+			} `json:"logs"`
+		} `json:"result"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return false, false, "", "", err
+	}
+	if payload.Error != nil {
+		return false, false, "", "", errors.New(payload.Error.Message)
+	}
+	if payload.Result == nil {
+		return false, false, "", "", nil
+	}
+	block := ""
+	if n, ok := new(big.Int).SetString(strings.TrimPrefix(payload.Result.BlockNumber, "0x"), 16); ok {
+		block = n.String()
+	}
+	account := ""
+	for _, log := range payload.Result.Logs {
+		if strings.EqualFold(log.Address, c.matchingAddress) && len(log.Topics) == 3 &&
+			strings.EqualFold(log.Topics[0], topicDepositedSubAccount) &&
+			strings.EqualFold("0x"+log.Topics[2][26:], owner) {
+			if id, ok := new(big.Int).SetString(strings.TrimPrefix(log.Topics[1], "0x"), 16); ok {
+				account = id.String()
+			}
+		}
+	}
+	return true, payload.Result.Status == "0x1", block, account, nil
 }
 
 func unsignedWord(raw string) (*big.Int, error) {
