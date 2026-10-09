@@ -21,7 +21,9 @@ export function buildApp(args: {
   /** Submits sponsored deposits. Absent unless DEPOSITS_ENABLED; POST /deposit then answers 503. */
   depositor?: Pick<MatchExecutor, 'deposit'>;
 }): FastifyInstance {
-  const app = Fastify({ logger: true });
+  // Fastify 5 destroys every open connection on close() by default -- including one mid-settlement. Off, close()
+  // refuses new work (503 on a still-open connection) and waits for in-flight requests: see shutdown.ts.
+  const app = Fastify({ logger: true, forceCloseConnections: false });
 
   app.get('/healthz', async () => ({
     status: 'ok',
