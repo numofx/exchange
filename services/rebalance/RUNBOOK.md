@@ -72,6 +72,10 @@ forgotten, because the alert fires about sub 26 and this touches neither the sub
 
 ## 3. Swap USDC → cNGN
 
+> **`swap` is unavailable until #144.** It prices off an indexer feed that was removed, so it fails
+> before placing anything. Do this leg by hand until #144 lands; `quote` below still works and
+> gives the rate to expect.
+
 ```bash
 export BASE_RPC_URL=...                   # keyed Alchemy; the public endpoint rate-limits the SDK
 pnpm rebalance quote 200                  # sanity-check the rate first

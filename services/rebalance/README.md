@@ -22,7 +22,7 @@ pnpm rebalance check               # is a rebalance due? (for a timer)
 pnpm rebalance check --alert       # ...and post to the ops webhook if so
 pnpm rebalance quote 20            # what the live feed prices it at
 pnpm rebalance approve 20 --execute
-pnpm rebalance swap 20 --execute   # place, auction, fill
+pnpm rebalance swap 20 --execute   # UNAVAILABLE until #144 (dead price feed)
 pnpm rebalance deposit --execute   # whole cNGN balance -> subaccount 26
 pnpm rebalance cancel --execute    # reclaim an unfilled order
 ```
@@ -36,9 +36,10 @@ it replaced is still frozen at 1393.0 from 2026-08-08. `@hyperbridge/sdk` 2.8.24
 (`orderbook.ts`, `ORDERBOOK_URL`), taking the *pessimistic* quote: the one price at which a single
 level fills the whole amount.
 
-**`swap` is not migrated.** It still prices off the removed V2 feed, so it fails before placing
-anything. Moving it means the SDK upgrade that placement depends on and a small real fill to prove
-it, which is its own change.
+**`swap` is unavailable until #144.** It still prices off the removed V2 feed, so it fails before
+placing anything (no funds move). Moving it needs the SDK upgrade that placement depends on and a
+small real fill to prove it (#144). Until then, a rebalance's swap leg is done by hand, outside
+this CLI.
 
 **Solvers compete.** What the auction adds is that solvers may bid *above* the required output and
 the surplus is split 40% to us, 60% to the gateway — so fills come in slightly better than the
