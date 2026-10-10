@@ -21,6 +21,7 @@ const (
 type fakeTokenState struct {
 	tokens  map[string]string
 	answers map[string]string
+	errs    map[string]error
 	err     error
 	calls   []string
 }
@@ -33,6 +34,9 @@ func (f *fakeTokenState) ethCall(_ context.Context, to, data string) (string, er
 	f.calls = append(f.calls, to+" "+data)
 	if f.err != nil {
 		return "", f.err
+	}
+	if err, ok := f.errs[to+" "+data]; ok {
+		return "", err
 	}
 	if answer, ok := f.answers[to+" "+data]; ok {
 		return answer, nil
