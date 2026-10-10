@@ -13,7 +13,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=ec2-user
-WorkingDirectory=/home/ec2-user/exchange/services/perp-keeper
+# Installed on the ops box as numo-perp-keeper.service, running from the exchange-perp checkout (ops-main), not from
+# /home/ec2-user/exchange (an older, dirty main checkout). Recorded as installed, 2026-10-10.
+WorkingDirectory=/home/ec2-user/exchange-perp/services/perp-keeper
 EnvironmentFile=/etc/numo/perp-keeper.env
 ExecStart=/bin/bash -c 'export KEEPER_KEY="$(aws ssm get-parameter --name /numo/keeper/keeper_key --with-decryption --query Parameter.Value --output text --region "$AWS_REGION")" RPC_URL="$(aws ssm get-parameter --name /numo/feeds/rpc_url --with-decryption --query Parameter.Value --output text --region "$AWS_REGION")" ALERT_WEBHOOK_URL="$(aws ssm get-parameter --name /numo/feeds/alert_webhook_url --with-decryption --query Parameter.Value --output text --region "$AWS_REGION" 2>/dev/null || true)" && exec /usr/bin/node dist/main.js'
 Environment=AWS_REGION=us-east-1
