@@ -135,10 +135,6 @@ def call(url: str, to: str, data: str) -> str:
 def describe_revert(exc: Exception) -> str:
   """Pull a named custom error out of an eth_call failure where the node returns one."""
   text = str(exc)
-  actual_topic = "0x" + keccak(b"AssetWhitelisted(address,uint256,uint8)").hex()
-  assert actual_topic == TOPIC_ASSET_WHITELISTED, f"whitelist topic drifted: {actual_topic}"
-  assert to18(5_000_000_000, 6) == 5_000 * 10**18, "6dp -> 18dp scaling is wrong"
-  assert to18(1, 18) == 1, "18dp scaling must be a no-op"
   for selector, name in KNOWN_ERRORS.items():
     if selector in text:
       return f"{name} [{selector}]"
@@ -455,6 +451,12 @@ def self_test() -> None:
   for selector, name in KNOWN_ERRORS.items():
     actual = "0x" + keccak(name.encode()).hex()[:8]
     assert actual == selector, f"{name}: hardcoded {selector}, actual {actual}"
+
+  # describe_revert runs inside every except branch. It once held these self-test assertions,
+  # with keccak unimported, so ANY failing check crashed the canary with NameError instead of
+  # posting its reason (b1b12100 .. 2026-10-10). It must describe, not raise.
+  assert describe_revert(RuntimeError("execution reverted: 0x1141796d")) == "BLF_DataTooOld() [0x1141796d]"
+  assert describe_revert(RuntimeError("HTTP Error 429: Too Many Requests")) == "HTTP Error 429: Too Many Requests"
 
 
 def main() -> int:
