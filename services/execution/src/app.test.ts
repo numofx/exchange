@@ -21,6 +21,7 @@ const config: AppConfig = {
   receiptTimeoutMs: 60_000,
   withdrawalAssetAddresses: [],
   withdrawalReceiptTimeoutMs: 30_000,
+  withdrawalMaxGasWeiPerHour: 2_000_000_000_000_000n,
 };
 
 const requestPayload: ExecuteMatchRequest = {

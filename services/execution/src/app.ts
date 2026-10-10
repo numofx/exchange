@@ -63,7 +63,8 @@ async function handleExecute(executor: Pick<MatchExecutor, 'execute'>, body: unk
 
 /**
  * 200 with the receipt (or `receipt_status: 'timeout'` when the outcome is not yet known), 422 for a withdrawal that
- * breaks policy or would revert — with `revert` naming the revert — and 503 when withdrawals are not configured.
+ * breaks policy or would revert — with `revert` naming the revert — and 503 when withdrawals are not configured or are
+ * paused at their hourly gas budget.
  */
 async function handleWithdraw(withdrawer: Pick<MatchExecutor, 'withdraw'> | undefined, body: unknown, reply: FastifyReply) {
   if (!withdrawer) {
@@ -75,7 +76,7 @@ async function handleWithdraw(withdrawer: Pick<MatchExecutor, 'withdraw'> | unde
     return reply.code(200).send(result);
   } catch (error) {
     if (error instanceof WithdrawalRejectedError) {
-      return reply.code(422).send(error.revert === undefined ? { error: error.message } : { error: error.message, revert: error.revert });
+      return reply.code(error.status).send(error.revert === undefined ? { error: error.message } : { error: error.message, revert: error.revert });
     }
     return sendError(reply, error);
   }

@@ -297,6 +297,13 @@ func TestExecutorVerdictsAreReportedFaithfully(t *testing.T) {
 			nil,
 		},
 		{
+			// The reason reaches the user: "not enabled" would be wrong, and would send them to support.
+			"withdrawals paused at the hourly gas budget",
+			&executorWithdrawError{Status: 503, Message: "withdrawals are paused: sponsored withdrawals spent 0.002 ETH of gas in the last hour, the most allowed (0.002 ETH); retry later"},
+			http.StatusServiceUnavailable,
+			map[string]string{"error": "withdrawals are paused: sponsored withdrawals spent 0.002 ETH of gas in the last hour, the most allowed (0.002 ETH); retry later"},
+		},
+		{
 			// The executor may have broadcast before the connection failed, so this is unknown, not failed.
 			"an unknown outcome",
 			errors.New("post withdrawal to execution-service: context deadline exceeded"),
