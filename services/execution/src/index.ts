@@ -86,6 +86,7 @@ const canary = config.settlementCanary
       expectedNetSettledCash: config.settlementCanary.expectedNetSettledCash,
       wrapperDeltaExceptions: config.settlementCanary.wrapperDeltaExceptions,
       feeRecipient: config.settlementCanary.feeRecipient,
+      depositModule: config.deposit?.moduleAddress,
       log: (level, message, fields) => {
         process.stdout.write(`${JSON.stringify({ level, msg: message, ...fields })}\n`);
       },
