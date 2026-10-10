@@ -1,3 +1,4 @@
+import type { DepositAsset } from './deposit.js';
 import 'dotenv/config';
 
 import { z } from 'zod';
@@ -46,6 +47,9 @@ const envSchema = z.object({
   DEPOSIT_MANAGER_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
   // In 6-decimal USDC base units: 10 USDC. Below this a sponsored deposit costs more in gas than it is worth.
   DEPOSIT_MIN_AMOUNT: z.coerce.bigint().default(10_000_000n),
+  // Each depositable asset as address:SYMBOL:minimum (6-decimal base units), comma-separated. When empty,
+  // DEPOSIT_ASSET_ADDRESSES with DEPOSIT_MIN_AMOUNT, as USDC. markets-service reads the same variable.
+  DEPOSIT_ASSETS: z.string().default(''),
   // Gas, in ETH, sponsored deposits may spend per rolling hour across all owners, measured from their receipts;
   // past it, 503 until the window clears.
   DEPOSIT_MAX_GAS_ETH_PER_HOUR: z.string().regex(/^\d+(\.\d+)?$/).default('0.002'),
@@ -110,9 +114,9 @@ export type AppConfig = {
   /** Undefined unless DEPOSITS_ENABLED and every address is set. */
   deposit?: {
     moduleAddress: `0x${string}`;
-    assetAddresses: `0x${string}`[];
+    /** DEPOSIT_ASSETS: each depositable wrapped asset with its token's symbol and own minimum. */
+    assets: DepositAsset[];
     managerAddress: `0x${string}`;
-    minAmount: bigint;
     maxGasWeiPerHour: bigint;
     minExecutorWei: bigint;
     receiptTimeoutMs: number;
@@ -285,12 +289,31 @@ function parseAccountIds(raw: string): number[] {
   return ids;
 }
 
+/** DEPOSIT_ASSETS, or the older address list with one minimum, all as USDC. */
+export function parseDepositAssets(spec: string, fallback: `0x${string}`[], fallbackMin: bigint): DepositAsset[] {
+  if (spec.trim() === '') return fallback.map((address) => ({ address, symbol: 'USDC', minAmount: fallbackMin }));
+  const seen = new Set<string>();
+  return spec.split(',').map((entry) => {
+    const parts = entry.trim().split(':');
+    if (parts.length !== 3) throw new Error(`DEPOSIT_ASSETS entry "${entry}" must be address:SYMBOL:minimum`);
+    const [rawAddress, symbol, rawMin] = parts.map((p) => p.trim());
+    if (!/^0x[0-9a-fA-F]{40}$/.test(rawAddress)) throw new Error(`DEPOSIT_ASSETS entry "${entry}": not an address`);
+    if (!symbol) throw new Error(`DEPOSIT_ASSETS entry "${entry}" has no symbol`);
+    if (!/^[1-9][0-9]*$/.test(rawMin)) throw new Error(`DEPOSIT_ASSETS entry "${entry}": the minimum must be a positive integer`);
+    const address = getAddress(rawAddress) as `0x${string}`;
+    if (seen.has(address)) throw new Error(`DEPOSIT_ASSETS lists ${address} twice`);
+    seen.add(address);
+    return { address, symbol, minAmount: BigInt(rawMin) };
+  });
+}
+
 function parseDepositConfig(parsed: {
   DEPOSITS_ENABLED: 'true' | 'false';
   DEPOSIT_MODULE_ADDRESS?: string;
   DEPOSIT_ASSET_ADDRESSES: string;
   DEPOSIT_MANAGER_ADDRESS?: string;
   DEPOSIT_MIN_AMOUNT: bigint;
+  DEPOSIT_ASSETS: string;
   DEPOSIT_MAX_GAS_ETH_PER_HOUR: string;
   DEPOSIT_MIN_EXECUTOR_ETH: string;
   DEPOSIT_RECEIPT_TIMEOUT_MS: number;
@@ -304,9 +327,8 @@ function parseDepositConfig(parsed: {
   }
   return {
     moduleAddress: getAddress(parsed.DEPOSIT_MODULE_ADDRESS) as `0x${string}`,
-    assetAddresses: assets,
+    assets: parseDepositAssets(parsed.DEPOSIT_ASSETS, assets, parsed.DEPOSIT_MIN_AMOUNT),
     managerAddress: getAddress(parsed.DEPOSIT_MANAGER_ADDRESS) as `0x${string}`,
-    minAmount: parsed.DEPOSIT_MIN_AMOUNT,
     maxGasWeiPerHour: parseEther(parsed.DEPOSIT_MAX_GAS_ETH_PER_HOUR),
     minExecutorWei: parseEther(parsed.DEPOSIT_MIN_EXECUTOR_ETH),
     alertWebhookUrl: parsed.ALERT_WEBHOOK_URL ? parsed.ALERT_WEBHOOK_URL : undefined,
