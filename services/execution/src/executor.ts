@@ -17,6 +17,7 @@ import { createKmsAccount } from '@numo/kms-signer';
 import { createSerialQueue } from './serial-queue.js';
 import { NonceTracker } from './nonce-tracker.js';
 import { broadcastWithNonce } from './broadcast.js';
+import { readAtOrAfter } from './pinned-read.js';
 import { assertSignerIsOwner, type SubmittedAction } from './signer-guard.js';
 import type { DepositRequest, DepositResponse, ExecuteMatchRequest, ExecuteMatchResponse, WithdrawRequest } from './types.js';
 import { SponsorGate, PROVISIONAL_SPONSORED_GAS, receiptCostWei } from './sponsor-gate.js';
@@ -161,19 +162,27 @@ export class MatchExecutor {
       onSimulationError?: (error: unknown) => never;
       /** Runs after a successful simulation, before anything is broadcast. May throw to stop the send. */
       beforeSend?: () => void;
+      /**
+       * A block the simulation and estimate must see: the block of a transaction this one depends on, such as a
+       * deposit's permit. Both are pinned to it rather than run at "latest"; see pinned-read.ts.
+       */
+      afterBlock?: bigint;
     },
   ): Promise<`0x${string}` | 'dry-run'> {
     assertSignerIsOwner(args[0]);
 
     return this.enqueueSend(async () => {
       try {
-        await this.publicClient.simulateContract({
-          account: this.account,
-          address: this.deps.matchingAddress,
-          abi: options.abi,
-          functionName: 'verifyAndMatch',
-          args,
-        });
+        await readAtOrAfter(options.afterBlock, (at) =>
+          this.publicClient.simulateContract({
+            account: this.account,
+            address: this.deps.matchingAddress,
+            abi: options.abi,
+            functionName: 'verifyAndMatch',
+            args,
+            ...at,
+          }),
+        );
       } catch (error) {
         options.onSimulationError?.(error);
         throw error;
@@ -191,13 +200,16 @@ export class MatchExecutor {
       // block later, ~48% more gas once anything is borrowed (CngnPerpStackFork
       // .testDepositGasDependsOnWhetherTheCashWasTouchedThisBlock). An exact estimate then reverts
       // out of gas on the next settlement.
-      const estimate = await this.publicClient.estimateContractGas({
-        account: this.account,
-        address: this.deps.matchingAddress,
-        abi: options.abi,
-        functionName: 'verifyAndMatch',
-        args,
-      });
+      const estimate = await readAtOrAfter(options.afterBlock, (at) =>
+        this.publicClient.estimateContractGas({
+          account: this.account,
+          address: this.deps.matchingAddress,
+          abi: options.abi,
+          functionName: 'verifyAndMatch',
+          args,
+          ...at,
+        }),
+      );
       return this.broadcast({
         address: this.deps.matchingAddress,
         abi: options.abi,
@@ -352,8 +364,9 @@ export class MatchExecutor {
   }
 
   /**
-   * Submits the deposit's USDC permit when the allowance does not already cover it, and waits for it to mine so the
-   * deposit's simulation sees the allowance. Returns the permit's hash, or undefined when it was not needed.
+   * Submits the deposit's USDC permit when the allowance does not already cover it, and waits for it to mine. Returns
+   * the permit's hash and block, or undefined when it was not needed; the deposit is simulated at that block, because
+   * a node that has not imported it yet still reads the allowance as it was before.
    *
    * Already covered -- an earlier approve, or this very permit submitted first by someone else (front-run) -- means
    * the permit is skipped, not failed. A permit the token refuses (expired, a spent permit nonce, not signed by the
@@ -364,7 +377,7 @@ export class MatchExecutor {
     module: `0x${string}`,
     data: { amount: bigint; asset: `0x${string}` },
     gate: SponsorGate,
-  ): Promise<`0x${string}` | undefined> {
+  ): Promise<{ hash: `0x${string}`; blockNumber: bigint } | undefined> {
     const token = (await this.publicClient.readContract({ address: data.asset, abi: wrappedAssetAbi, functionName: 'wrappedAsset' })) as `0x${string}`;
     const covered = async () =>
       ((await this.publicClient.readContract({
@@ -396,7 +409,7 @@ export class MatchExecutor {
     if (receipt.status !== 'success' && !(await covered())) {
       throw new DepositRejectedError('the permit transaction reverted and the allowance does not cover the deposit', 'permit: reverted');
     }
-    return hash;
+    return { hash, blockNumber: receipt.blockNumber };
   }
 
   private async submitDeposit(
@@ -408,7 +421,7 @@ export class MatchExecutor {
     if (request.permit) assertPermitPolicy(request.permit, data.amount, nowSeconds);
     const gate = this.depositGate!;
     await gate.check();
-    const permitTxHash = request.permit ? await this.submitPermitIfNeeded(request, deposit.moduleAddress, data, gate) : undefined;
+    const permit = request.permit ? await this.submitPermitIfNeeded(request, deposit.moduleAddress, data, gate) : undefined;
 
     const amounts = {
       amount_usdc: formatDepositUnits(data.amount),
@@ -425,8 +438,9 @@ export class MatchExecutor {
         throw error;
       },
       beforeSend: () => gate.assertBudget(),
+      afterBlock: permit?.blockNumber,
     });
-    if (permitTxHash) (amounts as Record<string, string>).permit_tx_hash = permitTxHash;
+    if (permit) (amounts as Record<string, string>).permit_tx_hash = permit.hash;
 
     if (txHash === 'dry-run') {
       return { accepted: true, tx_hash: 'dry-run', ...amounts };
