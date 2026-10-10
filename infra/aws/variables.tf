@@ -63,13 +63,13 @@ variable "image_markets" {
   description = "ECR image URI for the Go binary (serves both api and matcher modes)."
   type        = string
   # 2026-10-08: cNGN-USDC / cNGN-PERP identifiers, unknown symbols refused (exchange #133).
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:73e9dce57be4"
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:fc7ef5ccc6e3"
 }
 
 variable "image_execution" {
   description = "ECR image URI for services/execution."
   type        = string
-  default     = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/execution:8f3dd97a519b"
+  default     = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/execution:fc7ef5ccc6e3"
 }
 
 variable "secret_backend" {
