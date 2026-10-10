@@ -108,7 +108,9 @@ function feeCanary(o: { owner?: string; allowance?: bigint; accrued?: bigint; qu
 }
 
 /** A chain where every invariant holds, overridable per-call to break exactly one of them. */
-function invariantCanary(overrides: Record<string, bigint> = {}, wrappers = [WRAPPER]) {
+type Borrowers = { last: bigint; stored: Record<string, bigint>; owed: Record<string, bigint>; maintenance: Record<string, bigint> };
+
+function invariantCanary(overrides: Record<string, bigint> = {}, wrappers = [WRAPPER], borrowers?: Borrowers) {
   const v = {
     cashHeld: 5_000_000n, // 5 USDC at 6dp
     cashSupply: 5_000_000_000_000_000_000n, // 5 cash at 18dp
@@ -128,9 +130,14 @@ function invariantCanary(overrides: Record<string, bigint> = {}, wrappers = [WRA
     announceOnStart: false,
     client: {
       getLogs: async () => wrappers.map((asset) => ({ args: { asset } })),
-      readContract: async (a: { address: string; functionName: string }) => {
+      readContract: async (a: { address: string; functionName: string; args?: readonly unknown[] }) => {
+        const id = String(a.args?.[0]);
         switch (a.functionName) {
-          case 'getMargin': return 0n;
+          // getMargin(id, true) is the settlement probe; getMargin(id, false) a borrower's maintenance.
+          case 'getMargin': return a.args?.[1] === false ? borrowers!.maintenance[id] : 0n;
+          case 'lastAccountId': return borrowers!.last;
+          case 'getBalance': return borrowers!.stored[id] ?? 0n;
+          case 'calculateBalanceWithInterest': return -borrowers!.owed[id];
           case 'cashAsset': return CASH;
           case 'wrappedAsset': return a.address === CASH ? USDC : CNGN;
           case 'decimals': return 6;
@@ -398,10 +405,42 @@ test('a real backing shortfall is still caught once settled cash is excluded', a
   assert.match(snapshot.invariant_failures.join(' '), /UNDER-BACKED/);
 });
 
-test('borrowed cash is caught', async () => {
-  const snapshot = await invariantCanary({ cashBorrow: 1n }).check();
+// Borrowing is cross-margin working, not a failure (account 27, 2026-10-10: cNGN collateral, -0.007365 cash
+// after its first perp trade's fee; both canaries paged on it). What fails is a borrower the manager would not cover.
+const E18 = 10n ** 18n;
+
+test('a borrower above maintenance margin is fine (account 27, 2026-10-10, real numbers)', async () => {
+  const snapshot = await invariantCanary({ cashBorrow: 7_365_454_709_765_709n }, [WRAPPER], {
+    last: 27n,
+    stored: { '26': 372n * E18, '27': -7_365_454_709_765_709n },
+    owed: { '27': 7_366_247_165_066_985n },
+    maintenance: { '27': 1_463_972_743_057_649_929n },
+  }).check();
+  assert.deepEqual(snapshot.invariant_failures, []);
+  assert.equal(snapshot.ok, true);
+});
+
+test('a borrower below maintenance margin is caught', async () => {
+  const snapshot = await invariantCanary({ cashBorrow: 3n * E18 }, [WRAPPER], {
+    last: 2n, stored: { '2': -3n * E18 }, owed: { '2': 3n * E18 }, maintenance: { '2': -E18 / 2n },
+  }).check();
   assert.equal(snapshot.ok, false);
-  assert.match(snapshot.invariant_failures.join(' '), /totalBorrow/);
+  assert.match(snapshot.invariant_failures.join(' '), /subaccount 2 borrows 3\.000000 and is BELOW MAINTENANCE/);
+});
+
+test('borrow that no account accounts for is caught', async () => {
+  const snapshot = await invariantCanary({ cashBorrow: 7n * E18 }, [WRAPPER], {
+    last: 2n, stored: { '2': -3n * E18 }, owed: { '2': 3n * E18 }, maintenance: { '2': E18 },
+  }).check();
+  assert.equal(snapshot.ok, false);
+  assert.match(snapshot.invariant_failures.join(' '), /a borrower is unaccounted for/);
+});
+
+test('interest not yet in totalBorrow is within tolerance', async () => {
+  const snapshot = await invariantCanary({ cashBorrow: 100n * E18 }, [WRAPPER], {
+    last: 1n, stored: { '1': -100n * E18 }, owed: { '1': 100n * E18 + E18 / 2n }, maintenance: { '1': E18 },
+  }).check();
+  assert.deepEqual(snapshot.invariant_failures, []);
 });
 
 // Tokens sent straight to the wrapper, bypassing deposit(): balance moves, credited position
