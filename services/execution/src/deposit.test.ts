@@ -13,6 +13,7 @@ import {
   creditedSubaccount,
   decodeDepositData,
   depositActionHash,
+  depositAmounts,
   depositUnitsToLedger,
   formatDepositUnits,
 } from './deposit.js';
@@ -31,11 +32,15 @@ const OTHER = '0x1661AA54fA390cd916722F971e4A9Fe4c01889fB';
 const NOW = 1_789_400_000;
 const MAX = (1n << 256n) - 1n;
 
+const LEGACY_WRAPPED_USDC = '0x364058aFF6f36E01505fB2Cc870f8B6BD4835e84';
+
 const POLICY = {
   moduleAddress: DEPOSIT_MODULE,
-  assetAddresses: [PERP_CASH],
+  assets: [
+    { address: PERP_CASH, symbol: 'USDC', minAmount: 10_000_000n },
+    { address: CNGN_ESCROW, symbol: 'cNGN', minAmount: 15_000_000_000n },
+  ],
   managerAddress: PERP_SRM,
-  minAmount: 10_000_000n,
   nowSeconds: NOW,
 } as const;
 
@@ -80,8 +85,24 @@ test('a signer that is not the owner is refused, even a would-be session key', (
   rejects(request({ signer: OTHER }), /session-key deposits are not supported/));
 test('an expired action is refused', () => rejects(request({ expiry: String(NOW - 1) }), /expired/));
 // Accepted on chain (DepositModuleFork.testContractAcceptsADifferentWrappedAsset): only policy stops it.
-test('the cNGN escrow is refused: only the perp CashAsset is depositable', () =>
-  rejects(request({ data: depositData(1_000_000_000n, CNGN_ESCROW) }), /not depositable/));
+test('an asset that is not listed is refused, though the chain would take it', () =>
+  rejects(request({ data: depositData(1_000_000_000n, LEGACY_WRAPPED_USDC) }), /not depositable/));
+test('cNGN is depositable at its own minimum, and named as cNGN', () => {
+  const data = assertDepositPolicy(request({ data: depositData(15_000_000_000n, CNGN_ESCROW) }), POLICY);
+  assert.equal(data.symbol, 'cNGN');
+  rejects(request({ data: depositData(14_999_999_999n, CNGN_ESCROW) }), /14999\.999999 cNGN is below the minimum 15000\.000000 cNGN/);
+});
+test('a permit on cNGN is refused before the venue could pay for it to revert', () => {
+  const req = { ...request({ data: depositData(15_000_000_000n, CNGN_ESCROW) }), permit: { value: '15000000000', deadline: String(NOW + 600), signature: SIG } };
+  rejects(req, /cNGN has no permit/);
+});
+test('a cNGN deposit is stated as cNGN, never as USDC; a USDC one keeps its original fields', () => {
+  const cngn = depositAmounts('cNGN', CNGN_ESCROW, 20_000_000_000n);
+  assert.deepEqual(cngn, { asset: CNGN_ESCROW, asset_symbol: 'cNGN', amount: '20000.000000', amount_units: '20000000000', credited_e18: '20000000000000000000000' });
+  const usdc = depositAmounts('USDC', PERP_CASH, 10_000_000n);
+  assert.equal(usdc.amount_usdc, '10.000000');
+  assert.equal(usdc.credited_cash_e18, '10000000000000000000');
+});
 // On chain the max sentinel deposits the whole balance (testContractTreatsMaxAmountAsTheWholeBalance).
 test('the max sentinel is refused: the amount must be explicit', () =>
   rejects(request({ data: depositData(MAX) }), /must be explicit/));

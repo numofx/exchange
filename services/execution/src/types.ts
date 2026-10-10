@@ -129,12 +129,17 @@ export type DepositRequest = z.infer<typeof depositRequestSchema>;
 export type DepositResponse = ExecuteMatchResponse & {
   /** The account credited: the new one for subaccount_id 0. Absent until the receipt is known. */
   subaccount_id?: string;
-  /** USDC, as a decimal string with 6 places. */
-  amount_usdc: string;
-  /** The same amount in 6-decimal base units, as signed. */
+  /** The wrapped asset credited, and its token's symbol. */
+  asset: `0x${string}`;
+  asset_symbol: string;
+  /** The amount as a decimal string with 6 places, and in 6-decimal base units as signed. */
+  amount: string;
   amount_units: string;
-  /** What the account's cash is credited, at the ledger's 18 decimals. */
-  credited_cash_e18: string;
+  /** What the account's balance of the asset is credited, at the ledger's 18 decimals. */
+  credited_e18: string;
+  /** The same as amount and credited_e18, on USDC deposits only. */
+  amount_usdc?: string;
+  credited_cash_e18?: string;
   /** The permit transaction, when the deposit carried a permit and it was needed. */
   permit_tx_hash?: string;
 };

@@ -32,8 +32,7 @@ import {
   creditedSubaccount,
   depositActionHash,
   depositRevertErrorsAbi,
-  depositUnitsToLedger,
-  formatDepositUnits,
+  depositAmounts,
 } from './deposit.js';
 import {
   WithdrawalRejectedError,
@@ -423,11 +422,7 @@ export class MatchExecutor {
     await gate.check();
     const permit = request.permit ? await this.submitPermitIfNeeded(request, deposit.moduleAddress, data, gate) : undefined;
 
-    const amounts = {
-      amount_usdc: formatDepositUnits(data.amount),
-      amount_units: data.amount.toString(),
-      credited_cash_e18: depositUnitsToLedger(data.amount).toString(),
-    };
+    const amounts = depositAmounts(data.symbol ?? 'USDC', data.asset, data.amount);
     const txHash = await this.submitVerifyAndMatch(buildDepositArgs(request), {
       abi: [...this.deps.matchingAbi, ...depositRevertErrorsAbi] as Abi,
       onSimulationError: (error) => {

@@ -21,7 +21,9 @@ const LEGACY_CASH_ASSET = '0x6B232A2155Bd0C9bf741dB4cf8E7e8A0176A6fc6';
 const OWNER = '0xeaBca823B4d35d8F2eac09edB55C42D8077fbFcA';
 const NOW = 1_789_400_000;
 
-const POLICY = { moduleAddress: WITHDRAWAL_MODULE, assetAddresses: [WRAPPED_USDC, WRAPPED_CNGN], nowSeconds: NOW } as const;
+// The unified perp escrow: where cNGN has lived since the 2026-10-04 cutover.
+const CNGN_ESCROW = '0x37c976bb5d4887a714ef19AF6B83e34fe2f37c98';
+const POLICY = { moduleAddress: WITHDRAWAL_MODULE, assetAddresses: [WRAPPED_USDC, WRAPPED_CNGN, CNGN_ESCROW], nowSeconds: NOW } as const;
 
 function withdrawalData(asset: string = WRAPPED_USDC, amount = 1_999_575n) {
   return encodeAbiParameters([{ type: 'address' }, { type: 'uint256' }], [asset as `0x${string}`, amount]);
@@ -57,6 +59,7 @@ function rejectionOf(run: () => void): string {
 test('an allowlisted asset withdrawn to its owner passes policy', () => {
   assertWithdrawalPolicy(withdrawRequest(), POLICY);
   assertWithdrawalPolicy(withdrawRequest({ data: withdrawalData(WRAPPED_CNGN, 3_890_685_234n) }), POLICY);
+  assertWithdrawalPolicy(withdrawRequest({ data: withdrawalData(CNGN_ESCROW, 70_000_000_000n) }), POLICY);
 });
 
 test('withdrawal data decodes to exactly an asset and an amount', () => {

@@ -33,6 +33,33 @@ export function depositUnitsToLedger(units: bigint): bigint {
   return units * LEDGER_SCALE;
 }
 
+/**
+ * A deposit stated in every unit, under the names for its asset: `amount_usdc` and `credited_cash_e18` only when the
+ * asset is USDC, so a cNGN deposit is never labelled as USDC.
+ */
+export function depositAmounts(symbol: string, asset: `0x${string}`, units: bigint) {
+  const out: {
+    asset: `0x${string}`;
+    asset_symbol: string;
+    amount: string;
+    amount_units: string;
+    credited_e18: string;
+    amount_usdc?: string;
+    credited_cash_e18?: string;
+  } = {
+    asset,
+    asset_symbol: symbol,
+    amount: formatDepositUnits(units),
+    amount_units: units.toString(),
+    credited_e18: depositUnitsToLedger(units).toString(),
+  };
+  if (symbol === 'USDC') {
+    out.amount_usdc = out.amount;
+    out.credited_cash_e18 = out.credited_e18;
+  }
+  return out;
+}
+
 /** "1000.000000" for 1_000_000_000 base units. */
 export function formatDepositUnits(units: bigint): string {
   const scale = 10n ** BigInt(DEPOSIT_TOKEN_DECIMALS);
@@ -68,18 +95,19 @@ export class DepositRejectedError extends Error {
   }
 }
 
+/** One wrapped asset a deposit may pay into: its token's symbol, and the smallest deposit in 6-decimal base units. */
+export type DepositAsset = { address: `0x${string}`; symbol: string; minAmount: bigint };
+
 export type DepositPolicy = {
   moduleAddress: `0x${string}`;
-  /** Wrapped assets a deposit may pay into. Only the perp CashAsset for now. */
-  assetAddresses: readonly `0x${string}`[];
+  /** The wrapped assets a deposit may pay into (DEPOSIT_ASSETS): the perp CashAsset, and the cNGN escrow. */
+  assets: readonly DepositAsset[];
   /** The only manager a new account may be opened under: the perp SRM. */
   managerAddress: `0x${string}`;
-  /** In 6-decimal base units. */
-  minAmount: bigint;
   nowSeconds: number;
 };
 
-export type DepositData = { amount: bigint; asset: `0x${string}`; manager: `0x${string}` };
+export type DepositData = { amount: bigint; asset: `0x${string}`; manager: `0x${string}`; symbol?: string };
 
 const DEPOSIT_DATA_PATTERN = /^0x[0-9a-fA-F]{192}$/;
 const ADDRESS_WORD_PADDING = '0'.repeat(24);
@@ -118,15 +146,21 @@ export function assertDepositPolicy(request: DepositRequest, policy: DepositPoli
   }
 
   const data = decodeDepositData(action.data);
-  if (!policy.assetAddresses.some((allowed) => getAddress(allowed) === data.asset)) {
+  const asset = policy.assets.find((allowed) => getAddress(allowed.address) === data.asset);
+  if (!asset) {
     throw new DepositRejectedError(`asset ${data.asset} is not depositable through this executor`);
+  }
+  data.symbol = asset.symbol;
+  // Only USDC implements EIP-2612. A cNGN permit would be submitted and revert, at the venue's expense.
+  if (request.permit && asset.symbol !== 'USDC') {
+    throw new DepositRejectedError(`${asset.symbol} has no permit (EIP-2612); approve the deposit module on chain instead`);
   }
   if (data.amount === MAX_UINT256) {
     throw new DepositRejectedError('amount must be explicit; the max sentinel (deposit the whole balance) is not accepted');
   }
-  if (data.amount < policy.minAmount) {
+  if (data.amount < asset.minAmount) {
     throw new DepositRejectedError(
-      `amount ${formatDepositUnits(data.amount)} USDC is below the minimum ${formatDepositUnits(policy.minAmount)} USDC`,
+      `amount ${formatDepositUnits(data.amount)} ${asset.symbol} is below the minimum ${formatDepositUnits(asset.minAmount)} ${asset.symbol}`,
     );
   }
   const manager = getAddress(policy.managerAddress);
