@@ -282,9 +282,8 @@ variable "desired_count_execution" {
 variable "image_market_maker" {
   description = "Fully qualified mm-bot image, tagged by git SHA. Built from numofx/market-maker."
   type        = string
-  # 2026-10-08: logs the RPC endpoint as scheme and host only (market-maker #32), on top of
-  # resolving the market under either name across the rename (#31).
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:8851f9ba5070"
+  # 2026-10-10: MM_INVENTORY_SKEW_FULL_AT (market-maker #33); unset on spot, so spot is unchanged.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:e1ef066eb680"
 }
 
 variable "subaccounts_address" {
