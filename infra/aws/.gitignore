@@ -8,3 +8,9 @@
 *.tfvars
 *.tfvars.json
 crash.log
+
+# Saved plans (`-out=x.plan`) embed every resolved value, secrets included, and their text renderings and apply logs
+# can too. They are working files for one apply; the commit that matters is variables.tf.
+*.plan
+*.plan.txt
+*.apply.txt
