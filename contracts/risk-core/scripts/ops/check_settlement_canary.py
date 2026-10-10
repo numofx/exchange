@@ -18,7 +18,8 @@ Four checks, deliberately overlapping:
      outage run for a week.
 
   3. COLLATERAL BACKING of the cash ledger: every unit of cash must be backed by a real USDC
-     sitting in the CashAsset, nothing borrowed, and nothing printed by a manager.
+     sitting in the CashAsset, every borrower of cash above maintenance margin (borrowing against
+     cNGN collateral is how cross-margin works), and nothing printed by a manager.
      Checks 1 and 2 answer "can the venue price a trade"; this answers "is what it would
      settle actually there".
 
@@ -92,6 +93,19 @@ SEL_GET_BALANCE = "0x0806e640"       # getBalance(uint256,address,uint256)
 SEL_SUB_ACCOUNTS = "0x779e5012"      # subAccounts()
 SEL_MANAGER = "0x52981457"           # manager(uint256)
 SEL_MARGIN_AND_MTM = "0x6691bc04"    # getMarginAndMarkToMarket(uint256,bool,uint256)
+SEL_LAST_ACCOUNT_ID = "0x708c3593"   # lastAccountId()
+SEL_BALANCE_WITH_INTEREST = "0x77df2e81"  # calculateBalanceWithInterest(uint256)
+
+# Borrowing cash is how cross-margin works: an account that posts cNGN can run its USDC cash
+# below zero (account 27, 2026-10-10, -0.007365 after its first perp trade's fee). What must
+# never happen is a borrower the manager would not cover. Enumerating every account is
+# complete by construction; past this many, enumerate from balance events instead.
+MAX_ENUMERATED_ACCOUNTS = 2000
+# Interest accrues into totalBorrow lazily (on the next adjustment) and into an account's
+# balance on read, so the two drift slightly. The sum check is for a borrower the scan missed,
+# so it tolerates interest timing and nothing material: 1% of totalBorrow, or one cent.
+BORROW_SUM_TOLERANCE_BPS = 100
+BORROW_SUM_TOLERANCE_ABS = 10**16
 
 # AssetWhitelisted(address,uint256,uint8) -- used to discover which assets to check, so a new
 # market is covered without editing this file.
@@ -135,10 +149,6 @@ def call(url: str, to: str, data: str) -> str:
 def describe_revert(exc: Exception) -> str:
   """Pull a named custom error out of an eth_call failure where the node returns one."""
   text = str(exc)
-  actual_topic = "0x" + keccak(b"AssetWhitelisted(address,uint256,uint8)").hex()
-  assert actual_topic == TOPIC_ASSET_WHITELISTED, f"whitelist topic drifted: {actual_topic}"
-  assert to18(5_000_000_000, 6) == 5_000 * 10**18, "6dp -> 18dp scaling is wrong"
-  assert to18(1, 18) == 1, "18dp scaling must be a no-op"
   for selector, name in KNOWN_ERRORS.items():
     if selector in text:
       return f"{name} [{selector}]"
@@ -170,7 +180,7 @@ def to18(amount: int, decimals: int) -> int:
 
 
 def check_cash_backing(url: str, srm: str, failures: list, checked: list) -> None:
-  """Every unit of cash backed by a real USDC, nothing borrowed, nothing manager-printed.
+  """Every unit of cash backed by a real USDC, every borrower covered, nothing manager-printed.
 
   netSettledCash is the manager-credited component of totalSupply (CashAsset's own
   convention), so a non-zero value means cash exists that no deposit put there.
@@ -197,9 +207,8 @@ def check_cash_backing(url: str, srm: str, failures: list, checked: list) -> Non
       f"cash {cash} UNDER-BACKED: holds {held / 1e18:.6f} USDC against {total_cash / 1e18:.6f} "
       f"of backed cash (short {(total_cash - held) / 1e18:.6f})"
     )
-  if borrow != 0:
+  if borrow != 0 and not check_borrowers(url, srm, cash, borrow, failures, checked):
     ok = False
-    failures.append(f"cash {cash} totalBorrow is {borrow / 1e18:.6f}, expected 0")
 
   # Pinned, not required-zero. donateBalance burns against total_cash, which already excludes
   # netSettledCash, so a max donate burns exactly 0 -- verified on a Base fork. Requiring zero
@@ -217,6 +226,59 @@ def check_cash_backing(url: str, srm: str, failures: list, checked: list) -> Non
       f"cash {cash} backed ({held / 1e18:.6f} USDC against {total_cash / 1e18:.6f} required; "
       f"netSettledCash {settled / 1e18:.6f})"
     )
+
+
+def bool_arg(value: bool) -> str:
+  return f"{int(value):064x}"
+
+
+def uint_arg(value: int) -> str:
+  return f"{value:064x}"
+
+
+def check_borrowers(url: str, srm: str, cash: str, borrow: int, failures: list, checked: list) -> bool:
+  """Borrowed cash is fine while every borrower passes maintenance margin.
+
+  Every account from 1 to lastAccountId is read, so no borrower can be missed; the found
+  borrow must also add up to totalBorrow (within interest timing), so a scan that somehow did
+  miss one goes red rather than passing on the accounts it saw.
+  """
+  sub_accounts = "0x" + call(url, srm, SEL_SUB_ACCOUNTS)[26:]
+  last = uint(url, sub_accounts, SEL_LAST_ACCOUNT_ID)
+  if last > MAX_ENUMERATED_ACCOUNTS:
+    failures.append(
+      f"cash {cash} totalBorrow is {borrow / 1e18:.6f} across {last} accounts, more than the "
+      f"{MAX_ENUMERATED_ACCOUNTS} this check enumerates -- borrowers are unverified"
+    )
+    return False
+  ok = True
+  found = 0
+  borrowers = []
+  for account in range(1, last + 1):
+    stored = as_int256(call(url, sub_accounts, SEL_GET_BALANCE + uint_arg(account) + addr_arg(cash) + uint_arg(0)))
+    if stored >= 0:
+      continue
+    owed = -as_int256(call(url, cash, SEL_BALANCE_WITH_INTEREST + uint_arg(account)))
+    found += owed
+    manager = "0x" + call(url, sub_accounts, SEL_MANAGER + uint_arg(account))[26:]
+    maintenance = as_int256(call(url, manager, SEL_GET_MARGIN + uint_arg(account) + bool_arg(False)))
+    borrowers.append(f"{account} owes {owed / 1e18:.6f} (maintenance margin {maintenance / 1e18:+.6f})")
+    if maintenance < 0:
+      ok = False
+      failures.append(
+        f"cash {cash}: subaccount {account} borrows {owed / 1e18:.6f} and is BELOW MAINTENANCE "
+        f"margin by {-maintenance / 1e18:.6f} under {manager} -- borrowed cash not covered"
+      )
+  tolerance = max(borrow * BORROW_SUM_TOLERANCE_BPS // 10_000, BORROW_SUM_TOLERANCE_ABS)
+  if abs(found - borrow) > tolerance:
+    ok = False
+    failures.append(
+      f"cash {cash} totalBorrow is {borrow / 1e18:.6f} but the {last} accounts borrow "
+      f"{found / 1e18:.6f} -- a borrower is unaccounted for"
+    )
+  if ok:
+    checked.append(f"cash {cash} borrow {borrow / 1e18:.6f}, every borrower above maintenance: {'; '.join(borrowers)}")
+  return ok
 
 
 # ---------------------------------------------------------------------------------------------
@@ -445,6 +507,8 @@ def self_test() -> None:
     "subAccounts()": SEL_SUB_ACCOUNTS,
     "manager(uint256)": SEL_MANAGER,
     "getMarginAndMarkToMarket(uint256,bool,uint256)": SEL_MARGIN_AND_MTM,
+    "lastAccountId()": SEL_LAST_ACCOUNT_ID,
+    "calculateBalanceWithInterest(uint256)": SEL_BALANCE_WITH_INTEREST,
   }.items():
     actual = "0x" + keccak(signature.encode()).hex()[:8]
     assert actual == expected, f"{signature}: hardcoded {expected}, actual {actual}"
@@ -455,6 +519,65 @@ def self_test() -> None:
   for selector, name in KNOWN_ERRORS.items():
     actual = "0x" + keccak(name.encode()).hex()[:8]
     assert actual == selector, f"{name}: hardcoded {selector}, actual {actual}"
+
+  # describe_revert runs inside every except branch. It once held these self-test assertions,
+  # with keccak unimported, so ANY failing check crashed the canary with NameError instead of
+  # posting its reason (b1b12100 .. 2026-10-10). It must describe, not raise.
+  assert describe_revert(RuntimeError("execution reverted: 0x1141796d")) == "BLF_DataTooOld() [0x1141796d]"
+  assert describe_revert(RuntimeError("HTTP Error 429: Too Many Requests")) == "HTTP Error 429: Too Many Requests"
+
+  self_test_borrowers()
+
+
+def self_test_borrowers() -> None:
+  """check_borrowers against a fake chain: each rule broken once."""
+  global call
+  real_call = call
+  sub, cash, srm = "0x" + "5" * 40, "0x" + "c" * 40, "0x" + "a" * 40
+
+  def word(v: int) -> str:
+    return "0x" + format(v % (1 << 256), "064x")
+
+  def fake_chain(balances: dict, owed: dict, maintenance: dict):
+    def fake(url: str, to: str, data: str) -> str:
+      sel, args = data[:10], data[10:]
+      ints = [int(args[i:i + 64], 16) for i in range(0, len(args), 64)]
+      if to == srm and sel == SEL_SUB_ACCOUNTS:
+        return "0x" + "0" * 24 + sub[2:]
+      if to == sub and sel == SEL_LAST_ACCOUNT_ID:
+        return word(max(balances))
+      if to == sub and sel == SEL_GET_BALANCE:
+        return word(balances.get(ints[0], 0))
+      if to == sub and sel == SEL_MANAGER:
+        return "0x" + "0" * 24 + srm[2:]
+      if to == cash and sel == SEL_BALANCE_WITH_INTEREST:
+        return word(-owed[ints[0]])
+      if to == srm and sel == SEL_GET_MARGIN and ints[1] == 0:
+        return word(maintenance[ints[0]])
+      raise AssertionError(f"unexpected call {to} {data[:10]}")
+    return fake
+
+  e = 10**18
+  cases = [
+    # name, balances (stored), owed with interest, maintenance, totalBorrow, expect ok, expect text
+    ("covered borrower (account 27, 2026-10-10)", {26: 372 * e, 27: -7365454709765709}, {27: 7366247165066985},
+     {27: 1463972743057649929}, 7365454709765709, True, None),
+    ("borrower below maintenance", {1: 5 * e, 2: -3 * e}, {2: 3 * e}, {2: -e // 2}, 3 * e, False, "BELOW MAINTENANCE"),
+    ("borrower the scan missed", {1: 5 * e, 2: -3 * e}, {2: 3 * e}, {2: e}, 7 * e, False, "unaccounted for"),
+    ("interest drift within tolerance", {1: -100 * e}, {1: 100 * e + e // 2}, {1: e}, 100 * e, True, None),
+  ]
+  try:
+    for name, balances, owed, maintenance, borrow, want_ok, want_text in cases:
+      call = fake_chain(balances, owed, maintenance)
+      failures, checked = [], []
+      got = check_borrowers("fake", srm, cash, borrow, failures, checked)
+      assert got == want_ok, f"{name}: ok={got}, want {want_ok}; failures={failures}"
+      if want_text:
+        assert any(want_text in f for f in failures), f"{name}: no failure mentions {want_text!r}: {failures}"
+      else:
+        assert not failures, f"{name}: unexpected failures {failures}"
+  finally:
+    call = real_call
 
 
 def main() -> int:

@@ -69,7 +69,74 @@ const INVARIANT_ABI = [
     ],
     outputs: [{ type: 'int256' }],
   },
+  { type: 'function', name: 'lastAccountId', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
+  {
+    type: 'function', name: 'calculateBalanceWithInterest', stateMutability: 'view',
+    inputs: [{ name: 'accountId', type: 'uint256' }], outputs: [{ type: 'int256' }],
+  },
+  {
+    type: 'function', name: 'getMargin', stateMutability: 'view',
+    inputs: [{ name: 'accountId', type: 'uint256' }, { name: 'isInitial', type: 'bool' }], outputs: [{ type: 'int256' }],
+  },
 ] as const;
+
+/**
+ * Borrowing cash is how cross-margin works: an account that posts cNGN can run its USDC cash below
+ * zero (account 27, 2026-10-10: -0.007365 after its first perp trade's fee). What must never happen
+ * is a borrower the manager would not cover. Every account is enumerated, which is complete by
+ * construction; past this many, borrowers should be found from balance events instead.
+ */
+const MAX_ENUMERATED_ACCOUNTS = 2000n;
+/**
+ * Interest reaches totalBorrow lazily (on the next adjustment) and an account's balance on read,
+ * so the two drift slightly. The sum check exists for a borrower the scan missed, so it tolerates
+ * interest timing and nothing material: 1% of totalBorrow, or one cent.
+ */
+const BORROW_SUM_TOLERANCE_BPS = 100n;
+const BORROW_SUM_TOLERANCE_ABS = 10n ** 16n;
+
+type InvariantRead = <T>(address: `0x${string}`, functionName: string, args?: readonly unknown[]) => Promise<T>;
+
+/**
+ * Borrowed cash is fine while every borrower passes maintenance margin. Every account from 1 to
+ * lastAccountId is read, so none can be missed, and the borrow found must add up to totalBorrow
+ * (within interest timing), so a scan that did miss one goes red instead of passing. Mirrors
+ * check_borrowers in contracts/risk-core/scripts/ops/check_settlement_canary.py.
+ */
+export async function checkBorrowers(read: InvariantRead, manager: `0x${string}`, cash: `0x${string}`, borrow: bigint): Promise<string[]> {
+  const out: string[] = [];
+  const subAccounts = await read<`0x${string}`>(manager, 'subAccounts');
+  const last = await read<bigint>(subAccounts, 'lastAccountId');
+  if (last > MAX_ENUMERATED_ACCOUNTS) {
+    return [
+      `cash ${cash} totalBorrow is ${fmt(borrow)} across ${last} accounts, more than the ` +
+        `${MAX_ENUMERATED_ACCOUNTS} this check enumerates -- borrowers are unverified`,
+    ];
+  }
+  let found = 0n;
+  for (let account = 1n; account <= last; account++) {
+    const stored = await read<bigint>(subAccounts, 'getBalance', [account, cash, 0n]);
+    if (stored >= 0n) continue;
+    const owed = -(await read<bigint>(cash, 'calculateBalanceWithInterest', [account]));
+    found += owed;
+    const accountManager = await read<`0x${string}`>(subAccounts, 'manager', [account]);
+    const maintenance = await read<bigint>(accountManager, 'getMargin', [account, false]);
+    if (maintenance < 0n) {
+      out.push(
+        `cash ${cash}: subaccount ${account} borrows ${fmt(owed)} and is BELOW MAINTENANCE margin by ` +
+          `${fmt(-maintenance)} under ${accountManager} -- borrowed cash not covered`,
+      );
+    }
+  }
+  const tolerance = (borrow * BORROW_SUM_TOLERANCE_BPS) / 10_000n > BORROW_SUM_TOLERANCE_ABS
+    ? (borrow * BORROW_SUM_TOLERANCE_BPS) / 10_000n
+    : BORROW_SUM_TOLERANCE_ABS;
+  const gap = found > borrow ? found - borrow : borrow - found;
+  if (gap > tolerance) {
+    out.push(`cash ${cash} totalBorrow is ${fmt(borrow)} but the ${last} accounts borrow ${fmt(found)} -- a borrower is unaccounted for`);
+  }
+  return out;
+}
 
 const ASSET_WHITELISTED_EVENT = {
   type: 'event',
@@ -376,8 +443,8 @@ export class SettlementCanary {
   /**
    * Solvency invariants. Read-only, and independent of whether anything can be priced:
    *
-   *   1. Every unit of cash is backed by a real token in the CashAsset, nothing borrowed, and
-   *      nothing manager-printed. netSettledCash is CashAsset's own name for the credited-not-
+   *   1. Every unit of cash is backed by a real token in the CashAsset, every borrower of cash is
+   *      above maintenance margin (see checkBorrowers), and nothing is manager-printed. netSettledCash is CashAsset's own name for the credited-not-
    *      deposited component of totalSupply, so a non-zero value is exactly that.
    *   2. A WrappedERC20Asset mints on deposit and burns on withdraw, so its real token balance
    *      must equal the position it has credited. Any divergence means tokens entered or left
@@ -422,7 +489,7 @@ export class SettlementCanary {
             `(short ${fmt(totalCash - held)})`,
         );
       }
-      if (borrow !== 0n) out.push(`cash ${cash} totalBorrow is ${fmt(borrow)}, expected 0`);
+      if (borrow !== 0n) out.push(...(await checkBorrowers(read, this.options.manager, cash, borrow)));
 
       // netSettledCash is pinned rather than required to be zero. It is non-zero today and
       // cannot be retired by donateBalance -- that burns against totalCash, which already
