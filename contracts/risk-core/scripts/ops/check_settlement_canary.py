@@ -35,7 +35,9 @@ Env (or ~/.numo-feeds.env):
   RPC_URL            Base mainnet RPC
   ALERT_WEBHOOK_URL  Slack/Discord-compatible webhook (optional; logs only if unset)
   SRM_ADDRESS        StandardManager (default: the live Base deployment)
-  EXPECTED_NET_SETTLED_CASH  pin for netSettledCash; alert if it moves (unset = not checked)
+  EXPECTED_NET_SETTLED_CASH  the settled cash no perp position explains (0 for the perp cash
+                     ledger). netSettledCash plus every account's unsettled perp PnL and funding
+                     must equal it; unset = not checked. See check_settled_cash.
   WRAPPER_DELTA_EXCEPTIONS
                      comma-separated <wrapperAddress>:<expectedDelta18dp> pairs. A wrapper listed
                      here is healthy at exactly that delta and alerts if it MOVES, in either
@@ -95,6 +97,11 @@ SEL_MANAGER = "0x52981457"           # manager(uint256)
 SEL_MARGIN_AND_MTM = "0x6691bc04"    # getMarginAndMarkToMarket(uint256,bool,uint256)
 SEL_LAST_ACCOUNT_ID = "0x708c3593"   # lastAccountId()
 SEL_BALANCE_WITH_INTEREST = "0x77df2e81"  # calculateBalanceWithInterest(uint256)
+SEL_UNSETTLED_CASH = "0x7a4c2c3a"    # getUnsettledAndUnrealizedCash(uint256)
+ASSET_TYPE_PERPETUAL = 2             # IStandardManager.AssetType.Perpetual
+# netSettledCash and the perps' unsettled PnL are summed at one pinned block and agree to the wei
+# (verified at blocks 52418900, 52419874 and 52420278); this only absorbs per-account rounding.
+SETTLED_CASH_TOLERANCE = 10**12
 
 # Borrowing cash is how cross-margin works: an account that posts cNGN can run its USDC cash
 # below zero (account 27, 2026-10-10, -0.007365 after its first perp trade's fee). What must
@@ -142,8 +149,8 @@ def rpc(url: str, method: str, params: list):
   return out["result"]
 
 
-def call(url: str, to: str, data: str) -> str:
-  return rpc(url, "eth_call", [{"to": to, "data": data}, "latest"])
+def call(url: str, to: str, data: str, block: str = "latest") -> str:
+  return rpc(url, "eth_call", [{"to": to, "data": data}, block])
 
 
 def describe_revert(exc: Exception) -> str:
@@ -215,12 +222,8 @@ def check_cash_backing(url: str, srm: str, failures: list, checked: list) -> Non
   # would page forever about a value no available call can change. What matters is movement.
   expected = os.environ.get("EXPECTED_NET_SETTLED_CASH")
   if expected is not None and expected.strip() != "":
-    if settled != int(expected):
+    if not check_settled_cash(url, srm, cash, int(expected), failures, checked):
       ok = False
-      failures.append(
-        f"cash {cash} netSettledCash MOVED: {settled / 1e18:.6f}, pinned at {int(expected) / 1e18:.6f} "
-        f"(delta {(settled - int(expected)) / 1e18:+.6f}) -- a manager printed or burned settled cash"
-      )
   if ok:
     checked.append(
       f"cash {cash} backed ({held / 1e18:.6f} USDC against {total_cash / 1e18:.6f} required; "
@@ -234,6 +237,59 @@ def bool_arg(value: bool) -> str:
 
 def uint_arg(value: int) -> str:
   return f"{value:064x}"
+
+
+def perps_under(url: str, srm: str) -> list:
+  """Every perp whitelisted under the manager, from its AssetWhitelisted logs (data: asset, marketId, assetType)."""
+  logs = rpc(url, "eth_getLogs", [{"fromBlock": "0x0", "toBlock": "latest", "address": srm, "topics": [TOPIC_ASSET_WHITELISTED]}])
+  perps = []
+  for entry in logs:
+    data = entry["data"][2:]
+    asset, asset_type = "0x" + data[24:64], int(data[128:192], 16)
+    if asset_type == ASSET_TYPE_PERPETUAL and asset not in perps:
+      perps.append(asset)
+  return perps
+
+
+def check_settled_cash(url: str, srm: str, cash: str, baseline: int, failures: list, checked: list) -> bool:
+  """Settled cash must be accounted for by perp positions: perp PnL is zero-sum.
+
+  Every perp trade realizes the account's PnL and funding against the mark and pays it into
+  cash through the manager, which records it in netSettledCash (BaseManager._applyCashDelta).
+  Positions sum to zero across accounts, so what has been paid out equals minus what every
+  account has yet to be paid (getUnsettledAndUnrealizedCash: stored and unrealized PnL plus
+  funding). netSettledCash + that sum must equal the baseline, the settled cash no perp
+  explains. A manager printing or burning cash breaks it; trading does not -- which the old
+  pin did not know, and went red on the first perp trade that realized PnL (2026-10-10).
+  All reads are pinned to one block: the mark moves between blocks, and the sum is exact only
+  within one.
+  """
+  block = rpc(url, "eth_blockNumber", [])
+  at = lambda to, data: call(url, to, data, block)
+  settled = as_int256(at(cash, SEL_NET_SETTLED))
+  sub_accounts = "0x" + at(srm, SEL_SUB_ACCOUNTS)[26:]
+  last = int(at(sub_accounts, SEL_LAST_ACCOUNT_ID), 16)
+  if last > MAX_ENUMERATED_ACCOUNTS:
+    failures.append(f"cash {cash} netSettledCash unverified: {last} accounts, more than the {MAX_ENUMERATED_ACCOUNTS} this check enumerates")
+    return False
+  perps = perps_under(url, srm)
+  unsettled = 0
+  for perp in perps:
+    for account in range(1, last + 1):
+      unsettled += as_int256(at(perp, SEL_UNSETTLED_CASH + uint_arg(account)))
+  gap = settled + unsettled - baseline
+  if abs(gap) > SETTLED_CASH_TOLERANCE:
+    failures.append(
+      f"cash {cash} SETTLED CASH UNACCOUNTED: netSettledCash {settled / 1e18:.6f} + unsettled perp PnL "
+      f"{unsettled / 1e18:.6f} = {(settled + unsettled) / 1e18:.6f}, baseline {baseline / 1e18:.6f} "
+      f"(gap {gap / 1e18:+.6f}) -- cash settled that no perp position accounts for: a manager printed or burned cash"
+    )
+    return False
+  checked.append(
+    f"cash {cash} settled cash accounted for: netSettledCash {settled / 1e18:.6f} = -unsettled PnL across "
+    f"{len(perps)} perp(s) at block {int(block, 16)}"
+  )
+  return True
 
 
 def check_borrowers(url: str, srm: str, cash: str, borrow: int, failures: list, checked: list) -> bool:
@@ -509,6 +565,7 @@ def self_test() -> None:
     "getMarginAndMarkToMarket(uint256,bool,uint256)": SEL_MARGIN_AND_MTM,
     "lastAccountId()": SEL_LAST_ACCOUNT_ID,
     "calculateBalanceWithInterest(uint256)": SEL_BALANCE_WITH_INTEREST,
+    "getUnsettledAndUnrealizedCash(uint256)": SEL_UNSETTLED_CASH,
   }.items():
     actual = "0x" + keccak(signature.encode()).hex()[:8]
     assert actual == expected, f"{signature}: hardcoded {expected}, actual {actual}"
@@ -527,6 +584,7 @@ def self_test() -> None:
   assert describe_revert(RuntimeError("HTTP Error 429: Too Many Requests")) == "HTTP Error 429: Too Many Requests"
 
   self_test_borrowers()
+  self_test_settled_cash()
 
 
 def self_test_borrowers() -> None:
@@ -578,6 +636,66 @@ def self_test_borrowers() -> None:
         assert not failures, f"{name}: unexpected failures {failures}"
   finally:
     call = real_call
+
+
+def self_test_settled_cash() -> None:
+  """check_settled_cash against a fake chain: perp PnL zero-sum, each rule broken once."""
+  global call, rpc
+  real_call, real_rpc = call, rpc
+  srm, cash, sub = "0x" + "a" * 40, "0x" + "c" * 40, "0x" + "5" * 40
+  perp1, perp2, wrapper = "0x" + "1" * 40, "0x" + "2" * 40, "0x" + "3" * 40
+  e = 10**18
+
+  def word(v: int) -> str:
+    return "0x" + format(v % (1 << 256), "064x")
+
+  def whitelisted(asset: str, asset_type: int) -> dict:
+    return {"data": "0x" + "0" * 24 + asset[2:] + format(1, "064x") + format(asset_type, "064x")}
+
+  def fake(settled: int, unsettled: dict, perps=(perp1,)):
+    blocks = set()
+
+    def fake_rpc(url: str, method: str, params: list):
+      if method == "eth_blockNumber":
+        return "0x31f8f3a"
+      if method == "eth_getLogs":
+        return [whitelisted(p_, ASSET_TYPE_PERPETUAL) for p_ in perps] + [whitelisted(wrapper, 3)]
+      raise AssertionError(method)
+
+    def fake_call(url: str, to: str, data: str, block: str = "latest") -> str:
+      blocks.add(block)
+      sel, args = data[:10], data[10:]
+      if to == cash and sel == SEL_NET_SETTLED:
+        return word(settled)
+      if to == srm and sel == SEL_SUB_ACCOUNTS:
+        return "0x" + "0" * 24 + sub[2:]
+      if to == sub and sel == SEL_LAST_ACCOUNT_ID:
+        return word(3)
+      if sel == SEL_UNSETTLED_CASH:
+        return word(unsettled.get((to, int(args, 16)), 0))
+      raise AssertionError(f"unexpected call {to} {sel}")
+    return fake_rpc, fake_call, blocks
+
+  # name, netSettledCash, unsettled[(perp, account)], perps, baseline, expect ok
+  cases = [
+    ("perp PnL accounted for (block 52420278, real numbers)", 155777905523754,
+     {(perp1, 1): -10943022000000000, (perp1, 2): 10619464000000000, (perp1, 3): -155777905523754 + 10943022000000000 - 10619464000000000},
+     (perp1,), 0, True),
+    ("a manager printed cash", 5 * e, {(perp1, 1): -e, (perp1, 2): e}, (perp1,), 0, False),
+    ("a non-zero baseline is the part no perp explains", 7 * e + 2 * e, {(perp1, 1): -2 * e}, (perp1,), 7 * e, True),
+    ("every perp is summed, not just the first", 0, {(perp1, 1): e, (perp2, 2): -e}, (perp1, perp2), 0, True),
+  ]
+  try:
+    for name, settled, unsettled, perps, baseline, want in cases:
+      rpc, call, blocks = fake(settled, unsettled, perps)
+      failures, checked = [], []
+      got = check_settled_cash("fake", srm, cash, baseline, failures, checked)
+      assert got == want, f"{name}: ok={got}, want {want}; failures={failures}"
+      if not want:
+        assert any("SETTLED CASH UNACCOUNTED" in f for f in failures), f"{name}: {failures}"
+      assert blocks == {"0x31f8f3a"}, f"{name}: reads not pinned to one block: {blocks}"
+  finally:
+    call, rpc = real_call, real_rpc
 
 
 def main() -> int:

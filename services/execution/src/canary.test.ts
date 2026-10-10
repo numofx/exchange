@@ -111,7 +111,15 @@ function feeCanary(o: { owner?: string; allowance?: bigint; accrued?: bigint; qu
 /** A chain where every invariant holds, overridable per-call to break exactly one of them. */
 type Borrowers = { last: bigint; stored: Record<string, bigint>; owed: Record<string, bigint>; maintenance: Record<string, bigint> };
 
-function invariantCanary(overrides: Record<string, bigint> = {}, wrappers = [WRAPPER], borrowers?: Borrowers) {
+const PERP = '0xc74efc8b4808803dbcf439e76fde076d56625b8e';
+const PINNED_BLOCK = 52_420_278n;
+
+function invariantCanary(
+  overrides: Record<string, bigint> = {},
+  wrappers = [WRAPPER],
+  borrowers?: Borrowers,
+  settled: { unsettled?: Record<string, bigint>; blocksRead?: unknown[] } = {},
+) {
   const v = {
     cashHeld: 5_000_000n, // 5 USDC at 6dp
     cashSupply: 5_000_000_000_000_000_000n, // 5 cash at 18dp
@@ -130,13 +138,20 @@ function invariantCanary(overrides: Record<string, bigint> = {}, wrappers = [WRA
     intervalMs: 60_000,
     announceOnStart: false,
     client: {
-      getLogs: async () => wrappers.map((asset) => ({ args: { asset } })),
-      readContract: async (a: { address: string; functionName: string; args?: readonly unknown[] }) => {
+      getLogs: async () => [...wrappers.map((asset) => ({ args: { asset, assetType: 3 } })), { args: { asset: PERP, assetType: 2 } }],
+      getBlockNumber: async () => PINNED_BLOCK,
+      readContract: async (a: { address: string; functionName: string; args?: readonly unknown[]; blockNumber?: bigint }) => {
         const id = String(a.args?.[0]);
+        if (['netSettledCash', 'getUnsettledAndUnrealizedCash'].includes(a.functionName)) settled.blocksRead?.push([a.functionName, a.blockNumber]);
+        if (a.address === PERP) {
+          // A perp is not a wrapper: wrappedAsset reverts on it, as on chain.
+          if (a.functionName === 'getUnsettledAndUnrealizedCash') return settled.unsettled?.[id] ?? 0n;
+          throw new Error('execution reverted');
+        }
         switch (a.functionName) {
           // getMargin(id, true) is the settlement probe; getMargin(id, false) a borrower's maintenance.
           case 'getMargin': return a.args?.[1] === false ? borrowers!.maintenance[id] : 0n;
-          case 'lastAccountId': return borrowers!.last;
+          case 'lastAccountId': return borrowers?.last ?? 3n;
           case 'getBalance': return borrowers!.stored[id] ?? 0n;
           case 'calculateBalanceWithInterest': return -borrowers!.owed[id];
           case 'cashAsset': return CASH;
@@ -474,22 +489,44 @@ test('a backing failure alerts under its own headline, not the halt one', async 
   assert.doesNotMatch(sent[0]!, /SETTLEMENT HALTED/);
 });
 
-// Pinned, not required-zero: donateBalance burns against totalCash, which already excludes
-// netSettledCash, so a max donate burns exactly 0 (verified on a Base fork). Requiring zero
-// would page forever about a value no available call can change.
-test('a pinned netSettledCash that has not moved is not a failure', async () => {
-  const canary = invariantCanary({ cashSettled: 1_000n });
-  (canary as unknown as { options: Record<string, unknown> }).options.expectedNetSettledCash = 1_000n;
-  const snapshot = await canary.check();
-  assert.equal(snapshot.ok, true, snapshot.invariant_failures.join(' '));
+// The pin is the baseline of a zero-sum check: netSettledCash + every account's unsettled perp PnL must equal it.
+// Perp trading moves netSettledCash by design (2026-10-10: 0 -> -0.000599 -> +0.000156 over two trades, both
+// canaries red), so the pin alone could not tell trading from printing.
+function pinned(baseline: bigint, settledCash: bigint, unsettled: Record<string, bigint>, blocksRead?: unknown[]) {
+  const canary = invariantCanary({ cashSettled: settledCash }, [WRAPPER], undefined, { unsettled, blocksRead });
+  (canary as unknown as { options: Record<string, unknown> }).options.expectedNetSettledCash = baseline;
+  return canary;
+}
+
+test('settled cash that perp PnL accounts for is not a failure (block 52420278, real numbers)', async () => {
+  const snapshot = await pinned(0n, 155_777_905_523_754n, {
+    '1': -10_943_022_000_000_000n,
+    '2': 10_619_464_000_000_000n,
+    '3': -155_777_905_523_754n + 10_943_022_000_000_000n - 10_619_464_000_000_000n,
+  }).check();
+  assert.deepEqual(snapshot.invariant_failures, []);
 });
 
-test('netSettledCash moving off its pin is caught', async () => {
-  const canary = invariantCanary({ cashSettled: 2_000n });
-  (canary as unknown as { options: Record<string, unknown> }).options.expectedNetSettledCash = 1_000n;
-  const snapshot = await canary.check();
+test('cash a manager printed, which no perp position accounts for, is caught', async () => {
+  const snapshot = await pinned(1_000n, 2_000n * 10n ** 18n, {}).check();
   assert.equal(snapshot.ok, false);
-  assert.match(snapshot.invariant_failures.join(' '), /netSettledCash MOVED/);
+  assert.match(snapshot.invariant_failures.join(' '), /SETTLED CASH UNACCOUNTED/);
+});
+
+test('the pin is the settled cash no perp explains, and perp PnL is measured from it', async () => {
+  // A baseline well above the rounding tolerance, so ignoring it cannot pass by accident.
+  const snapshot = await pinned(7n * 10n ** 18n, 7n * 10n ** 18n + 5n * 10n ** 18n, { '1': -5n * 10n ** 18n }).check();
+  assert.deepEqual(snapshot.invariant_failures, []);
+});
+
+test('the zero-sum reads are pinned to one block', async () => {
+  const reads: [string, unknown][] = [];
+  await pinned(0n, 0n, {}, reads as unknown[]).check();
+  const unsettled = reads.filter(([fn]) => fn === 'getUnsettledAndUnrealizedCash');
+  assert.equal(unsettled.length, 3, 'one per account');
+  assert.ok(unsettled.every(([, block]) => block === PINNED_BLOCK), 'every unsettled-PnL read at the pinned block');
+  // The backing check reads netSettledCash at latest; the zero-sum check must read its own at the same pinned block.
+  assert.ok(reads.some(([fn, block]) => fn === 'netSettledCash' && block === PINNED_BLOCK), 'netSettledCash read at the pinned block');
 });
 
 test('no pin configured means netSettledCash is not checked at all', async () => {
