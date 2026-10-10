@@ -94,7 +94,7 @@ stay where they were put and remain withdrawable either way.
 
 - The SecurityModule rule and the keeper's `MAX_CNGN_INVENTORY` now cover spot holdings: cNGN under
   the perp SRM is MM inventory plus margin deposits. Re-size `MAX_CNGN_INVENTORY` and the escrow cap
-  against that total; the pager's `sm-coverage` reads actual one-side open interest and is unchanged.
+  against that total (the escrow cap was raised to 50M cNGN on 2026-10-10; see cngn-perp-go-live.md); the pager's `sm-coverage` reads actual one-side open interest and is unchanged.
 - Thin cNGN liquidity is the exposure when the keeper inherits cNGN: it hedges on the perp rather
   than dumping on spot (unchanged).
 - One pause, one SRM: a guardian pause for a perp incident stops spot too.
