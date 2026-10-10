@@ -55,7 +55,12 @@ const tradeModuleAddress = config.tradeModuleAddress ?? deploymentAddresses.trad
 const withdrawalModuleAddress = config.withdrawalModuleAddress ?? deploymentAddresses.withdrawal;
 const withdrawal =
   withdrawalModuleAddress && config.withdrawalAssetAddresses.length > 0
-    ? { moduleAddress: withdrawalModuleAddress, assetAddresses: config.withdrawalAssetAddresses }
+    ? {
+        moduleAddress: withdrawalModuleAddress,
+        assetAddresses: config.withdrawalAssetAddresses,
+        maxGasWeiPerHour: config.withdrawalMaxGasWeiPerHour,
+        alertWebhookUrl: config.alertWebhookUrl,
+      }
     : undefined;
 
 const executor = await MatchExecutor.create(config, {
@@ -89,6 +94,7 @@ const canary = config.settlementCanary
 canary?.start();
 // Reports a deposit pause (executor below its floor, or the hourly gas budget spent) even when nobody is depositing.
 executor.depositGate?.watch(300_000);
+executor.withdrawalGate?.watch(300_000);
 
 const app = buildApp({
   config,

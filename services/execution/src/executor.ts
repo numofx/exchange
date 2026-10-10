@@ -19,7 +19,7 @@ import { NonceTracker } from './nonce-tracker.js';
 import { broadcastWithNonce } from './broadcast.js';
 import { assertSignerIsOwner, type SubmittedAction } from './signer-guard.js';
 import type { DepositRequest, DepositResponse, ExecuteMatchRequest, ExecuteMatchResponse, WithdrawRequest } from './types.js';
-import { DepositGate, PROVISIONAL_DEPOSIT_GAS, receiptCostWei } from './deposit-gate.js';
+import { SponsorGate, PROVISIONAL_SPONSORED_GAS, receiptCostWei } from './sponsor-gate.js';
 import {
   DepositRejectedError,
   assertDepositPolicy,
@@ -55,6 +55,9 @@ export type ExecutorDependencies = {
   withdrawal?: {
     moduleAddress: `0x${string}`;
     assetAddresses: readonly `0x${string}`[];
+    /** Gas sponsored withdrawals may spend per rolling hour. No floor: users can always withdraw. */
+    maxGasWeiPerHour: bigint;
+    alertWebhookUrl?: string;
   };
   /** Sponsored deposits. Absent unless DEPOSITS_ENABLED; `deposit` then refuses. */
   deposit?: NonNullable<AppConfig['deposit']>;
@@ -70,7 +73,9 @@ export class MatchExecutor {
   // Nonces are tracked locally, inside that queue; see nonce-tracker.ts.
   private readonly nonces: NonceTracker;
   /** Floor and gas budget for sponsored deposits; undefined unless deposits are configured. */
-  readonly depositGate?: DepositGate;
+  readonly depositGate?: SponsorGate;
+  /** Gas budget (no floor) for sponsored withdrawals; undefined unless withdrawals are configured. */
+  readonly withdrawalGate?: SponsorGate;
   /**
    * Deposits by action hash, so a retried request (a client timeout, a double click) gets the same result instead of
    * a second broadcast. Kept for two hours: an action expires within one, after which it could not be resubmitted
@@ -112,13 +117,28 @@ export class MatchExecutor {
     this.publicClient = createPublicClient({ chain: this.chain, transport: http(config.rpcUrl) });
     this.walletClient = createWalletClient({ account: this.account, chain: this.chain, transport: http(config.rpcUrl) });
     this.nonces = new NonceTracker(() => this.publicClient.getTransactionCount({ address: this.account.address, blockTag: 'pending' }));
+    const readBalance = () => this.publicClient.getBalance({ address: this.account.address });
+    const log = (level: string, message: string, fields: Record<string, unknown>) =>
+      process.stdout.write(`${JSON.stringify({ level, msg: message, ...fields })}\n`);
     if (deps.deposit) {
-      this.depositGate = new DepositGate({
+      this.depositGate = new SponsorGate({
+        subject: 'deposits',
+        reject: (message) => new DepositRejectedError(message, undefined, 503),
         minExecutorWei: deps.deposit.minExecutorWei,
         maxGasWeiPerHour: deps.deposit.maxGasWeiPerHour,
-        readBalance: () => this.publicClient.getBalance({ address: this.account.address }),
+        readBalance,
         alertWebhookUrl: deps.deposit.alertWebhookUrl,
-        log: (level, message, fields) => process.stdout.write(`${JSON.stringify({ level, msg: message, ...fields })}\n`),
+        log,
+      });
+    }
+    if (deps.withdrawal) {
+      this.withdrawalGate = new SponsorGate({
+        subject: 'withdrawals',
+        reject: (message) => new WithdrawalRejectedError(message, undefined, 503),
+        maxGasWeiPerHour: deps.withdrawal.maxGasWeiPerHour,
+        readBalance,
+        alertWebhookUrl: deps.withdrawal.alertWebhookUrl,
+        log,
       });
     }
   }
@@ -266,6 +286,8 @@ export class MatchExecutor {
       nowSeconds: Math.floor(Date.now() / 1000),
     });
 
+    const gate = this.withdrawalGate!;
+    await gate.check();
     const args = buildWithdrawArgs(request);
     const abi = [...this.deps.matchingAbi, ...withdrawalRevertErrorsAbi] as Abi;
 
@@ -278,6 +300,7 @@ export class MatchExecutor {
         }
         throw error;
       },
+      beforeSend: () => gate.assertBudget(),
     });
 
     if (txHash === 'dry-run') {
@@ -289,9 +312,11 @@ export class MatchExecutor {
         hash: txHash,
         timeout: this.config.withdrawalReceiptTimeoutMs,
       });
+      gate.record(receiptCostWei(receipt));
       return buildReceiptResponse(txHash, receipt);
     } catch (error) {
       if (error instanceof WaitForTransactionReceiptTimeoutError) {
+        gate.record(PROVISIONAL_SPONSORED_GAS * (await this.publicClient.getGasPrice().catch(() => 0n)));
         return { accepted: false, tx_hash: txHash, receipt_status: 'timeout' };
       }
       throw error;
@@ -338,7 +363,7 @@ export class MatchExecutor {
     request: DepositRequest,
     module: `0x${string}`,
     data: { amount: bigint; asset: `0x${string}` },
-    gate: DepositGate,
+    gate: SponsorGate,
   ): Promise<`0x${string}` | undefined> {
     const token = (await this.publicClient.readContract({ address: data.asset, abi: wrappedAssetAbi, functionName: 'wrappedAsset' })) as `0x${string}`;
     const covered = async () =>
@@ -417,7 +442,7 @@ export class MatchExecutor {
     } catch (error) {
       if (error instanceof WaitForTransactionReceiptTimeoutError) {
         // The outcome is unknown, but the gas may be spent: count a conservative provisional cost.
-        gate.record(PROVISIONAL_DEPOSIT_GAS * (await this.publicClient.getGasPrice().catch(() => 0n)));
+        gate.record(PROVISIONAL_SPONSORED_GAS * (await this.publicClient.getGasPrice().catch(() => 0n)));
         return { accepted: false, tx_hash: txHash, receipt_status: 'timeout', ...amounts };
       }
       throw error;

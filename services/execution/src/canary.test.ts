@@ -20,6 +20,7 @@ const config: AppConfig = {
   receiptTimeoutMs: 60_000,
   withdrawalAssetAddresses: [],
   withdrawalReceiptTimeoutMs: 30_000,
+  withdrawalMaxGasWeiPerHour: 2_000_000_000_000_000n,
 };
 
 const CASH_ = '0x6B232A2155Bd0C9bf741dB4cf8E7e8A0176A6fc6';
