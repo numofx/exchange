@@ -10,7 +10,7 @@
 variable "deposits_enabled" {
   description = "Serve POST /v1/deposits. Both services read it at boot."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "deposit_module_address" {
