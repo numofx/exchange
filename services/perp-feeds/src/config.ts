@@ -80,7 +80,11 @@ const envSchema = z.object({
   MARK_UPDATE_THRESHOLD_BPS: z.coerce.number().int().nonnegative().default(10),
   MARK_MAX_AGE_MS: z.coerce.number().int().positive().default(420_000),
   MARK_MAX_BASIS_BPS: z.coerce.number().int().positive().max(600).default(200),
-  IMPACT_NOTIONAL_USD: z.coerce.number().positive().default(1_000),
+  // Inside the maker's first rung ($116), so funding leaves the static rate once its inventory lean
+  // passes the 15 bps half spread rather than ~42 bps into the ladder. Must stay under one rung:
+  // a rung is whole cNGN, worth a hair under its USDC size, and a side short of the notional reads
+  // as the index (no premium).
+  IMPACT_NOTIONAL_USD: z.coerce.number().positive().default(100),
 
   // Feed timestamps are signed this far behind the chain head: the feed rejects future timestamps.
   TIMESTAMP_SAFETY_SEC: z.coerce.number().int().nonnegative().default(15),
