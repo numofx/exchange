@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,20 +13,22 @@ import (
 
 // depositRecord is one row of the deposits table (migration 000018).
 type depositRecord struct {
-	ActionHash            string    `json:"action_hash"`
-	Owner                 string    `json:"owner"`
-	Nonce                 string    `json:"nonce"`
-	SubaccountIDRequested string    `json:"subaccount_id_requested"`
-	AmountUnits           string    `json:"amount_units"`
-	Status                string    `json:"status"`
-	TxHash                string    `json:"tx_hash,omitempty"`
-	PermitTxHash          string    `json:"permit_tx_hash,omitempty"`
-	BlockNumber           string    `json:"block_number,omitempty"`
-	SubaccountID          string    `json:"subaccount_id,omitempty"`
-	Error                 string    `json:"error,omitempty"`
-	Revert                string    `json:"revert,omitempty"`
-	CreatedAt             time.Time `json:"created_at"`
-	UpdatedAt             time.Time `json:"updated_at"`
+	ActionHash            string `json:"action_hash"`
+	Owner                 string `json:"owner"`
+	Nonce                 string `json:"nonce"`
+	SubaccountIDRequested string `json:"subaccount_id_requested"`
+	AmountUnits           string `json:"amount_units"`
+	// Asset is the wrapped asset deposited, lowercased; empty on records from before migration 000019 (all USDC cash).
+	Asset        string    `json:"asset,omitempty"`
+	Status       string    `json:"status"`
+	TxHash       string    `json:"tx_hash,omitempty"`
+	PermitTxHash string    `json:"permit_tx_hash,omitempty"`
+	BlockNumber  string    `json:"block_number,omitempty"`
+	SubaccountID string    `json:"subaccount_id,omitempty"`
+	Error        string    `json:"error,omitempty"`
+	Revert       string    `json:"revert,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 const (
@@ -51,25 +54,25 @@ type pgDepositStore struct{ pool *pgxpool.Pool }
 
 const depositColumns = `action_hash, owner, nonce, subaccount_id_requested, amount_units::text, status,
 	coalesce(tx_hash, ''), coalesce(permit_tx_hash, ''), coalesce(block_number, ''), coalesce(subaccount_id, ''),
-	coalesce(error, ''), coalesce(revert, ''), created_at, updated_at`
+	coalesce(error, ''), coalesce(revert, ''), created_at, updated_at, coalesce(asset, '')`
 
 func scanDeposit(row pgx.Row) (depositRecord, error) {
 	var r depositRecord
 	err := row.Scan(&r.ActionHash, &r.Owner, &r.Nonce, &r.SubaccountIDRequested, &r.AmountUnits, &r.Status,
-		&r.TxHash, &r.PermitTxHash, &r.BlockNumber, &r.SubaccountID, &r.Error, &r.Revert, &r.CreatedAt, &r.UpdatedAt)
+		&r.TxHash, &r.PermitTxHash, &r.BlockNumber, &r.SubaccountID, &r.Error, &r.Revert, &r.CreatedAt, &r.UpdatedAt, &r.Asset)
 	return r, err
 }
 
 func (s *pgDepositStore) Claim(ctx context.Context, rec depositRecord) (depositRecord, bool, error) {
 	// One statement: insert, or reclaim a rejected row; anything else is left as it is and read back.
 	row := s.pool.QueryRow(ctx, `
-		insert into deposits (action_hash, owner, nonce, subaccount_id_requested, amount_units, status)
-		values ($1, $2, $3, $4, $5::numeric, 'pending')
+		insert into deposits (action_hash, owner, nonce, subaccount_id_requested, amount_units, status, asset)
+		values ($1, $2, $3, $4, $5::numeric, 'pending', nullif($6, ''))
 		on conflict (action_hash) do update
 		  set status = 'pending', error = null, revert = null, updated_at = now()
 		  where deposits.status = 'rejected'
 		returning `+depositColumns,
-		rec.ActionHash, rec.Owner, rec.Nonce, rec.SubaccountIDRequested, rec.AmountUnits)
+		rec.ActionHash, rec.Owner, rec.Nonce, rec.SubaccountIDRequested, rec.AmountUnits, strings.ToLower(rec.Asset))
 	claimed, err := scanDeposit(row)
 	if err == nil {
 		return claimed, true, nil

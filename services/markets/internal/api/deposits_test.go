@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/numofx/matching-backend/internal/config"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -140,16 +141,18 @@ func newDepositHarness() *depositHarness {
 			signatures: signatures,
 			deposits: &depositService{
 				moduleAddress: testDepositModule,
-				assets:        []string{testPerpCash},
-				manager:       testDepositSRM,
-				minAmount:     usdc(10),
-				chain:         chain,
-				submitter:     submitter,
-				limiter:       newWithdrawalLimiter(3),
-				hourly:        newOwnerHourlyCap(6),
-				store:         newMemDepositStore(),
-				receipts:      &fakeDepositReceipts{},
-				now:           func() time.Time { return testWithdrawalNow },
+				assets: depositAssetsByAddress([]config.DepositAsset{
+					{Address: testPerpCash, Symbol: "USDC", MinAmount: usdc(10)},
+					{Address: cngnEscrow, Symbol: "cNGN", MinAmount: usdc(15_000)},
+				}),
+				manager:   testDepositSRM,
+				chain:     chain,
+				submitter: submitter,
+				limiter:   newWithdrawalLimiter(3),
+				hourly:    newOwnerHourlyCap(6),
+				store:     newMemDepositStore(),
+				receipts:  &fakeDepositReceipts{},
+				now:       func() time.Time { return testWithdrawalNow },
 			},
 		},
 		chain:      chain,
@@ -210,10 +213,18 @@ func TestDepositRequestRules(t *testing.T) {
 		{"an expiry more than an hour ahead", func(r *depositRequest) {
 			r.Action.Expiry = strconv.FormatInt(testWithdrawalNow.Unix()+3601, 10)
 		}, "at most one hour"},
-		// Accepted on chain (DepositModuleFork.testContractAcceptsADifferentWrappedAsset): only this stops it.
-		{"the cNGN escrow", func(r *depositRequest) {
-			r.Action.Data = depositDataHex(usdc(1_000), testCNGNEscrow, testDepositSRM)
+		// Accepted on chain (DepositModuleFork.testContractAcceptsADifferentWrappedAsset): only the list stops it.
+		{"an asset that is not listed (the legacy wrapped USDC)", func(r *depositRequest) {
+			r.Action.Data = depositDataHex(usdc(1_000), testWrappedUSDC, testDepositSRM)
 		}, "not depositable"},
+		{"cNGN below its own minimum", func(r *depositRequest) {
+			r.Action.Data = depositDataHex(usdc(14_999), testCNGNEscrow, testDepositSRM)
+			r.Permit = nil
+		}, "14999.000000 cNGN is below the minimum 15000.000000 cNGN"},
+		{"a permit on cNGN, which has none", func(r *depositRequest) {
+			r.Action.Data = depositDataHex(usdc(20_000), testCNGNEscrow, testDepositSRM)
+			r.Permit = &depositPermit{Value: usdc(20_000).String(), Deadline: strconv.FormatInt(testWithdrawalNow.Unix()+600, 10), Signature: "0x" + strings.Repeat("ab", 65)}
+		}, "cNGN has no permit"},
 		// On chain the max sentinel deposits the owner's whole balance (testContractTreatsMaxAmountAsTheWholeBalance).
 		{"the max sentinel", func(r *depositRequest) { r.Action.Data = depositDataHex(maxUint256, testPerpCash, testDepositSRM) }, "must be explicit"},
 		{"below the minimum", func(r *depositRequest) {
@@ -320,8 +331,8 @@ func TestDepositExecutorRevertsMapToClear400s(t *testing.T) {
 
 func TestDepositUnknownRevertStays422(t *testing.T) {
 	h := newDepositHarness()
-	h.submitter.err = &executorWithdrawError{Status: http.StatusUnprocessableEntity, Message: "deposit would revert: BM_AssetCapExceeded", Revert: "BM_AssetCapExceeded"}
-	expectDeposit(t, postDeposit(t, h.server, validDeposit()), http.StatusUnprocessableEntity, "BM_AssetCapExceeded")
+	h.submitter.err = &executorWithdrawError{Status: http.StatusUnprocessableEntity, Message: "deposit would revert: XX_NotYetKnown", Revert: "XX_NotYetKnown"}
+	expectDeposit(t, postDeposit(t, h.server, validDeposit()), http.StatusUnprocessableEntity, "XX_NotYetKnown")
 }
 
 func TestDepositsAre503WhenOff(t *testing.T) {
@@ -344,6 +355,13 @@ func TestDepositSelectorsMatchTheirSignatures(t *testing.T) {
 		"wrappedAsset()":              sigWrapped,
 		"balanceOf(address)":          sigBalanceOf,
 		"allowance(address,address)":  sigAllowanceOf,
+		"totalPositionCap(address)":   sigEscrowCap,
+		"totalPosition(address)":      sigEscrowTotal,
+		"whitelistedManager(address)": sigEscrowOpen,
+		// token_controls.go
+		"paused()":               sigPaused,
+		"isBlacklisted(address)": sigIsBlacklisted,
+		"isBlackListed(address)": sigIsBlackListed,
 	} {
 		h := sha3.NewLegacyKeccak256()
 		h.Write([]byte(sig))
@@ -642,4 +660,115 @@ func TestDepositRefusedPermitMapsToA400(t *testing.T) {
 	h := newDepositHarness()
 	h.submitter.err = &executorWithdrawError{Status: http.StatusUnprocessableEntity, Message: "permit would revert", Revert: "permit: EIP2612: invalid signature"}
 	expectDeposit(t, postDeposit(t, h.server, withPermit(usdc(1_000), testWithdrawalNow.Unix()+600)), http.StatusBadRequest, "refused the permit")
+}
+
+// cNGN deposits: the asset's own minimum, no permit, its collateral cap, and amounts never labelled USDC.
+
+func uintWord(n *big.Int) string { return fmt.Sprintf("0x%064x", n) }
+
+// venueTokenState is a chain where nothing is frozen or paused, both assets accept the manager, the cash has no cap
+// (totalPositionCap reverts on it, as on Base), and the escrow holds `posted` of an 8M cap.
+func venueTokenState(posted *big.Int) *fakeTokenState {
+	state := newTokenState()
+	for _, asset := range []string{testPerpCash, testCNGNEscrow} {
+		state.answers[asset+" "+sigEscrowOpen+addressArg(testDepositSRM)] = trueWord
+	}
+	state.errs = map[string]error{testPerpCash + " " + sigEscrowCap + addressArg(testDepositSRM): errors.New("execution reverted")}
+	state.answers[testCNGNEscrow+" "+sigEscrowCap+addressArg(testDepositSRM)] = uintWord(new(big.Int).Mul(big.NewInt(8_000_000), big.NewInt(1e18)))
+	state.answers[testCNGNEscrow+" "+sigEscrowTotal+addressArg(testDepositSRM)] = uintWord(posted)
+	return state
+}
+
+// cngnHarness is a deposit harness whose owner holds and has approved 100,000 cNGN, on a venue chain with `posted`.
+func cngnHarness(posted *big.Int) *depositHarness {
+	h := newDepositHarness()
+	h.chain.balance, h.chain.allowance = usdc(100_000), usdc(100_000)
+	h.server.deposits.tokens = venueTokenState(posted)
+	return h
+}
+
+func cngnDeposit(amount *big.Int) depositRequest {
+	req := validDeposit()
+	req.Action.Data = depositDataHex(amount, testCNGNEscrow, testDepositSRM)
+	req.Permit = nil
+	return req
+}
+
+func e18(whole int64) *big.Int { return new(big.Int).Mul(big.NewInt(whole), big.NewInt(1e18)) }
+
+func TestACngnDepositIsAnsweredInCngnAndNeverAsUSDC(t *testing.T) {
+	h := cngnHarness(e18(416_132))
+	rec := postDeposit(t, h.server, cngnDeposit(usdc(20_000)))
+	expectDeposit(t, rec, http.StatusOK, "")
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["asset"] != testCNGNEscrow || body["asset_symbol"] != "cNGN" || body["amount"] != "20000.000000" ||
+		body["amount_units"] != "20000000000" || body["credited_e18"] != "20000000000000000000000" {
+		t.Fatalf("cNGN deposit answered %s", rec.Body.String())
+	}
+	if _, ok := body["amount_usdc"]; ok {
+		t.Fatalf("a cNGN deposit must not carry amount_usdc: %s", rec.Body.String())
+	}
+	if _, ok := body["credited_cash_e18"]; ok {
+		t.Fatalf("a cNGN deposit credits the escrow, not cash: %s", rec.Body.String())
+	}
+
+	// The record says the same on a later GET.
+	got := getDepositBody(t, h.server, body["action_hash"].(string))
+	if got["asset_symbol"] != "cNGN" || got["amount_usdc"] != nil {
+		t.Fatalf("GET answered %v", got)
+	}
+}
+
+func TestAUSDCDepositKeepsItsOriginalFieldsAlongsideTheNewOnes(t *testing.T) {
+	h := newDepositHarness()
+	h.server.deposits.tokens = venueTokenState(e18(0))
+	rec := postDeposit(t, h.server, validDeposit())
+	expectDeposit(t, rec, http.StatusOK, "")
+	var body map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	if body["asset_symbol"] != "USDC" || body["amount"] != "1000.000000" || body["amount_usdc"] != "1000.000000" ||
+		body["credited_cash_e18"] != "1000000000000000000000" || body["credited_e18"] != "1000000000000000000000" {
+		t.Fatalf("USDC deposit answered %s", rec.Body.String())
+	}
+}
+
+func TestARecordFromBeforeAssetsWereStoredReadsAsUSDC(t *testing.T) {
+	h := newDepositHarness()
+	store := h.server.deposits.store.(*memDepositStore)
+	store.rows["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"] = depositRecord{ActionHash: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Owner: "0xabc", Nonce: "1", SubaccountIDRequested: "0", AmountUnits: "10000000", Status: depositConfirmed}
+	got := getDepositBody(t, h.server, "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if got["asset_symbol"] != "USDC" || got["amount_usdc"] != "10.000000" {
+		t.Fatalf("a pre-000019 record answered %v", got)
+	}
+}
+
+func TestACngnDepositPastTheCapIsRefusedWithTheRoomLeft(t *testing.T) {
+	h := cngnHarness(e18(7_990_000))
+	rec := postDeposit(t, h.server, cngnDeposit(usdc(20_000)))
+	expectDeposit(t, rec, http.StatusBadRequest, "past its cap of 8000000 cNGN (7990000 cNGN posted, room for 10000 cNGN)")
+	if h.submitter.received != nil {
+		t.Fatal("a deposit over the cap reached the executor")
+	}
+	// Exactly to the cap is fine: the contract refuses only what crosses it.
+	h = cngnHarness(e18(7_980_000))
+	expectDeposit(t, postDeposit(t, h.server, cngnDeposit(usdc(20_000))), http.StatusOK, "")
+}
+
+func TestADepositIntoAnAssetThatNoLongerAcceptsTheManagerIsRefused(t *testing.T) {
+	h := cngnHarness(e18(0))
+	delete(h.server.deposits.tokens.(*fakeTokenState).answers, testCNGNEscrow+" "+sigEscrowOpen+addressArg(testDepositSRM))
+	expectDeposit(t, postDeposit(t, h.server, cngnDeposit(usdc(20_000))), http.StatusBadRequest, "cNGN deposits are closed")
+}
+
+func getDepositBody(t *testing.T, server *Server, hash string) map[string]any {
+	t.Helper()
+	rec := getDeposit(t, server, hash)
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("GET %s: %d %s", hash, rec.Code, rec.Body.String())
+	}
+	return body
 }

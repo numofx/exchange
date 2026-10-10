@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"math/big"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -45,6 +46,11 @@ const (
 	sigWrapped     = "0xd9a1836a" // wrappedAsset()
 	sigBalanceOf   = "0x70a08231" // balanceOf(address)
 	sigAllowanceOf = "0xdd62ed3e" // allowance(address,address)
+	// A WrappedERC20Asset escrow's cap under a manager, what is posted under it, and whether it accepts that manager:
+	// the same reads GET /v1/perp/state makes for collateral_assets.
+	sigEscrowCap   = "0x745ab570" // totalPositionCap(address)
+	sigEscrowTotal = "0xa9578774" // totalPosition(address)
+	sigEscrowOpen  = "0x97d51c04" // whitelistedManager(address)
 	// topicDepositedSubAccount is DepositedSubAccount(uint256,address), which Matching emits for a new account.
 	topicDepositedSubAccount = "0x043a568d47b1a65cdc989ff14c921411b62abf40132dc4b5e78675ba8d0bc9df"
 )
@@ -80,11 +86,18 @@ type depositReceipt struct {
 	BlockNumber   string `json:"block_number,omitempty"`
 	// SubaccountID is the account credited: for subaccount_id 0, the new one. Absent until the receipt is known.
 	SubaccountID string `json:"subaccount_id,omitempty"`
-	// AmountUSDC is the deposit as a decimal string with 6 places; AmountUnits the same in 6-decimal base units, as
-	// signed; CreditedCashE18 what the account's cash rises by, at the ledger's 18 decimals.
-	AmountUSDC      string `json:"amount_usdc"`
-	AmountUnits     string `json:"amount_units"`
-	CreditedCashE18 string `json:"credited_cash_e18"`
+	// Asset is the wrapped asset credited and AssetSymbol its token's. Amount is the deposit as a decimal string with
+	// 6 places, AmountUnits the same in 6-decimal base units, as signed, and CreditedE18 what the account's balance of
+	// the asset rises by, at the ledger's 18 decimals.
+	Asset       string `json:"asset"`
+	AssetSymbol string `json:"asset_symbol"`
+	Amount      string `json:"amount"`
+	AmountUnits string `json:"amount_units"`
+	CreditedE18 string `json:"credited_e18"`
+	// AmountUSDC and CreditedCashE18 are the same numbers under their original names, on USDC deposits only: a cNGN
+	// deposit has no USDC amount, and labelling cNGN as USDC would misstate it by three orders of magnitude.
+	AmountUSDC      string `json:"amount_usdc,omitempty"`
+	CreditedCashE18 string `json:"credited_cash_e18,omitempty"`
 	// PermitTxHash is the permit's transaction, when the deposit carried one and it was needed.
 	PermitTxHash string `json:"permit_tx_hash,omitempty"`
 }
@@ -93,6 +106,8 @@ type depositData struct {
 	amount  *big.Int
 	asset   string
 	manager string
+	// symbol is the asset's token's, from DEPOSIT_ASSETS.
+	symbol string
 }
 
 // depositChain is every read the endpoint makes before submitting.
@@ -120,10 +135,10 @@ type depositReceipts interface {
 // endpoint then answers 503.
 type depositService struct {
 	moduleAddress string
-	assets        []string
-	manager       string
-	minAmount     *big.Int
-	chain         depositChain
+	// assets is each depositable wrapped asset, by lowercased address.
+	assets  map[string]config.DepositAsset
+	manager string
+	chain   depositChain
 	// tokens reads the issuer's pause and freezes for token_controls.go; nil skips that check.
 	tokens    tokenStateReader
 	submitter depositSubmitter
@@ -160,9 +175,8 @@ func newDepositService(cfg config.Config, signatures signatureChecker, pool *pgx
 	}}
 	return &depositService{
 		moduleAddress: module,
-		assets:        cfg.DepositAssetAddresses,
+		assets:        depositAssetsByAddress(cfg.DepositAssets),
 		manager:       manager,
-		minAmount:     cfg.DepositMinAmount,
 		chain:         reader,
 		tokens:        reader,
 		receipts:      reader,
@@ -334,7 +348,7 @@ func (s *Server) handleCreateDeposit(w http.ResponseWriter, r *http.Request) {
 
 	rec, claimed, err := svc.store.Claim(r.Context(), depositRecord{
 		ActionHash: actionHash, Owner: owner, Nonce: strings.TrimSpace(req.Action.Nonce),
-		SubaccountIDRequested: strings.TrimSpace(req.Action.SubaccountID), AmountUnits: data.amount.String(),
+		SubaccountIDRequested: strings.TrimSpace(req.Action.SubaccountID), AmountUnits: data.amount.String(), Asset: data.asset,
 	})
 	if err != nil {
 		slog.Warn("deposit_store_unwritable", "action_hash", actionHash, "error", err)
@@ -358,7 +372,7 @@ func (s *Server) handleCreateDeposit(w http.ResponseWriter, r *http.Request) {
 			rec.Status, rec.Error, rec.Revert = depositRejected, rejected.Message, rejected.Revert
 		}
 		svc.save(r.Context(), rec)
-		writeDepositSubmitError(w, req, svc.moduleAddress, err)
+		writeDepositSubmitError(w, req, svc.moduleAddress, data.symbol, err)
 		return
 	}
 	rec.TxHash, rec.PermitTxHash, rec.BlockNumber, rec.SubaccountID = receipt.TxHash, receipt.PermitTxHash, receipt.BlockNumber, receipt.SubaccountID
@@ -372,8 +386,13 @@ func (s *Server) handleCreateDeposit(w http.ResponseWriter, r *http.Request) {
 	}
 	svc.save(r.Context(), rec)
 	receipt.ActionHash, receipt.Status = actionHash, rec.Status
+	// The amounts are this service's, from the signed action and the asset's own symbol, not the executor's wording.
+	amounts := depositAmounts(svc.assets[data.asset], data.amount)
+	receipt.Asset, receipt.AssetSymbol, receipt.Amount, receipt.AmountUnits, receipt.CreditedE18 =
+		amounts.Asset, amounts.AssetSymbol, amounts.Amount, amounts.AmountUnits, amounts.CreditedE18
+	receipt.AmountUSDC, receipt.CreditedCashE18 = amounts.AmountUSDC, amounts.CreditedCashE18
 	slog.Info("deposit_submitted", "owner", owner, "action_hash", actionHash, "status", rec.Status, "subaccount_id", receipt.SubaccountID,
-		"amount_usdc", receipt.AmountUSDC, "tx_hash", receipt.TxHash)
+		"asset", data.symbol, "amount", receipt.Amount, "tx_hash", receipt.TxHash)
 	writeJSON(w, http.StatusOK, receipt)
 }
 
@@ -438,13 +457,19 @@ func (svc *depositService) writeRecord(ctx context.Context, w http.ResponseWrite
 	if rec.Status == depositPending {
 		status = http.StatusAccepted
 	}
-	writeJSON(w, status, map[string]any{
+	amounts := depositAmounts(svc.assetOf(rec.Asset), units)
+	body := map[string]any{
 		"action_hash": rec.ActionHash, "status": rec.Status, "owner": rec.Owner, "nonce": rec.Nonce,
 		"subaccount_id_requested": rec.SubaccountIDRequested, "subaccount_id": rec.SubaccountID,
 		"tx_hash": rec.TxHash, "permit_tx_hash": rec.PermitTxHash, "block_number": rec.BlockNumber,
-		"amount_usdc": formatDepositUnits(units), "amount_units": units.String(), "credited_cash_e18": depositUnitsToLedger(units).String(),
+		"asset": amounts.Asset, "asset_symbol": amounts.AssetSymbol, "amount": amounts.Amount,
+		"amount_units": amounts.AmountUnits, "credited_e18": amounts.CreditedE18,
 		"error": rec.Error, "revert": rec.Revert, "created_at": rec.CreatedAt, "updated_at": rec.UpdatedAt,
-	})
+	}
+	if amounts.AmountUSDC != "" {
+		body["amount_usdc"], body["credited_cash_e18"] = amounts.AmountUSDC, amounts.CreditedCashE18
+	}
+	writeJSON(w, status, body)
 }
 
 func isHexString(s string) bool {
@@ -495,15 +520,17 @@ func (svc *depositService) validate(req depositRequest) (depositData, error) {
 	if err != nil {
 		return depositData{}, err
 	}
-	if !containsFold(svc.assets, data.asset) {
-		return depositData{}, fmt.Errorf("asset %s is not depositable; only the perp cash asset is", data.asset)
+	asset, ok := svc.assets[data.asset]
+	if !ok {
+		return depositData{}, fmt.Errorf("asset %s is not depositable; these are: %s", data.asset, svc.assetList())
 	}
+	data.symbol = asset.Symbol
 	if data.amount.Cmp(maxUint256) == 0 {
 		return depositData{}, errors.New("amount must be explicit; the max sentinel (deposit the whole balance) is not accepted")
 	}
-	if data.amount.Cmp(svc.minAmount) < 0 {
-		return depositData{}, fmt.Errorf("amount %s USDC is below the minimum %s USDC (amounts are 6-decimal USDC base units)",
-			formatDepositUnits(data.amount), formatDepositUnits(svc.minAmount))
+	if data.amount.Cmp(asset.MinAmount) < 0 {
+		return depositData{}, fmt.Errorf("amount %s %s is below the minimum %s %s (amounts are 6-decimal %s base units)",
+			formatDepositUnits(data.amount), asset.Symbol, formatDepositUnits(asset.MinAmount), asset.Symbol, asset.Symbol)
 	}
 	if subaccountID.Sign() == 0 {
 		if data.manager != svc.manager {
@@ -515,14 +542,18 @@ func (svc *depositService) validate(req depositRequest) (depositData, error) {
 	if !isSignatureHex(req.Signature) {
 		return depositData{}, errors.New("signature must be hex of at least 65 bytes")
 	}
+	if req.Permit != nil && asset.Symbol != "USDC" {
+		return depositData{}, fmt.Errorf("%s has no permit (EIP-2612); approve the deposit module %s for %s on chain once, "+
+			"then send the deposit without a permit", asset.Symbol, svc.moduleAddress, asset.Symbol)
+	}
 	if req.Permit != nil {
 		value, err := parseUint256Decimal("permit.value", req.Permit.Value)
 		if err != nil {
 			return depositData{}, err
 		}
 		if value.Cmp(data.amount) < 0 {
-			return depositData{}, fmt.Errorf("permit.value %s USDC is below the deposit amount %s USDC",
-				formatDepositUnits(value), formatDepositUnits(data.amount))
+			return depositData{}, fmt.Errorf("permit.value %s %s is below the deposit amount %s %s",
+				formatDepositUnits(value), asset.Symbol, formatDepositUnits(data.amount), asset.Symbol)
 		}
 		deadline, err := parseUint256Decimal("permit.deadline", req.Permit.Deadline)
 		if err != nil {
@@ -582,7 +613,7 @@ func (svc *depositService) preflight(ctx context.Context, req depositRequest, da
 		return "", err
 	}
 	if balance.Cmp(data.amount) < 0 {
-		return fmt.Sprintf("the owner holds %s USDC, less than the %s USDC deposit", formatDepositUnits(balance), formatDepositUnits(data.amount)), nil
+		return fmt.Sprintf("the owner holds %s %s, less than the %s %s deposit", formatDepositUnits(balance), data.symbol, formatDepositUnits(data.amount), data.symbol), nil
 	}
 	allowance, err := svc.chain.TokenAllowance(ctx, token, owner, svc.moduleAddress)
 	if err != nil {
@@ -590,16 +621,17 @@ func (svc *depositService) preflight(ctx context.Context, req depositRequest, da
 	}
 	// With a permit the executor sets the allowance itself; without one it must already be there.
 	if allowance.Cmp(data.amount) < 0 && req.Permit == nil {
-		return fmt.Sprintf("the owner's USDC allowance to the deposit module is %s USDC, less than the %s USDC deposit; "+
-			"approve %s for at least the amount first", formatDepositUnits(allowance), formatDepositUnits(data.amount), svc.moduleAddress), nil
+		return fmt.Sprintf("the owner's %s allowance to the deposit module is %s %s, less than the %s %s deposit; "+
+			"approve %s for at least the amount first", data.symbol, formatDepositUnits(allowance), data.symbol, formatDepositUnits(data.amount), data.symbol, svc.moduleAddress), nil
 	}
-	return "", nil
+	return svc.escrowRoom(ctx, data)
 }
 
 // knownDepositReverts are the reverts a deposit can still hit after preflight (a race, or a check preflight cannot
 // make), each mapped to a 400 that says what to do. Anything else is reported as a 422 with its name.
 var knownDepositReverts = map[string]string{
-	"MW_UnknownManager":                    "the account is not under the perp risk manager; perp cash can only be deposited into a perp account",
+	"MW_UnknownManager":                    "the account is not under the perp risk manager; deposits go only into accounts under it",
+	"BM_AssetCapExceeded":                  "the deposit would take the asset past its collateral cap under the perp risk manager",
 	"BM_NonceAlreadyUsed":                  "the nonce is already used for this owner; sign a fresh action with a new nonce",
 	"OV_ActionExpired":                     "action has expired; sign a fresh one",
 	"OV_SignerNotOwnerOrSessionKeyExpired": "action.signer is not action.owner",
@@ -607,29 +639,29 @@ var knownDepositReverts = map[string]string{
 	"OV_InvalidSignature":                  "the signature does not match the action",
 }
 
-func depositRevertMessage(revert, module string) (string, bool) {
+func depositRevertMessage(revert, module, symbol string) (string, bool) {
 	if message, ok := knownDepositReverts[revert]; ok {
 		return message, true
 	}
-	// USDC reverts with require strings, not custom errors.
+	// USDC and cNGN revert with require strings, not custom errors.
 	switch lower := strings.ToLower(revert); {
 	case strings.HasPrefix(lower, "permit:"):
 		return "USDC refused the permit (expired, already used, or not signed by action.owner for the deposit module " +
 			module + "), and the allowance does not cover the deposit; sign a fresh permit or approve the module", true
-	case strings.Contains(lower, "exceeds allowance"):
-		return fmt.Sprintf("the owner's USDC allowance to the deposit module is below the amount; approve %s first", module), true
-	case strings.Contains(lower, "exceeds balance"):
-		return "the owner's USDC balance is below the amount", true
+	case strings.Contains(lower, "exceeds allowance") || strings.Contains(lower, "insufficient allowance"):
+		return fmt.Sprintf("the owner's %s allowance to the deposit module is below the amount; approve %s first", symbol, module), true
+	case strings.Contains(lower, "exceeds balance") || strings.Contains(lower, "insufficient balance"):
+		return fmt.Sprintf("the owner's %s balance is below the amount", symbol), true
 	}
 	return "", false
 }
 
-func writeDepositSubmitError(w http.ResponseWriter, req depositRequest, module string, err error) {
+func writeDepositSubmitError(w http.ResponseWriter, req depositRequest, module, symbol string, err error) {
 	var rejected *executorWithdrawError
 	if errors.As(err, &rejected) {
 		switch rejected.Status {
 		case http.StatusUnprocessableEntity:
-			if message, ok := depositRevertMessage(rejected.Revert, module); ok {
+			if message, ok := depositRevertMessage(rejected.Revert, module, symbol); ok {
 				slog.Info("deposit_rejected", "stage", "executor", "revert", rejected.Revert)
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": message, "revert": rejected.Revert})
 				return
@@ -854,4 +886,105 @@ func (c *executorDepositClient) SubmitDeposit(ctx context.Context, request depos
 		}
 		return depositReceipt{}, fmt.Errorf("execution-service returned %d: %s", resp.StatusCode, text)
 	}
+}
+
+func depositAssetsByAddress(assets []config.DepositAsset) map[string]config.DepositAsset {
+	out := make(map[string]config.DepositAsset, len(assets))
+	for _, asset := range assets {
+		out[strings.ToLower(asset.Address)] = asset
+	}
+	return out
+}
+
+// assetList names the depositable assets for a refusal: "0xa74e… (USDC), 0x37c9… (cNGN)", in a stable order.
+func (svc *depositService) assetList() string {
+	names := make([]string, 0, len(svc.assets))
+	for address, asset := range svc.assets {
+		names = append(names, fmt.Sprintf("%s (%s)", address, asset.Symbol))
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
+}
+
+// escrowRoom refuses a deposit the asset would turn away under the perp manager: one that no longer accepts it, or one
+// that would cross the asset's collateral cap (BM_AssetCapExceeded). The cash asset has no cap -- totalPositionCap
+// reverts on it -- so only an escrow is held to one.
+func (svc *depositService) escrowRoom(ctx context.Context, data depositData) (string, error) {
+	reader := svc.tokens
+	if reader == nil {
+		return "", nil
+	}
+	raw, err := reader.ethCall(ctx, data.asset, sigEscrowOpen+addressArg(svc.manager))
+	if err != nil {
+		return "", err
+	}
+	if open, err := unsignedWord(raw); err != nil {
+		return "", err
+	} else if open.Sign() == 0 {
+		return fmt.Sprintf("%s deposits are closed: the asset %s does not accept the perp risk manager", data.symbol, data.asset), nil
+	}
+	raw, err = reader.ethCall(ctx, data.asset, sigEscrowCap+addressArg(svc.manager))
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "revert") {
+			return "", nil // no cap on this asset
+		}
+		return "", err
+	}
+	capacity, err := unsignedWord(raw)
+	if err != nil {
+		return "", err
+	}
+	raw, err = reader.ethCall(ctx, data.asset, sigEscrowTotal+addressArg(svc.manager))
+	if err != nil {
+		return "", err
+	}
+	total, err := unsignedWord(raw)
+	if err != nil {
+		return "", err
+	}
+	after := new(big.Int).Add(total, depositUnitsToLedger(data.amount))
+	if after.Cmp(capacity) > 0 {
+		room := new(big.Int).Sub(capacity, total)
+		if room.Sign() < 0 {
+			room.SetInt64(0)
+		}
+		return fmt.Sprintf("the deposit would take %s posted under the perp risk manager past its cap of %s %s (%s %s posted, room for %s %s)",
+			data.symbol, formatE18Whole(capacity), data.symbol, formatE18Whole(total), data.symbol, formatE18Whole(room), data.symbol), nil
+	}
+	return "", nil
+}
+
+// formatE18Whole prints an 18-decimal amount in whole units, rounded down: "8000000".
+func formatE18Whole(value *big.Int) string {
+	return new(big.Int).Quo(value, new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)).String()
+}
+
+// depositAmounts states a deposit in every unit, under the names for its asset: amount_usdc and credited_cash_e18
+// only when the asset is USDC.
+func depositAmounts(asset config.DepositAsset, units *big.Int) depositReceipt {
+	out := depositReceipt{
+		Asset:       asset.Address,
+		AssetSymbol: asset.Symbol,
+		Amount:      formatDepositUnits(units),
+		AmountUnits: units.String(),
+		CreditedE18: depositUnitsToLedger(units).String(),
+	}
+	if asset.Symbol == "USDC" {
+		out.AmountUSDC, out.CreditedCashE18 = out.Amount, out.CreditedE18
+	}
+	return out
+}
+
+// assetOf is the configured asset a record names. A record from before migration 000019 names none: those are all
+// deposits of the USDC cash asset, the only one accepted then.
+func (svc *depositService) assetOf(address string) config.DepositAsset {
+	if asset, ok := svc.assets[strings.ToLower(address)]; ok {
+		return asset
+	}
+	for _, asset := range svc.assets {
+		if address == "" && asset.Symbol == "USDC" {
+			return asset
+		}
+	}
+	return config.DepositAsset{Address: address, Symbol: "unknown"}
 }

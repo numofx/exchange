@@ -528,3 +528,22 @@ func TestPerpCashWithdrawalsStopAtZero(t *testing.T) {
 		t.Fatalf("spot withdrawals are not subject to the perp cash floor: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// cNGN leaves through the same route as USDC: the escrow is on the list, its amount is in cNGN's own 6 decimals, and the
+// USDC cash floor does not apply to it (the chain's margin check does). Live since 2026-10-03: account 25 withdrew
+// 10,000, 1,000 and 70,000 cNGN this way.
+func TestACngnWithdrawalFromTheEscrowIsSubmittedWithoutTheCashFloor(t *testing.T) {
+	h := newWithdrawalHarness()
+	h.server.withdrawals.assets = append(h.server.withdrawals.assets, cngnEscrow)
+	h.server.withdrawals.perpCash = testPerpCash
+	h.server.withdrawals.ledger = &fakeWithdrawalLedger{cash: big.NewInt(-5)} // owes USDC: a USDC withdrawal would be refused
+	req := validWithdrawal()
+	req.Action.Data = withdrawalDataHex(cngnEscrow, 70_000_000_000)
+	rec := postWithdrawal(t, h.server, req)
+	if rec.Code != http.StatusOK || h.submitter.received == nil {
+		t.Fatalf("status=%d body=%s; a cNGN withdrawal must reach the executor", rec.Code, rec.Body.String())
+	}
+	if got := h.submitter.received.Action.Data; got != req.Action.Data {
+		t.Fatalf("the executor got %s, want the signed data unchanged", got)
+	}
+}

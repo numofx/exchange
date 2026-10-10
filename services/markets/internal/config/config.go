@@ -68,6 +68,10 @@ type Config struct {
 	DepositManagerAddress string
 	// DepositMinAmount is the smallest deposit, in 6-decimal USDC base units (DEPOSIT_MIN_AMOUNT, default 10 USDC).
 	DepositMinAmount *big.Int
+	// DepositAssets is each depositable wrapped asset with its token's symbol and its own minimum, in the token's
+	// 6-decimal base units: DEPOSIT_ASSETS as address:SYMBOL:minimum,... When unset, DepositAssetAddresses with
+	// DepositMinAmount, as USDC. DepositAssetAddresses always lists the same addresses.
+	DepositAssets []DepositAsset
 	// DepositsPerOwnerPerMinute caps how often one owner can make the venue simulate, and pay gas for, a deposit.
 	DepositsPerOwnerPerMinute int
 	// DepositsPerOwnerPerHour caps the deposits one owner can have the venue submit in a rolling hour. Without it one
@@ -230,6 +234,15 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("DEPOSIT_MIN_AMOUNT must be a positive integer of 6-decimal USDC base units")
 	}
 	cfg.DepositMinAmount = minDeposit
+	assets, err := parseDepositAssets(os.Getenv("DEPOSIT_ASSETS"), cfg.DepositAssetAddresses, minDeposit)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.DepositAssets = assets
+	cfg.DepositAssetAddresses = make([]string, 0, len(assets))
+	for _, asset := range assets {
+		cfg.DepositAssetAddresses = append(cfg.DepositAssetAddresses, asset.Address)
+	}
 
 	cfg.EventsPruneHorizon = getenvDurationDefault("EVENTS_PRUNE_HORIZON", 2*time.Hour)
 	cfg.EventsPruneInterval = getenvDurationDefault("EVENTS_PRUNE_INTERVAL", 5*time.Minute)
@@ -530,4 +543,53 @@ func parseExecutorManagerData(data []byte) (string, error) {
 		return strings.TrimSpace(payload.ManagerData), nil
 	}
 	return trimmed, nil
+}
+
+// DepositAsset is one wrapped asset POST /v1/deposits accepts.
+type DepositAsset struct {
+	// Address is the wrapped asset (the CashAsset, or a WrappedERC20Asset escrow), lowercased.
+	Address string
+	// Symbol is its token's, for messages and responses: "USDC", "cNGN".
+	Symbol string
+	// MinAmount is the smallest deposit, in the token's 6-decimal base units.
+	MinAmount *big.Int
+}
+
+// parseDepositAssets reads DEPOSIT_ASSETS ("address:SYMBOL:minimum,..."), or, when it is empty, the older pair of
+// addresses and one minimum, all as USDC.
+func parseDepositAssets(spec string, fallbackAddresses []string, fallbackMin *big.Int) ([]DepositAsset, error) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		out := make([]DepositAsset, 0, len(fallbackAddresses))
+		for _, address := range fallbackAddresses {
+			out = append(out, DepositAsset{Address: strings.ToLower(strings.TrimSpace(address)), Symbol: "USDC", MinAmount: fallbackMin})
+		}
+		return out, nil
+	}
+	var out []DepositAsset
+	seen := map[string]bool{}
+	for _, entry := range strings.Split(spec, ",") {
+		parts := strings.Split(strings.TrimSpace(entry), ":")
+		if len(parts) != 3 {
+			return nil, fmt.Errorf("DEPOSIT_ASSETS entry %q must be address:SYMBOL:minimum", entry)
+		}
+		address := strings.ToLower(strings.TrimSpace(parts[0]))
+		if len(address) != 42 || !strings.HasPrefix(address, "0x") {
+			return nil, fmt.Errorf("DEPOSIT_ASSETS entry %q: %q is not an address", entry, parts[0])
+		}
+		symbol := strings.TrimSpace(parts[1])
+		if symbol == "" {
+			return nil, fmt.Errorf("DEPOSIT_ASSETS entry %q has no symbol", entry)
+		}
+		minimum, ok := new(big.Int).SetString(strings.TrimSpace(parts[2]), 10)
+		if !ok || minimum.Sign() <= 0 {
+			return nil, fmt.Errorf("DEPOSIT_ASSETS entry %q: the minimum must be a positive integer of 6-decimal base units", entry)
+		}
+		if seen[address] {
+			return nil, fmt.Errorf("DEPOSIT_ASSETS lists %s twice", address)
+		}
+		seen[address] = true
+		out = append(out, DepositAsset{Address: address, Symbol: symbol, MinAmount: minimum})
+	}
+	return out, nil
 }
