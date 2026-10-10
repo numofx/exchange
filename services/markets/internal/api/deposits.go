@@ -124,10 +124,12 @@ type depositService struct {
 	manager       string
 	minAmount     *big.Int
 	chain         depositChain
-	submitter     depositSubmitter
-	store         depositStore
-	receipts      depositReceipts
-	limiter       *withdrawalLimiter
+	// tokens reads the issuer's pause and freezes for token_controls.go; nil skips that check.
+	tokens    tokenStateReader
+	submitter depositSubmitter
+	store     depositStore
+	receipts  depositReceipts
+	limiter   *withdrawalLimiter
 	// hourly counts deposits submitted to the executor per owner -- the ones the venue may pay gas for. A request
 	// refused before that (a 400, a 401) does not count, so fixing a mistake costs nothing.
 	hourly *ownerHourlyCap
@@ -162,6 +164,7 @@ func newDepositService(cfg config.Config, signatures signatureChecker, pool *pgx
 		manager:       manager,
 		minAmount:     cfg.DepositMinAmount,
 		chain:         reader,
+		tokens:        reader,
 		receipts:      reader,
 		store:         &pgDepositStore{pool: pool},
 		submitter: &executorDepositClient{
@@ -302,6 +305,21 @@ func (s *Server) handleCreateDeposit(w http.ResponseWriter, r *http.Request) {
 				svc.hourly.limit, int(retryIn.Minutes())+1),
 		})
 		return
+	}
+
+	if svc.tokens != nil {
+		stop, err := checkTokenControls(r.Context(), svc.tokens, data.asset, "deposit", []custodyParty{
+			{address: owner, role: "depositing owner"},
+			{address: svc.moduleAddress, role: "deposit module", venue: true},
+			{address: data.asset, role: "custody contract", venue: true},
+		})
+		if err != nil {
+			slog.Warn("deposit_token_controls_unreadable", "owner", owner, "asset", data.asset, "error", err)
+		} else if stop != nil {
+			logTokenStop("deposit", owner, data.asset, stop)
+			writeJSON(w, stop.status, map[string]string{"error": stop.message})
+			return
+		}
 	}
 
 	if message, err := svc.preflight(r.Context(), req, data); err != nil {
