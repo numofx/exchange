@@ -78,7 +78,59 @@ const INVARIANT_ABI = [
     type: 'function', name: 'getMargin', stateMutability: 'view',
     inputs: [{ name: 'accountId', type: 'uint256' }, { name: 'isInitial', type: 'bool' }], outputs: [{ type: 'int256' }],
   },
+  {
+    type: 'function', name: 'getUnsettledAndUnrealizedCash', stateMutability: 'view',
+    inputs: [{ name: 'accountId', type: 'uint256' }], outputs: [{ type: 'int256' }],
+  },
 ] as const;
+
+/** IStandardManager.AssetType.Perpetual, as AssetWhitelisted reports it. */
+const ASSET_TYPE_PERPETUAL = 2;
+/**
+ * netSettledCash and the perps' unsettled PnL, read at one pinned block, agree to the wei (verified at Base blocks
+ * 52418900, 52419874 and 52420278); this only absorbs per-account rounding.
+ */
+const SETTLED_CASH_TOLERANCE = 10n ** 12n;
+
+/**
+ * Settled cash must be accounted for by perp positions, because perp PnL is zero-sum. Every perp trade realizes the
+ * account's PnL and funding against the mark and pays it into cash through the manager, which records it in
+ * netSettledCash (BaseManager._applyCashDelta). Positions sum to zero across accounts, so what has been paid out is
+ * exactly minus what every account has yet to be paid (getUnsettledAndUnrealizedCash). netSettledCash + that sum must
+ * equal the baseline -- the settled cash no perp explains. A manager printing or burning cash breaks it; trading does
+ * not, which the old pin did not know and went red on the first perp trade that realized PnL (2026-10-10).
+ * `read` must be pinned to one block: the mark moves between blocks and the sum is exact only within one.
+ * Mirrors check_settled_cash in contracts/risk-core/scripts/ops/check_settlement_canary.py.
+ */
+export async function checkSettledCash(
+  read: InvariantRead,
+  manager: `0x${string}`,
+  cash: `0x${string}`,
+  perps: readonly `0x${string}`[],
+  baseline: bigint,
+): Promise<string[]> {
+  const settled = await read<bigint>(cash, 'netSettledCash');
+  const subAccounts = await read<`0x${string}`>(manager, 'subAccounts');
+  const last = await read<bigint>(subAccounts, 'lastAccountId');
+  if (last > MAX_ENUMERATED_ACCOUNTS) {
+    return [`cash ${cash} netSettledCash unverified: ${last} accounts, more than the ${MAX_ENUMERATED_ACCOUNTS} this check enumerates`];
+  }
+  let unsettled = 0n;
+  for (const perp of perps) {
+    for (let account = 1n; account <= last; account++) {
+      unsettled += await read<bigint>(perp, 'getUnsettledAndUnrealizedCash', [account]);
+    }
+  }
+  const gap = settled + unsettled - baseline;
+  if ((gap < 0n ? -gap : gap) > SETTLED_CASH_TOLERANCE) {
+    return [
+      `cash ${cash} SETTLED CASH UNACCOUNTED: netSettledCash ${fmt(settled)} + unsettled perp PnL ${fmt(unsettled)} = ` +
+        `${fmt(settled + unsettled)}, baseline ${fmt(baseline)} (gap ${fmt(gap)}) — cash settled that no perp position ` +
+        `accounts for: a manager printed or burned cash`,
+    ];
+  }
+  return [];
+}
 
 /**
  * Borrowing cash is how cross-margin works: an account that posts cNGN can run its USDC cash below
@@ -279,14 +331,15 @@ export type CanaryOptions = {
     quoteAsset: `0x${string}`;
   };
   /** Injected in tests; defaults to a viem client over rpcUrl. */
-  client?: Pick<PublicClient, 'readContract' | 'getLogs'>;
+  client?: Pick<PublicClient, 'readContract' | 'getLogs' | 'getBlockNumber'>;
   log?: (level: 'info' | 'error', message: string, fields: Record<string, unknown>) => void;
 };
 
 export class SettlementCanary {
-  private readonly client: Pick<PublicClient, 'readContract' | 'getLogs'>;
+  private readonly client: Pick<PublicClient, 'readContract' | 'getLogs' | 'getBlockNumber'>;
   /** Discovered once: the whitelist does not change between checks, and a log scan every 60s would. */
   private wrappers: `0x${string}`[] | undefined;
+  private perps: `0x${string}`[] | undefined;
   private readonly log: NonNullable<CanaryOptions['log']>;
   private readonly postAlert: NonNullable<CanaryOptions['postAlert']>;
   private readonly ping: NonNullable<CanaryOptions['ping']>;
@@ -455,6 +508,20 @@ export class SettlementCanary {
    * enumerable on chain, so this compares against the configured manager: another manager
    * holding a position makes the check go RED rather than silently pass.
    */
+  /** Wrappers and perps under the manager, from its AssetWhitelisted logs. Once: the whitelist does not churn. */
+  private async discoverWhitelist(): Promise<void> {
+    if (this.wrappers && this.perps) return;
+    const logs = await this.client.getLogs({
+      address: this.options.manager,
+      event: ASSET_WHITELISTED_EVENT,
+      fromBlock: 0n,
+      toBlock: 'latest',
+    });
+    const entries = logs.map((l) => (l as { args: { asset: `0x${string}`; assetType?: number } }).args);
+    this.wrappers = [...new Set(entries.map((a) => a.asset))];
+    this.perps = [...new Set(entries.filter((a) => Number(a.assetType) === ASSET_TYPE_PERPETUAL).map((a) => a.asset))];
+  }
+
   private async checkInvariants(): Promise<string[]> {
     const out: string[] = [];
     // viem infers functionName/args from the ABI literal; this call site is deliberately generic
@@ -496,30 +563,23 @@ export class SettlementCanary {
       // excludes it, so a max donate burns exactly 0 (verified on a Base fork). What matters
       // operationally is that it does not MOVE without someone knowing: a change means a manager
       // printed or burned settled cash.
+      // The pin is now the baseline of a zero-sum check rather than a value that must not move: perp trading
+      // moves netSettledCash by design. See checkSettledCash.
       const expected = this.options.expectedNetSettledCash;
-      if (expected !== undefined && settled !== expected) {
-        out.push(
-          `cash ${cash} netSettledCash MOVED: ${fmt(settled)}, pinned at ${fmt(expected)} ` +
-            `(delta ${fmt(settled - expected)}) — a manager printed or burned settled cash`,
-        );
+      if (expected !== undefined) {
+        const blockNumber = await this.client.getBlockNumber();
+        const readAt = <T>(address: `0x${string}`, functionName: string, args: readonly unknown[] = []) =>
+          (this.client.readContract as (a: unknown) => Promise<unknown>)({ address, abi: INVARIANT_ABI, functionName, args, blockNumber }) as Promise<T>;
+        await this.discoverWhitelist();
+        out.push(...(await checkSettledCash(readAt, this.options.manager, cash, this.perps!, expected)));
       }
     } catch (error) {
       out.push(`cash backing check failed to run: ${describe(error)}`);
     }
 
     try {
-      if (!this.wrappers) {
-        const logs = await this.client.getLogs({
-          address: this.options.manager,
-          event: ASSET_WHITELISTED_EVENT,
-          fromBlock: 0n,
-          toBlock: 'latest',
-        });
-        this.wrappers = [
-          ...new Set(logs.map((l) => (l as { args: { asset: `0x${string}` } }).args.asset)),
-        ];
-      }
-      for (const asset of this.wrappers) {
+      await this.discoverWhitelist();
+      for (const asset of this.wrappers!) {
         let token: `0x${string}`;
         let decimals: number;
         try {
