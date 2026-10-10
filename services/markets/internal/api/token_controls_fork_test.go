@@ -150,3 +150,27 @@ func TestForkTokenControlsSeeTheIssuersRealFreezesAndPauses(t *testing.T) {
 	expect("cNGN admin paused", cngnEscrow, "withdrawal", deposit(cngnEscrow), 0, "")
 	sendAs(t, url, adminOwner, cngnAdmin, sigUnpause)
 }
+
+// escrowRoom against the real escrow and cash: the cNGN cap is read and enforced, and the cash's reverting
+// totalPositionCap is read as "no cap", not as an unreadable chain.
+func TestForkEscrowRoomReadsTheRealCapAndLetsCashThrough(t *testing.T) {
+	url := os.Getenv("FORK_RPC_URL")
+	if url == "" {
+		t.Fatal("FORK_RPC_URL is required: this test only exists to run against a fork")
+	}
+	reader := &chainDepositReader{chainCustodyChecker: &chainCustodyChecker{rpcURL: url, httpClient: &http.Client{Timeout: 10 * time.Second}}}
+	svc := &depositService{tokens: reader, manager: testDepositSRM}
+	ctx := context.Background()
+
+	if message, err := svc.escrowRoom(ctx, depositData{amount: usdc(20_000), asset: cngnEscrow, symbol: "cNGN"}); err != nil || message != "" {
+		t.Fatalf("20,000 cNGN under an 8M cap: message=%q err=%v", message, err)
+	}
+	message, err := svc.escrowRoom(ctx, depositData{amount: usdc(8_000_000), asset: cngnEscrow, symbol: "cNGN"})
+	if err != nil || !strings.Contains(message, "past its cap of 8000000 cNGN") {
+		t.Fatalf("8M cNGN on top of what is posted: message=%q err=%v", message, err)
+	}
+	t.Logf("8M cNGN -> %s", message)
+	if message, err := svc.escrowRoom(ctx, depositData{amount: usdc(1_000_000), asset: testPerpCash, symbol: "USDC"}); err != nil || message != "" {
+		t.Fatalf("USDC cash has no cap: message=%q err=%v", message, err)
+	}
+}
