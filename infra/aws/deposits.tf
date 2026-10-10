@@ -25,6 +25,12 @@ variable "deposit_min_amount" {
   default     = "10000000"
 }
 
+variable "deposit_cngn_min_amount" {
+  description = "Smallest cNGN deposit, in 6-decimal cNGN base units: 15000000000 is 15,000 cNGN (about $11). Empty turns cNGN deposits off."
+  type        = string
+  default     = "15000000000"
+}
+
 variable "deposit_max_gas_eth_per_hour" {
   description = "ETH of gas sponsored deposits (and their permits) may spend per rolling hour, measured from receipts; past it, 503."
   type        = string
@@ -50,14 +56,20 @@ variable "deposits_per_owner_per_hour" {
 }
 
 locals {
-  # Only the perp CashAsset is depositable and only under the perp SRM: the chain also accepts the cNGN escrow, so
-  # the allowlist is what refuses it. Both come from the perp stack's own variables.
+  # Depositable: the perp CashAsset (USDC) and the cNGN escrow, each at its own minimum, only under the perp SRM. The
+  # chain also accepts any other wrapped asset, so DEPOSIT_ASSETS is what refuses one. Both services read the same list.
+  deposit_assets = join(",", compact([
+    "${var.cngn_perp_cash_address}:USDC:${var.deposit_min_amount}",
+    var.deposit_cngn_min_amount == "" ? "" : "${var.cngn_perp_collateral_address}:cNGN:${var.deposit_cngn_min_amount}",
+  ]))
+
   markets_deposit_env = var.deposits_enabled ? [
     { name = "DEPOSITS_ENABLED", value = "true" },
     { name = "DEPOSIT_MODULE_ADDRESS", value = var.deposit_module_address },
     { name = "DEPOSIT_ASSET_ADDRESSES", value = var.cngn_perp_cash_address },
     { name = "DEPOSIT_MANAGER_ADDRESS", value = var.cngn_perp_srm_address },
     { name = "DEPOSIT_MIN_AMOUNT", value = var.deposit_min_amount },
+    { name = "DEPOSIT_ASSETS", value = local.deposit_assets },
     { name = "DEPOSITS_PER_OWNER_PER_MINUTE", value = tostring(var.deposits_per_owner_per_minute) },
     { name = "DEPOSITS_PER_OWNER_PER_HOUR", value = tostring(var.deposits_per_owner_per_hour) },
     { name = "EXECUTOR_DEPOSIT_URL", value = "http://execution-service.${var.internal_namespace}:8081/deposit" },
@@ -71,6 +83,7 @@ locals {
     { name = "DEPOSIT_ASSET_ADDRESSES", value = var.cngn_perp_cash_address },
     { name = "DEPOSIT_MANAGER_ADDRESS", value = var.cngn_perp_srm_address },
     { name = "DEPOSIT_MIN_AMOUNT", value = var.deposit_min_amount },
+    { name = "DEPOSIT_ASSETS", value = local.deposit_assets },
     { name = "DEPOSIT_MAX_GAS_ETH_PER_HOUR", value = var.deposit_max_gas_eth_per_hour },
     { name = "DEPOSIT_MIN_EXECUTOR_ETH", value = var.deposit_min_executor_eth },
     { name = "DEPOSIT_RECEIPT_TIMEOUT_MS", value = "30000" },

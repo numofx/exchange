@@ -10,6 +10,12 @@
 #   topup <sub>       deposit 10 USDC into the existing account, on the approval (one sponsored transaction)
 #   status <hash>     GET /v1/deposits/<action_hash>
 #
+# cNGN (no permit exists for it, so the wallet approves once, paying its own gas):
+#   approve-cngn      cNGN.approve(DepositModule, CNGN_AMOUNT)
+#   open-cngn         deposit CNGN_AMOUNT cNGN into a new account (one sponsored transaction)
+#   topup-cngn <sub>  deposit CNGN_AMOUNT cNGN into an existing account
+#   withdraw-cngn <sub>  withdraw CNGN_AMOUNT cNGN back to the wallet
+#
 # Signing: SIGN_ARGS is passed to cast, e.g. SIGN_ARGS="--account jason" (a keystore from
 # `cast wallet import jason --interactive`) or SIGN_ARGS="--ledger". OWNER is the wallet's address.
 set -euo pipefail
@@ -26,6 +32,9 @@ USDC=0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
 PERP_CASH=0xA74E49b4Ed7cb176bc02ef4D8a1A3240C9aD4272
 PERP_MANAGER=0xDE0423D0a1E15536265C9513d2e0c10DAb5835D4
 AMOUNT=10000000 # 10 USDC, the venue's minimum
+CNGN=0x46C85152bFe9f96829aA94755D9f915F9B10EF5F
+CNGN_ESCROW=0x37c976bb5d4887a714ef19AF6B83e34fe2f37c98
+CNGN_AMOUNT="${CNGN_AMOUNT:-15000000000}" # 15,000 cNGN, the venue's minimum
 
 # shellcheck disable=SC2086
 sign() { cast wallet sign $SIGN_ARGS --data "$1"; }
@@ -75,10 +84,10 @@ post() { # path body
   curl -sS -w '\nHTTP %{http_code}\n' -X POST -H 'content-type: application/json' --data "$2" "$API$1"
 }
 
-deposit() { # subaccount amount with_permit
+deposit() { # subaccount amount with_permit [asset]
   local expiry data action sig body
   expiry=$(($(date +%s) + 600))
-  data=$(cast abi-encode 'f(uint256,address,address)' "$2" "$PERP_CASH" "$PERP_MANAGER")
+  data=$(cast abi-encode 'f(uint256,address,address)' "$2" "${4:-$PERP_CASH}" "$PERP_MANAGER")
   action=$(action_json "$1" "$(fresh_nonce)" "$DEPOSIT_MODULE" "$data" "$expiry")
   echo "action hash (on chain): $(cast call "$MATCHING" \
     'getActionHash((uint256,uint256,address,bytes,uint256,address,address))(bytes32)' \
@@ -92,10 +101,10 @@ deposit() { # subaccount amount with_permit
   post /v1/deposits "$body"
 }
 
-withdraw() { # subaccount amount
+withdraw() { # subaccount amount [asset]
   local expiry data action sig
   expiry=$(($(date +%s) + 600))
-  data=$(cast abi-encode 'f(address,uint256)' "$PERP_CASH" "$2")
+  data=$(cast abi-encode 'f(address,uint256)' "${3:-$PERP_CASH}" "$2")
   action=$(action_json "$1" "$(fresh_nonce)" "$WITHDRAWAL_MODULE" "$data" "$expiry")
   sig=$(sign_action "$action")
   post /v1/withdrawals "$(jq -nc --argjson a "$action" --arg s "$sig" '{action:$a, signature:$s}')"
@@ -107,6 +116,10 @@ case "${1:-}" in
   withdraw) withdraw "${2:?subaccount id}" "$AMOUNT" ;;
   approve) cast send "$USDC" 'approve(address,uint256)' "$DEPOSIT_MODULE" "$AMOUNT" $SIGN_ARGS --rpc-url "$RPC" ;;
   topup) deposit "${2:?subaccount id}" "$AMOUNT" none ;;
+  approve-cngn) cast send "$CNGN" 'approve(address,uint256)' "$DEPOSIT_MODULE" "$CNGN_AMOUNT" $SIGN_ARGS --rpc-url "$RPC" ;;
+  open-cngn) deposit 0 "$CNGN_AMOUNT" none "$CNGN_ESCROW" ;;
+  topup-cngn) deposit "${2:?subaccount id}" "$CNGN_AMOUNT" none "$CNGN_ESCROW" ;;
+  withdraw-cngn) withdraw "${2:?subaccount id}" "$CNGN_AMOUNT" "$CNGN_ESCROW" ;;
   status) curl -sS -w '\nHTTP %{http_code}\n' "$API/v1/deposits/${2:?action hash}" ;;
-  *) sed -n '2,16p' "$0"; exit 2 ;;
+  *) sed -n '2,22p' "$0"; exit 2 ;;
 esac
