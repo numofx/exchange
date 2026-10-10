@@ -83,6 +83,12 @@ resource "aws_ecs_task_definition" "market_maker_perp" {
       { name = "MM_HALF_SPREAD_BPS", value = "15" },
       { name = "MM_LEVEL_SPREAD_STEP_BPS", value = "10" },
       { name = "MM_LEVEL_SIZE_MULT", value = "1.2" },
+      # The inventory lean is what moves funding: PerpAsset pays a premium only once an impact price
+      # crosses the index. With perp-feeds IMPACT_NOTIONAL_USD=100 (inside the first rung) that is
+      # the 15 bps half spread, so funding leaves the static rate at ~$1,200 of position and reaches
+      # ~1.25 bps/h (~110% APR) beyond it at $2,000 (market-maker #33).
+      { name = "MM_INVENTORY_SKEW_BPS", value = "25" },
+      { name = "MM_INVENTORY_SKEW_FULL_AT", value = "2000" },
       # 20 resting quotes replaced 15 s before expiry: 300 s keeps that at ~4 cancels/min against
       # the 30/min cap (60 s would be ~27/min and skip replaces).
       { name = "MM_ORDER_EXPIRY_SECONDS", value = "300" },
