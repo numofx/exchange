@@ -72,7 +72,9 @@ arming job would have paged about it every day.
 **SSM** (under `/numo/pager`, the one new-to-the-box path its role may read; no IAM change):
 `healthchecks_api_key` (read-only; a write was tested and refused with 401) and
 `healthchecks_api_key_rw` (used to create the checks, not read by the box), both written by the
-operator. The checks' ping URLs are at `heartbeats/<check name>`.
+operator. The checks' ping URLs are at `heartbeats/<check name>`. **`healthchecks_api_key_rw` was deleted on
+2026-10-10** after confirming nothing in the repo or on the box reads it; creating a new check now needs a write key
+issued afresh in Healthchecks and removed again afterwards.
 
 **On the box:**
 
