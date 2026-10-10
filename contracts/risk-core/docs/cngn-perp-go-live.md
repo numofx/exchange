@@ -356,6 +356,11 @@ maker's, the SecurityModule's, other traders'). It is bounded three ways:
 - **Liquidity and loss** are unchanged: borrowed USDC is not in the CashAsset to pay withdrawals,
   and a loan is a 2:1 over-collateralised cNGN position the keeper liquidates at the index.
 
+> **2026-10-10: raised to 50M cNGN** (vault tx `0xbdefc76f0b5a61d6b39926cde7d848aeb1345f5be5ead3639bd4fbb3a56f1415`,
+> block 52437344, via `scripts/ops/propose_collateral_cap.py`), equal to the perp's open-interest cap. At the 50% factor
+> that allows up to ~$18k of borrowing against a $3,250 SecurityModule; the negative-cash pager ($1,500 warn, $3,000
+> page) is what bounds lending, not the cap. Since the unified cutover the cap also bounds spot cNGN inventory.
+
 **The collateral cap is the escrow's `setTotalPositionCap(srm, cap)`**: 8M cNGN at launch, summed
 over every account under the perp SRM; the deposit that crosses it is refused, nothing else is. At
 1:1 that is 8M cNGN of long-USD notional (~$6k), about a third of a side. **It goes up with the
