@@ -69,7 +69,7 @@ variable "image_markets" {
 variable "image_execution" {
   description = "ECR image URI for services/execution."
   type        = string
-  default     = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/execution:6d9fd4d6193f"
+  default     = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/execution:8f3dd97a519b"
 }
 
 variable "secret_backend" {
