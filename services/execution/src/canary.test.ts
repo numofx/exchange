@@ -47,6 +47,8 @@ function healthyInvariantRead(a: { address: string; functionName: string }): unk
     case 'subAccounts': return '0x7019244E25FA416e6Ca2ed2F3cA25277aef72843';
     case 'manager': return MANAGER;
     case 'getMarginAndMarkToMarket': return [0n, 660n * 10n ** 18n];
+    // No issuer has paused a token or frozen anything.
+    case 'paused': case 'isBlacklisted': case 'isBlackListed': return false;
     default: throw new Error(`unexpected call ${a.functionName}`);
   }
 }
@@ -119,6 +121,7 @@ function invariantCanary(
   wrappers = [WRAPPER],
   borrowers?: Borrowers,
   settled: { unsettled?: Record<string, bigint>; blocksRead?: unknown[] } = {},
+  issuer: { paused?: string[]; frozen?: { by: string; address: string }[]; depositModule?: `0x${string}`; reads?: string[] } = {},
 ) {
   const v = {
     cashHeld: 5_000_000n, // 5 USDC at 6dp
@@ -137,6 +140,7 @@ function invariantCanary(
     accountIds: [15],
     intervalMs: 60_000,
     announceOnStart: false,
+    depositModule: issuer.depositModule,
     client: {
       getLogs: async () => [...wrappers.map((asset) => ({ args: { asset, assetType: 3 } })), { args: { asset: PERP, assetType: 2 } }],
       getBlockNumber: async () => PINNED_BLOCK,
@@ -164,6 +168,12 @@ function invariantCanary(
           case 'accruedSmFees': return v.cashSmFees;
           case 'totalPosition': return v.wrapperCredited;
           case 'subAccounts': case 'manager': case 'getMarginAndMarkToMarket': return healthyInvariantRead(a);
+          case 'paused':
+            issuer.reads?.push(`${a.address} paused`);
+            return (issuer.paused ?? []).includes(a.address);
+          case 'isBlacklisted': case 'isBlackListed':
+            issuer.reads?.push(`${a.address} ${a.functionName} ${String(a.args?.[0])}`);
+            return (issuer.frozen ?? []).some((f) => f.by === a.address && f.address === a.args?.[0]);
           default: throw new Error(`unexpected call ${a.functionName}`);
         }
       },
@@ -738,4 +748,49 @@ test('a heartbeat service that is down does not stop the canary', async () => {
     ping: async () => { throw new Error('503'); },
   }).check();
   assert.equal(s.ok, true);
+});
+
+// Issuer controls (token-controls.ts): a paused token or a frozen custody contract stops every holder, so it pages.
+const CNGN_ADMIN = '0x2a7483194a651b398582c9a935f793ec2dee2fa7';
+const DEPOSIT_MODULE = '0x6540f8d9Eb599b045C05E45cb6a5B1730a806658' as const;
+
+test('each issuer is asked in its own way, about the cash and every wrapper, and the deposit module when configured', async () => {
+  const reads: string[] = [];
+  const snapshot = await invariantCanary({}, [WRAPPER], undefined, {}, { depositModule: DEPOSIT_MODULE, reads }).check();
+  assert.equal(snapshot.ok, true, snapshot.invariant_failures.join('; '));
+  assert.deepEqual(reads.sort(), [
+    `${CNGN} paused`,
+    `${CNGN_ADMIN} isBlackListed ${DEPOSIT_MODULE}`,
+    `${CNGN_ADMIN} isBlackListed ${WRAPPER}`,
+    `${USDC} isBlacklisted ${CASH}`,
+    `${USDC} isBlacklisted ${DEPOSIT_MODULE}`,
+    `${USDC} paused`,
+  ].sort());
+});
+
+test('a paused token pages', async () => {
+  const snapshot = await invariantCanary({}, [WRAPPER], undefined, {}, { paused: [USDC] }).check();
+  assert.equal(snapshot.ok, false);
+  assert.match(snapshot.invariant_failures.join(' '), /USDC .* is PAUSED by its issuer/);
+});
+
+test('Circle freezing the cash pages, though the cash is not a whitelisted wrapper', async () => {
+  const snapshot = await invariantCanary({}, [WRAPPER], undefined, {}, { frozen: [{ by: USDC, address: CASH }] }).check();
+  assert.equal(snapshot.ok, false);
+  assert.match(snapshot.invariant_failures.join(' '), new RegExp(`USDC's issuer has FROZEN the venue's custody contract ${CASH}`));
+});
+
+test('cNGN freezing the escrow pages, read from its admin contract', async () => {
+  const snapshot = await invariantCanary({}, [WRAPPER], undefined, {}, { frozen: [{ by: CNGN_ADMIN, address: WRAPPER }] }).check();
+  assert.equal(snapshot.ok, false);
+  assert.match(snapshot.invariant_failures.join(' '), /cNGN's issuer has FROZEN the venue's custody contract/);
+});
+
+test('a frozen deposit module pages when deposits are on, and is not read when they are off', async () => {
+  const frozen = [{ by: USDC, address: DEPOSIT_MODULE }];
+  const on = await invariantCanary({}, [WRAPPER], undefined, {}, { frozen, depositModule: DEPOSIT_MODULE }).check();
+  assert.equal(on.ok, false);
+  assert.match(on.invariant_failures.join(' '), /FROZEN the venue's deposit module/);
+  const off = await invariantCanary({}, [WRAPPER], undefined, {}, { frozen }).check();
+  assert.equal(off.ok, true, off.invariant_failures.join('; '));
 });

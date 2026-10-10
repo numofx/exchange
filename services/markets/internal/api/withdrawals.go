@@ -82,6 +82,8 @@ type withdrawalService struct {
 	moduleAddress string
 	assets        []string
 	custody       withdrawalCustody
+	// tokens reads the issuer's pause and freezes for token_controls.go; nil skips that check.
+	tokens tokenStateReader
 	// perpCash is the perp's CashAsset, lowercased, and ledger reads its balances; both empty/nil
 	// without a perp, in which case no cash rule applies.
 	perpCash  string
@@ -123,6 +125,7 @@ func newWithdrawalService(cfg config.Config, signatures signatureChecker) *withd
 			matchingAddress: strings.ToLower(strings.TrimSpace(cfg.MatchingAddress)),
 			httpClient:      &http.Client{Timeout: 5 * time.Second},
 		},
+		tokens: &chainDepositReader{chainCustodyChecker: custody},
 		submitter: &executorWithdrawClient{
 			url:        strings.TrimSpace(cfg.ExecutorWithdrawURL),
 			httpClient: &http.Client{Timeout: cfg.ExecutorWithdrawTimeout},
@@ -206,6 +209,21 @@ func (s *Server) handleCreateWithdrawal(w http.ResponseWriter, r *http.Request) 
 			"error": fmt.Sprintf("subaccount_id %s is not owned by action.owner", req.Action.SubaccountID),
 		})
 		return
+	}
+
+	if svc.tokens != nil {
+		asset, _, _ := decodeWithdrawalData(req.Action.Data)
+		stop, err := checkTokenControls(r.Context(), svc.tokens, asset, "withdrawal", []custodyParty{
+			{address: owner, role: "withdrawing owner"},
+			{address: asset, role: "custody contract", venue: true},
+		})
+		if err != nil {
+			slog.Warn("withdrawal_token_controls_unreadable", "owner", owner, "asset", asset, "error", err)
+		} else if stop != nil {
+			logTokenStop("withdrawal", owner, asset, stop)
+			writeJSON(w, stop.status, map[string]string{"error": stop.message})
+			return
+		}
 	}
 
 	if message, err := svc.cashFloor(r.Context(), req); err != nil {

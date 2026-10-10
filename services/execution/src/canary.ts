@@ -1,4 +1,5 @@
 import { createPublicClient, defineChain, http, type PublicClient } from 'viem';
+import { TOKEN_CONTROLS_ABI, tokenControlFailures } from './token-controls.js';
 
 /**
  * Periodically asks the risk manager to price a real subaccount.
@@ -19,6 +20,7 @@ import { createPublicClient, defineChain, http, type PublicClient } from 'viem';
  */
 
 const INVARIANT_ABI = [
+  ...TOKEN_CONTROLS_ABI,
   { type: 'function', name: 'cashAsset', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }] },
   { type: 'function', name: 'wrappedAsset', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }] },
   { type: 'function', name: 'decimals', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint8' }] },
@@ -324,6 +326,11 @@ export type CanaryOptions = {
    * strictly 1:1, has no rescue path, and is not behind a proxy.
    */
   wrapperDeltaExceptions?: Record<string, bigint>;
+  /**
+   * The DepositModule, when deposits are on: a freeze on it stops every deposit, so its issuer state is checked with
+   * the wrappers'. See token-controls.ts.
+   */
+  depositModule?: `0x${string}`;
   feeRecipient?: {
     accountId: bigint;
     expectedOwner: `0x${string}`;
@@ -606,6 +613,27 @@ export class SettlementCanary {
       }
     } catch (error) {
       out.push(`wrapper backing check failed to run: ${describe(error)}`);
+    }
+
+    // Issuer controls on every custody contract: the cash (USDC) and each wrapper. Separate from the backing loop so
+    // the cash, which the whitelist logs need not list as a wrapper, is never missed. See token-controls.ts.
+    try {
+      await this.discoverWhitelist();
+      const cash = await read<`0x${string}`>(this.options.manager, 'cashAsset');
+      const custody = [...new Map([cash, ...this.wrappers!].map((a) => [a.toLowerCase(), a] as const)).values()];
+      for (const asset of custody) {
+        let token: `0x${string}`;
+        try {
+          token = await read<`0x${string}`>(asset, 'wrappedAsset');
+        } catch {
+          continue; // holds no token of its own
+        }
+        const parties = [{ address: asset, role: 'custody contract' }];
+        if (this.options.depositModule) parties.push({ address: this.options.depositModule, role: 'deposit module' });
+        out.push(...(await tokenControlFailures(read, token, parties)));
+      }
+    } catch (error) {
+      out.push(`issuer controls check failed to run: ${describe(error)}`);
     }
 
     out.push(...(await this.checkFeeRecipient(read)));
