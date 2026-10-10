@@ -280,9 +280,17 @@ variable "desired_count_execution" {
 }
 
 variable "image_market_maker" {
-  description = "Fully qualified mm-bot image, tagged by git SHA. Built from numofx/market-maker."
+  description = "The SPOT market maker's mm-bot image, tagged by git SHA. Built from numofx/market-maker."
   type        = string
-  # 2026-10-10: MM_INVENTORY_SKEW_FULL_AT (market-maker #33); unset on spot, so spot is unchanged.
+  # What market-maker-spot runs. It was briefly shared with the perp maker, so a perp-only image bump (#160, for
+  # MM_INVENTORY_SKEW_FULL_AT) silently became a planned spot rollout; each maker now has its own pin.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:8851f9ba5070"
+}
+
+variable "image_market_maker_perp" {
+  description = "The PERP market maker's mm-bot image, tagged by git SHA. Same repository as image_market_maker, pinned separately."
+  type        = string
+  # 2026-10-10: MM_INVENTORY_SKEW_FULL_AT (market-maker #33, exchange #160).
   default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:e1ef066eb680"
 }
 

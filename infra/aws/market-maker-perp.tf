@@ -49,7 +49,7 @@ resource "aws_ecs_task_definition" "market_maker_perp" {
 
   container_definitions = jsonencode([{
     name      = "market-maker-perp"
-    image     = var.image_market_maker
+    image     = var.image_market_maker_perp
     essential = true
 
     environment = [
