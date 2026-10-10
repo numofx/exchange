@@ -51,7 +51,9 @@ func newTokenState() *fakeTokenState {
 	}
 }
 
-func frozenAt(contract, selector, address string) string { return contract + " " + selector + addressArg(address) }
+func frozenAt(contract, selector, address string) string {
+	return contract + " " + selector + addressArg(address)
+}
 
 var withdrawalParties = func(owner, asset string) []custodyParty {
 	return []custodyParty{{address: owner, role: "withdrawing owner"}, {address: asset, role: "custody contract", venue: true}}

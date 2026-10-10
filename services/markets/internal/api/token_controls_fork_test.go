@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"math/big"
 	"net/http"
 	"os"
 	"strings"
@@ -28,7 +29,7 @@ func forkRPC(t *testing.T, url, method string, params ...any) json.RawMessage {
 	}
 	defer resp.Body.Close()
 	var out struct {
-		Result json.RawMessage `json:"result"`
+		Result json.RawMessage           `json:"result"`
 		Error  *struct{ Message string } `json:"error"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || out.Error != nil {
@@ -162,14 +163,30 @@ func TestForkEscrowRoomReadsTheRealCapAndLetsCashThrough(t *testing.T) {
 	svc := &depositService{tokens: reader, manager: testDepositSRM}
 	ctx := context.Background()
 
-	if message, err := svc.escrowRoom(ctx, depositData{amount: usdc(20_000), asset: cngnEscrow, symbol: "cNGN"}); err != nil || message != "" {
-		t.Fatalf("20,000 cNGN under an 8M cap: message=%q err=%v", message, err)
+	// The cap and what is posted are read from the fork, not assumed: the vault raises the cap, and a test that pinned
+	// today's number at head would start failing for a reason that is not a bug (CLAUDE.md, "Chain state moves").
+	word := func(selector string) *big.Int {
+		raw, err := reader.ethCall(ctx, cngnEscrow, selector+addressArg(testDepositSRM))
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, err := unsignedWord(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
 	}
-	message, err := svc.escrowRoom(ctx, depositData{amount: usdc(8_000_000), asset: cngnEscrow, symbol: "cNGN"})
-	if err != nil || !strings.Contains(message, "past its cap of 8000000 cNGN") {
-		t.Fatalf("8M cNGN on top of what is posted: message=%q err=%v", message, err)
+	capacity, posted := word(sigEscrowCap), word(sigEscrowTotal)
+	roomUnits := new(big.Int).Quo(new(big.Int).Sub(capacity, posted), big.NewInt(1e12)) // 18 -> 6 decimals
+	if message, err := svc.escrowRoom(ctx, depositData{amount: roomUnits, asset: cngnEscrow, symbol: "cNGN"}); err != nil || message != "" {
+		t.Fatalf("exactly the room left (%s units): message=%q err=%v", roomUnits, message, err)
 	}
-	t.Logf("8M cNGN -> %s", message)
+	over := new(big.Int).Add(roomUnits, big.NewInt(1_000_000)) // one cNGN more
+	message, err := svc.escrowRoom(ctx, depositData{amount: over, asset: cngnEscrow, symbol: "cNGN"})
+	if err != nil || !strings.Contains(message, "past its cap of "+formatE18Whole(capacity)+" cNGN") {
+		t.Fatalf("one cNGN past the room: message=%q err=%v", message, err)
+	}
+	t.Logf("one cNGN past the room -> %s", message)
 	if message, err := svc.escrowRoom(ctx, depositData{amount: usdc(1_000_000), asset: testPerpCash, symbol: "USDC"}); err != nil || message != "" {
 		t.Fatalf("USDC cash has no cap: message=%q err=%v", message, err)
 	}
