@@ -34,6 +34,9 @@ const envSchema = z
     INDEX_FEED: address,
     FORWARD_FEED: address,
     FUTURE_ASSET: address,
+    /** The FutureManager, for closeOutExpired, and SubAccounts, to find the accounts still holding. */
+    FUTURE_MANAGER: address,
+    SUB_ACCOUNTS: address,
     FUTURE_SUB_ID: uint,
     /** Annual NGN-over-USD carry, 18dp: the forward without a book is index * (1 + CARRY * tau). */
     CARRY: uint,
@@ -47,6 +50,14 @@ const envSchema = z
     FORWARD_SAFETY_BPS: z.coerce.number().int().nonnegative().max(5_000).default(50),
     /** Alert when the contract's last mark is older than this, and trading is still open. */
     FORWARD_MARK_LATE_MS: z.coerce.number().int().positive().default(2 * 60 * 60_000),
+
+    /**
+     * Expiry (expiry-keeper.ts): an index sample this often in the fixing window. Must sit well
+     * inside the contract's maxSampleGap (15 min), so one failed sample does not break the fixing.
+     */
+    FIXING_SAMPLE_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
+    /** Close-outs per tick after settlement. */
+    CLOSE_OUT_BATCH: z.coerce.number().int().positive().default(20),
 
     TIMESTAMP_SAFETY_SEC: z.coerce.number().int().nonnegative().default(15),
     DEADLINE_SEC: z.coerce.number().int().positive().default(60),

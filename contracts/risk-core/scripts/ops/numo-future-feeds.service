@@ -1,5 +1,7 @@
-# The cNGN future's forward publisher (services/perp-feeds, dist/forward-main.js): signs the forward
-# into the future's LyraForwardFeed and calls FutureAsset.pullMark, about hourly, until last trade.
+# The cNGN future's keeper (services/perp-feeds, dist/forward-main.js). Until last trade it signs the
+# forward into the future's LyraForwardFeed and calls FutureAsset.pullMark, about hourly. In the
+# fixing window it records index samples, after expiry it fixes the settlement price (or alerts that
+# the vault's bounded fallback is needed), and once settled it closes out every account still holding.
 #
 # NOT YET INSTALLED. Nothing it marks is deployed. Install with the deploy, and record it in
 # OPS_BOX_CHANGES.md the same day.
@@ -17,7 +19,7 @@
 #          cp contracts/risk-core/scripts/ops/numo-future-feeds.service /etc/systemd/system/
 #          systemctl daemon-reload && systemctl enable --now numo-future-feeds
 [Unit]
-Description=Numo cNGN future forward publisher (Base mainnet, KMS signer, SSM relayer)
+Description=Numo cNGN future keeper: forward marks, fixing, close-out (Base mainnet, KMS signer, SSM relayer)
 After=network-online.target
 Wants=network-online.target
 
