@@ -2,6 +2,7 @@
 pragma solidity ^0.8.18;
 
 import "forge-std/Test.sol";
+import "openzeppelin/utils/math/Math.sol";
 
 import "../../../../src/SubAccounts.sol";
 import "../../../../src/risk-managers/BasePortfolioViewer.sol";
@@ -737,6 +738,91 @@ contract TestDatedFutureManager is Test {
     vm.warp(expiry + FALLBACK);
     vm.expectRevert(IDatedFutureAsset.DFA_FixingAvailable.selector);
     future.setSettlementPrice(subId, 1001e18);
+  }
+
+  ///////////////////
+  // expiry, no feed //
+  ///////////////////
+
+  /// @dev alice long 1, bob short 1, both cash only, no pool reserve; marked 1010 (reading the index at 1000), then
+  ///      the feed dies and the fallback settles at `price` once the delay has run.
+  function _settleWithADeadFeed(uint price) internal {
+    _useIndex();
+    _fundCash(aliceAcc, 1_000e18);
+    _fundCash(bobAcc, 1_000e18);
+    _trade(bobAcc, aliceAcc, 1e18, MARK);
+    _mark(1010e18);
+    vm.mockCallRevert(address(spotFeed), abi.encodeWithSelector(ISpotFeed.getSpot.selector), "stale");
+    vm.warp(expiry + FALLBACK);
+    future.setSettlementPrice(subId, price);
+  }
+
+  function testCloseOutConvertsAtTheSettlementPriceWithADeadFeed() public {
+    _settleWithADeadFeed(1015e18);
+
+    // bob owes 15 cNGN per USDC on 1,000 USDC and holds no cNGN: he pays its USDC value at 1015, rounded up
+    uint owedCngn = 15_000e18;
+    uint bobPays = Math.mulDiv(owedCngn, 1e18, 1015e18, Math.Rounding.Ceil);
+    manager.closeOutExpired(bobAcc, subId);
+    assertEq(_position(bobAcc), 0, "bob closed out");
+    assertEq(_cash(bobAcc), 1_000e18 - int(bobPays), "in USDC at the settlement price");
+
+    // the pool has no cNGN either, so alice is paid in USDC at the same price, rounded down
+    uint alicePaid = Math.mulDiv(owedCngn, 1e18, 1015e18, Math.Rounding.Floor);
+    manager.closeOutExpired(aliceAcc, subId);
+    assertEq(_position(aliceAcc), 0, "alice closed out");
+    assertEq(_cash(aliceAcc), 1_000e18 + int(alicePaid));
+    assertEq(future.totalPosition(manager), 0, "no open interest left");
+  }
+
+  function testCloseOutRoundingNeverFavoursTheTrader() public {
+    // 15,000 cNGN at 1015 cNGN per USDC is 14.77832512315270935960... USDC: not a whole number of wei
+    _settleWithADeadFeed(1015e18);
+    manager.closeOutExpired(bobAcc, subId);
+    manager.closeOutExpired(aliceAcc, subId);
+
+    uint owed = 15_000e18;
+    uint price = 1015e18;
+    uint exact = owed * 1e18 / price;
+    assertTrue(owed * 1e18 % price != 0, "the conversion has a remainder");
+    assertEq(_cash(bobAcc), 1_000e18 - int(exact) - 1, "the loser pays the extra wei");
+    assertEq(_cash(aliceAcc), 1_000e18 + int(exact), "the winner gets the floor");
+    assertEq(_cash(pool), 1, "the pool keeps the wei and is never short");
+  }
+
+  function testPreExpirySettlementStillUsesTheFeed() public {
+    _useIndex();
+    _fundCash(aliceAcc, 1_000e18);
+    _fundCash(bobAcc, 1_000e18);
+    _trade(bobAcc, aliceAcc, 1e18, MARK);
+    _mark(1010e18);
+    vm.mockCallRevert(address(spotFeed), abi.encodeWithSelector(ISpotFeed.getSpot.selector), "stale");
+    // bob owes 10,000 cNGN with none held: converting it before expiry needs the feed
+    vm.expectRevert(bytes("stale"));
+    manager.settleAccount(bobAcc);
+  }
+
+  ///////////////////
+  //  IM boundary  //
+  ///////////////////
+
+  /// @dev at the launch margin, IM 25% of 1,000 USDC is 250 USDC: one wei either side of it
+  function testOpeningAtTheLaunchIMBoundary() public {
+    manager.setMarginParams(
+      DatedFutureManager.MarginParams({mmReq: 0.15e18, imReq: 0.25e18, cngnMarginFactor: 0.5e18, cngnIMScale: 1e18})
+    );
+    _fundCash(bobAcc, 10_000e18);
+
+    uint above = subAccounts.createAccountWithApproval(address(0xa1), address(this), manager);
+    _fundCash(above, 250e18 + 1);
+    _trade(bobAcc, above, 1e18, MARK);
+    assertEq(_position(above), 1e18, "just above IM opens");
+    assertEq(manager.getMargin(above, true), 1, "with one wei to spare");
+
+    uint below = subAccounts.createAccountWithApproval(address(0xa2), address(this), manager);
+    _fundCash(below, 250e18 - 1);
+    vm.expectRevert(DatedFutureManager.DFM_PortfolioBelowMargin.selector);
+    _trade(bobAcc, below, 1e18, MARK);
   }
 
   ///////////////////
