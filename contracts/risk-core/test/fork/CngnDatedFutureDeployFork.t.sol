@@ -430,7 +430,7 @@ contract CngnDatedFutureDeployFork is Test {
     d.future.setSettlementPrice(d.subId, ref * 1015 / 1000);
     assertTrue(d.future.futureContracts(d.subId).settled);
 
-    // close-out needs no index: both accounts hold cNGN to settle the last leg in
+    // close-out reads no feed: any USDC part of the last leg converts at the settlement price (getSpot still reverts)
     d.manager.closeOutExpired(bobAcc, d.subId);
     d.manager.closeOutExpired(aliceAcc, d.subId);
     assertEq(d.future.totalPosition(d.manager), 0);
