@@ -10,10 +10,11 @@
  *
  * Skipped without ANVIL_RPC_URL.
  *
- * It shares the anvil with anvil.e2e.test.ts, and node runs test files as concurrent processes, so it
- * never moves the clock more than a few seconds: a large jump lands between another test's signing
- * and its submission and expires its 60-second deadline (BLF_DataExpired). For the same reason the
- * future's minMarkInterval here is 1 second; the hourly interval is the unit tests' to check.
+ * It shares the anvil, and so the chain clock, with the other anvil suites. `pnpm test` runs test files
+ * one at a time (--test-concurrency=1) for that reason: run concurrently, one suite's evm_increaseTime
+ * lands between another's signing and submission and expires its 60-second deadline
+ * (BLF_DataExpired), or blows through its fixing window. The future's minMarkInterval here is 1 second
+ * so the test needs no long jump; the hourly interval is the unit tests' to check.
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -42,8 +43,8 @@ import { carryForward, invert, ONE } from './forward-targets.js';
 
 const RPC = process.env.ANVIL_RPC_URL;
 const ARTIFACTS = join(import.meta.dirname, '../../../contracts/risk-core/out');
-// anvil's second default account: the index e2e test deploys and relays from the first, and test
-// files run as separate processes, so sharing it would race for nonces.
+// anvil's second default account: each anvil suite deploys and relays from its own, so a stray
+// concurrent run cannot race another for nonces.
 const DEPLOYER_KEY = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d' as Hex;
 const INDEX_SIGNER_KEY = keccak256(toHex('numo.future-feeds.e2e.index-signer'));
 const FORWARD_SIGNER_KEY = keccak256(toHex('numo.future-feeds.e2e.forward-signer'));
