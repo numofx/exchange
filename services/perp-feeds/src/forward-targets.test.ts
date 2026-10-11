@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { bookMid, carryForward, computeForwardTarget, invert, ONE, type ForwardInputs } from './forward-targets.js';
+import { bookMid, carryForward, computeForwardTarget, depthPrice, invert, ONE, type ForwardInputs } from './forward-targets.js';
 import type { RestingOrder } from './mark-targets.js';
 
 // The feed holds USDC per cNGN; the index in cNGN per USDC is its inverse, as the publisher computes it
@@ -16,6 +16,8 @@ function inputs(overrides: Partial<ForwardInputs> = {}): ForwardInputs {
     carry: (2n * ONE) / 10n, // 20% a year
     secondsToExpiry: 73n * DAY, // a fifth of a year: carry forward is index * 1.04
     orders: [],
+    contractSize: 1_000n * ONE,
+    minDepthUsdc: 1_000n * ONE, // one contract
     lastMark: INDEX,
     band: ONE / 10n, // 10%
     maxMove: ONE / 20n, // 5%
@@ -37,14 +39,41 @@ describe('carry forward', () => {
   });
 });
 
+const SIZE = 1_000n * ONE; // USDC per contract
+const ONE_CONTRACT = 1_000n * ONE; // of notional
+const sized = (side: 'buy' | 'sell', price: bigint, contracts: bigint): RestingOrder => ({ side, price, remaining: contracts });
+
 describe('book mid', () => {
-  it('is the mid of the best bid and ask', () => {
-    assert.equal(bookMid([order('buy', 1450n * ONE), order('buy', 1440n * ONE), order('sell', 1460n * ONE)]), 1455n * ONE);
+  it('is the mid of the best bid and ask when each fills the depth', () => {
+    assert.equal(
+      bookMid([order('buy', 1450n * ONE), order('buy', 1440n * ONE), order('sell', 1460n * ONE)], SIZE, ONE_CONTRACT),
+      1455n * ONE,
+    );
   });
   it('is null one-sided, crossed, or empty', () => {
-    assert.equal(bookMid([order('buy', 1450n * ONE)]), null);
-    assert.equal(bookMid([order('buy', 1460n * ONE), order('sell', 1450n * ONE)]), null);
-    assert.equal(bookMid([]), null);
+    assert.equal(bookMid([order('buy', 1450n * ONE)], SIZE, ONE_CONTRACT), null);
+    assert.equal(bookMid([order('buy', 1460n * ONE), order('sell', 1450n * ONE)], SIZE, ONE_CONTRACT), null);
+    assert.equal(bookMid([], SIZE, ONE_CONTRACT), null);
+  });
+  it('ignores a book with dust at the top and no depth behind it', () => {
+    const dust = ONE / 1000n; // a thousandth of a contract each side
+    assert.equal(bookMid([sized('buy', 1450n * ONE, dust), sized('sell', 1460n * ONE, dust)], SIZE, 2n * ONE_CONTRACT), null);
+  });
+  it('weights each side by depth, so a dust order at the top cannot move it', () => {
+    const book = [
+      sized('buy', 1459n * ONE, ONE / 1000n), // dust bid just under the ask
+      sized('buy', 1440n * ONE, 5n * ONE),
+      sized('sell', 1460n * ONE, 5n * ONE),
+    ];
+    const mid = bookMid(book, SIZE, 2n * ONE_CONTRACT)!;
+    // bid: 0.001 at 1459 + 1.999 at 1440 over 2 contracts
+    const bid = (1459n * ONE * (ONE / 1000n) + 1440n * ONE * (2n * ONE - ONE / 1000n)) / (2n * ONE);
+    assert.equal(mid, (bid + 1460n * ONE) / 2n);
+    assert.ok(mid < 1450n * ONE + ONE / 100n, 'the dust bid barely moves it: 1450.0095, not the 1459.5 its price would give');
+  });
+  it('fills a side across several orders', () => {
+    assert.equal(depthPrice([sized('sell', 1460n * ONE, ONE), sized('sell', 1470n * ONE, ONE)], SIZE, 2n * ONE_CONTRACT), 1465n * ONE);
+    assert.equal(depthPrice([sized('sell', 1460n * ONE, ONE)], SIZE, 2n * ONE_CONTRACT), null);
   });
 });
 

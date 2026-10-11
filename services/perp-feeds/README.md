@@ -106,8 +106,10 @@ ANVIL_RPC_URL=http://127.0.0.1:8599 pnpm test    # + the real feed contracts acc
 `dist/forward-main.js` marks a USDC/cNGN `FutureAsset`. Each tick, once the contract's
 `minMarkInterval` (an hour) has passed and until last trade, it:
 
-1. works out the forward in cNGN per USDC (`src/forward-targets.ts`): the futures book's mid if it is
-   two-sided, else the carry forward `index × (1 + CARRY × τ)`, then clamps it to the carry forward
+1. works out the forward in cNGN per USDC (`src/forward-targets.ts`): the futures book's mid if both
+   sides fill `FORWARD_MIN_BOOK_DEPTH_USDC` (2,000; each side's price is its depth-weighted average
+   over that, so a dust order cannot set the mark), else the carry forward
+   `index × (1 + CARRY × τ)`, then clamps it to the carry forward
    ± `FORWARD_MAX_BASIS_BPS`, inside the contract's current index band, and inside its per-mark move
    limit (both less `FORWARD_SAFETY_BPS`). If the band and the move limit cannot both be met, it
    publishes nothing and alerts `forward-unreachable`;
@@ -134,7 +136,11 @@ but permissionless calls, each reading its state back from the chain first so a 
    reads no feed, so it works with the index down.
 
 It alerts `forward-mark-late` when the contract's last mark is older than `FORWARD_MARK_LATE_MS`
-(2 h) while trading is open, and on every refusal. Config: `src/forward-config.ts`. Unit:
+(2 h) while trading is open, and on every refusal. At startup it refuses a threshold no larger than
+the contract's `minMarkInterval` plus `FORWARD_TICK_MS`, which an on-time mark would trip. If KMS
+cannot be reached at startup it stays up, retrying each minute and alerting
+`forward-signer-unavailable`, rather than crash-looping under systemd; a signing failure later alerts
+`forward-sign-failed`. Config: `src/forward-config.ts`. Unit:
 `numo-future-feeds.service`, secrets through `run-with-ssm-forward.sh`, non-secret config in
 `/etc/numo/future-feeds.env` (template `contracts/risk-core/scripts/ops/future-feeds.env`). Not
 installed: nothing it marks is deployed yet.
