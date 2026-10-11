@@ -36,6 +36,7 @@ type State = {
   index: bigint | null;
   forwardFeed: Address;
   band: bigint;
+  minMarkInterval?: bigint;
 };
 
 function fakeChain(state: State) {
@@ -64,7 +65,8 @@ function fakeChain(state: State) {
           markPrice: state.markPrice,
           cumulativeVMPerContract: 0n,
         },
-        minMarkInterval: 3_600n,
+        minMarkInterval: state.minMarkInterval ?? 3_600n,
+        contractSize: 1_000n * ONE,
         maxMarkDeviation: ONE / 20n,
         markIndexBand: state.band,
         forwardFeed: state.forwardFeed,
@@ -100,6 +102,59 @@ function run(state: State, cfg = config) {
 }
 
 describe('forward publisher', () => {
+  it('alerts at a last mark one second past the 2-hour threshold, not at exactly 2 hours', async () => {
+    const head = EXPIRY - 30n * 86_400n;
+    const onTime = run(base({ head, lastMarkTime: head - 7_200n }));
+    assert.equal(await onTime.publisher.tick(), 'published');
+    assert.ok(!onTime.alerts.includes('forward-mark-late'), 'exactly 2 hours is not late');
+
+    const late = run(base({ head, lastMarkTime: head - 7_201n }));
+    assert.equal(await late.publisher.tick(), 'published');
+    assert.ok(late.alerts.includes('forward-mark-late'), '2 hours and a second is');
+  });
+
+  it('refuses at startup a late threshold an on-time mark would trip', async () => {
+    // 2 hours against a 1-hour interval and a 1-minute tick: fine
+    await run(base()).publisher.checkLateThreshold();
+    // exactly interval + tick: an on-time mark seen one tick late would alert
+    await assert.rejects(() => run(base(), { ...config, FORWARD_MARK_LATE_MS: 3_660_000 }).publisher.checkLateThreshold(), /must exceed/);
+    // a contract whose interval is itself 2 hours
+    await assert.rejects(() => run(base({ minMarkInterval: 7_200n })).publisher.checkLateThreshold(), /must exceed/);
+  });
+
+  it('alerts, and sends nothing, when the signer fails (KMS refusing or down)', async () => {
+    const fake = fakeChain(base());
+    fake.chain.signer = {
+      ...fake.chain.signer,
+      signTypedData: async () => {
+        throw new Error('AccessDeniedException: not authorized to perform kms:Sign');
+      },
+    };
+    const alerts: string[] = [];
+    const publisher = new ForwardPublisher(config, fake.chain, async (key) => void alerts.push(key), async () => []);
+    assert.equal(await publisher.tick(), 'sign-failed');
+    assert.deepEqual(alerts, ['forward-sign-failed']);
+    assert.deepEqual(fake.calls, []);
+  });
+
+  it('marks to carry, not to a dust book', async () => {
+    const dust = [
+      { side: 'buy' as const, price: (INDEX * 102n) / 100n, remaining: ONE / 1000n },
+      { side: 'sell' as const, price: (INDEX * 103n) / 100n, remaining: ONE / 1000n },
+    ];
+    const fake = fakeChain(base());
+    const publisher = new ForwardPublisher(config, fake.chain, async () => {}, async () => dust);
+    const logs: string[] = [];
+    const original = console.log;
+    console.log = (line: string) => void logs.push(line);
+    try {
+      assert.equal(await publisher.tick(), 'published');
+    } finally {
+      console.log = original;
+    }
+    assert.ok(logs.some((line) => line.includes('(carry')), `marked to carry: ${logs.join(' | ')}`);
+  });
+
   it('publishes the forward, then pulls the mark, in that order', async () => {
     const { publisher, calls, submitted } = run(base());
     assert.equal(await publisher.tick(), 'published');

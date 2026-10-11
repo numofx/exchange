@@ -1,4 +1,4 @@
-import { parseAbi, type Address } from 'viem';
+import { parseAbi, parseUnits, type Address } from 'viem';
 
 import type { Alerter } from './alert.js';
 import { fetchBook } from './book.js';
@@ -12,6 +12,7 @@ export const futureAbi = parseAbi([
   'struct FutureContract { bool listed; bool settled; uint64 expiry; uint64 lastTradeTime; uint64 lastMarkTime; uint256 markPrice; int256 cumulativeVMPerContract; }',
   'function futureContracts(uint256 subId) view returns (FutureContract)',
   'function minMarkInterval() view returns (uint256)',
+  'function contractSize() view returns (uint256)',
   'function maxMarkDeviation() view returns (uint256)',
   'function markIndexBand(uint64 expiry) view returns (uint256)',
   'function forwardFeed() view returns (address)',
@@ -36,6 +37,7 @@ export type ForwardOutcome =
   | 'settled'
   | 'no-index'
   | 'unreachable'
+  | 'sign-failed'
   | 'pull-failed'
   | 'misconfigured';
 
@@ -59,6 +61,21 @@ export class ForwardPublisher {
 
   private read<T>(functionName: string, args: readonly unknown[] = []): Promise<T> {
     return this.chain.read<T>(this.config.FUTURE_ASSET, futureAbi, functionName, args);
+  }
+
+  /**
+   * Refuses a late-mark threshold that an on-time mark would trip. A mark is due every minMarkInterval
+   * and the publisher only looks every FORWARD_TICK_MS, so an on-time mark can be that much older.
+   * Run once at startup.
+   */
+  async checkLateThreshold(): Promise<void> {
+    const interval = await this.read<bigint>('minMarkInterval');
+    const earliestLateMs = Number(interval) * 1000 + this.config.FORWARD_TICK_MS;
+    if (this.config.FORWARD_MARK_LATE_MS <= earliestLateMs) {
+      throw new Error(
+        `FORWARD_MARK_LATE_MS (${this.config.FORWARD_MARK_LATE_MS}) must exceed minMarkInterval + FORWARD_TICK_MS (${earliestLateMs}ms)`,
+      );
+    }
   }
 
   async tick(): Promise<ForwardOutcome> {
@@ -103,15 +120,18 @@ export class ForwardPublisher {
       console.warn(`[forward] book unavailable, marking to carry: ${(error as Error).message}`);
     }
 
-    const [band, maxMove] = await Promise.all([
+    const [band, maxMove, contractSize] = await Promise.all([
       this.read<bigint>('markIndexBand', [contract.expiry]),
       this.read<bigint>('maxMarkDeviation'),
+      this.read<bigint>('contractSize'),
     ]);
     const target = computeForwardTarget({
       indexUsdc,
       carry: this.config.CARRY,
       secondsToExpiry: contract.expiry - head,
       orders,
+      contractSize,
+      minDepthUsdc: parseUnits(String(this.config.FORWARD_MIN_BOOK_DEPTH_USDC), 18),
       lastMark: contract.markPrice,
       band,
       maxMove,
@@ -123,15 +143,22 @@ export class ForwardPublisher {
       return 'unreachable';
     }
 
-    const update = await signFeedUpdate({
-      signer: this.chain.signer,
-      kind: 'LyraForwardFeed',
-      feed: this.config.FORWARD_FEED,
-      chainId: this.chain.chainId,
-      data: encodeForwardData(contract.expiry, target.diffUsdc),
-      timestamp: head - BigInt(this.config.TIMESTAMP_SAFETY_SEC),
-      deadline: head + BigInt(this.config.DEADLINE_SEC),
-    });
+    let update;
+    try {
+      update = await signFeedUpdate({
+        signer: this.chain.signer,
+        kind: 'LyraForwardFeed',
+        feed: this.config.FORWARD_FEED,
+        chainId: this.chain.chainId,
+        data: encodeForwardData(contract.expiry, target.diffUsdc),
+        timestamp: head - BigInt(this.config.TIMESTAMP_SAFETY_SEC),
+        deadline: head + BigInt(this.config.DEADLINE_SEC),
+      });
+    } catch (error) {
+      // With a KMS signer this is KMS refusing or failing: a lost grant, a disabled key, throttling.
+      await this.alert('forward-sign-failed', `forward not signed: ${(error as Error).message.slice(0, 300)}`);
+      return 'sign-failed';
+    }
     const clamps = target.clampedBy.length ? ` clamped by ${target.clampedBy.join(',')}` : '';
     console.log(`[forward] mark ${target.mark} (${target.basis}${clamps}) diff ${target.diffUsdc} on index ${indexUsdc}`);
 
