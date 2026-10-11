@@ -44,11 +44,16 @@ interface ITradeModuleQuote {
  *
  * @dev UNITS. Prices are cNGN per USDC. The index feed is USDC per cNGN; the asset inverts it.
  *
+ * @dev INITIAL MARK. Required, with the carry it is checked against: it must sit within INITIAL_MARK_TOLERANCE of
+ *      index * (1 + CARRY * tau), tau the years to expiry. The 10% spot band (which every later mark must meet) is
+ *      checked too.
+ *
  * Usage (the deployer is forge's sender: a keystore account, never a key on the command line):
- *   INITIAL_MARK=<cNGN per USDC, 18dp, from the forward> \
+ *   INITIAL_MARK=<cNGN per USDC, 18dp, from the forward> CARRY=<annual NGN-over-USD carry, 18dp, e.g. 0.2e18> \
  *     forge script scripts/deploy-cngn-dated-future.s.sol --rpc-url $BASE_RPC_URL --account numo-deployer --broadcast
  *
- * Optional env (defaults below): EXPIRY, LAST_TRADE_TIME, CONTRACT_SIZE, FUTURE_OI_CAP, FUTURE_CNGN_CAP.
+ * Optional env (defaults below): EXPIRY, LAST_TRADE_TIME, CONTRACT_SIZE, FUTURE_OI_CAP, FUTURE_CNGN_CAP,
+ *   INITIAL_MARK_TOLERANCE.
  */
 contract DeployCngnDatedFuture is Utils {
   string internal constant ARTIFACT_NAME = "CNGN_NOV30_2026_DATED_FUTURE";
@@ -75,7 +80,7 @@ contract DeployCngnDatedFuture is Utils {
   uint internal constant DEFAULT_FUTURE_CNGN_CAP = 20_000_000e18;
 
   uint internal constant MM_REQ = 0.15e18;
-  uint internal constant IM_REQ = 0.2e18;
+  uint internal constant IM_REQ = 0.25e18;
   uint internal constant CNGN_MARGIN_FACTOR = 0.5e18;
   uint internal constant CNGN_IM_SCALE = 1e18;
 
@@ -88,6 +93,12 @@ contract DeployCngnDatedFuture is Utils {
   uint internal constant FALLBACK_DELAY = 24 hours;
 
   uint internal constant MAX_ACCOUNT_SIZE = 48;
+
+  /// @dev How far the initial mark may sit from index * (1 + carry * tau).
+  uint internal constant DEFAULT_INITIAL_MARK_TOLERANCE = 0.02e18;
+
+  /// @dev Carry above this is refused as a likely units error (e.g. 20 for 20%).
+  uint internal constant MAX_CARRY = 1e18;
 
   struct Params {
     address subAccounts;
@@ -102,6 +113,9 @@ contract DeployCngnDatedFuture is Utils {
     uint64 lastTradeTime;
     uint contractSize;
     uint initialMark;
+    /// @dev annual NGN-over-USD carry, 18dp
+    uint carry;
+    uint initialMarkTolerance;
     uint futureOICap;
     uint futureCngnCap;
   }
@@ -147,6 +161,8 @@ contract DeployCngnDatedFuture is Utils {
     params.lastTradeTime = uint64(vm.envOr("LAST_TRADE_TIME", uint(params.expiry - FIXING_WINDOW)));
     params.contractSize = vm.envOr("CONTRACT_SIZE", DEFAULT_CONTRACT_SIZE);
     params.initialMark = vm.envUint("INITIAL_MARK");
+    params.carry = vm.envUint("CARRY");
+    params.initialMarkTolerance = vm.envOr("INITIAL_MARK_TOLERANCE", DEFAULT_INITIAL_MARK_TOLERANCE);
     params.futureOICap = vm.envOr("FUTURE_OI_CAP", DEFAULT_FUTURE_OI_CAP);
     params.futureCngnCap = vm.envOr("FUTURE_CNGN_CAP", DEFAULT_FUTURE_CNGN_CAP);
 
@@ -179,12 +195,37 @@ contract DeployCngnDatedFuture is Utils {
     if (params.futureOICap == 0) revert("FUTURE_OI_CAP is zero");
     if (params.futureCngnCap == 0) revert("FUTURE_CNGN_CAP is zero");
 
-    // The first daily mark is banded against the index; an initial mark outside the band cannot be followed by one.
     if (params.initialMark == 0) revert("INITIAL_MARK is zero");
+    if (params.carry > MAX_CARRY) revert("CARRY over 100% a year: give it 18dp (0.2e18 for 20%)");
+    if (params.initialMarkTolerance == 0 || params.initialMarkTolerance > MAX_MARK_INDEX_DEVIATION) {
+      revert("INITIAL_MARK_TOLERANCE out of range");
+    }
+
+    uint index = indexPrice(params);
+    // The first daily mark is banded against the spot index; an initial mark outside it cannot be followed by one.
+    if (_outside(params.initialMark, index, MAX_MARK_INDEX_DEVIATION)) revert("INITIAL_MARK is outside the index band");
+    // And it must be the forward the carry implies, not just near spot.
+    if (_outside(params.initialMark, fairForward(params), params.initialMarkTolerance)) {
+      revert("INITIAL_MARK is outside the band around index * (1 + carry * tau)");
+    }
+  }
+
+  /// @dev cNGN per USDC, from the feed's USDC per cNGN.
+  function indexPrice(Params memory params) public view returns (uint) {
     (uint spotPrice,) = ISpotFeed(params.indexFeed).getSpot();
-    uint index = 1e36 / spotPrice;
-    uint diff = params.initialMark > index ? params.initialMark - index : index - params.initialMark;
-    if (diff * 1e18 > index * MAX_MARK_INDEX_DEVIATION) revert("INITIAL_MARK is outside the index band");
+    return 1e36 / spotPrice;
+  }
+
+  /// @dev index * (1 + carry * tau), tau = years from now to expiry.
+  function fairForward(Params memory params) public view returns (uint) {
+    uint index = indexPrice(params);
+    uint tau = uint(params.expiry - block.timestamp);
+    return index + index * params.carry / 1e18 * tau / 365 days;
+  }
+
+  function _outside(uint price, uint reference_, uint band) internal pure returns (bool) {
+    uint diff = price > reference_ ? price - reference_ : reference_ - price;
+    return diff * 1e18 > reference_ * band;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -295,6 +336,8 @@ contract DeployCngnDatedFuture is Utils {
     vm.serializeUint(obj, "lastTradeTime", params.lastTradeTime);
     vm.serializeUint(obj, "contractSize", params.contractSize);
     vm.serializeUint(obj, "initialMark", params.initialMark);
+    vm.serializeUint(obj, "carry", params.carry);
+    vm.serializeUint(obj, "initialMarkTolerance", params.initialMarkTolerance);
     vm.serializeAddress(obj, "cash", params.cash);
     vm.serializeAddress(obj, "cngnEscrow", params.cngnEscrow);
     vm.serializeAddress(obj, "indexFeed", params.indexFeed);

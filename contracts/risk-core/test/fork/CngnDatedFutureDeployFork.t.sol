@@ -40,6 +40,9 @@ contract CngnDatedFutureDeployFork is Test {
   address constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
   address constant CNGN = 0x46C85152bFe9f96829aA94755D9f915F9B10EF5F;
 
+  uint64 constant EXPIRY = 1796047200;
+  uint constant CARRY = 0.2e18;
+
   address alice = address(0xa11ce);
   address bob = address(0xb0b);
   address treasury = address(0x7ea5);
@@ -57,11 +60,13 @@ contract CngnDatedFutureDeployFork is Test {
     vm.createSelectFork(vm.envString("BASE_RPC_URL"));
     script = new DeployCngnDatedFuture();
 
-    // The initial mark is the operator's input; here, 1% over the live index, as a forward would sit.
+    // The initial mark is the operator's input, checked against index * (1 + carry * tau); here it is exactly that.
     string memory stack = vm.readFile(string.concat(vm.projectRoot(), "/deployments/8453/CNGN_PERP_STACK.json"));
     (spot,) = ISpotFeed(vm.parseJsonAddress(stack, ".indexFeed")).getSpot();
     index = 1e36 / spot;
-    vm.setEnv("INITIAL_MARK", vm.toString(index * 101 / 100));
+    uint tau = uint(EXPIRY) - block.timestamp;
+    vm.setEnv("CARRY", vm.toString(CARRY));
+    vm.setEnv("INITIAL_MARK", vm.toString(index + index * CARRY / 1e18 * tau / 365 days));
 
     params = script.loadParams();
     subAccounts = SubAccounts(params.subAccounts);
@@ -82,6 +87,31 @@ contract CngnDatedFutureDeployFork is Test {
     p.initialMark = index * 111 / 100;
     vm.expectRevert(bytes("INITIAL_MARK is outside the index band"));
     script.checkParams(p);
+  }
+
+  function testInitialMarkOffTheCarryForwardIsRefused() public {
+    DeployCngnDatedFuture.Params memory p = params;
+    uint fair = script.fairForward(p);
+    p.initialMark = fair * 103 / 100; // inside the 10% spot band, 3% off the carry forward
+    assertLt(p.initialMark, index * 110 / 100, "the spot band alone would pass it");
+    vm.expectRevert(bytes("INITIAL_MARK is outside the band around index * (1 + carry * tau)"));
+    script.checkParams(p);
+
+    p.initialMark = fair * 1019 / 1000;
+    script.checkParams(p);
+  }
+
+  function testCarryInTheWrongUnitsIsRefused() public {
+    DeployCngnDatedFuture.Params memory p = params;
+    p.carry = 20e18; // "20" for 20%
+    vm.expectRevert(bytes("CARRY over 100% a year: give it 18dp (0.2e18 for 20%)"));
+    script.checkParams(p);
+  }
+
+  function testLaunchMarginIsIM25MM15() public view {
+    (uint mm, uint im,,) = d.manager.marginParams();
+    assertEq(im, 0.25e18);
+    assertEq(mm, 0.15e18);
   }
 
   function testLastTradeAfterTheFixingWindowStartIsRefused() public {
@@ -225,6 +255,185 @@ contract CngnDatedFutureDeployFork is Test {
     uint vmCngn = 1_000 * (mark0 * 102 / 100 - mark0);
     assertApproxEqAbs(cashAfter - cashBefore, int(vmCngn * spot / 1e18), 1, "paid the cNGN's value in USDC");
     assertLt(subAccounts.getBalance(d.poolAccount, _cash(), 0), 0, "the pool owes the cash until treasury tops up");
+  }
+
+  ///////////////////
+  //     rally     //
+  ///////////////////
+
+  /// @dev Move the index by `bps` (cNGN per USDC up, so USDC per cNGN down) and mark the future with it, a day later.
+  function _rallyStep(uint bps) internal returns (uint mark) {
+    spot = spot * 10_000 / (10_000 + bps);
+    _holdIndex(spot);
+    mark = d.future.futureContracts(d.subId).markPrice * (10_000 + bps) / 10_000;
+    vm.warp(block.timestamp + 1 days);
+    vm.prank(VAULT);
+    d.future.setDailyMark(d.subId, uint64(block.timestamp), mark);
+  }
+
+  function _mtm(uint acc) internal view returns (int mtm) {
+    (, mtm) = d.manager.getMarginAndMarkToMarket(acc, false, 0);
+  }
+
+  /**
+   * The index rises ~15% over four daily marks. Longs are paid in cNGN, fronted by the pool reserve; shorts that hold no
+   * cNGN pay in USDC; two shorts fall below maintenance and one is liquidated through the real auction. At IM 25% none
+   * goes insolvent: the move costs about 13% of notional against 25% posted.
+   */
+  function testIndexRallyOfFifteenPercent() public {
+    _executeVaultBatch();
+    _executeEnableBatch();
+    _holdIndex(spot);
+    _depositCngn(treasury, d.poolAccount, 2_000_000e6);
+
+    uint aliceAcc = _account(alice);
+    uint bobAcc = _account(bob);
+    uint carolAcc = _account(address(0xca401));
+    _depositUsdc(alice, aliceAcc, 2_000e6);
+    _depositUsdc(bob, bobAcc, 530e6); // IM 500 on two contracts
+    _depositUsdc(address(0xca401), carolAcc, 260e6); // IM 250 on one
+    uint mark0 = d.future.futureContracts(d.subId).markPrice;
+    _trade(bobAcc, aliceAcc, 2e18, mark0);
+    _trade(carolAcc, aliceAcc, 1e18, mark0);
+
+    for (uint i; i < 4; ++i) {
+      _rallyStep(350); // +3.5%, inside the 5% mark limit and the 10% index band
+      // the long is settled first each day: the reserve pays it before the shorts have paid in
+      uint poolBefore = uint(_cngnBalance(d.poolAccount));
+      d.manager.settleAccount(aliceAcc);
+      assertLt(uint(_cngnBalance(d.poolAccount)), poolBefore, "the reserve fronted the long");
+    }
+    uint markEnd = d.future.futureContracts(d.subId).markPrice;
+    assertApproxEqRel(markEnd, mark0 * 11475 / 10_000, 0.001e18, "about 14.75% up");
+
+    // alice holds the cNGN the four marks paid her
+    assertEq(_cngnBalance(aliceAcc), int(3 * 1_000 * (markEnd - mark0)), "long paid in cNGN, fronted by the pool");
+
+    // the shorts have paid nothing yet; both are below maintenance, neither is insolvent
+    assertLt(d.manager.getMargin(bobAcc, false), 0, "bob below MM");
+    assertLt(d.manager.getMargin(carolAcc, false), 0, "carol below MM");
+    assertGt(_mtm(bobAcc), 0, "bob still solvent");
+    assertGt(_mtm(carolAcc), 0, "carol still solvent");
+
+    // bob is liquidated through the real auction: the start settles his VM, in USDC since he holds no cNGN
+    DutchAuction auction = DutchAuction(params.auction);
+    int poolCashBefore = subAccounts.getBalance(d.poolAccount, _cash(), 0);
+    auction.startAuction(bobAcc, 0);
+    assertGt(subAccounts.getBalance(d.poolAccount, _cash(), 0), poolCashBefore, "bob paid the pool in USDC");
+
+    address dave = address(0xda5e);
+    uint daveAcc = _account(dave);
+    _depositUsdc(dave, daveAcc, 5_000e6);
+    vm.prank(dave);
+    (uint pct,,) = auction.bid(bobAcc, daveAcc, 1e18, 0, 0);
+    assertGt(pct, 0, "dave took part of bob");
+    assertLt(subAccounts.getBalance(daveAcc, d.future, d.subId), 0, "dave holds the short he bought");
+    assertGt(subAccounts.getBalance(bobAcc, d.future, d.subId), -2e18, "bob's short shrank");
+  }
+
+  /**
+   * Past the 10-15% case: carol's short is left unliquidated while the index keeps rising, until her losses exceed her
+   * collateral. Her insolvent auction is paid from the perp stack's real SecurityModule.
+   */
+  function testUnliquidatedRallyDrawsOnTheSecurityModule() public {
+    _executeVaultBatch();
+    _executeEnableBatch();
+    _holdIndex(spot);
+    _depositCngn(treasury, d.poolAccount, 2_000_000e6);
+
+    uint aliceAcc = _account(alice);
+    uint carolAcc = _account(address(0xca401));
+    _depositUsdc(alice, aliceAcc, 2_000e6);
+    _depositUsdc(address(0xca401), carolAcc, 260e6);
+    _trade(carolAcc, aliceAcc, 1e18, d.future.futureContracts(d.subId).markPrice);
+
+    // ~+47% over nine marks with nobody liquidating
+    for (uint i; i < 9; ++i) {
+      _rallyStep(450);
+    }
+    assertLt(_mtm(carolAcc), 0, "carol's losses now exceed her collateral");
+
+    DutchAuction auction = DutchAuction(params.auction);
+    uint smAcc = vm.parseJsonUint(
+      vm.readFile(string.concat(vm.projectRoot(), "/deployments/8453/CNGN_PERP_STACK.json")), ".securityModuleAccount"
+    );
+    // accrue the SecurityModule's interest first, so the delta below is the payout alone
+    StandardManager(params.perpSrm).settleInterest(smAcc);
+    int smBefore = subAccounts.getBalance(smAcc, _cash(), 0);
+    auction.startAuction(carolAcc, 0);
+    (bool insolvent) = _isInsolvent(carolAcc);
+    assertTrue(insolvent, "insolvent auction");
+
+    address eve = address(0xe7e);
+    uint eveAcc = _account(eve);
+    _depositUsdc(eve, eveAcc, 5_000e6);
+    vm.prank(eve);
+    (,, uint cashToBidder) = auction.bid(carolAcc, eveAcc, 1e18, 0, 0);
+
+    assertGt(cashToBidder, 0, "the bidder is paid to take the account");
+    assertEq(smBefore - subAccounts.getBalance(smAcc, _cash(), 0), int(cashToBidder), "paid by the SecurityModule");
+    assertEq(subAccounts.getBalance(eveAcc, d.future, d.subId), -1e18, "eve holds carol's short");
+    assertEq(subAccounts.getBalance(carolAcc, d.future, d.subId), 0, "carol is closed out");
+  }
+
+  function _isInsolvent(uint acc) internal view returns (bool) {
+    (bool ok, bytes memory data) = params.auction.staticcall(abi.encodeWithSignature("auctions(uint256)", acc));
+    require(ok, "auctions() read failed");
+    (,, bool insolvent,,,,) = abi.decode(data, (uint, uint, bool, bool, uint, uint, uint));
+    return insolvent;
+  }
+
+  ///////////////////
+  // stale fixing  //
+  ///////////////////
+
+  /// @dev The index goes stale 20 minutes into the fixing hour: the fixing cannot be made, and after 24 hours the
+  ///      vault may settle by hand, but only within 2% of the samples it did record.
+  function testStaleIndexDuringTheFixingThenTheBoundedFallback() public {
+    _executeVaultBatch();
+    _executeEnableBatch();
+    _holdIndex(spot);
+    _depositCngn(treasury, d.poolAccount, 1_000_000e6);
+    (uint aliceAcc, uint bobAcc) = _fundedAccounts();
+    _trade(bobAcc, aliceAcc, 1e18, d.future.futureContracts(d.subId).markPrice);
+
+    uint64 expiry = params.expiry;
+    for (uint t = expiry - 1 hours; t <= expiry - 40 minutes; t += 10 minutes) {
+      vm.warp(t);
+      d.future.recordFixingSample(d.subId);
+    }
+
+    // the feed goes stale: getSpot reverts, as LyraSpotFeed does past its heartbeat
+    vm.clearMockedCalls();
+    vm.mockCallRevert(params.indexFeed, abi.encodeWithSelector(ISpotFeed.getSpot.selector), "stale");
+    vm.warp(expiry - 30 minutes);
+    vm.expectRevert();
+    d.future.recordFixingSample(d.subId);
+
+    vm.warp(expiry);
+    vm.expectRevert(IDatedFutureAsset.DFA_FixingIncomplete.selector);
+    d.future.fixSettlementFromIndex(d.subId);
+
+    vm.prank(VAULT);
+    vm.expectRevert(IDatedFutureAsset.DFA_NotExpired.selector);
+    d.future.setSettlementPrice(d.subId, index);
+
+    vm.warp(uint(expiry) + 24 hours);
+    uint ref = d.future.fallbackReference(d.subId);
+    assertEq(ref, index, "three samples, all at the live index");
+
+    vm.prank(VAULT);
+    vm.expectRevert(IDatedFutureAsset.DFA_FallbackOutsideBand.selector);
+    d.future.setSettlementPrice(d.subId, ref * 1021 / 1000);
+
+    vm.prank(VAULT);
+    d.future.setSettlementPrice(d.subId, ref * 1015 / 1000);
+    assertTrue(d.future.futureContracts(d.subId).settled);
+
+    // close-out needs no index: both accounts hold cNGN to settle the last leg in
+    d.manager.closeOutExpired(bobAcc, d.subId);
+    d.manager.closeOutExpired(aliceAcc, d.subId);
+    assertEq(d.future.totalPosition(d.manager), 0);
   }
 
   ///////////////////
