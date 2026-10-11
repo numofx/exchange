@@ -128,5 +128,6 @@ It alerts `forward-mark-late` when the contract's last mark is older than `FORWA
 installed: nothing it marks is deployed yet.
 
 `src/forward.anvil.e2e.test.ts` runs it against the real `LyraSpotFeed`, `LyraForwardFeed`,
-`FutureAsset` and `OracleDataSubmitter` on anvil. It shares the anvil with the perp suite and never
-moves the clock more than a few seconds, since a large jump expires the other suite's signatures.
+`FutureAsset` and `OracleDataSubmitter` on anvil. The anvil suites share one chain clock, so
+`pnpm test` runs test files one at a time (`--test-concurrency=1`): concurrently, one suite's
+`evm_increaseTime` expires another's signatures.
