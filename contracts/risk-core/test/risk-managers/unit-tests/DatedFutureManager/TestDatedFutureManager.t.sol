@@ -465,9 +465,10 @@ contract TestDatedFutureManager is Test {
 
   function testCloseOutAfterSettlementRemovesPositionsAndPaysTheLastLeg() public {
     _openAtMark();
-    _mark(1010e18);
-    vm.warp(expiry);
-    future.setSettlementPrice(subId, 1015e18); // last leg +5 on top of +10
+    _useIndex();
+    _mark(1010e18); // reads the index (1000) as the fallback's reference
+    vm.warp(expiry + FALLBACK);
+    future.setSettlementPrice(subId, 1015e18); // last leg +5 on top of +10, 1.5% from the reference
 
     manager.closeOutExpired(bobAcc, subId);
     manager.closeOutExpired(aliceAcc, subId);
@@ -486,7 +487,9 @@ contract TestDatedFutureManager is Test {
   }
 
   function testNoMarksAfterSettlement() public {
-    vm.warp(expiry);
+    _useIndex();
+    _mark(1001e18);
+    vm.warp(expiry + FALLBACK);
     future.setSettlementPrice(subId, 1001e18);
     vm.expectRevert(IDatedFutureAsset.DFA_AlreadySettled.selector);
     future.setSettlementPrice(subId, 1002e18);
@@ -659,13 +662,73 @@ contract TestDatedFutureManager is Test {
 
   function testOwnerFallbackOnlyAfterTheDelayAndOnlyWithoutAFixing() public {
     _useIndex();
+    _mark(1001e18); // the fallback needs a reference: this mark reads the index
     vm.warp(expiry);
     vm.expectRevert(IDatedFutureAsset.DFA_NotExpired.selector);
     future.setSettlementPrice(subId, 1001e18);
 
     vm.warp(expiry + FALLBACK);
-    future.setSettlementPrice(subId, 1001e18); // nothing was sampled
+    future.setSettlementPrice(subId, 1001e18); // nothing was sampled; bounded by the index the mark read
     assertEq(future.futureContracts(subId).markPrice, 1001e18);
+  }
+
+  /// @dev two samples, then the index goes stale: the reference is their TWAP, the last held for one gap limit
+  function _sampleThenGoStale() internal {
+    uint start = expiry - WINDOW;
+    vm.warp(start);
+    future.recordFixingSample(subId); // 1000
+    vm.warp(start + GAP);
+    spotFeed.setSpot(0.0008e18, 1e18);
+    future.recordFixingSample(subId); // 1250
+  }
+
+  function testFallbackInsideTheBandOfTheSampleTwap() public {
+    _useIndex();
+    _sampleThenGoStale();
+    vm.warp(expiry + FALLBACK);
+    assertEq(future.fallbackReference(subId), 1125e18, "1000 for 15 minutes, 1250 for its 15-minute limit");
+    future.setSettlementPrice(subId, 1147e18); // 1.96% over
+    assertEq(future.futureContracts(subId).markPrice, 1147e18);
+  }
+
+  function testFallbackOutsideTheBandOfTheSampleTwapIsRefused() public {
+    _useIndex();
+    _sampleThenGoStale();
+    vm.warp(expiry + FALLBACK);
+    vm.expectRevert(IDatedFutureAsset.DFA_FallbackOutsideBand.selector);
+    future.setSettlementPrice(subId, 1148e18); // 2.04% over
+    vm.expectRevert(IDatedFutureAsset.DFA_FallbackOutsideBand.selector);
+    future.setSettlementPrice(subId, 1102e18); // 2.04% under
+  }
+
+  function testFallbackWithoutSamplesIsBoundedByTheLastIndexRead() public {
+    _useIndex();
+    _mark(1001e18); // reads 1000
+    spotFeed.setSpot(0.0008e18, 1e18); // the live index moves to 1250 afterwards: the last READ one is the reference
+    vm.warp(expiry + FALLBACK);
+    assertEq(future.fallbackReference(subId), 1000e18);
+    vm.expectRevert(IDatedFutureAsset.DFA_FallbackOutsideBand.selector);
+    future.setSettlementPrice(subId, 1021e18);
+    future.setSettlementPrice(subId, 1020e18);
+    assertTrue(future.futureContracts(subId).settled);
+  }
+
+  function testFallbackWithNoReferenceIsRefused() public {
+    _useIndex();
+    vm.warp(expiry + FALLBACK);
+    vm.expectRevert(IDatedFutureAsset.DFA_NoSettlementReference.selector);
+    future.setSettlementPrice(subId, 1000e18);
+  }
+
+  /// @dev the reference bound replaces the mark deviation bound, which would otherwise block settling at the index
+  function testFallbackIsNotHeldToTheMarkDeviationBound() public {
+    future.setMarkBounds(0.05e18, 0);
+    _useIndex();
+    _mark(1050e18);
+    _mark(1100e18); // both inside the 10% index band; the last index read is 1000
+    vm.warp(expiry + FALLBACK);
+    future.setSettlementPrice(subId, 1000e18); // 9% from the last mark, at the reference
+    assertTrue(future.futureContracts(subId).settled);
   }
 
   function testOwnerCannotOverrideACompleteFixing() public {
