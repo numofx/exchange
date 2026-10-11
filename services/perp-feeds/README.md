@@ -121,6 +121,18 @@ deploy script refuses one key for both). The signer is a **KMS key** (`FORWARD_S
 is refused on Base mainnet. The relayer is its own too (`/numo/feeds/forward_relayer_key`): one
 relayer shared by two processes races for nonces.
 
+**Expiry** (`src/expiry-keeper.ts`, the same process, every tick after the publisher), with nothing
+but permissionless calls, each reading its state back from the chain first so a restart resumes:
+
+1. in the contract's `fixingWindow` (1 h) it records an index sample every `FIXING_SAMPLE_INTERVAL_MS`
+   (5 min), at most half the contract's `maxSampleGap` so one failed sample cannot break the fixing
+   (it refuses to start otherwise; a failed sample alerts `fixing-sample-failed`);
+2. after expiry it calls `fixSettlementFromIndex`. If the fixing is incomplete it alerts
+   `fixing-incomplete`, then `fixing-fallback-due` once the vault's bounded fallback opens;
+3. once settled it calls `FutureManager.closeOutExpired` on every account still holding the series
+   (it walks `SubAccounts.lastAccountId`; Base has a few dozen), `CLOSE_OUT_BATCH` per tick. Close-out
+   reads no feed, so it works with the index down.
+
 It alerts `forward-mark-late` when the contract's last mark is older than `FORWARD_MARK_LATE_MS`
 (2 h) while trading is open, and on every refusal. Config: `src/forward-config.ts`. Unit:
 `numo-future-feeds.service`, secrets through `run-with-ssm-forward.sh`, non-secret config in
@@ -128,5 +140,7 @@ It alerts `forward-mark-late` when the contract's last mark is older than `FORWA
 installed: nothing it marks is deployed yet.
 
 `src/forward.anvil.e2e.test.ts` runs it against the real `LyraSpotFeed`, `LyraForwardFeed`,
-`FutureAsset` and `OracleDataSubmitter` on anvil. It shares the anvil with the perp suite and never
-moves the clock more than a few seconds, since a large jump expires the other suite's signatures.
+`FutureAsset` and `OracleDataSubmitter` on anvil, and `src/expiry.anvil.e2e.test.ts` runs a real fixing
+on `FutureAsset`. The anvil suites share one chain clock, so `pnpm test` runs test files one at a time
+(`--test-concurrency=1`): concurrently, one suite's `evm_increaseTime` expires another's signatures or
+skips its fixing window.
