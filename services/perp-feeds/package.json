@@ -12,7 +12,8 @@
     "start": "node dist/main.js",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test --test-concurrency=1 src/**/*.test.ts",
-    "start:forward": "node dist/forward-main.js"
+    "start:forward": "node dist/forward-main.js",
+    "rehearse:future": "tsx scripts/rehearse-future-fork.ts"
   },
   "dependencies": {
     "@numo/kms-signer": "workspace:*",
