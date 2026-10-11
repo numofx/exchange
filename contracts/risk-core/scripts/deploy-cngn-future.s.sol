@@ -3,17 +3,20 @@ pragma solidity ^0.8.0;
 
 import {SubAccounts} from "../src/SubAccounts.sol";
 import {CashAsset} from "../src/assets/CashAsset.sol";
-import {DatedFutureAsset} from "../src/assets/DatedFutureAsset.sol";
+import {FutureAsset} from "../src/assets/FutureAsset.sol";
 import {WrappedERC20Asset} from "../src/assets/WrappedERC20Asset.sol";
-import {DatedFutureManager} from "../src/risk-managers/DatedFutureManager.sol";
+import {FutureManager} from "../src/risk-managers/FutureManager.sol";
 import {BasePortfolioViewer} from "../src/risk-managers/BasePortfolioViewer.sol";
 import {DutchAuction} from "../src/liquidation/DutchAuction.sol";
 import {StandardManager} from "../src/risk-managers/StandardManager.sol";
+import {LyraForwardFeed} from "../src/feeds/LyraForwardFeed.sol";
+import {LyraSpotFeed} from "../src/feeds/LyraSpotFeed.sol";
 import {IAsset} from "../src/interfaces/IAsset.sol";
 import {ICashAsset} from "../src/interfaces/ICashAsset.sol";
 import {IDutchAuction} from "../src/interfaces/IDutchAuction.sol";
-import {IDatedFutureAsset} from "../src/interfaces/IDatedFutureAsset.sol";
+import {IFutureAsset} from "../src/interfaces/IFutureAsset.sol";
 import {ISpotFeed} from "../src/interfaces/ISpotFeed.sol";
+import {IForwardFeed} from "../src/interfaces/IForwardFeed.sol";
 import {IManager} from "../src/interfaces/IManager.sol";
 
 import {Utils, IOwnable2Step} from "./utils.sol";
@@ -24,9 +27,9 @@ interface ITradeModuleQuote {
 }
 
 /**
- * @title DeployCngnDatedFuture
+ * @title DeployCngnFuture
  *
- * @dev A USDC/cNGN dated future, cash settled in cNGN, on its own DatedFutureManager beside the perp SRM. It reuses
+ * @dev A USDC/cNGN future, cash settled in cNGN, on its own FutureManager beside the perp SRM. It reuses
  *      the perp stack's pieces rather than duplicating them:
  *      - its USDC cash (CNGN_PERP_STACK.cash): margin, fees, and VM shortfalls settle in it;
  *      - its cNGN escrow (CNGN_PERP_COLLATERAL.escrow): the asset VM settles in, and cNGN collateral;
@@ -42,7 +45,11 @@ interface ITradeModuleQuote {
  *      batch accepts each, and wires the new manager into the perp stack's cash, escrow and auction, which the vault
  *      already owns. ENABLE_VAULT_ACTIONS opens the cap and registers the future on the perp TradeModule.
  *
- * @dev UNITS. Prices are cNGN per USDC. The index feed is USDC per cNGN; the asset inverts it.
+ * @dev MARKS. A new LyraForwardFeed on the perp's index: forward = index + a signed per-expiry difference, published
+ *      by FORWARD_SIGNER, a key of its own. Anyone may pull a mark from it, at most hourly. The index band then bounds
+ *      what that signer can do, so it must not also sign the index: the script refuses one key for both.
+ *
+ * @dev UNITS. Prices are cNGN per USDC. The index and forward feeds are USDC per cNGN; the asset inverts them.
  *
  * @dev INITIAL MARK. Required, with the carry it is checked against: it must sit within INITIAL_MARK_TOLERANCE of
  *      index * (1 + CARRY * tau), tau the years to expiry. The 10% spot band (which every later mark must meet) is
@@ -50,15 +57,16 @@ interface ITradeModuleQuote {
  *
  * Usage (the deployer is forge's sender: a keystore account, never a key on the command line):
  *   INITIAL_MARK=<cNGN per USDC, 18dp, from the forward> CARRY=<annual NGN-over-USD carry, 18dp, e.g. 0.2e18> \
- *     forge script scripts/deploy-cngn-dated-future.s.sol --rpc-url $BASE_RPC_URL --account numo-deployer --broadcast
+ *   FORWARD_SIGNER=<forward publisher key> \
+ *     forge script scripts/deploy-cngn-future.s.sol --rpc-url $BASE_RPC_URL --account numo-deployer --broadcast
  *
  * Optional env (defaults below): EXPIRY, LAST_TRADE_TIME, CONTRACT_SIZE, FUTURE_OI_CAP, FUTURE_CNGN_CAP,
  *   INITIAL_MARK_TOLERANCE.
  */
-contract DeployCngnDatedFuture is Utils {
-  string internal constant ARTIFACT_NAME = "CNGN_NOV30_2026_DATED_FUTURE";
-  string internal constant VAULT_ACTIONS_NAME = "CNGN_NOV30_2026_DATED_FUTURE_VAULT_ACTIONS";
-  string internal constant ENABLE_ACTIONS_NAME = "CNGN_NOV30_2026_DATED_FUTURE_ENABLE_VAULT_ACTIONS";
+contract DeployCngnFuture is Utils {
+  string internal constant ARTIFACT_NAME = "CNGN_NOV30_2026_FUTURE";
+  string internal constant VAULT_ACTIONS_NAME = "CNGN_NOV30_2026_FUTURE_VAULT_ACTIONS";
+  string internal constant ENABLE_ACTIONS_NAME = "CNGN_NOV30_2026_FUTURE_ENABLE_VAULT_ACTIONS";
 
   address internal constant EXPECTED_VAULT = 0x1dcA42ab54Bd3862853A821F84B29BF65245F435;
 
@@ -88,6 +96,12 @@ contract DeployCngnDatedFuture is Utils {
   uint internal constant MAX_MARK_DELAY = 10 minutes;
 
   uint internal constant MAX_MARK_INDEX_DEVIATION = 0.1e18;
+  uint internal constant MIN_MARK_INDEX_DEVIATION = 0.01e18;
+  uint internal constant BAND_NARROWING_PERIOD = 14 days;
+  uint internal constant MIN_MARK_INTERVAL = 1 hours;
+  /// @dev The forward goes stale after this, and pullMark with it: twice the pull interval, so one missed publish is
+  ///      tolerated.
+  uint64 internal constant FORWARD_HEARTBEAT = 2 hours;
   uint internal constant FIXING_WINDOW = 1 hours;
   uint internal constant MAX_SAMPLE_GAP = 15 minutes;
   uint internal constant FALLBACK_DELAY = 24 hours;
@@ -118,12 +132,14 @@ contract DeployCngnDatedFuture is Utils {
     uint initialMarkTolerance;
     uint futureOICap;
     uint futureCngnCap;
+    address forwardSigner;
   }
 
   struct Deployment {
-    DatedFutureAsset future;
+    FutureAsset future;
     BasePortfolioViewer viewer;
-    DatedFutureManager manager;
+    FutureManager manager;
+    LyraForwardFeed forwardFeed;
     uint96 subId;
     uint poolAccount;
   }
@@ -165,6 +181,7 @@ contract DeployCngnDatedFuture is Utils {
     params.initialMarkTolerance = vm.envOr("INITIAL_MARK_TOLERANCE", DEFAULT_INITIAL_MARK_TOLERANCE);
     params.futureOICap = vm.envOr("FUTURE_OI_CAP", DEFAULT_FUTURE_OI_CAP);
     params.futureCngnCap = vm.envOr("FUTURE_CNGN_CAP", DEFAULT_FUTURE_CNGN_CAP);
+    params.forwardSigner = vm.envAddress("FORWARD_SIGNER");
 
     checkParams(params);
   }
@@ -195,6 +212,12 @@ contract DeployCngnDatedFuture is Utils {
     if (params.futureOICap == 0) revert("FUTURE_OI_CAP is zero");
     if (params.futureCngnCap == 0) revert("FUTURE_CNGN_CAP is zero");
 
+    if (params.forwardSigner == address(0)) revert("FORWARD_SIGNER is zero");
+    if (params.forwardSigner == params.vault) revert("FORWARD_SIGNER must not be the vault");
+    // The index band is what bounds a bad forward. It only does if the index is signed by someone else.
+    if (LyraSpotFeed(params.indexFeed).isSigner(params.forwardSigner)) {
+      revert("FORWARD_SIGNER must not also sign the index");
+    }
     if (params.initialMark == 0) revert("INITIAL_MARK is zero");
     if (params.carry > MAX_CARRY) revert("CARRY over 100% a year: give it 18dp (0.2e18 for 20%)");
     if (params.initialMarkTolerance == 0 || params.initialMarkTolerance > MAX_MARK_INDEX_DEVIATION) {
@@ -235,21 +258,21 @@ contract DeployCngnDatedFuture is Utils {
   function deploy(Params memory params) public returns (Deployment memory d) {
     SubAccounts subAccounts = SubAccounts(params.subAccounts);
 
-    d.future = new DatedFutureAsset(subAccounts, params.contractSize);
+    d.future = new FutureAsset(subAccounts, params.contractSize);
     d.viewer = new BasePortfolioViewer(subAccounts, ICashAsset(params.cash));
-    d.manager = new DatedFutureManager(
+    d.manager = new FutureManager(
       subAccounts,
       ICashAsset(params.cash),
       IDutchAuction(params.auction),
       d.viewer,
-      IDatedFutureAsset(address(d.future)),
+      IFutureAsset(address(d.future)),
       IAsset(params.cngnEscrow),
       ISpotFeed(params.indexFeed)
     );
     d.poolAccount = d.manager.accId();
 
     d.manager.setMarginParams(
-      DatedFutureManager.MarginParams({
+      FutureManager.MarginParams({
         mmReq: MM_REQ, imReq: IM_REQ, cngnMarginFactor: CNGN_MARGIN_FACTOR, cngnIMScale: CNGN_IM_SCALE
       })
     );
@@ -260,8 +283,20 @@ contract DeployCngnDatedFuture is Utils {
     d.future.setTotalPositionCap(d.manager, 0);
     d.future.setMarkBounds(MAX_MARK_DEVIATION, MAX_MARK_DELAY);
     d.future.setIndexParams(
-      ISpotFeed(params.indexFeed), MAX_MARK_INDEX_DEVIATION, FIXING_WINDOW, MAX_SAMPLE_GAP, FALLBACK_DELAY
+      ISpotFeed(params.indexFeed),
+      MAX_MARK_INDEX_DEVIATION,
+      MIN_MARK_INDEX_DEVIATION,
+      BAND_NARROWING_PERIOD,
+      FIXING_WINDOW,
+      MAX_SAMPLE_GAP,
+      FALLBACK_DELAY
     );
+
+    d.forwardFeed = new LyraForwardFeed(ISpotFeed(params.indexFeed));
+    d.forwardFeed.setHeartbeat(FORWARD_HEARTBEAT);
+    d.forwardFeed.addSigner(params.forwardSigner, true);
+    d.forwardFeed.setRequiredSigners(1);
+    d.future.setForwardFeed(IForwardFeed(address(d.forwardFeed)), MIN_MARK_INTERVAL);
     d.subId = d.future.setContract(params.expiry, params.lastTradeTime, params.initialMark);
 
     // No OI fee: the TradeModule's taker fee is the venue's fee. Explicit so the artifact states it.
@@ -274,10 +309,11 @@ contract DeployCngnDatedFuture is Utils {
   }
 
   function ownedContracts(Deployment memory d) public pure returns (address[] memory owned) {
-    owned = new address[](3);
+    owned = new address[](4);
     owned[0] = address(d.future);
     owned[1] = address(d.viewer);
     owned[2] = address(d.manager);
+    owned[3] = address(d.forwardFeed);
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -310,8 +346,17 @@ contract DeployCngnDatedFuture is Utils {
     if (d.future.totalPositionCap(d.manager) != 0) revert("future must deploy closed (cap 0)");
     if (address(d.future.indexFeed()) != params.indexFeed) revert("future index not set");
     if (d.future.maxMarkIndexDeviation() == 0 || d.future.maxMarkDeviation() == 0) revert("mark bounds not set");
+    if (d.future.minMarkIndexDeviation() == 0 || d.future.bandNarrowingPeriod() == 0) revert("band does not narrow");
 
-    IDatedFutureAsset.FutureContract memory c = d.future.futureContracts(d.subId);
+    // Marks come from the new forward feed, on the perp's index, signed by the forward key alone.
+    if (address(d.future.forwardFeed()) != address(d.forwardFeed)) revert("future does not read the forward feed");
+    if (d.future.minMarkInterval() == 0) revert("pulls are not rate limited");
+    if (address(d.forwardFeed.spotFeed()) != params.indexFeed) revert("forward feed is not on the index");
+    if (!d.forwardFeed.isSigner(params.forwardSigner)) revert("forward feed missing its signer");
+    // msg.sender is the deployer when run() calls this
+    if (d.forwardFeed.isSigner(msg.sender)) revert("deployer signs the forward feed");
+
+    IFutureAsset.FutureContract memory c = d.future.futureContracts(d.subId);
     if (!c.listed || c.expiry != params.expiry || c.markPrice != params.initialMark) revert("contract not listed");
 
     // Nothing reused is changed by the deployer: wiring is the vault's.
@@ -326,10 +371,12 @@ contract DeployCngnDatedFuture is Utils {
   // ---------------------------------------------------------------------------------------------
 
   function _writeArtifacts(Deployment memory d, Params memory params) internal {
-    string memory obj = "cngn-dated-future";
+    string memory obj = "cngn-future";
     vm.serializeAddress(obj, "future", address(d.future));
     vm.serializeAddress(obj, "viewer", address(d.viewer));
     vm.serializeAddress(obj, "manager", address(d.manager));
+    vm.serializeAddress(obj, "forwardFeed", address(d.forwardFeed));
+    vm.serializeAddress(obj, "forwardSigner", params.forwardSigner);
     vm.serializeUint(obj, "poolAccount", d.poolAccount);
     vm.serializeUint(obj, "subId", d.subId);
     vm.serializeUint(obj, "expiry", params.expiry);
@@ -357,7 +404,7 @@ contract DeployCngnDatedFuture is Utils {
     bytes memory accept = abi.encodeWithSignature("acceptOwnership()");
     json = "[";
     for (uint i = 0; i < owned.length; i++) {
-      json = string.concat(json, i == 0 ? "" : ",", _action("acceptOwnership() [cNGN dated future]", owned[i], accept));
+      json = string.concat(json, i == 0 ? "" : ",", _action("acceptOwnership() [cNGN future]", owned[i], accept));
     }
     address manager = address(d.manager);
     json = string.concat(
