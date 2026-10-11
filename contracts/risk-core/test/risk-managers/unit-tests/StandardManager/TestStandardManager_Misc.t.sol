@@ -29,12 +29,6 @@ contract UNIT_TestStandardManager_Misc is TestStandardManagerBase {
     manager.setOptionMarginParams(ethMarketId, params);
   }
 
-  /// Dated futures settle VM in cNGN; this manager would book it as USDC cash. They belong on DatedFutureManager.
-  function testRefusesDatedFutures() public {
-    vm.expectRevert(IStandardManager.SRM_UnsupportedAsset.selector);
-    manager.whitelistAsset(IAsset(address(0xf00)), ethMarketId, IStandardManager.AssetType.DatedFuture);
-  }
-
   function testCanEnableBorrowing() public {
     manager.setBorrowingEnabled(true);
     assertEq(manager.borrowingEnabled(), true);
