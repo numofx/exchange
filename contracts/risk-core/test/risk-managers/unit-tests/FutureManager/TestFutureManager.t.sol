@@ -6,15 +6,16 @@ import "openzeppelin/utils/math/Math.sol";
 
 import "../../../../src/SubAccounts.sol";
 import "../../../../src/risk-managers/BasePortfolioViewer.sol";
-import "../../../../src/risk-managers/DatedFutureManager.sol";
+import "../../../../src/risk-managers/FutureManager.sol";
 import "../../../../src/assets/WrappedERC20Asset.sol";
-import "../../../../src/assets/DatedFutureAsset.sol";
+import "../../../../src/assets/FutureAsset.sol";
 import {IAsset} from "../../../../src/interfaces/IAsset.sol";
 import {ICashAsset} from "../../../../src/interfaces/ICashAsset.sol";
 import {IDutchAuction} from "../../../../src/interfaces/IDutchAuction.sol";
-import {IDatedFutureAsset} from "../../../../src/interfaces/IDatedFutureAsset.sol";
+import {IFutureAsset} from "../../../../src/interfaces/IFutureAsset.sol";
 import {IERC20BasedAsset} from "../../../../src/interfaces/IERC20BasedAsset.sol";
 import {ISpotFeed} from "../../../../src/interfaces/ISpotFeed.sol";
+import {IForwardFeed} from "../../../../src/interfaces/IForwardFeed.sol";
 
 import "../../../shared/mocks/MockERC20.sol";
 import "../../../shared/mocks/MockFeeds.sol";
@@ -26,9 +27,9 @@ import "../../mocks/MockDutchAuction.sol";
  * mark 1000 cNGN/USDC, spot 0.001 USDC/cNGN, one contract = 1,000 USDC, so a 10 cNGN move in the mark is
  * 10,000 cNGN (10 USDC) of VM per contract.
  */
-contract TestDatedFutureManager is Test {
+contract TestFutureManager is Test {
   SubAccounts subAccounts;
-  DatedFutureManager manager;
+  FutureManager manager;
   BasePortfolioViewer viewer;
   MockDutchAuction auction;
 
@@ -36,7 +37,7 @@ contract TestDatedFutureManager is Test {
   MockERC20 usdc;
   MockERC20 cngn;
   WrappedERC20Asset cngnAsset;
-  DatedFutureAsset future;
+  FutureAsset future;
   MockFeeds spotFeed;
 
   uint aliceAcc;
@@ -66,21 +67,21 @@ contract TestDatedFutureManager is Test {
     viewer = new BasePortfolioViewer(subAccounts, cash);
     auction = new MockDutchAuction();
     cngnAsset = new WrappedERC20Asset(subAccounts, cngn);
-    future = new DatedFutureAsset(subAccounts, CONTRACT_SIZE);
+    future = new FutureAsset(subAccounts, CONTRACT_SIZE);
     spotFeed = new MockFeeds();
     spotFeed.setSpot(SPOT, 1e18);
 
-    manager = new DatedFutureManager(
+    manager = new FutureManager(
       subAccounts,
       ICashAsset(address(cash)),
       IDutchAuction(address(auction)),
       viewer,
-      IDatedFutureAsset(address(future)),
+      IFutureAsset(address(future)),
       IAsset(address(cngnAsset)),
       ISpotFeed(address(spotFeed))
     );
     manager.setMarginParams(
-      DatedFutureManager.MarginParams({mmReq: 0.1e18, imReq: 0.2e18, cngnMarginFactor: 0.5e18, cngnIMScale: 1e18})
+      FutureManager.MarginParams({mmReq: 0.1e18, imReq: 0.2e18, cngnMarginFactor: 0.5e18, cngnIMScale: 1e18})
     );
     pool = manager.accId();
 
@@ -127,7 +128,7 @@ contract TestDatedFutureManager is Test {
 
   function _mark(uint price) internal {
     vm.warp(block.timestamp + 1 days);
-    future.setDailyMark(subId, uint64(block.timestamp), price);
+    future.setMark(subId, uint64(block.timestamp), price);
   }
 
   function _cngn(uint acc) internal view returns (int) {
@@ -357,7 +358,7 @@ contract TestDatedFutureManager is Test {
   function testCannotOpenBelowInitialMargin() public {
     _fundCash(aliceAcc, 199e18);
     _fundCash(bobAcc, 1_000e18);
-    vm.expectRevert(DatedFutureManager.DFM_PortfolioBelowMargin.selector);
+    vm.expectRevert(FutureManager.FM_PortfolioBelowMargin.selector);
     _trade(bobAcc, aliceAcc, 1e18, MARK);
   }
 
@@ -387,7 +388,7 @@ contract TestDatedFutureManager is Test {
   function testCannotDrawCashBelowZero() public {
     _fundCash(aliceAcc, 100e18);
     vm.prank(alice);
-    vm.expectRevert(DatedFutureManager.DFM_NoNegativeCash.selector);
+    vm.expectRevert(FutureManager.FM_NoNegativeCash.selector);
     cash.withdraw(aliceAcc, 101e18, alice);
   }
 
@@ -395,7 +396,7 @@ contract TestDatedFutureManager is Test {
   ///      that could put a position there without an allowance is a liquidation bid naming it as the liquidator.
   function testPoolCannotBeTheLiquidator() public {
     vm.prank(address(auction));
-    vm.expectRevert(DatedFutureManager.DFM_PoolCannotHoldFutures.selector);
+    vm.expectRevert(FutureManager.FM_PoolCannotHoldFutures.selector);
     manager.executeBid(bobAcc, pool, 1e18, 0, 0);
   }
 
@@ -405,7 +406,7 @@ contract TestDatedFutureManager is Test {
     other.setTotalPositionCap(manager, 1e36);
     usdc.mint(address(this), 1e6);
     usdc.approve(address(other), 1e6);
-    vm.expectRevert(DatedFutureManager.DFM_UnsupportedAsset.selector);
+    vm.expectRevert(FutureManager.FM_UnsupportedAsset.selector);
     other.deposit(aliceAcc, 1e6);
   }
 
@@ -416,28 +417,28 @@ contract TestDatedFutureManager is Test {
   function testMarkDeviationBound() public {
     future.setMarkBounds(0.05e18, 0);
     vm.warp(block.timestamp + 1 days);
-    vm.expectRevert(IDatedFutureAsset.DFA_MarkDeviationExceeded.selector);
-    future.setDailyMark(subId, uint64(block.timestamp), 1051e18);
-    future.setDailyMark(subId, uint64(block.timestamp), 1050e18);
+    vm.expectRevert(IFutureAsset.FA_MarkDeviationExceeded.selector);
+    future.setMark(subId, uint64(block.timestamp), 1051e18);
+    future.setMark(subId, uint64(block.timestamp), 1050e18);
   }
 
   function testStaleMarkIsRejected() public {
     future.setMarkBounds(0, 600);
     vm.warp(block.timestamp + 1 days);
-    vm.expectRevert(IDatedFutureAsset.DFA_StaleMark.selector);
-    future.setDailyMark(subId, uint64(block.timestamp - 601), 1001e18);
+    vm.expectRevert(IFutureAsset.FA_StaleMark.selector);
+    future.setMark(subId, uint64(block.timestamp - 601), 1001e18);
   }
 
   function testMarkCannotBeInTheFuture() public {
-    vm.expectRevert(IDatedFutureAsset.DFA_InvalidMark.selector);
-    future.setDailyMark(subId, uint64(block.timestamp + 1), 1001e18);
+    vm.expectRevert(IFutureAsset.FA_InvalidMark.selector);
+    future.setMark(subId, uint64(block.timestamp + 1), 1001e18);
   }
 
   function testOnlyOwnerMarks() public {
     vm.warp(block.timestamp + 1 days);
     vm.prank(alice);
     vm.expectRevert();
-    future.setDailyMark(subId, uint64(block.timestamp), 1001e18);
+    future.setMark(subId, uint64(block.timestamp), 1001e18);
   }
 
   ///////////////////
@@ -447,20 +448,20 @@ contract TestDatedFutureManager is Test {
   function testTradingClosesAtLastTradeTime() public {
     _openAtMark();
     vm.warp(lastTradeTime);
-    vm.expectRevert(IDatedFutureAsset.DFA_TradingClosed.selector);
+    vm.expectRevert(IFutureAsset.FA_TradingClosed.selector);
     _trade(bobAcc, aliceAcc, 1e18, MARK);
   }
 
   function testSettlementPriceOnlyAfterExpiry() public {
     vm.warp(expiry - 1);
-    vm.expectRevert(IDatedFutureAsset.DFA_NotExpired.selector);
+    vm.expectRevert(IFutureAsset.FA_NotExpired.selector);
     future.setSettlementPrice(subId, 1001e18);
   }
 
   function testCloseOutBeforeSettlementReverts() public {
     _openAtMark();
     vm.warp(expiry);
-    vm.expectRevert(DatedFutureManager.DFM_NotSettled.selector);
+    vm.expectRevert(FutureManager.FM_NotSettled.selector);
     manager.closeOutExpired(aliceAcc, subId);
   }
 
@@ -492,10 +493,10 @@ contract TestDatedFutureManager is Test {
     _mark(1001e18);
     vm.warp(expiry + FALLBACK);
     future.setSettlementPrice(subId, 1001e18);
-    vm.expectRevert(IDatedFutureAsset.DFA_AlreadySettled.selector);
+    vm.expectRevert(IFutureAsset.FA_AlreadySettled.selector);
     future.setSettlementPrice(subId, 1002e18);
-    vm.expectRevert(IDatedFutureAsset.DFA_AlreadySettled.selector);
-    future.setDailyMark(subId, uint64(block.timestamp), 1002e18);
+    vm.expectRevert(IFutureAsset.FA_AlreadySettled.selector);
+    future.setMark(subId, uint64(block.timestamp), 1002e18);
   }
 
   ///////////////////
@@ -505,10 +506,11 @@ contract TestDatedFutureManager is Test {
   uint constant WINDOW = 1 hours;
   uint constant GAP = 15 minutes;
   uint constant FALLBACK = 24 hours;
+  uint constant NARROWING = 14 days;
 
   /// @dev the index feed is USDC per cNGN; 0.001 is 1000 cNGN per USDC, the mark
   function _useIndex() internal {
-    future.setIndexParams(ISpotFeed(address(spotFeed)), 0.1e18, WINDOW, GAP, FALLBACK);
+    future.setIndexParams(ISpotFeed(address(spotFeed)), 0.1e18, 0.01e18, NARROWING, WINDOW, GAP, FALLBACK);
   }
 
   /// @dev sample every 15 minutes across the window: 1000 for the first half, 1250 (0.0008) for the second
@@ -525,16 +527,18 @@ contract TestDatedFutureManager is Test {
   function testMarkMustSitInsideTheIndexBand() public {
     _useIndex();
     vm.warp(block.timestamp + 1 days);
-    vm.expectRevert(IDatedFutureAsset.DFA_MarkOutsideIndexBand.selector);
-    future.setDailyMark(subId, uint64(block.timestamp), 1101e18);
-    future.setDailyMark(subId, uint64(block.timestamp), 1100e18); // exactly 10% over
+    vm.expectRevert(IFutureAsset.FA_MarkOutsideIndexBand.selector);
+    future.setMark(subId, uint64(block.timestamp), 1101e18);
+    future.setMark(subId, uint64(block.timestamp), 1100e18); // exactly 10% over
   }
 
   function testIndexParamsAreValidated() public {
-    vm.expectRevert(IDatedFutureAsset.DFA_InvalidIndexParams.selector);
-    future.setIndexParams(ISpotFeed(address(spotFeed)), 0.1e18, WINDOW, WINDOW + 1, FALLBACK);
-    vm.expectRevert(IDatedFutureAsset.DFA_InvalidIndexParams.selector);
-    future.setIndexParams(ISpotFeed(address(0)), 0.1e18, WINDOW, GAP, FALLBACK);
+    vm.expectRevert(IFutureAsset.FA_InvalidIndexParams.selector);
+    future.setIndexParams(ISpotFeed(address(spotFeed)), 0.1e18, 0.01e18, NARROWING, WINDOW, WINDOW + 1, FALLBACK);
+    vm.expectRevert(IFutureAsset.FA_InvalidIndexParams.selector);
+    future.setIndexParams(ISpotFeed(address(0)), 0.1e18, 0.01e18, NARROWING, WINDOW, GAP, FALLBACK);
+    vm.expectRevert(IFutureAsset.FA_InvalidIndexParams.selector);
+    future.setIndexParams(ISpotFeed(address(spotFeed)), 0.1e18, 0.11e18, NARROWING, WINDOW, GAP, FALLBACK);
   }
 
   function testFixingIsTheTimeWeightedIndex() public {
@@ -542,7 +546,7 @@ contract TestDatedFutureManager is Test {
     _sampleWindow();
     future.fixSettlementFromIndex(subId);
 
-    IDatedFutureAsset.FutureContract memory c = future.futureContracts(subId);
+    IFutureAsset.FutureContract memory c = future.futureContracts(subId);
     assertTrue(c.settled);
     assertEq(c.markPrice, 1125e18, "half the window at 1000, half at 1250");
   }
@@ -580,7 +584,7 @@ contract TestDatedFutureManager is Test {
     _useIndex();
     vm.warp(expiry - 1);
     future.recordFixingSample(subId);
-    vm.expectRevert(IDatedFutureAsset.DFA_NotExpired.selector);
+    vm.expectRevert(IFutureAsset.FA_NotExpired.selector);
     future.fixSettlementFromIndex(subId);
   }
 
@@ -596,7 +600,7 @@ contract TestDatedFutureManager is Test {
     vm.warp(start + 3 * GAP);
     future.recordFixingSample(subId);
     vm.warp(expiry);
-    vm.expectRevert(IDatedFutureAsset.DFA_FixingIncomplete.selector);
+    vm.expectRevert(IFutureAsset.FA_FixingIncomplete.selector);
     future.fixSettlementFromIndex(subId);
   }
 
@@ -608,7 +612,7 @@ contract TestDatedFutureManager is Test {
       future.recordFixingSample(subId);
     }
     vm.warp(expiry);
-    vm.expectRevert(IDatedFutureAsset.DFA_FixingIncomplete.selector);
+    vm.expectRevert(IFutureAsset.FA_FixingIncomplete.selector);
     future.fixSettlementFromIndex(subId);
   }
 
@@ -635,17 +639,17 @@ contract TestDatedFutureManager is Test {
     vm.warp(expiry - WINDOW + GAP);
     future.recordFixingSample(subId);
     vm.warp(expiry);
-    vm.expectRevert(IDatedFutureAsset.DFA_FixingIncomplete.selector);
+    vm.expectRevert(IFutureAsset.FA_FixingIncomplete.selector);
     future.fixSettlementFromIndex(subId);
   }
 
   function testSamplesOnlyInsideTheWindow() public {
     _useIndex();
     vm.warp(expiry - WINDOW - 1);
-    vm.expectRevert(IDatedFutureAsset.DFA_OutsideFixingWindow.selector);
+    vm.expectRevert(IFutureAsset.FA_OutsideFixingWindow.selector);
     future.recordFixingSample(subId);
     vm.warp(expiry + 1);
-    vm.expectRevert(IDatedFutureAsset.DFA_OutsideFixingWindow.selector);
+    vm.expectRevert(IFutureAsset.FA_OutsideFixingWindow.selector);
     future.recordFixingSample(subId);
   }
 
@@ -655,9 +659,9 @@ contract TestDatedFutureManager is Test {
     vm.warp(start);
     future.recordFixingSample(subId);
     // widening the gap limit mid-window does not loosen this fixing
-    future.setIndexParams(ISpotFeed(address(spotFeed)), 0.1e18, WINDOW, WINDOW, FALLBACK);
+    future.setIndexParams(ISpotFeed(address(spotFeed)), 0.1e18, 0.01e18, NARROWING, WINDOW, WINDOW, FALLBACK);
     vm.warp(expiry);
-    vm.expectRevert(IDatedFutureAsset.DFA_FixingIncomplete.selector);
+    vm.expectRevert(IFutureAsset.FA_FixingIncomplete.selector);
     future.fixSettlementFromIndex(subId);
   }
 
@@ -665,7 +669,7 @@ contract TestDatedFutureManager is Test {
     _useIndex();
     _mark(1001e18); // the fallback needs a reference: this mark reads the index
     vm.warp(expiry);
-    vm.expectRevert(IDatedFutureAsset.DFA_NotExpired.selector);
+    vm.expectRevert(IFutureAsset.FA_NotExpired.selector);
     future.setSettlementPrice(subId, 1001e18);
 
     vm.warp(expiry + FALLBACK);
@@ -696,9 +700,9 @@ contract TestDatedFutureManager is Test {
     _useIndex();
     _sampleThenGoStale();
     vm.warp(expiry + FALLBACK);
-    vm.expectRevert(IDatedFutureAsset.DFA_FallbackOutsideBand.selector);
+    vm.expectRevert(IFutureAsset.FA_FallbackOutsideBand.selector);
     future.setSettlementPrice(subId, 1148e18); // 2.04% over
-    vm.expectRevert(IDatedFutureAsset.DFA_FallbackOutsideBand.selector);
+    vm.expectRevert(IFutureAsset.FA_FallbackOutsideBand.selector);
     future.setSettlementPrice(subId, 1102e18); // 2.04% under
   }
 
@@ -708,7 +712,7 @@ contract TestDatedFutureManager is Test {
     spotFeed.setSpot(0.0008e18, 1e18); // the live index moves to 1250 afterwards: the last READ one is the reference
     vm.warp(expiry + FALLBACK);
     assertEq(future.fallbackReference(subId), 1000e18);
-    vm.expectRevert(IDatedFutureAsset.DFA_FallbackOutsideBand.selector);
+    vm.expectRevert(IFutureAsset.FA_FallbackOutsideBand.selector);
     future.setSettlementPrice(subId, 1021e18);
     future.setSettlementPrice(subId, 1020e18);
     assertTrue(future.futureContracts(subId).settled);
@@ -717,7 +721,7 @@ contract TestDatedFutureManager is Test {
   function testFallbackWithNoReferenceIsRefused() public {
     _useIndex();
     vm.warp(expiry + FALLBACK);
-    vm.expectRevert(IDatedFutureAsset.DFA_NoSettlementReference.selector);
+    vm.expectRevert(IFutureAsset.FA_NoSettlementReference.selector);
     future.setSettlementPrice(subId, 1000e18);
   }
 
@@ -736,7 +740,7 @@ contract TestDatedFutureManager is Test {
     _useIndex();
     _sampleWindow();
     vm.warp(expiry + FALLBACK);
-    vm.expectRevert(IDatedFutureAsset.DFA_FixingAvailable.selector);
+    vm.expectRevert(IFutureAsset.FA_FixingAvailable.selector);
     future.setSettlementPrice(subId, 1001e18);
   }
 
@@ -809,7 +813,7 @@ contract TestDatedFutureManager is Test {
   /// @dev at the launch margin, IM 25% of 1,000 USDC is 250 USDC: one wei either side of it
   function testOpeningAtTheLaunchIMBoundary() public {
     manager.setMarginParams(
-      DatedFutureManager.MarginParams({mmReq: 0.15e18, imReq: 0.25e18, cngnMarginFactor: 0.5e18, cngnIMScale: 1e18})
+      FutureManager.MarginParams({mmReq: 0.15e18, imReq: 0.25e18, cngnMarginFactor: 0.5e18, cngnIMScale: 1e18})
     );
     _fundCash(bobAcc, 10_000e18);
 
@@ -821,8 +825,126 @@ contract TestDatedFutureManager is Test {
 
     uint below = subAccounts.createAccountWithApproval(address(0xa2), address(this), manager);
     _fundCash(below, 250e18 - 1);
-    vm.expectRevert(DatedFutureManager.DFM_PortfolioBelowMargin.selector);
+    vm.expectRevert(FutureManager.FM_PortfolioBelowMargin.selector);
     _trade(bobAcc, below, 1e18, MARK);
+  }
+
+  ///////////////////
+  //  band, feed   //
+  ///////////////////
+
+  function _markAt(uint t, uint price) internal {
+    vm.warp(t);
+    future.setMark(subId, uint64(t), price);
+  }
+
+  function testBandIsFullUntilTheNarrowingPeriod() public {
+    _useIndex();
+    assertEq(future.markIndexBand(uint64(expiry)), 0.1e18);
+    _markAt(expiry - NARROWING, 1100e18); // exactly at the start of narrowing: still 10%
+  }
+
+  function testBandNarrowsLinearlyToOnePercentAtExpiry() public {
+    _useIndex();
+    vm.warp(expiry - NARROWING / 2);
+    assertEq(future.markIndexBand(uint64(expiry)), 0.055e18, "halfway: 1% + 9% / 2");
+    vm.expectRevert(IFutureAsset.FA_MarkOutsideIndexBand.selector);
+    future.setMark(subId, uint64(block.timestamp), 1056e18);
+    future.setMark(subId, uint64(block.timestamp), 1055e18);
+
+    vm.warp(expiry);
+    assertEq(future.markIndexBand(uint64(expiry)), 0.01e18, "1% at expiry");
+  }
+
+  function testBandNearExpiryRefusesAMarkTheFullBandWouldTake() public {
+    _useIndex();
+    _markAt(expiry - 1 hours, 1010e18); // band ~1.03%: 1% inside it
+    vm.warp(expiry - 30 minutes);
+    vm.expectRevert(IFutureAsset.FA_MarkOutsideIndexBand.selector);
+    future.setMark(subId, uint64(block.timestamp), 1050e18); // inside 10%, outside ~1%
+  }
+
+  function testNoNarrowingWhenThePeriodIsZero() public {
+    future.setIndexParams(ISpotFeed(address(spotFeed)), 0.1e18, 0.01e18, 0, WINDOW, GAP, FALLBACK);
+    vm.warp(expiry - 1);
+    assertEq(future.markIndexBand(uint64(expiry)), 0.1e18);
+  }
+
+  /// @dev forward of 0.000990099... USDC per cNGN: a mark of ~1010 cNGN per USDC
+  uint constant FORWARD = 990099009900990;
+
+  function _useForward() internal {
+    _useIndex();
+    future.setForwardFeed(IForwardFeed(address(spotFeed)), 1 hours);
+    spotFeed.setForwardPrice(expiry, FORWARD, 1e18);
+  }
+
+  function testAnyoneMayPullTheMarkFromTheForwardFeed() public {
+    _useForward();
+    _openAtMark();
+    vm.warp(block.timestamp + 1 hours);
+    vm.prank(address(0xbeef));
+    future.pullMark(subId);
+
+    uint mark = 1e36 / FORWARD;
+    assertEq(future.futureContracts(subId).markPrice, mark, "the inverse of the forward");
+    assertEq(future.futureContracts(subId).lastMarkTime, block.timestamp);
+    assertEq(future.getPendingVM(aliceAcc, subId), int((mark - MARK) * CONTRACT_SIZE / 1e18), "VM accrues from it");
+  }
+
+  function testPullsAreRateLimited() public {
+    _useForward();
+    vm.warp(block.timestamp + 1 hours);
+    future.pullMark(subId);
+    vm.warp(block.timestamp + 1 hours - 1);
+    vm.expectRevert(IFutureAsset.FA_MarkTooSoon.selector);
+    future.pullMark(subId);
+    vm.warp(block.timestamp + 1);
+    future.pullMark(subId);
+  }
+
+  function testPulledMarkIsHeldToTheIndexBandAndMoveLimit() public {
+    _useForward();
+    future.setMarkBounds(0.05e18, 0);
+    vm.warp(block.timestamp + 1 hours);
+    spotFeed.setForwardPrice(expiry, 0.00094e18, 1e18); // ~1063.8: a 6.4% move
+    vm.expectRevert(IFutureAsset.FA_MarkDeviationExceeded.selector);
+    future.pullMark(subId);
+
+    future.setMarkBounds(0.2e18, 0);
+    spotFeed.setForwardPrice(expiry, 0.00089e18, 1e18); // ~1123.6: 12.4% from the index
+    vm.expectRevert(IFutureAsset.FA_MarkOutsideIndexBand.selector);
+    future.pullMark(subId);
+  }
+
+  function testNoPullsWithoutAFeedOrAfterLastTrade() public {
+    _useIndex();
+    vm.warp(block.timestamp + 1 hours);
+    vm.expectRevert(IFutureAsset.FA_NoForwardFeed.selector);
+    future.pullMark(subId);
+
+    future.setForwardFeed(IForwardFeed(address(spotFeed)), 1 hours);
+    spotFeed.setForwardPrice(expiry, FORWARD, 1e18);
+    vm.warp(lastTradeTime);
+    vm.expectRevert(IFutureAsset.FA_MarkingClosed.selector);
+    future.pullMark(subId);
+  }
+
+  function testOwnerMarksWhenTheForwardFeedIsDown() public {
+    _useForward();
+    vm.mockCallRevert(address(spotFeed), abi.encodeWithSelector(IForwardFeed.getForwardPrice.selector), "stale");
+    vm.warp(block.timestamp + 1 hours);
+    vm.expectRevert(bytes("stale"));
+    future.pullMark(subId);
+    future.setMark(subId, uint64(block.timestamp), 1010e18);
+    assertEq(future.futureContracts(subId).markPrice, 1010e18);
+  }
+
+  /// @dev The SRM settles a dated future by calling settleAccount(uint,uint) and booking the result as USDC cash.
+  ///      FutureAsset has no such function, so an SRM that whitelisted it by mistake would revert, not mis-credit.
+  function testAnSrmCannotSettleThisAsset() public {
+    (bool ok,) = address(future).call(abi.encodeWithSignature("settleAccount(uint256,uint256)", aliceAcc, uint(subId)));
+    assertFalse(ok, "no settleAccount: an SRM's call reverts");
   }
 
   ///////////////////

@@ -13,7 +13,7 @@ import {ISubAccounts} from "../interfaces/ISubAccounts.sol";
 import {IAsset} from "../interfaces/IAsset.sol";
 import {ICashAsset} from "../interfaces/ICashAsset.sol";
 import {IOptionAsset} from "../interfaces/IOptionAsset.sol";
-import {IDatedFutureAsset} from "../interfaces/IDatedFutureAsset.sol";
+import {IFutureAsset} from "../interfaces/IFutureAsset.sol";
 import {IERC20BasedAsset} from "../interfaces/IERC20BasedAsset.sol";
 import {ISpotFeed} from "../interfaces/ISpotFeed.sol";
 import {IDutchAuction} from "../interfaces/IDutchAuction.sol";
@@ -24,9 +24,9 @@ import {IBaseManager} from "../interfaces/IBaseManager.sol";
 import {BaseManager} from "./BaseManager.sol";
 
 /**
- * @title DatedFutureManager
+ * @title FutureManager
  * @notice Standard risk manager for cNGN-settled USDC/cNGN dated futures.
- * @dev    Accounts hold USDC cash, wrapped cNGN, and positions in one DatedFutureAsset. Margin is
+ * @dev    Accounts hold USDC cash, wrapped cNGN, and positions in one FutureAsset. Margin is
  *
  *             cash + value(cNGN held + cNGN VM pending) - requirement * sum(|position| * contractSize)
  *
@@ -39,7 +39,7 @@ import {BaseManager} from "./BaseManager.sol";
  *         cash at the spot price instead. Settlement therefore never reverts on a shortfall, and an account can always
  *         be settled and liquidated.
  */
-contract DatedFutureManager is ILiquidatableManager, BaseManager, ReentrancyGuard {
+contract FutureManager is ILiquidatableManager, BaseManager, ReentrancyGuard {
   using DecimalMath for uint;
   using SignedDecimalMath for int;
   using SafeCast for uint;
@@ -60,7 +60,7 @@ contract DatedFutureManager is ILiquidatableManager, BaseManager, ReentrancyGuar
   // Variables //
   ///////////////
 
-  IDatedFutureAsset public immutable future;
+  IFutureAsset public immutable future;
 
   /// @dev wrapped cNGN: the asset variation margin settles in, and the only collateral besides cash
   IAsset public immutable cngnAsset;
@@ -83,14 +83,14 @@ contract DatedFutureManager is ILiquidatableManager, BaseManager, ReentrancyGuar
   // Errors //
   ////////////
 
-  error DFM_UnsupportedAsset();
-  error DFM_InvalidMarginParams();
-  error DFM_NoNegativeCash();
-  error DFM_PortfolioBelowMargin();
-  error DFM_TooManyAssets();
-  error DFM_PoolCannotHoldFutures();
-  error DFM_NotSettled();
-  error DFM_OptionsUnsupported();
+  error FM_UnsupportedAsset();
+  error FM_InvalidMarginParams();
+  error FM_NoNegativeCash();
+  error FM_PortfolioBelowMargin();
+  error FM_TooManyAssets();
+  error FM_PoolCannotHoldFutures();
+  error FM_NotSettled();
+  error FM_OptionsUnsupported();
 
   ////////////////////////
   //    Constructor     //
@@ -101,7 +101,7 @@ contract DatedFutureManager is ILiquidatableManager, BaseManager, ReentrancyGuar
     ICashAsset cashAsset_,
     IDutchAuction dutchAuction_,
     IBasePortfolioViewer viewer_,
-    IDatedFutureAsset future_,
+    IFutureAsset future_,
     IAsset cngnAsset_,
     ISpotFeed spotFeed_
   ) BaseManager(subAccounts_, cashAsset_, dutchAuction_, viewer_) {
@@ -124,7 +124,7 @@ contract DatedFutureManager is ILiquidatableManager, BaseManager, ReentrancyGuar
       params.mmReq == 0 || params.mmReq > params.imReq || params.imReq >= 1e18 || params.cngnMarginFactor > 1e18
         || params.cngnIMScale > 1e18
     ) {
-      revert DFM_InvalidMarginParams();
+      revert FM_InvalidMarginParams();
     }
     marginParams = params;
     emit MarginParamsSet(params.mmReq, params.imReq, params.cngnMarginFactor, params.cngnIMScale);
@@ -179,25 +179,25 @@ contract DatedFutureManager is ILiquidatableManager, BaseManager, ReentrancyGuar
         int position = subAccounts.getBalance(accountId, future, assetDeltas[i].subId);
         if (position != 0 && position * delta > 0) futureIncreased = true;
       } else {
-        revert DFM_UnsupportedAsset();
+        revert FM_UnsupportedAsset();
       }
     }
 
     ISubAccounts.AssetBalance[] memory balances = subAccounts.getAccountBalances(accountId);
     if (balances.length > maxAccountSize && viewer.getPreviousAssetsLength(balances, assetDeltas) < balances.length) {
-      revert DFM_TooManyAssets();
+      revert FM_TooManyAssets();
     }
 
     if (!riskAdding) return;
 
     // Negative cash only ever comes from a VM shortfall. An account cannot draw cash below zero itself.
-    if (cashOut && subAccounts.getBalance(accountId, cashAsset, 0) < 0) revert DFM_NoNegativeCash();
+    if (cashOut && subAccounts.getBalance(accountId, cashAsset, 0) < 0) revert FM_NoNegativeCash();
 
     // Trusted assessors, and accounts that only reduced futures exposure, are held to maintenance margin; everything
     // else to initial. A pure reduction is never blocked by IM, so an account can always deleverage above MM.
     bool isInitial = !trustedRiskAssessor[caller] && (futureIncreased || cashOut || _hasNegativeCngnDelta(assetDeltas));
     (int margin,) = _getMarginAndMarkToMarket(accountId, isInitial);
-    if (margin < 0) revert DFM_PortfolioBelowMargin();
+    if (margin < 0) revert FM_PortfolioBelowMargin();
   }
 
   ///////////////////////
@@ -216,8 +216,8 @@ contract DatedFutureManager is ILiquidatableManager, BaseManager, ReentrancyGuar
    *         settlement price existing, so a stale or dead feed after expiry cannot hold positions open.
    */
   function closeOutExpired(uint accountId, uint96 subId) external nonReentrant {
-    IDatedFutureAsset.FutureContract memory c = future.futureContracts(subId);
-    if (!c.settled) revert DFM_NotSettled();
+    IFutureAsset.FutureContract memory c = future.futureContracts(subId);
+    if (!c.settled) revert FM_NotSettled();
     // once settled, markPrice is the settlement price
     _settleVM(accountId, subId, c.markPrice);
 
@@ -233,7 +233,7 @@ contract DatedFutureManager is ILiquidatableManager, BaseManager, ReentrancyGuar
   }
 
   function settleOptions(IOptionAsset, uint) external pure {
-    revert DFM_OptionsUnsupported();
+    revert FM_OptionsUnsupported();
   }
 
   function executeBid(uint accountId, uint liquidatorId, uint portion, uint bidAmount, uint reservedCash)
@@ -242,7 +242,7 @@ contract DatedFutureManager is ILiquidatableManager, BaseManager, ReentrancyGuar
     onlyLiquidations
     nonReentrant
   {
-    if (liquidatorId == accId) revert DFM_PoolCannotHoldFutures();
+    if (liquidatorId == accId) revert FM_PoolCannotHoldFutures();
     _settleAllVM(accountId);
     _settleAllVM(liquidatorId);
     _executeBid(accountId, liquidatorId, portion, bidAmount, reservedCash);
