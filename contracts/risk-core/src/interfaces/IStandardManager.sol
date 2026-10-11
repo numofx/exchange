@@ -122,11 +122,6 @@ interface IStandardManager is IBaseManager {
     uint IMScale;
   }
 
-  struct FutureMarginRequirements {
-    uint mmReq;
-    uint imReq;
-  }
-
   function assetDetails(IAsset asset) external view returns (AssetDetail memory);
 
   ///////////////
@@ -195,8 +190,6 @@ interface IStandardManager is IBaseManager {
   );
 
   event BaseMarginParamsSet(uint marketId, uint baseAssetMarginFactor, uint baseAssetIMScale);
-
-  event FutureMarginRequirementsSet(uint marketId, uint futureMMRequirement, uint futureIMRequirement);
 
   event DepegParametersSet(uint threshold, uint depegFactor);
 
