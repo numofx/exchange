@@ -35,6 +35,9 @@ jobs:
       # written from memory, and the self-tests are what caught them. Unrun, they prove nothing.
       - run: python3 scripts/ops/propose_market1_inert_batch.py --self-test
       - run: python3 scripts/ops/check_settlement_canary.py --self-test
+      - run: python3 scripts/ops/check_heartbeats.py --self-test
+      # Every ops script, one at a time: `bash -n a.sh b.sh` parses only a.sh. Mirrors verify.sh.
+      - run: for f in scripts/ops/*.sh; do bash -n "$f" || exit 1; done
       - run: python3 scripts/ops/refresh_deployment_artifacts.py --self-test
       - run: forge test -vvv
         env:

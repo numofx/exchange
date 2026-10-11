@@ -41,11 +41,19 @@ const envSchema = z
 
     /** How often to check. A mark is only pushed once FutureAsset.minMarkInterval has passed. */
     FORWARD_TICK_MS: z.coerce.number().int().positive().default(60_000),
+    /**
+     * Notional (USDC) each side of the futures book must fill before the book sets the mark: each
+     * side's price is its depth-weighted average over this. Below it, the mark is the carry forward.
+     */
+    FORWARD_MIN_BOOK_DEPTH_USDC: z.coerce.number().positive().default(2_000),
     /** Farthest the mark may sit from the carry forward, however the book reads. */
     FORWARD_MAX_BASIS_BPS: z.coerce.number().int().positive().max(2_000).default(300),
     /** Share of the contract's band and move limit left unused, so a mark is never at the edge. */
     FORWARD_SAFETY_BPS: z.coerce.number().int().nonnegative().max(5_000).default(50),
-    /** Alert when the contract's last mark is older than this, and trading is still open. */
+    /**
+     * Alert when the contract's last mark is older than this, and trading is still open. Must exceed
+     * the contract's minMarkInterval plus a tick, or every on-time mark alerts (checked at startup).
+     */
     FORWARD_MARK_LATE_MS: z.coerce.number().int().positive().default(2 * 60 * 60_000),
 
     TIMESTAMP_SAFETY_SEC: z.coerce.number().int().nonnegative().default(15),

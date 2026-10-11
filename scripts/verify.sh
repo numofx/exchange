@@ -52,7 +52,9 @@ step risk-core contracts/risk-core "propose_cngn_spot_batch self-test" python3 s
 step risk-core contracts/risk-core "propose_market1_inert_batch self-test" python3 scripts/ops/propose_market1_inert_batch.py --self-test
 step risk-core contracts/risk-core "check_settlement_canary self-test" python3 scripts/ops/check_settlement_canary.py --self-test
 step risk-core contracts/risk-core "check_heartbeats self-test" python3 scripts/ops/check_heartbeats.py --self-test
-step risk-core contracts/risk-core "ops shell scripts parse" bash -n scripts/ops/run-with-heartbeat.sh scripts/ops/run-with-ssm-readonly.sh
+# Every ops script, one at a time: `bash -n a.sh b.sh` parses only a.sh (b.sh is its argument), which
+# is how this step checked one file of the two it listed.
+step risk-core contracts/risk-core "ops shell scripts parse" bash -c 'for f in scripts/ops/*.sh; do bash -n "$f" || exit 1; done'
 step risk-core contracts/risk-core "refresh_deployment_artifacts self-test" python3 scripts/ops/refresh_deployment_artifacts.py --self-test
 step risk-core contracts/risk-core "forge test" forge test
 
