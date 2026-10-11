@@ -47,6 +47,8 @@ interface IDatedFutureAsset is IAsset, IPositionTracking {
 
   function fixings(uint subId) external view returns (Fixing memory);
 
+  function fallbackReference(uint96 subId) external view returns (uint);
+
   /// @notice Realise and return the cNGN owed to (positive) or by (negative) an account. Manager only.
   function settleAccountVM(uint accountId, uint subId) external returns (int cngnDelta);
 
@@ -86,4 +88,6 @@ interface IDatedFutureAsset is IAsset, IPositionTracking {
   error DFA_OutsideFixingWindow();
   error DFA_FixingIncomplete();
   error DFA_FixingAvailable();
+  error DFA_FallbackOutsideBand();
+  error DFA_NoSettlementReference();
 }
