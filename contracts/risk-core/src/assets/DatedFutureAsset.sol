@@ -56,6 +56,14 @@ contract DatedFutureAsset is IDatedFutureAsset, PositionTracking, ManagerWhiteli
 
   mapping(uint subId => Fixing) internal _fixings;
 
+  /// @dev The manual fallback must sit within this of its reference: the fixing samples' TWAP, else the last index.
+  uint public constant FALLBACK_BAND = 0.02e18;
+
+  /// @dev The last index this contract read (cNGN per USDC), and when. Stored by every mark and fixing sample, so the
+  ///      fallback has a reference even when the feed has gone stale.
+  uint public lastIndexPrice;
+  uint64 public lastIndexTime;
+
   mapping(uint subId => FutureContract) internal _futureContracts;
 
   /// @dev accountId => subId => cumulative VM per contract at which the account is checkpointed
@@ -137,7 +145,7 @@ contract DatedFutureAsset is IDatedFutureAsset, PositionTracking, ManagerWhiteli
 
     uint oldMarkPrice = market.markPrice;
     _checkDeviation(oldMarkPrice, markPrice);
-    _checkIndexBand(markPrice);
+    _observeIndexAndCheckBand(markPrice);
     _accrue(market, markPrice);
     market.lastMarkTime = markTime;
 
@@ -146,7 +154,10 @@ contract DatedFutureAsset is IDatedFutureAsset, PositionTracking, ManagerWhiteli
 
   /**
    * @notice Fallback for when the index fixing could not be made: the owner sets the settlement price by hand, no
-   *         sooner than `fallbackDelay` after expiry, and never over a complete fixing.
+   *         sooner than `fallbackDelay` after expiry, never over a complete fixing, and within FALLBACK_BAND of
+   *         fallbackReference: the TWAP of whatever fixing samples were recorded, or with none, the last index read.
+   * @dev    Not held to the mark deviation bound, for the reason fixSettlementFromIndex is not: the reference bound is
+   *         the one that matters, and a mark that drifted from the index must not be able to block settlement.
    */
   function setSettlementPrice(uint96 subId, uint settlementPrice) external onlyOwner {
     FutureContract storage market = _futureContracts[subId];
@@ -155,8 +166,30 @@ contract DatedFutureAsset is IDatedFutureAsset, PositionTracking, ManagerWhiteli
     if (settlementPrice == 0) revert DFA_InvalidMark();
     if (_fixingComplete(market, _fixings[subId])) revert DFA_FixingAvailable();
 
-    _checkDeviation(market.markPrice, settlementPrice);
+    uint reference_ = fallbackReference(subId);
+    uint diff = settlementPrice > reference_ ? settlementPrice - reference_ : reference_ - settlementPrice;
+    if (diff * 1e18 > reference_ * FALLBACK_BAND) revert DFA_FallbackOutsideBand();
+
     _settle(subId, market, settlementPrice, false);
+  }
+
+  /**
+   * @notice The price the manual fallback is bounded against. With fixing samples, their TWAP: each sample holds until
+   *         the next, and the last for at most the window's gap limit (and not past expiry), so an index that went stale
+   *         early is not carried forward as if it had held. With no samples, the last index this contract read.
+   */
+  function fallbackReference(uint96 subId) public view returns (uint) {
+    Fixing storage fixing = _fixings[subId];
+    if (fixing.firstSampleTime == 0) {
+      if (lastIndexTime == 0) revert DFA_NoSettlementReference();
+      return lastIndexPrice;
+    }
+    uint64 expiry = _futureContracts[subId].expiry;
+    uint64 end = fixing.lastSampleTime + fixing.maxSampleGap;
+    if (end > expiry) end = expiry;
+    uint duration = end - fixing.firstSampleTime;
+    if (duration == 0) return fixing.lastPrice;
+    return (fixing.accumulator + fixing.lastPrice * (end - fixing.lastSampleTime)) / duration;
   }
 
   //////////////////////////
@@ -177,7 +210,7 @@ contract DatedFutureAsset is IDatedFutureAsset, PositionTracking, ManagerWhiteli
     uint64 windowStart = fixing.firstSampleTime == 0 ? _windowStart(market) : fixing.windowStart;
     if (block.timestamp < windowStart || block.timestamp > market.expiry) revert DFA_OutsideFixingWindow();
 
-    uint price = _indexPrice();
+    uint price = _observeIndex();
     uint64 now_ = uint64(block.timestamp);
 
     if (fixing.firstSampleTime == 0) {
@@ -247,9 +280,17 @@ contract DatedFutureAsset is IDatedFutureAsset, PositionTracking, ManagerWhiteli
     return 1e36 / spot;
   }
 
-  function _checkIndexBand(uint markPrice) internal view {
-    if (address(indexFeed) == address(0) || maxMarkIndexDeviation == 0) return;
-    uint index = _indexPrice();
+  /// @dev Read the index and keep it as the last valid one.
+  function _observeIndex() internal returns (uint price) {
+    price = _indexPrice();
+    lastIndexPrice = price;
+    lastIndexTime = uint64(block.timestamp);
+  }
+
+  function _observeIndexAndCheckBand(uint markPrice) internal {
+    if (address(indexFeed) == address(0)) return;
+    uint index = _observeIndex();
+    if (maxMarkIndexDeviation == 0) return;
     uint diff = markPrice > index ? markPrice - index : index - markPrice;
     if (diff * 1e18 > index * maxMarkIndexDeviation) revert DFA_MarkOutsideIndexBand();
   }
