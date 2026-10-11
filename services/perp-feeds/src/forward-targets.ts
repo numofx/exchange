@@ -5,8 +5,10 @@
  * (USDC per cNGN, the index and forward feeds' denomination). The feed stores the forward as
  * `index + diff` in USDC per cNGN; FutureAsset.pullMark inverts that back.
  *
- * The target is the futures book's mid when there is a two-sided book, otherwise the carry forward
- * index * (1 + carry * tau). Then it is clamped, in order:
+ * The target is the futures book's mid when both sides have depth, otherwise the carry forward
+ * index * (1 + carry * tau). Each side's price is its depth-weighted average over minDepthUsdc of
+ * notional, so a dust order at the top of the book cannot set the mark; a side that cannot fill that
+ * much counts as no book. Then it is clamped, in order:
  *   1. to the carry forward +/- maxBasisBps, so a thin book cannot drag the mark away from carry;
  *   2. inside the contract's index band (markIndexBand), less a safety margin;
  *   3. inside the contract's per-mark move limit from the last mark, less the same margin.
@@ -24,8 +26,12 @@ export type ForwardInputs = {
   /** Annual NGN-over-USD carry, 18dp. */
   carry: bigint;
   secondsToExpiry: bigint;
-  /** The futures book, prices in cNGN per USDC. */
+  /** The futures book: prices in cNGN per USDC, amounts in contracts (18dp). */
   orders: RestingOrder[];
+  /** USDC per contract (18dp), FutureAsset.contractSize. */
+  contractSize: bigint;
+  /** Notional (USDC, 18dp) each side must be able to fill for the book to set the mark. */
+  minDepthUsdc: bigint;
   lastMark: bigint;
   /** FutureAsset.markIndexBand(expiry) now: a fraction of the index, 18dp. */
   band: bigint;
@@ -50,17 +56,37 @@ export function carryForward(index: bigint, carry: bigint, secondsToExpiry: bigi
   return index + (index * carry / ONE) * secondsToExpiry / YEAR;
 }
 
-/** Mid of the best bid and ask, or null without a two-sided, uncrossed book. */
-export function bookMid(orders: RestingOrder[]): bigint | null {
-  let bestBid: bigint | null = null;
-  let bestAsk: bigint | null = null;
-  for (const order of orders) {
-    if (order.remaining <= 0n) continue;
-    if (order.side === 'buy' && (bestBid === null || order.price > bestBid)) bestBid = order.price;
-    if (order.side === 'sell' && (bestAsk === null || order.price < bestAsk)) bestAsk = order.price;
+/**
+ * Volume-weighted price to fill `minDepthUsdc` of notional walking one side best-first, or null if
+ * the side cannot fill it. A contract's notional is its USDC size, whatever the price.
+ */
+export function depthPrice(side: RestingOrder[], contractSize: bigint, minDepthUsdc: bigint): bigint | null {
+  if (contractSize <= 0n) throw new Error('contract size must be positive');
+  // contracts (18dp) needed, rounded up
+  let needed = (minDepthUsdc * ONE + contractSize - 1n) / contractSize;
+  if (needed === 0n) needed = 1n;
+  let taken = 0n;
+  let weighted = 0n;
+  for (const order of side) {
+    if (taken >= needed) break;
+    const take = order.remaining < needed - taken ? order.remaining : needed - taken;
+    taken += take;
+    weighted += order.price * take;
   }
-  if (bestBid === null || bestAsk === null || bestBid >= bestAsk) return null;
-  return (bestBid + bestAsk) / 2n;
+  if (taken < needed) return null;
+  return weighted / taken;
+}
+
+/** Mid of the depth-weighted bid and ask, or null without depth on both sides or with a crossed book. */
+export function bookMid(orders: RestingOrder[], contractSize: bigint, minDepthUsdc: bigint): bigint | null {
+  const live = orders.filter((o) => o.remaining > 0n);
+  const bids = live.filter((o) => o.side === 'buy').sort((a, b) => (a.price > b.price ? -1 : a.price < b.price ? 1 : 0));
+  const asks = live.filter((o) => o.side === 'sell').sort((a, b) => (a.price < b.price ? -1 : a.price > b.price ? 1 : 0));
+  if (bids.length === 0 || asks.length === 0 || bids[0].price >= asks[0].price) return null;
+  const bid = depthPrice(bids, contractSize, minDepthUsdc);
+  const ask = depthPrice(asks, contractSize, minDepthUsdc);
+  if (bid === null || ask === null) return null;
+  return (bid + ask) / 2n;
 }
 
 function within(price: bigint, reference: bigint, fraction: bigint): boolean {
@@ -78,7 +104,7 @@ function clampTo(price: bigint, reference: bigint, fraction: bigint): bigint {
 export function computeForwardTarget(inputs: ForwardInputs): ForwardTarget {
   const index = invert(inputs.indexUsdc);
   const fair = carryForward(index, inputs.carry, inputs.secondsToExpiry);
-  const mid = bookMid(inputs.orders);
+  const mid = bookMid(inputs.orders, inputs.contractSize, inputs.minDepthUsdc);
   const clampedBy: string[] = [];
   const keep = (10_000n - inputs.safetyBps) * ONE / 10_000n; // the share of each limit we use
 
