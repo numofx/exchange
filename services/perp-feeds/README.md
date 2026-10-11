@@ -1,6 +1,8 @@
 # perp-feeds
 
-Price publishers for `USDCcNGN-PERP`. One process, one feed signer, one relayer:
+Price publishers for `USDCcNGN-PERP` (`dist/main.js`: one process, one feed signer, one relayer),
+and, as a separate process, the forward publisher for the cNGN future (`dist/forward-main.js`,
+[below](#forward-publisher-cngn-future)). The perp publishers:
 
 - **Index.** Every minute, three fiat USDT/NGN providers from
   [`cngn-rate-picker`](https://github.com/wrappedcbdc/cngn-rate-picker) (Quidax `usdtngn`, Textile,
@@ -98,3 +100,33 @@ anvil --port 8599 &
 (cd ../../contracts/risk-core && forge build)
 ANVIL_RPC_URL=http://127.0.0.1:8599 pnpm test    # + the real feed contracts accept what we sign
 ```
+
+## Forward publisher (cNGN future)
+
+`dist/forward-main.js` marks a USDC/cNGN `FutureAsset`. Each tick, once the contract's
+`minMarkInterval` (an hour) has passed and until last trade, it:
+
+1. works out the forward in cNGN per USDC (`src/forward-targets.ts`): the futures book's mid if it is
+   two-sided, else the carry forward `index × (1 + CARRY × τ)`, then clamps it to the carry forward
+   ± `FORWARD_MAX_BASIS_BPS`, inside the contract's current index band, and inside its per-mark move
+   limit (both less `FORWARD_SAFETY_BPS`). If the band and the move limit cannot both be met, it
+   publishes nothing and alerts `forward-unreachable`;
+2. signs `forward − index` (USDC per cNGN) into the future's `LyraForwardFeed` and relays it;
+3. calls `FutureAsset.pullMark`, which reads it back, checks it again, and accrues VM.
+
+**Its own process, signer and relayer.** The forward key must not sign the index: the contract
+bands every mark against the index, which only bounds a bad forward if someone else signs it (the
+deploy script refuses one key for both). The signer is a **KMS key** (`FORWARD_SIGNER_KMS_KEY_ID`,
+`aws_kms_key.forward_signer`), so its private key never reaches the box; a raw `FORWARD_SIGNER_KEY`
+is refused on Base mainnet. The relayer is its own too (`/numo/feeds/forward_relayer_key`): one
+relayer shared by two processes races for nonces.
+
+It alerts `forward-mark-late` when the contract's last mark is older than `FORWARD_MARK_LATE_MS`
+(2 h) while trading is open, and on every refusal. Config: `src/forward-config.ts`. Unit:
+`numo-future-feeds.service`, secrets through `run-with-ssm-forward.sh`, non-secret config in
+`/etc/numo/future-feeds.env` (template `contracts/risk-core/scripts/ops/future-feeds.env`). Not
+installed: nothing it marks is deployed yet.
+
+`src/forward.anvil.e2e.test.ts` runs it against the real `LyraSpotFeed`, `LyraForwardFeed`,
+`FutureAsset` and `OracleDataSubmitter` on anvil. It shares the anvil with the perp suite and never
+moves the clock more than a few seconds, since a large jump expires the other suite's signatures.

@@ -10,7 +10,7 @@
 # place recreates the problem this script was written to remove.
 #
 #   ./scripts/verify.sh              # everything
-#   ./scripts/verify.sh risk-core    # one section: risk-core | execution | markets | node | abis | infra
+#   ./scripts/verify.sh risk-core    # one section: risk-core | execution | markets | node | perp-feeds | abis | infra
 #
 # BASE_RPC_URL is required. CI supplies it from secrets, and the fork suites fail in setUp
 # without it — which is the same divergence in the other direction.
@@ -92,6 +92,28 @@ step node . "execution image builds" execution_image
 # ---- services-rebalance.yml ------------------------------------------------------------
 step node . "cngn-rebalance check" pnpm --filter cngn-rebalance run check
 step node . "cngn-rebalance test" pnpm --filter cngn-rebalance test
+
+# ---- services-perp-feeds.yml -----------------------------------------------------------
+# The anvil suites deploy the real feed contracts and FutureAsset, so they need forge and anvil, and
+# a fresh anvil on the port the tests read: started here, stopped however the tests end.
+perp_feeds_anvil_tests() {
+  ( cd "$ROOT/contracts/risk-core" \
+    && forge build src/feeds/LyraSpotFeed.sol src/feeds/LyraSpotDiffFeed.sol src/feeds/LyraForwardFeed.sol \
+      src/periphery/OracleDataSubmitter.sol src/assets/FutureAsset.sol src/SubAccounts.sol >/dev/null ) || return 1
+  anvil --port 8599 --silent &
+  local anvil_pid=$!
+  sleep 2
+  ANVIL_RPC_URL=http://127.0.0.1:8599 pnpm --filter perp-feeds test
+  local rc=$?
+  kill "$anvil_pid" 2>/dev/null
+  wait "$anvil_pid" 2>/dev/null
+  return $rc
+}
+step perp-feeds . "pnpm install --frozen-lockfile" pnpm install --frozen-lockfile
+step perp-feeds . "build @numo/kms-signer" pnpm --filter @numo/kms-signer build
+step perp-feeds . "perp-feeds check" pnpm --filter perp-feeds run check
+step perp-feeds . "perp-feeds build" pnpm --filter perp-feeds run build
+step perp-feeds . "perp-feeds test (with the anvil suites)" perp_feeds_anvil_tests
 
 # ---- infra.yml -------------------------------------------------------------------------
 # -backend=false matches CI: the real backend is S3 and validate does not need it. Skipped

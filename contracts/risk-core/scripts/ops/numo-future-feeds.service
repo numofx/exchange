@@ -1,0 +1,37 @@
+# The cNGN future's forward publisher (services/perp-feeds, dist/forward-main.js): signs the forward
+# into the future's LyraForwardFeed and calls FutureAsset.pullMark, about hourly, until last trade.
+#
+# NOT YET INSTALLED. Nothing it marks is deployed. Install with the deploy, and record it in
+# OPS_BOX_CHANGES.md the same day.
+#
+# Its own unit, signer and relayer, apart from numo-perp-feeds: the forward key must not be the index
+# key (the index band is what bounds a bad forward), and one failing must not stop the other.
+#
+# Before starting:
+#   - the KMS key exists (infra/aws: forward_signer_kms_enabled) and its address is the forward feed's
+#     only signer;
+#   - /numo/feeds/forward_relayer_key holds a funded relayer, watched by check_signer_balance.py;
+#   - /etc/numo/future-feeds.env holds the addresses from the deploy artifact (future-feeds.env).
+#
+# Install: (cd /home/ec2-user/exchange-perp && pnpm install --filter perp-feeds... && pnpm --filter @numo/kms-signer build && pnpm --filter perp-feeds build)
+#          cp contracts/risk-core/scripts/ops/numo-future-feeds.service /etc/systemd/system/
+#          systemctl daemon-reload && systemctl enable --now numo-future-feeds
+[Unit]
+Description=Numo cNGN future forward publisher (Base mainnet, KMS signer, SSM relayer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/home/ec2-user/exchange-perp/services/perp-feeds
+EnvironmentFile=/etc/numo/future-feeds.env
+ExecStart=/home/ec2-user/exchange-perp/contracts/risk-core/scripts/ops/run-with-ssm-forward.sh /usr/bin/node dist/forward-main.js
+Environment=AWS_REGION=us-east-1
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
