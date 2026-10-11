@@ -5,6 +5,25 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-11 11:20 UTC: 35 stale `setMarkPrice` signing requests rejected in MPCVault
+
+Run from the box over SSM through `run-with-ssm-mark.sh`. The script was a throwaway in `/tmp`,
+deleted after the run, so nothing on the box changed. The change is in the vault's queue.
+
+- **What.** `rejectSigningRequest` on the 35 requests that were still PENDING. Each was a
+  `setMarkPrice(uint96,uint64,uint256)` (`0x272e3661`) from the mark keeper to the SEP-16-2026 future
+  `0xDd9c…A1F9`, subId 1789567201, created 2026-08-16 to 2026-09-01. Before rejecting, each request
+  was read back and rejected only if it was still PENDING, to that future, with that selector. All
+  35 passed and were rejected.
+- **Why.** The series has expired. Executed now, each would revert in `setMarkPrice` (mark time not
+  after the last mark, settlement price already set, stale mark). Left in the queue, they made an
+  approve in the app easy to get wrong. Rejection is permanent.
+- **Read back.** `getSigningRequestList` afterwards: 965 SUCCEEDED, 35 FAILED, 0 PENDING. The API
+  reports a rejected request as FAILED.
+- **Also established.** The same listing, back to 2026-08-15, holds no request for the stage (B)
+  leverage batch (`setPerpMarginRequirements`, or `setBaseAssetMarginFactor(1, 0.35e18, …)`), so
+  that batch was never proposed. Every request to the perp SRM `0xDE04…35D4` in the window succeeded.
+
 ## 2026-10-09 14:58 UTC: low-priority Pushover drill
 
 Ran the real `check_signer_balance.py` with `WARN_RUNWAY_DAYS=100` (forcing a finding) through
