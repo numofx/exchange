@@ -173,7 +173,7 @@ contract DatedFutureManager is ILiquidatableManager, BaseManager, ReentrancyGuar
       } else if (asset == IAsset(address(future))) {
         // A position this adjustment closed is no longer in the account's balances, so _settleAllVM did not see
         // it; settle it here or the VM realised at its fill price is stranded.
-        _settleVM(accountId, uint96(assetDeltas[i].subId));
+        _settleVM(accountId, uint96(assetDeltas[i].subId), 0);
         // Every future change is checked: a reduction can realise a loss at its fill price.
         riskAdding = true;
         int position = subAccounts.getBalance(accountId, future, assetDeltas[i].subId);
@@ -211,11 +211,15 @@ contract DatedFutureManager is ILiquidatableManager, BaseManager, ReentrancyGuar
 
   /**
    * @notice After the settlement price is fixed, realise the last VM and remove the position.
-   * @dev    Anyone may call. The position leaves at the settlement price, so nothing but VM changes hands.
+   * @dev    Anyone may call. The position leaves at the settlement price, so nothing but VM changes hands. Any part of
+   *         the VM that moves as USDC converts at the settlement price, not the spot feed: close-out depends only on a
+   *         settlement price existing, so a stale or dead feed after expiry cannot hold positions open.
    */
   function closeOutExpired(uint accountId, uint96 subId) external nonReentrant {
-    if (!future.futureContracts(subId).settled) revert DFM_NotSettled();
-    _settleVM(accountId, subId);
+    IDatedFutureAsset.FutureContract memory c = future.futureContracts(subId);
+    if (!c.settled) revert DFM_NotSettled();
+    // once settled, markPrice is the settlement price
+    _settleVM(accountId, subId, c.markPrice);
 
     int position = subAccounts.getBalance(accountId, future, subId);
     if (position == 0) return;
@@ -248,26 +252,31 @@ contract DatedFutureManager is ILiquidatableManager, BaseManager, ReentrancyGuar
     ISubAccounts.AssetBalance[] memory balances = subAccounts.getAccountBalances(accountId);
     for (uint i = 0; i < balances.length; ++i) {
       if (balances[i].asset != IAsset(address(future))) continue;
-      _settleVM(accountId, uint96(balances[i].subId));
+      _settleVM(accountId, uint96(balances[i].subId), 0);
     }
   }
 
-  function _settleVM(uint accountId, uint96 subId) internal {
+  /// @param settlementPrice cNGN per USDC to convert any USDC remainder at; 0 converts at the spot feed.
+  function _settleVM(uint accountId, uint96 subId, uint settlementPrice) internal {
     int cngnDelta = future.settleAccountVM(accountId, subId);
     if (cngnDelta == 0) return;
 
-    (uint cngnMoved, uint cashMoved) =
-      cngnDelta > 0 ? _pay(accId, accountId, uint(cngnDelta), false) : _pay(accountId, accId, uint(-cngnDelta), true);
+    (uint cngnMoved, uint cashMoved) = cngnDelta > 0
+      ? _pay(accId, accountId, uint(cngnDelta), false, settlementPrice)
+      : _pay(accountId, accId, uint(-cngnDelta), true, settlementPrice);
 
     emit VMSettled(accountId, subId, cngnDelta, cngnMoved, cashMoved);
   }
 
   /**
-   * @dev Move `cngnOwed` from `from` to `to`: as much as `from` holds in wrapped cNGN, and the remainder as cash at the
-   *      spot price. The remainder rounds against the payer (`roundUp` when the payer is a trader, down when it is
-   *      the pool), so rounding never leaves the pool short.
+   * @dev Move `cngnOwed` from `from` to `to`: as much as `from` holds in wrapped cNGN, and the remainder as cash, at
+   *      `settlementPrice` (cNGN per USDC) if given, else at the spot feed. The remainder rounds against the payer
+   *      (`roundUp` when the payer is a trader, down when it is the pool), so rounding never leaves the pool short.
    */
-  function _pay(uint from, uint to, uint cngnOwed, bool roundUp) internal returns (uint cngnMoved, uint cashMoved) {
+  function _pay(uint from, uint to, uint cngnOwed, bool roundUp, uint settlementPrice)
+    internal
+    returns (uint cngnMoved, uint cashMoved)
+  {
     int held = subAccounts.getBalance(from, cngnAsset, 0);
     cngnMoved = held > 0 ? Math.min(cngnOwed, uint(held)) : 0;
     if (cngnMoved != 0) _symmetricManagerAdjustment(from, to, cngnAsset, 0, cngnMoved.toInt256());
@@ -275,8 +284,13 @@ contract DatedFutureManager is ILiquidatableManager, BaseManager, ReentrancyGuar
     uint remainder = cngnOwed - cngnMoved;
     if (remainder == 0) return (cngnMoved, 0);
 
-    (uint spot,) = spotFeed.getSpot();
-    cashMoved = Math.mulDiv(remainder, spot, 1e18, roundUp ? Math.Rounding.Ceil : Math.Rounding.Floor);
+    Math.Rounding rounding = roundUp ? Math.Rounding.Ceil : Math.Rounding.Floor;
+    if (settlementPrice != 0) {
+      cashMoved = Math.mulDiv(remainder, 1e18, settlementPrice, rounding);
+    } else {
+      (uint spot,) = spotFeed.getSpot();
+      cashMoved = Math.mulDiv(remainder, spot, 1e18, rounding);
+    }
     if (cashMoved != 0) _symmetricManagerAdjustment(from, to, cashAsset, 0, cashMoved.toInt256());
   }
 
