@@ -1,4 +1,4 @@
-import { parseAbi } from 'viem';
+import { parseAbi, type Address } from 'viem';
 
 import type { Alerter } from './alert.js';
 import type { ContractChain } from './chain.js';
@@ -18,7 +18,9 @@ const managerAbi = parseAbi(['function closeOutExpired(uint256 accountId, uint96
 const subAccountsAbi = parseAbi([
   'function lastAccountId() view returns (uint256)',
   'function getBalance(uint256 accountId, address asset, uint256 subId) view returns (int256)',
+  'function manager(uint256 accountId) view returns (address)',
 ]);
+const assetAbi = parseAbi(['function subAccounts() view returns (address)']);
 
 type FutureContract = { listed: boolean; settled: boolean; expiry: bigint; lastTradeTime: bigint };
 type Fixing = { firstSampleTime: bigint; lastSampleTime: bigint; largestGap: bigint; maxSampleGap: bigint };
@@ -44,9 +46,12 @@ export type ExpiryOutcome =
  *     alerts: the vault's bounded fallback (setSettlementPrice, within 2% of the samples' TWAP) is
  *     the only way out, no sooner than fallbackDelay after expiry, and it alerts again once that
  *     delay has passed with the contract still unsettled.
- *  3. Once settled, calls FutureManager.closeOutExpired on every account still holding the series,
- *     up to CLOSE_OUT_BATCH per tick. Close-out converts any shortfall at the settlement price and
- *     reads no feed, so this works with the index down.
+ *  3. Once settled, calls closeOutExpired on every account still holding the series, up to
+ *     CLOSE_OUT_BATCH per tick. Close-out converts any shortfall at the settlement price and reads no
+ *     feed, so this works with the index down. The list comes from the chain and nothing else: the
+ *     SubAccounts ledger is the one the future itself records (FutureAsset.subAccounts), and each
+ *     account's close-out goes to its own manager (SubAccounts.manager), so no configured address
+ *     can point the sweep at the wrong ledger or manager.
  *
  * Every step reads its state back from the chain first, so a restart picks up where it left off and
  * two keepers running at once only waste gas on calls the contract then refuses.
@@ -126,17 +131,22 @@ export class ExpiryKeeper {
     }
   }
 
-  /** Accounts still holding the series. Walks every account: Base has a few dozen. */
-  async holders(): Promise<bigint[]> {
-    const last = await this.chain.read<bigint>(this.config.SUB_ACCOUNTS, subAccountsAbi, 'lastAccountId');
-    const holders: bigint[] = [];
+  /**
+   * Accounts still holding the series, each with the manager it sits under, all read from the chain:
+   * the future's own SubAccounts ledger, walked to its lastAccountId (Base has a few dozen accounts).
+   */
+  async holders(): Promise<{ id: bigint; manager: Address }[]> {
+    const ledger = await this.chain.read<Address>(this.config.FUTURE_ASSET, assetAbi, 'subAccounts');
+    const last = await this.chain.read<bigint>(ledger, subAccountsAbi, 'lastAccountId');
+    const holders: { id: bigint; manager: Address }[] = [];
     for (let id = 1n; id <= last; id++) {
-      const balance = await this.chain.read<bigint>(this.config.SUB_ACCOUNTS, subAccountsAbi, 'getBalance', [
+      const balance = await this.chain.read<bigint>(ledger, subAccountsAbi, 'getBalance', [
         id,
         this.config.FUTURE_ASSET,
         this.config.FUTURE_SUB_ID,
       ]);
-      if (balance !== 0n) holders.push(id);
+      if (balance === 0n) continue;
+      holders.push({ id, manager: await this.chain.read<Address>(ledger, subAccountsAbi, 'manager', [id]) });
     }
     return holders;
   }
@@ -145,9 +155,9 @@ export class ExpiryKeeper {
     const holders = await this.holders();
     if (holders.length === 0) return 'done';
     let failed = 0;
-    for (const id of holders.slice(0, this.config.CLOSE_OUT_BATCH)) {
+    for (const { id, manager } of holders.slice(0, this.config.CLOSE_OUT_BATCH)) {
       try {
-        const tx = await this.chain.write(this.config.FUTURE_MANAGER, managerAbi, 'closeOutExpired', [id, this.config.FUTURE_SUB_ID]);
+        const tx = await this.chain.write(manager, managerAbi, 'closeOutExpired', [id, this.config.FUTURE_SUB_ID]);
         console.log(`[expiry] closed out account ${id} tx=${tx}`);
       } catch (error) {
         failed++;

@@ -131,9 +131,11 @@ but permissionless calls, each reading its state back from the chain first so a 
    (it refuses to start otherwise; a failed sample alerts `fixing-sample-failed`);
 2. after expiry it calls `fixSettlementFromIndex`. If the fixing is incomplete it alerts
    `fixing-incomplete`, then `fixing-fallback-due` once the vault's bounded fallback opens;
-3. once settled it calls `FutureManager.closeOutExpired` on every account still holding the series
-   (it walks `SubAccounts.lastAccountId`; Base has a few dozen), `CLOSE_OUT_BATCH` per tick. Close-out
-   reads no feed, so it works with the index down.
+3. once settled it calls `closeOutExpired` on every account still holding the series,
+   `CLOSE_OUT_BATCH` per tick. The list is read from the chain, not configured: the ledger is the one
+   the future records (`FutureAsset.subAccounts`), walked to its `lastAccountId` (Base has a few dozen),
+   and each account is closed out on its own manager (`SubAccounts.manager`). Close-out reads no feed,
+   so it works with the index down.
 
 It alerts `forward-mark-late` when the contract's last mark is older than `FORWARD_MARK_LATE_MS`
 (2 h) while trading is open, and on every refusal. At startup it refuses a threshold no larger than

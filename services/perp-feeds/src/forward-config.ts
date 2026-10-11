@@ -34,9 +34,6 @@ const envSchema = z
     INDEX_FEED: address,
     FORWARD_FEED: address,
     FUTURE_ASSET: address,
-    /** The FutureManager, for closeOutExpired, and SubAccounts, to find the accounts still holding. */
-    FUTURE_MANAGER: address,
-    SUB_ACCOUNTS: address,
     FUTURE_SUB_ID: uint,
     /** Annual NGN-over-USD carry, 18dp: the forward without a book is index * (1 + CARRY * tau). */
     CARRY: uint,

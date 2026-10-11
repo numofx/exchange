@@ -130,8 +130,6 @@ describe('expiry keeper against a real FutureAsset on anvil', { skip: !RPC }, ()
       INDEX_FEED: at.index,
       FORWARD_FEED: at.index,
       FUTURE_ASSET: at.future,
-      FUTURE_MANAGER: at.subAccounts,
-      SUB_ACCOUNTS: at.subAccounts,
       FUTURE_SUB_ID: String(expiry),
       CARRY: '0',
       FIXING_SAMPLE_INTERVAL_MS: '8000',
