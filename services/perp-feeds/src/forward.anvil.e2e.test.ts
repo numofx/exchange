@@ -127,8 +127,6 @@ describe('forward publisher against real contracts on anvil', { skip: !RPC }, ()
       INDEX_FEED: at.index,
       FORWARD_FEED: at.forward,
       FUTURE_ASSET: at.future,
-      FUTURE_MANAGER: at.subAccounts,
-      SUB_ACCOUNTS: at.subAccounts,
       FUTURE_SUB_ID: String(expiry),
       CARRY: String(CARRY),
       TIMESTAMP_SAFETY_SEC: '1',

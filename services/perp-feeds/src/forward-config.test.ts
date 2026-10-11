@@ -14,8 +14,6 @@ function env(overrides: Record<string, string | undefined> = {}): NodeJS.Process
     INDEX_FEED: ADDR,
     FORWARD_FEED: ADDR,
     FUTURE_ASSET: ADDR,
-    FUTURE_MANAGER: ADDR,
-    SUB_ACCOUNTS: ADDR,
     FUTURE_SUB_ID: '1796047200',
     CARRY: '200000000000000000',
     ...overrides,

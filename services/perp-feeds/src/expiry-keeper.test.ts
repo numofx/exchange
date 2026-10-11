@@ -12,6 +12,12 @@ const EXPIRY = 1_796_047_200n;
 const WINDOW = 3_600n;
 const GAP = 900n;
 const FALLBACK = 86_400n;
+const FUTURE = '0x00000000000000000000000000000000000000F0' as Address;
+/** The ledger FutureAsset.subAccounts() reports: the only SubAccounts the keeper reads. */
+const LEDGER = '0x00000000000000000000000000000000000000B1' as Address;
+/** Accounts sit under two managers here, so the sweep must call each account's own. */
+const MANAGER_OF = (id: bigint): Address =>
+  (id % 2n === 0n ? '0x00000000000000000000000000000000000000C2' : '0x00000000000000000000000000000000000000C3') as Address;
 
 const config = loadForwardConfig({
   RPC_URL: 'http://127.0.0.1:8545',
@@ -21,9 +27,7 @@ const config = loadForwardConfig({
   DATA_SUBMITTER: '0x00000000000000000000000000000000000000A0',
   INDEX_FEED: '0x00000000000000000000000000000000000000A1',
   FORWARD_FEED: '0x00000000000000000000000000000000000000A4',
-  FUTURE_ASSET: '0x00000000000000000000000000000000000000F0',
-  FUTURE_MANAGER: '0x00000000000000000000000000000000000000A2',
-  SUB_ACCOUNTS: '0x00000000000000000000000000000000000000A3',
+  FUTURE_ASSET: FUTURE,
   FUTURE_SUB_ID: String(EXPIRY),
   CARRY: '0',
   CLOSE_OUT_BATCH: '2',
@@ -40,7 +44,8 @@ type State = {
 };
 
 function run(state: State, cfg = config) {
-  const writes: { fn: string; args: readonly unknown[] }[] = [];
+  const writes: { fn: string; args: readonly unknown[]; to: Address }[] = [];
+  const readsFrom: Address[] = [];
   const alerts: string[] = [];
   const chain: ContractChain = {
     signer: privateKeyToAccount(keccak256(toHex('forward-signer'))),
@@ -50,31 +55,35 @@ function run(state: State, cfg = config) {
     readIndex: async () => 1n,
     readDiffFeed: async () => null,
     submit: async () => '0x',
-    read: async <T,>(_address: Address, _abi: unknown, functionName: string, args: readonly unknown[] = []): Promise<T> => {
-      const values: Record<string, unknown> = {
-        futureContracts: { listed: true, settled: state.settled, expiry: EXPIRY, lastTradeTime: EXPIRY - WINDOW },
-        fixingWindow: WINDOW,
-        maxSampleGap: GAP,
-        fallbackDelay: FALLBACK,
-        fixings: {
+    read: async <T,>(address: Address, _abi: unknown, functionName: string, args: readonly unknown[] = []): Promise<T> => {
+      readsFrom.push(address);
+      // thunks: each answer is computed only for the function asked, since some need args the others lack
+      const values: Record<string, () => unknown> = {
+        futureContracts: () => ({ listed: true, settled: state.settled, expiry: EXPIRY, lastTradeTime: EXPIRY - WINDOW }),
+        fixingWindow: () => WINDOW,
+        maxSampleGap: () => GAP,
+        fallbackDelay: () => FALLBACK,
+        fixings: () => ({
           firstSampleTime: state.firstSampleTime,
           lastSampleTime: state.lastSampleTime,
           largestGap: state.largestGap,
           maxSampleGap: GAP,
-        },
-        lastAccountId: BigInt(state.balances.length),
-        getBalance: state.balances[Number(args[0] as bigint) - 1],
+        }),
+        subAccounts: () => LEDGER,
+        lastAccountId: () => BigInt(state.balances.length),
+        getBalance: () => state.balances[Number(args[0] as bigint) - 1],
+        manager: () => MANAGER_OF(args[0] as bigint),
       };
-      return values[functionName] as T;
+      return values[functionName]() as T;
     },
-    write: async (_address, _abi, functionName, args = []) => {
+    write: async (address, _abi, functionName, args = []) => {
       if (state.failWrites?.has(functionName)) throw new Error(`${functionName} reverted`);
-      writes.push({ fn: functionName, args });
+      writes.push({ fn: functionName, args, to: address });
       return '0x01';
     },
   };
   const keeper = new ExpiryKeeper(cfg, chain, async (key) => void alerts.push(key));
-  return { keeper, writes, alerts };
+  return { keeper, writes, alerts, readsFrom };
 }
 
 function state(overrides: Partial<State> = {}): State {
@@ -144,6 +153,14 @@ describe('expiry keeper: close-out', () => {
     assert.deepEqual(last.writes.map((w) => w.args[0]), [5n]);
   });
 
+  it('reads the ledger from the future and closes each account out on its own manager', async () => {
+    const { keeper, writes, readsFrom } = run(state({ settled: true, balances: [0n, 5n, -5n] }));
+    await keeper.tick();
+    assert.deepEqual(writes.map((w) => [w.args[0], w.to]), [[2n, MANAGER_OF(2n)], [3n, MANAGER_OF(3n)]]);
+    // nothing but the future and the ledger it names is ever read
+    assert.deepEqual([...new Set(readsFrom)].sort(), [FUTURE, LEDGER].sort());
+  });
+
   it('is done when nobody holds the series', async () => {
     const { keeper, writes } = run(state({ settled: true, balances: [0n, 0n] }));
     assert.equal(await keeper.tick(), 'done');
@@ -176,8 +193,6 @@ function envOf(cfg: typeof config): Record<string, string> {
     INDEX_FEED: cfg.INDEX_FEED,
     FORWARD_FEED: cfg.FORWARD_FEED,
     FUTURE_ASSET: cfg.FUTURE_ASSET,
-    FUTURE_MANAGER: cfg.FUTURE_MANAGER,
-    SUB_ACCOUNTS: cfg.SUB_ACCOUNTS,
     FUTURE_SUB_ID: String(cfg.FUTURE_SUB_ID),
     CARRY: String(cfg.CARRY),
   };
