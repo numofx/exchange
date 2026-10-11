@@ -24,7 +24,18 @@ export async function fetchPerpBook(
   nowSec: number,
   fetchImpl: typeof fetch = fetch,
 ): Promise<RestingOrder[]> {
-  const url = `${marketsServiceUrl}/v1/book?asset_address=${perp}&sub_id=0`;
+  return fetchBook(marketsServiceUrl, perp, 0n, nowSec, fetchImpl);
+}
+
+/** Any asset's resting orders, in its engine terms. A dated future's sub id is its expiry. */
+export async function fetchBook(
+  marketsServiceUrl: string,
+  asset: Address,
+  subId: bigint,
+  nowSec: number,
+  fetchImpl: typeof fetch = fetch,
+): Promise<RestingOrder[]> {
+  const url = `${marketsServiceUrl}/v1/book?asset_address=${asset}&sub_id=${subId}`;
   const response = await fetchImpl(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(8_000) });
   if (!response.ok) throw new Error(`markets-service book returned ${response.status}`);
   return parseBook((await response.json()) as BookResponse, nowSec);

@@ -1,0 +1,150 @@
+import { parseAbi, type Address } from 'viem';
+
+import type { Alerter } from './alert.js';
+import { fetchBook } from './book.js';
+import type { ContractChain } from './chain.js';
+import type { ForwardConfig } from './forward-config.js';
+import { computeForwardTarget } from './forward-targets.js';
+import { encodeForwardData, encodeManagerData, signFeedUpdate } from './feed-data.js';
+import type { RestingOrder } from './mark-targets.js';
+
+export const futureAbi = parseAbi([
+  'struct FutureContract { bool listed; bool settled; uint64 expiry; uint64 lastTradeTime; uint64 lastMarkTime; uint256 markPrice; int256 cumulativeVMPerContract; }',
+  'function futureContracts(uint256 subId) view returns (FutureContract)',
+  'function minMarkInterval() view returns (uint256)',
+  'function maxMarkDeviation() view returns (uint256)',
+  'function markIndexBand(uint64 expiry) view returns (uint256)',
+  'function forwardFeed() view returns (address)',
+  'function pullMark(uint96 subId)',
+]);
+
+type FutureContract = {
+  listed: boolean;
+  settled: boolean;
+  expiry: bigint;
+  lastTradeTime: bigint;
+  lastMarkTime: bigint;
+  markPrice: bigint;
+  cumulativeVMPerContract: bigint;
+};
+
+export type ForwardOutcome =
+  | 'published'
+  | 'dry-run'
+  | 'waiting'
+  | 'closed'
+  | 'settled'
+  | 'no-index'
+  | 'unreachable'
+  | 'pull-failed'
+  | 'misconfigured';
+
+/**
+ * Marks a USDC/cNGN future from its forward: each tick, once the contract's minMarkInterval has
+ * passed, it works out the forward (forward-targets.ts), signs it into the future's LyraForwardFeed
+ * and calls FutureAsset.pullMark, which reads it back, checks it against the index band and move
+ * limit, and accrues VM. Stops at last trade.
+ *
+ * Every refusal alerts. A mark that has not landed for FORWARD_MARK_LATE_MS while trading is open
+ * alerts on its own: the contract's VM is only as fresh as its last mark.
+ */
+export class ForwardPublisher {
+  constructor(
+    private readonly config: ForwardConfig,
+    private readonly chain: ContractChain,
+    private readonly alert: Alerter,
+    private readonly readBook: (nowSec: number) => Promise<RestingOrder[]> = (nowSec) =>
+      fetchBook(config.MARKETS_SERVICE_URL, config.FUTURE_ASSET, config.FUTURE_SUB_ID, nowSec),
+  ) {}
+
+  private read<T>(functionName: string, args: readonly unknown[] = []): Promise<T> {
+    return this.chain.read<T>(this.config.FUTURE_ASSET, futureAbi, functionName, args);
+  }
+
+  async tick(): Promise<ForwardOutcome> {
+    const contract = await this.read<FutureContract>('futureContracts', [this.config.FUTURE_SUB_ID]);
+    if (!contract.listed) {
+      await this.alert('forward-unlisted', `future ${this.config.FUTURE_ASSET} has no contract ${this.config.FUTURE_SUB_ID}`);
+      return 'misconfigured';
+    }
+    if (contract.settled) return 'settled';
+
+    const head = await this.chain.headTimestamp();
+    if (head >= contract.lastTradeTime) return 'closed';
+
+    const lateSec = BigInt(Math.floor(this.config.FORWARD_MARK_LATE_MS / 1000));
+    if (head - contract.lastMarkTime > lateSec) {
+      await this.alert(
+        'forward-mark-late',
+        `future ${this.config.FUTURE_SUB_ID}: last mark ${head - contract.lastMarkTime}s ago, past ${lateSec}s; VM is stale`,
+      );
+    }
+
+    const minInterval = await this.read<bigint>('minMarkInterval');
+    if (head < contract.lastMarkTime + minInterval) return 'waiting';
+
+    const feed = await this.read<Address>('forwardFeed');
+    if (feed.toLowerCase() !== this.config.FORWARD_FEED.toLowerCase()) {
+      await this.alert('forward-feed-mismatch', `future reads forward feed ${feed}, configured ${this.config.FORWARD_FEED}`);
+      return 'misconfigured';
+    }
+
+    const indexUsdc = await this.chain.readIndex(this.config.INDEX_FEED);
+    if (indexUsdc === null) {
+      await this.alert('forward-no-index', 'forward not published: index feed is unset or stale');
+      return 'no-index';
+    }
+
+    let orders: RestingOrder[] = [];
+    try {
+      orders = await this.readBook(Number(head));
+    } catch (error) {
+      // No book is the normal state before the market is listed: mark to carry, and say so in the log.
+      console.warn(`[forward] book unavailable, marking to carry: ${(error as Error).message}`);
+    }
+
+    const [band, maxMove] = await Promise.all([
+      this.read<bigint>('markIndexBand', [contract.expiry]),
+      this.read<bigint>('maxMarkDeviation'),
+    ]);
+    const target = computeForwardTarget({
+      indexUsdc,
+      carry: this.config.CARRY,
+      secondsToExpiry: contract.expiry - head,
+      orders,
+      lastMark: contract.markPrice,
+      band,
+      maxMove,
+      maxBasisBps: BigInt(this.config.FORWARD_MAX_BASIS_BPS),
+      safetyBps: BigInt(this.config.FORWARD_SAFETY_BPS),
+    });
+    if (!target.ok) {
+      await this.alert('forward-unreachable', `future ${this.config.FUTURE_SUB_ID}: ${target.reason}`);
+      return 'unreachable';
+    }
+
+    const update = await signFeedUpdate({
+      signer: this.chain.signer,
+      kind: 'LyraForwardFeed',
+      feed: this.config.FORWARD_FEED,
+      chainId: this.chain.chainId,
+      data: encodeForwardData(contract.expiry, target.diffUsdc),
+      timestamp: head - BigInt(this.config.TIMESTAMP_SAFETY_SEC),
+      deadline: head + BigInt(this.config.DEADLINE_SEC),
+    });
+    const clamps = target.clampedBy.length ? ` clamped by ${target.clampedBy.join(',')}` : '';
+    console.log(`[forward] mark ${target.mark} (${target.basis}${clamps}) diff ${target.diffUsdc} on index ${indexUsdc}`);
+
+    if (this.config.DRY_RUN) return 'dry-run';
+
+    try {
+      await this.chain.submit(encodeManagerData([update]));
+      const tx = await this.chain.write(this.config.FUTURE_ASSET, futureAbi, 'pullMark', [this.config.FUTURE_SUB_ID]);
+      console.log(`[forward] marked tx=${tx}`);
+      return 'published';
+    } catch (error) {
+      await this.alert('forward-pull-failed', `future ${this.config.FUTURE_SUB_ID}: ${(error as Error).message.slice(0, 300)}`);
+      return 'pull-failed';
+    }
+  }
+}

@@ -11,9 +11,11 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
     "check": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test src/**/*.test.ts"
+    "test": "node --import tsx --test src/**/*.test.ts",
+    "start:forward": "node dist/forward-main.js"
   },
   "dependencies": {
+    "@numo/kms-signer": "workspace:*",
     "cngn-rate-picker": "0.2.2",
     "dotenv": "^16.4.7",
     "viem": "^2.23.5",
