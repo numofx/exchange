@@ -15,6 +15,7 @@ import {IAsset} from "../interfaces/IAsset.sol";
 import {ICashAsset} from "../interfaces/ICashAsset.sol";
 import {IPerpAsset} from "../interfaces/IPerpAsset.sol";
 import {IOptionAsset} from "../interfaces/IOptionAsset.sol";
+import {IDatedFutureAsset} from "../interfaces/IDatedFutureAsset.sol";
 import {IBaseManager} from "../interfaces/IBaseManager.sol";
 import {IStandardManager} from "../interfaces/IStandardManager.sol";
 import {ISRMPortfolioViewer} from "../interfaces/ISRMPortfolioViewer.sol";
@@ -67,6 +68,9 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
   /// @dev Perp Margin Requirements: maintenance and initial margin requirements
   mapping(uint marketId => PerpMarginRequirements) public perpMarginRequirements;
 
+  /// @dev Dated futures margin requirements
+  mapping(uint marketId => FutureMarginRequirements) public futureMarginRequirements;
+
   OptionMarginHelper internal immutable optionMarginHelper;
 
   /// @dev Option Margin Parameters. See getIsolatedMargin for how it is used in the formula
@@ -111,12 +115,10 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
 
   /**
    * @notice Whitelist an asset to be used in Manager
-   * @dev the standard manager supports option, perp and base assets. Dated futures settle in cNGN and live on
-   *      DatedFutureManager; this manager would book their cNGN variation margin as cash, so it refuses them.
+   * @dev the standard manager supports option, perp, base, and dated futures assets
    */
   function whitelistAsset(IAsset _asset, uint _marketId, AssetType _type) external onlyOwner {
     _checkMarketExist(_marketId);
-    if (_type == AssetType.DatedFuture) revert SRM_UnsupportedAsset();
 
     IAsset previousAsset = assetMap[_marketId][_type];
     AssetDetail memory previousDetails = _assetDetails[previousAsset];
@@ -171,6 +173,21 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
     perpMarginRequirements[marketId] = PerpMarginRequirements(_mmPerpReq, _imPerpReq);
 
     emit PerpMarginRequirementsSet(marketId, _mmPerpReq, _imPerpReq);
+  }
+
+  /**
+   * @notice Set dated futures maintenance and initial margin requirement for a market
+   */
+  function setFutureMarginRequirements(uint marketId, uint _mmFutureReq, uint _imFutureReq) external onlyOwner {
+    _checkMarketExist(marketId);
+
+    if (_mmFutureReq > _imFutureReq || _mmFutureReq == 0 || _mmFutureReq >= 1e18 || _imFutureReq >= 1e18) {
+      revert SRM_InvalidPerpMarginParams();
+    }
+
+    futureMarginRequirements[marketId] = FutureMarginRequirements(_mmFutureReq, _imFutureReq);
+
+    emit FutureMarginRequirementsSet(marketId, _mmFutureReq, _imFutureReq);
   }
 
   /**
@@ -282,6 +299,9 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
     // Block any transfers where an account is under liquidation
     _checkIfLiveAuction(accountId);
 
+    // settle accrued daily VM for any dated futures before risk checks
+    _settleAllDatedFutureVM(accountId);
+
     // if account is only reduce perp position, increasing cash, or increasing option position, bypass check
     bool riskAdding = false;
     bool isPositiveCashDelta = true;
@@ -310,6 +330,16 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
           // if so, we cannot bypass the risk check
           int perpPosition = subAccounts.getBalance(accountId, perp, 0);
           if (perpPosition != 0 && assetDeltas[i].delta * perpPosition > 0) {
+            riskAdding = true;
+          }
+        }
+      } else if (detail.assetType == AssetType.DatedFuture) {
+        IDatedFutureAsset futureAsset = IDatedFutureAsset(address(assetDeltas[i].asset));
+        _settleDatedFutureVM(futureAsset, accountId, assetDeltas[i].subId);
+
+        if (!riskAdding) {
+          int futurePosition = subAccounts.getBalance(accountId, futureAsset, assetDeltas[i].subId);
+          if (futurePosition != 0 && assetDeltas[i].delta * futurePosition > 0) {
             riskAdding = true;
           }
         }
@@ -416,6 +446,7 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
     // scope locals to avoid stack-too-deep in this path
     {
       margin += _getNetPerpMargin(marketHolding, spotPrice, isInitial, spotConf);
+      margin += _getNetFutureMargin(marketHolding, isInitial);
       int netOptionMargin;
       (netOptionMargin, optionMtm) = _getNetOptionMarginAndMtM(marketHolding, spotPrice, isInitial, spotConf);
       margin += netOptionMargin;
@@ -482,6 +513,29 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
       uint penalty =
         diff.multiplyDecimal(ocParam.OCFactor).multiplyDecimal(spotPrice).multiplyDecimal(SignedMath.abs(position));
       netMargin -= penalty.toInt256();
+    }
+  }
+
+  /**
+   * @notice Get margin required for all dated futures positions in a market.
+   */
+  function _getNetFutureMargin(MarketHolding memory marketHolding, bool isInitial)
+    internal
+    view
+    returns (int netMargin)
+  {
+    uint requirement = isInitial
+      ? futureMarginRequirements[marketHolding.marketId].imReq
+      : futureMarginRequirements[marketHolding.marketId].mmReq;
+    if (requirement == 0) return 0;
+
+    for (uint i = 0; i < marketHolding.futurePositions.length; ++i) {
+      IStandardManager.FuturePosition memory position = marketHolding.futurePositions[i];
+      (uint markPrice, bool isSet) = marketHolding.datedFuture.getReferencePrice(position.subId);
+      if (!isSet || markPrice == 0) revert SRM_NoForwardPrice();
+
+      uint notional = SignedMath.abs(position.balance).multiplyDecimal(markPrice);
+      netMargin -= int(notional.multiplyDecimal(requirement));
     }
   }
 
@@ -592,6 +646,8 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
    * @dev settle perp value with index price
    */
   function settlePerpsWithIndex(uint accountId) external {
+    _settleAllDatedFutureVM(accountId);
+
     for (uint id = 1; id <= lastMarketId; id++) {
       IPerpAsset perp = IPerpAsset(address(assetMap[id][AssetType.Perpetual]));
       if (address(perp) == address(0) || subAccounts.getBalance(accountId, perp, 0) == 0) continue;
@@ -669,6 +725,20 @@ contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager,
 
   function _checkMarketExist(uint marketId) internal view {
     if (marketId > lastMarketId) revert SRM_MarketNotCreated();
+  }
+
+  function _settleAllDatedFutureVM(uint accountId) internal {
+    ISubAccounts.AssetBalance[] memory balances = subAccounts.getAccountBalances(accountId);
+    for (uint i = 0; i < balances.length; ++i) {
+      IStandardManager.AssetDetail memory detail = _assetDetails[balances[i].asset];
+      if (detail.assetType != AssetType.DatedFuture) continue;
+      _settleDatedFutureVM(IDatedFutureAsset(address(balances[i].asset)), accountId, balances[i].subId);
+    }
+  }
+
+  function _settleDatedFutureVM(IDatedFutureAsset future, uint accountId, uint subId) internal {
+    int cashDelta = future.settleAccount(accountId, subId);
+    _applyCashDelta(accountId, cashDelta);
   }
 
   function _chargeAllOIFee(address caller, uint accountId, uint tradeId, ISubAccounts.AssetDelta[] memory assetDeltas)
