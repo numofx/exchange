@@ -4,16 +4,19 @@ pragma solidity ^0.8.20;
 import "forge-std/Test.sol";
 import {IERC20Metadata} from "openzeppelin/token/ERC20/extensions/IERC20Metadata.sol";
 
-import {DeployCngnDatedFuture} from "../../scripts/deploy-cngn-dated-future.s.sol";
+import {DeployCngnFuture} from "../../scripts/deploy-cngn-future.s.sol";
 import {SubAccounts} from "../../src/SubAccounts.sol";
 import {ISubAccounts} from "../../src/interfaces/ISubAccounts.sol";
 import {CashAsset} from "../../src/assets/CashAsset.sol";
 import {WrappedERC20Asset} from "../../src/assets/WrappedERC20Asset.sol";
 import {DutchAuction} from "../../src/liquidation/DutchAuction.sol";
 import {StandardManager} from "../../src/risk-managers/StandardManager.sol";
-import {IDatedFutureAsset} from "../../src/interfaces/IDatedFutureAsset.sol";
+import {IFutureAsset} from "../../src/interfaces/IFutureAsset.sol";
 import {ISpotFeed} from "../../src/interfaces/ISpotFeed.sol";
 import {IManager} from "../../src/interfaces/IManager.sol";
+import {IBaseLyraFeed} from "../../src/interfaces/IBaseLyraFeed.sol";
+import {BaseLyraFeed} from "../../src/feeds/BaseLyraFeed.sol";
+import {MessageHashUtils} from "openzeppelin/utils/cryptography/MessageHashUtils.sol";
 
 interface IOwnableLike {
   function owner() external view returns (address);
@@ -25,7 +28,7 @@ interface ITradeModuleLike {
 }
 
 /**
- * Runs deploy-cngn-dated-future.s.sol's own `deploy` on a Base fork at head, plays the vault's side by executing the
+ * Runs deploy-cngn-future.s.sol's own `deploy` on a Base fork at head, plays the vault's side by executing the
  * generated batches exactly as written, and takes a position through its life on the live perp cash, cNGN escrow and
  * index feed: open, daily marks, the index fixing, close-out, and withdrawal of real USDC and cNGN.
  *
@@ -35,7 +38,7 @@ interface ITradeModuleLike {
  *
  * Requires BASE_RPC_URL.
  */
-contract CngnDatedFutureDeployFork is Test {
+contract CngnFutureDeployFork is Test {
   address constant VAULT = 0x1dcA42ab54Bd3862853A821F84B29BF65245F435;
   address constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
   address constant CNGN = 0x46C85152bFe9f96829aA94755D9f915F9B10EF5F;
@@ -47,9 +50,13 @@ contract CngnDatedFutureDeployFork is Test {
   address bob = address(0xb0b);
   address treasury = address(0x7ea5);
 
-  DeployCngnDatedFuture script;
-  DeployCngnDatedFuture.Params params;
-  DeployCngnDatedFuture.Deployment d;
+  // Derived rather than memorable: well-known keys carry EIP-7702 delegations on Base.
+  uint forwardPk = uint(keccak256("cngn-future-deploy-fork-forward-signer"));
+  address forwardSigner = vm.addr(forwardPk);
+
+  DeployCngnFuture script;
+  DeployCngnFuture.Params params;
+  DeployCngnFuture.Deployment d;
   SubAccounts subAccounts;
 
   uint spot; // USDC per cNGN, live
@@ -58,7 +65,7 @@ contract CngnDatedFutureDeployFork is Test {
 
   function setUp() public {
     vm.createSelectFork(vm.envString("BASE_RPC_URL"));
-    script = new DeployCngnDatedFuture();
+    script = new DeployCngnFuture();
 
     // The initial mark is the operator's input, checked against index * (1 + carry * tau); here it is exactly that.
     string memory stack = vm.readFile(string.concat(vm.projectRoot(), "/deployments/8453/CNGN_PERP_STACK.json"));
@@ -67,6 +74,7 @@ contract CngnDatedFutureDeployFork is Test {
     uint tau = uint(EXPIRY) - block.timestamp;
     vm.setEnv("CARRY", vm.toString(CARRY));
     vm.setEnv("INITIAL_MARK", vm.toString(index + index * CARRY / 1e18 * tau / 365 days));
+    vm.setEnv("FORWARD_SIGNER", vm.toString(forwardSigner));
 
     params = script.loadParams();
     subAccounts = SubAccounts(params.subAccounts);
@@ -83,14 +91,14 @@ contract CngnDatedFutureDeployFork is Test {
   }
 
   function testInitialMarkOutsideTheIndexBandIsRefused() public {
-    DeployCngnDatedFuture.Params memory p = params;
+    DeployCngnFuture.Params memory p = params;
     p.initialMark = index * 111 / 100;
     vm.expectRevert(bytes("INITIAL_MARK is outside the index band"));
     script.checkParams(p);
   }
 
   function testInitialMarkOffTheCarryForwardIsRefused() public {
-    DeployCngnDatedFuture.Params memory p = params;
+    DeployCngnFuture.Params memory p = params;
     uint fair = script.fairForward(p);
     p.initialMark = fair * 103 / 100; // inside the 10% spot band, 3% off the carry forward
     assertLt(p.initialMark, index * 110 / 100, "the spot band alone would pass it");
@@ -102,7 +110,7 @@ contract CngnDatedFutureDeployFork is Test {
   }
 
   function testCarryInTheWrongUnitsIsRefused() public {
-    DeployCngnDatedFuture.Params memory p = params;
+    DeployCngnFuture.Params memory p = params;
     p.carry = 20e18; // "20" for 20%
     vm.expectRevert(bytes("CARRY over 100% a year: give it 18dp (0.2e18 for 20%)"));
     script.checkParams(p);
@@ -115,7 +123,7 @@ contract CngnDatedFutureDeployFork is Test {
   }
 
   function testLastTradeAfterTheFixingWindowStartIsRefused() public {
-    DeployCngnDatedFuture.Params memory p = params;
+    DeployCngnFuture.Params memory p = params;
     p.lastTradeTime = p.expiry - 30 minutes;
     vm.expectRevert(bytes("last trade must be no later than the fixing window's start"));
     script.checkParams(p);
@@ -187,7 +195,7 @@ contract CngnDatedFutureDeployFork is Test {
     vm.warp(block.timestamp + 1 days);
     uint mark1 = mark0 * 102 / 100;
     vm.prank(VAULT);
-    d.future.setDailyMark(d.subId, uint64(block.timestamp), mark1);
+    d.future.setMark(d.subId, uint64(block.timestamp), mark1);
 
     int expectedVM = int(2 * 1_000 * (mark1 - mark0));
     assertEq(d.future.getPendingVM(aliceAcc, d.subId), expectedVM);
@@ -245,7 +253,7 @@ contract CngnDatedFutureDeployFork is Test {
 
     vm.warp(block.timestamp + 1 days);
     vm.prank(VAULT);
-    d.future.setDailyMark(d.subId, uint64(block.timestamp), mark0 * 102 / 100);
+    d.future.setMark(d.subId, uint64(block.timestamp), mark0 * 102 / 100);
 
     // accrue interest first, so the delta below is the VM payment alone
     d.manager.settleInterest(aliceAcc);
@@ -255,6 +263,87 @@ contract CngnDatedFutureDeployFork is Test {
     uint vmCngn = 1_000 * (mark0 * 102 / 100 - mark0);
     assertApproxEqAbs(cashAfter - cashBefore, int(vmCngn * spot / 1e18), 1, "paid the cNGN's value in USDC");
     assertLt(subAccounts.getBalance(d.poolAccount, _cash(), 0), 0, "the pool owes the cash until treasury tops up");
+  }
+
+  ///////////////////
+  // forward marks //
+  ///////////////////
+
+  /// @dev Publish a forward for this contract's expiry, signed by the forward key: forward = index + `diff`.
+  function _publishForward(int96 diff) internal {
+    IBaseLyraFeed.FeedData memory feedData = IBaseLyraFeed.FeedData({
+      data: abi.encode(params.expiry, uint(0), uint(0), diff, uint64(1e18)),
+      timestamp: uint64(block.timestamp),
+      deadline: block.timestamp + 5,
+      signers: new address[](1),
+      signatures: new bytes[](1)
+    });
+    BaseLyraFeed feed = BaseLyraFeed(address(d.forwardFeed));
+    bytes32 structHash =
+      keccak256(abi.encode(feed.FEED_DATA_TYPEHASH(), keccak256(feedData.data), feedData.deadline, feedData.timestamp));
+    (uint8 v, bytes32 r, bytes32 sig) =
+      vm.sign(forwardPk, MessageHashUtils.toTypedDataHash(feed.domainSeparator(), structHash));
+    feedData.signatures[0] = bytes.concat(r, sig, bytes1(v));
+    feedData.signers[0] = forwardSigner;
+    d.forwardFeed.acceptData(abi.encode(feedData));
+  }
+
+  function testMarksArePulledFromTheSignedForwardFeed() public {
+    _executeVaultBatch();
+    _executeEnableBatch();
+    _holdIndex(spot);
+    _depositCngn(treasury, d.poolAccount, 1_000_000e6);
+    (uint aliceAcc, uint bobAcc) = _fundedAccounts();
+    uint mark0 = d.future.futureContracts(d.subId).markPrice;
+    _trade(bobAcc, aliceAcc, 1e18, mark0);
+
+    // the forward 2% under spot in USDC per cNGN: ~2% over the index in cNGN per USDC
+    vm.warp(block.timestamp + 1 hours);
+    int96 diff = -int96(int(spot * 2 / 100));
+    _publishForward(diff);
+
+    vm.prank(address(0xbeef)); // anyone
+    d.future.pullMark(d.subId);
+    uint mark1 = 1e36 / uint(int(spot) + diff);
+    assertEq(d.future.futureContracts(d.subId).markPrice, mark1, "the inverse of index + diff");
+    assertEq(
+      d.future.getPendingVM(aliceAcc, d.subId), int(1_000) * (int(mark1) - int(mark0)), "VM from the pulled mark"
+    );
+
+    // not again within the hour
+    vm.warp(block.timestamp + 30 minutes);
+    vm.expectRevert(IFutureAsset.FA_MarkTooSoon.selector);
+    d.future.pullMark(d.subId);
+  }
+
+  function testAForwardSignedByAnyoneElseIsRefused() public {
+    _executeVaultBatch();
+    _holdIndex(spot);
+    uint pk = uint(keccak256("not-the-forward-signer"));
+    IBaseLyraFeed.FeedData memory feedData = IBaseLyraFeed.FeedData({
+      data: abi.encode(params.expiry, uint(0), uint(0), int96(0), uint64(1e18)),
+      timestamp: uint64(block.timestamp),
+      deadline: block.timestamp + 5,
+      signers: new address[](1),
+      signatures: new bytes[](1)
+    });
+    BaseLyraFeed feed = BaseLyraFeed(address(d.forwardFeed));
+    bytes32 structHash =
+      keccak256(abi.encode(feed.FEED_DATA_TYPEHASH(), keccak256(feedData.data), feedData.deadline, feedData.timestamp));
+    (uint8 v, bytes32 r, bytes32 sig) =
+      vm.sign(pk, MessageHashUtils.toTypedDataHash(feed.domainSeparator(), structHash));
+    feedData.signatures[0] = bytes.concat(r, sig, bytes1(v));
+    feedData.signers[0] = vm.addr(pk);
+    vm.expectRevert();
+    d.forwardFeed.acceptData(abi.encode(feedData));
+  }
+
+  function testTheForwardSignerMustNotSignTheIndex() public {
+    DeployCngnFuture.Params memory p = params;
+    vm.prank(VAULT);
+    BaseLyraFeed(params.indexFeed).addSigner(p.forwardSigner, true);
+    vm.expectRevert(bytes("FORWARD_SIGNER must not also sign the index"));
+    script.checkParams(p);
   }
 
   ///////////////////
@@ -268,7 +357,7 @@ contract CngnDatedFutureDeployFork is Test {
     mark = d.future.futureContracts(d.subId).markPrice * (10_000 + bps) / 10_000;
     vm.warp(block.timestamp + 1 days);
     vm.prank(VAULT);
-    d.future.setDailyMark(d.subId, uint64(block.timestamp), mark);
+    d.future.setMark(d.subId, uint64(block.timestamp), mark);
   }
 
   function _mtm(uint acc) internal view returns (int mtm) {
@@ -411,11 +500,11 @@ contract CngnDatedFutureDeployFork is Test {
     d.future.recordFixingSample(d.subId);
 
     vm.warp(expiry);
-    vm.expectRevert(IDatedFutureAsset.DFA_FixingIncomplete.selector);
+    vm.expectRevert(IFutureAsset.FA_FixingIncomplete.selector);
     d.future.fixSettlementFromIndex(d.subId);
 
     vm.prank(VAULT);
-    vm.expectRevert(IDatedFutureAsset.DFA_NotExpired.selector);
+    vm.expectRevert(IFutureAsset.FA_NotExpired.selector);
     d.future.setSettlementPrice(d.subId, index);
 
     vm.warp(uint(expiry) + 24 hours);
@@ -423,7 +512,7 @@ contract CngnDatedFutureDeployFork is Test {
     assertEq(ref, index, "three samples, all at the live index");
 
     vm.prank(VAULT);
-    vm.expectRevert(IDatedFutureAsset.DFA_FallbackOutsideBand.selector);
+    vm.expectRevert(IFutureAsset.FA_FallbackOutsideBand.selector);
     d.future.setSettlementPrice(d.subId, ref * 1021 / 1000);
 
     vm.prank(VAULT);
