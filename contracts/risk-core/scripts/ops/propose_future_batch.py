@@ -317,7 +317,7 @@ def self_test() -> int:
   # A deployment, its batches as the deploy script writes them, and each way a file can be wrong.
   a = lambda n: "0x" + format(n, "040x")  # noqa: E731
   d = {"future": a(1), "viewer": a(2), "manager": a(3), "forwardFeed": a(4), "cash": a(5), "cngnEscrow": a(6),
-       "auction": a(7), "perpTradeModule": a(8), "futureCngnCap": str(30_000_000 * 10**18), "futureOICap": str(40 * 10**18)}
+       "auction": a(7), "perpTradeModule": a(8), "futureCngnCap": str(30_000_000 * 10**18), "futureOICap": str(30 * 10**18)}
   for batch in ("setup", "enable"):
     good = [{"description": str(i), "to": to, "value": "0", "data": data, "digest": digest(to, data)}
             for i, (to, data) in enumerate(expected_actions(batch, d))]
@@ -340,18 +340,20 @@ def self_test() -> int:
       raise AssertionError(f"{batch}: a wrong {what} was accepted")
   # The cap in the escrow action is the artifact's, and the OI cap in the enable action likewise.
   assert expected_actions("setup", d)[6][1].endswith(word_uint(30_000_000 * 10**18))
-  assert expected_actions("enable", d)[0][1].endswith(word_uint(40 * 10**18))
+  assert expected_actions("enable", d)[0][1].endswith(word_uint(30 * 10**18))
   # The digest convention: keccak(to || keccak(data)), checked on a known action.
   assert digest(a(1), selector("acceptOwnership")) == "0x" + keccak(bytes.fromhex(a(1)[2:]) + keccak(bytes.fromhex("79ba5097"))).hex()
 
   # Gates: the reserve, the escrow headroom after it, and coverage across both books.
-  target = future_reserve_target_cngn(40, 1_000, 1 / 1_363.7)
+  target = future_reserve_target_cngn(30, 1_000, 1 / 1_363.7)
   assert not reserve_gate(0, target).ok and not reserve_gate(target - 1, target).ok and reserve_gate(target, target).ok
   assert not reserve_gate(1, 0).ok
   assert escrow_gate(target, 30_000_000, target).ok
   assert not escrow_gate(30_000_000 - target + 1, 30_000_000, target).ok
-  # $3,250 covers the perp alone; it does not cover a $20,000 futures side at IM 25% beside it ($3,750 more)
+  # The launch cap is sized to the module as it stands: $3,250 covers the perp's $134 and a $15,000 futures
+  # side at IM 25% ($2,812.50), $2,947 in all. A 40-contract cap ($20,000 a side, $3,884 in all) is refused.
   assert sm_gate(3_250, {"perp": (801, 1 / 3)}).ok
+  assert sm_gate(3_250, {"perp": (801, 1 / 3), "future at the cap": (15_000, 0.25)}).ok
   assert not sm_gate(3_250, {"perp": (801, 1 / 3), "future at the cap": (20_000, 0.25)}).ok
   assert sm_gate(3_900, {"perp": (801, 1 / 3), "future at the cap": (20_000, 0.25)}).ok
   with tempfile.TemporaryDirectory() as tmp:

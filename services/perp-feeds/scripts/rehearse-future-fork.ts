@@ -328,20 +328,17 @@ async function main() {
   // The enable batch, gated. Before the pool is seeded, the SecurityModule topped up and the pager
   // running, the proposer must refuse; after, everything must pass.
   const refused = failing(await proposer('enable'));
-  assert.deepEqual(refused.sort(), ['pager', 'reserve', 'sm'], `before seeding, exactly these gates fail: ${refused}`);
-  log(`enable refused before the seed: ${refused.join(', ')} gates fail; custody, feeds, marks and escrow pass`);
+  // The launch cap is sized to the live SecurityModule, so sm passes without a top-up.
+  assert.deepEqual(refused.sort(), ['pager', 'reserve'], `before seeding, exactly these gates fail: ${refused}`);
+  log(`enable refused before the seed: ${refused.join(', ')} gates fail; custody, feeds, marks, escrow and sm pass`);
   // 30% of one side at the cap, in cNGN at the index, plus 1% for the index moving meanwhile
   const reserve = ((BigInt(artifact.futureOICap) / 2n) * BigInt(artifact.contractSize) * 3n) / (10n * spot);
   await depositTo(USERS.treasury, POOL, CNGN, ESCROW, (reserve * 101n) / 100n / 10n ** 12n);
-  // The live SecurityModule does not cover a full futures side beside the perp (see the sm gate):
-  // here it is topped up, on the fork only, so the rest of the rehearsal can open the market.
-  const smAccount = BigInt(stack.securityModuleAccount);
-  await depositTo(USERS.treasury, smAccount, USDC, CASH, 1_000n * 10n ** 6n);
   // the pager gate reads its state file; a provider and dead-man's switch cannot be rehearsed here
   writeFileSync(join(OUT, 'proposer-pager-state.json'), JSON.stringify({ lastRunAt: Math.floor(Date.now() / 1000), lastRunOk: true, provider: 'pushover', heartbeatConfigured: true }));
   const allowed = await proposer('enable');
   assert.deepEqual(failing(allowed), [], `after seeding, every enable gate passes: ${JSON.stringify(allowed.gates.filter((g) => !g.ok))}`);
-  log(`enable gates pass: pool seeded with ${fmt(reserve * 101n / 100n)} cNGN, SecurityModule +$1,000 (fork only)`);
+  log(`enable gates pass: pool seeded with ${fmt(reserve * 101n / 100n)} cNGN, the SecurityModule as it is on Base`);
   await runBatch('CNGN_NOV30_2026_FUTURE_ENABLE_VAULT_ACTIONS');
   assert.ok((await proposer('enable')).landed.every(Boolean), 'the proposer sees the market open');
   const alice = await account(USERS.alice);
