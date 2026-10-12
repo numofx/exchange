@@ -89,10 +89,11 @@ contract DeployCngnFuture is Utils {
 
   /// @dev How much cNGN the escrow takes under the new manager: the pool reserve plus traders' cNGN collateral. At the
   ///      launch OI cap and an index of ~1,364: the reserve is 30% of one side ($4,500, ~6.1M cNGN), and margin posted
-  ///      wholly in cNGN is 25% IM at the 50% cNGN factor on $30k ($15,000, ~20.5M). 30M takes both, ~26.6M, with
-  ///      ~3.4M (~13%) to spare for cNGN weakening; the pager's future-escrow-cap check says when to raise it, before a
-  ///      reserve top-up would no longer fit. Raise it with the OI cap.
-  uint internal constant DEFAULT_FUTURE_CNGN_CAP = 30_000_000e18;
+  ///      wholly in cNGN is 25% IM at the 50% cNGN factor on $30k ($15,000, ~20.5M): ~26.6M in all. The cap must also
+  ///      leave a reserve's worth of headroom on top, or a pool top-up reverts (the pager's future-escrow-cap page and
+  ///      the enable gate's escrow check both hold it to that). 50M leaves ~23.4M, nearly four reserves, and pages only
+  ///      once cNGN has weakened ~46% with the book full. 30M left 3.4M, under one reserve. Raise it with the OI cap.
+  uint internal constant DEFAULT_FUTURE_CNGN_CAP = 50_000_000e18;
 
   uint internal constant MM_REQ = 0.15e18;
   uint internal constant IM_REQ = 0.25e18;
