@@ -1,0 +1,9 @@
+[
+  {
+    "description": "Matching.setAllowedModule(RfqModule 0x8399328A\u2026, false) [RFQ is not supported: never used since deployment, it settles in the frozen DFXM-era cash and knows neither the perp nor the future]",
+    "to": "0x9E90A9cD13d859Bd6a08168082FB1F6F7405F191",
+    "value": "0",
+    "data": "0xb1b628250000000000000000000000008399328ac53a279a3564e49c2cbc82ce95ee62d30000000000000000000000000000000000000000000000000000000000000000",
+    "digest": "0x41d668ad1ec34b68c812e2d46101483340793cc7bdcb4148b9b63bb5c5ed4d0f"
+  }
+]
