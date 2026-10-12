@@ -1198,4 +1198,146 @@ contract TestMarginEngine_Future is Test {
     assertEq(afterwards.im - before.im, 5e18);
     assertEq(afterwards.mtm, before.mtm, "mark-to-market counts it at par either way");
   }
+
+  ///////////////////////////////////////////////
+  //  the pool: negative, never liquidatable   //
+  ///////////////////////////////////////////////
+
+  /// @dev An empty pool pays a winner settled before the loser in cash, and goes negative.
+  function _drainPoolNegative() internal {
+    _fundCash(aliceAcc, 1_000e18);
+    _fundCash(bobAcc, 1_000e18); // no cNGN anywhere: the pool has none to pay in
+    _trade(bobAcc, aliceAcc, 1e18, MARK);
+    _mark(1050e18);
+    manager.settleAccount(aliceAcc); // alice before bob: the pool pays 50 USDC it does not have
+    assertEq(_cash(pool), -50e18, "the pool owes the cash until bob pays in");
+  }
+
+  function testANegativePoolReadsAsNeverLiquidatable() public {
+    _drainPoolNegative();
+    assertEq(manager.getMargin(pool, false), 0, "never below maintenance");
+    assertEq(manager.getMargin(pool, true), 0);
+    (int margin, int mtm) = manager.getMarginAndMarkToMarket(pool, false, 0);
+    assertEq(margin, 0);
+    assertEq(mtm, -50e18, "mark-to-market still reports the deficit");
+  }
+
+  function testANegativePoolStillTakesDepositsAndRefillsWhenLosersPay() public {
+    _drainPoolNegative();
+    _fundCash(pool, 10e18); // a treasury top-up into a negative pool
+    assertEq(_cash(pool), -40e18);
+    manager.settleAccount(bobAcc);
+    assertEq(_cash(pool), 10e18, "bob's 50 repays the deficit");
+  }
+
+  ///////////////////////////////////////
+  //  fills are bounded by the index band  //
+  ///////////////////////////////////////
+
+  function testAFillOutsideTheIndexBandIsRefused() public {
+    _useIndex(); // index 1,000 cNGN per USDC, band 10%
+    _fundCash(aliceAcc, 1_000e18);
+    _fundCash(bobAcc, 1_000e18);
+    vm.expectRevert(IFutureAsset.FA_FillOutsideIndexBand.selector);
+    _trade(bobAcc, aliceAcc, 1e18, 1101e18);
+    vm.expectRevert(IFutureAsset.FA_FillOutsideIndexBand.selector);
+    _trade(bobAcc, aliceAcc, 1e18, 899e18);
+    _trade(bobAcc, aliceAcc, 1e18, 1100e18); // the band's edge
+    assertEq(_position(aliceAcc), 1e18);
+  }
+
+  /// @dev The bound is the band a mark must sit in, so it narrows with it: 1% at expiry.
+  function testTheFillBoundNarrowsWithTheBand() public {
+    _useIndex();
+    _fundCash(aliceAcc, 1_000e18);
+    _fundCash(bobAcc, 1_000e18);
+    vm.warp(lastTradeTime - 1);
+    uint band = future.markIndexBand(uint64(expiry));
+    assertLt(band, 0.0103e18, "about 1% an hour before expiry: 1% + 9% x 1h / 14 days");
+    vm.expectRevert(IFutureAsset.FA_FillOutsideIndexBand.selector);
+    _trade(bobAcc, aliceAcc, 1e18, 1015e18);
+    _trade(bobAcc, aliceAcc, 1e18, 1009e18);
+  }
+
+  /// @dev Bounded by the index, not the last mark: a stale mark far from a moved index does not hold fills back.
+  function testTheFillBoundFollowsTheIndexNotAStaleMark() public {
+    _useIndex();
+    _fundCash(aliceAcc, 1_000e18);
+    _fundCash(bobAcc, 1_000e18);
+    uint movedSpot = uint(1e36) / 1150e18; // the index moves 15%, to 1,150; the mark is still 1,000
+    spotFeed.setSpot(movedSpot, 1e18);
+    _trade(bobAcc, aliceAcc, 1e18, 1150e18);
+    assertEq(_position(aliceAcc), 1e18, "a fill at the moved market is taken");
+  }
+
+  /// @dev Transfers with no price move at the mark and are not bounded: liquidation, close-out.
+  function testAPricelessTransferIsNotBounded() public {
+    _useIndex();
+    _openAtMark();
+    uint farSpot = uint(1e36) / 1500e18; // the index 50% away from the mark
+    spotFeed.setSpot(farSpot, 1e18);
+    _trade(aliceAcc, bobAcc, 1e18, 0); // no price: moves at the mark
+    assertEq(_position(aliceAcc), 0);
+  }
+
+  //////////////////////////////////////////////////////////
+  //  settlement order: the view does not depend on it     //
+  //////////////////////////////////////////////////////////
+
+  /// @dev Two losing series, acquired in the reverse of subId order: held cNGN spent is min(owed, held) whichever the
+  ///      series' order, so the view is exact.
+  function testInvariantLossesOnTwoSeriesAcquiredOutOfOrder() public {
+    uint96 subId2 = future.setContract(uint64(expiry + 30 days), uint64(lastTradeTime + 30 days), MARK);
+    _fundCash(aliceAcc, 5_000e18);
+    _fundCash(bobAcc, 5_000e18);
+    _depositCngn(bobAcc, 15_000e18);
+    _depositCngn(pool, 100_000e18);
+    // the later series first
+    subAccounts.submitTransfer(
+      ISubAccounts.AssetTransfer({
+        fromAcc: bobAcc, toAcc: aliceAcc, asset: future, subId: subId2, amount: 1e18, assetData: bytes32(MARK)
+      }),
+      ""
+    );
+    _trade(bobAcc, aliceAcc, 1e18, MARK);
+    _mark(1010e18);
+    future.setMark(subId2, uint64(block.timestamp), 1006e18); // owes 10,000 and 6,000
+    _assertSettlingChangesNothing(bobAcc, "losses on two series, acquired out of order");
+  }
+
+  /// @dev A gain and a loss on two series, both orders: in settlement a gain taken first can fund the loss in cNGN; the
+  ///      view never lets it. So the view is at most the margin after settlement, whichever order.
+  function testAGainAndALossAreNeverOverstatedInEitherOrder() public {
+    for (uint flip; flip < 2; ++flip) {
+      setUp();
+      uint96 subId2 = future.setContract(uint64(expiry + 30 days), uint64(lastTradeTime + 30 days), MARK);
+      _fundCash(aliceAcc, 5_000e18);
+      _fundCash(bobAcc, 5_000e18);
+      _depositCngn(pool, 100_000e18); // bob holds no cNGN: his loss is cash unless his gain arrives first
+      uint96 first = flip == 0 ? subId : subId2;
+      uint96 second = flip == 0 ? subId2 : subId;
+      // bob short `first`, long `second`
+      subAccounts.submitTransfer(
+        ISubAccounts.AssetTransfer({
+          fromAcc: bobAcc, toAcc: aliceAcc, asset: future, subId: first, amount: 1e18, assetData: bytes32(MARK)
+        }),
+        ""
+      );
+      subAccounts.submitTransfer(
+        ISubAccounts.AssetTransfer({
+          fromAcc: aliceAcc, toAcc: bobAcc, asset: future, subId: second, amount: 1e18, assetData: bytes32(MARK)
+        }),
+        ""
+      );
+      vm.warp(block.timestamp + 1 days);
+      future.setMark(first, uint64(block.timestamp), 1010e18); // bob loses 10,000
+      future.setMark(second, uint64(block.timestamp), 1006e18); // and gains 6,000
+      MarginReads memory before = _reads(bobAcc);
+      manager.settleAccount(bobAcc);
+      MarginReads memory afterwards = _reads(bobAcc);
+      assertLe(before.mm, afterwards.mm, "never above what settlement gives");
+      assertLe(before.im, afterwards.im);
+      assertEq(before.mtm, afterwards.mtm, "mark-to-market at par either way");
+    }
+  }
 }

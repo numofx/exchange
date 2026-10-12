@@ -138,13 +138,15 @@ library FutureVMLib {
    * @notice Margin for every futures position in a market, gross: the requirement on each, |position| x contractSize x
    *         requirement (a contract is a fixed USDC amount whatever its price), plus each position's unsettled VM, valued
    *         as settlement will pay it.
-   * @dev    Series are taken in the order settlement takes them (the account's balance order). A loss is paid from the
-   *         base the account holds first: that part costs its margin only the base factor (held base was counted at
-   *         it), the rest is cash at par. So for losses, margin before settlement equals margin after.
-   *         A gain counts at the base factor, as the base the pool pays it in. If the pool is short, settlement pays the
-   *         rest in cash at par: then the view is below what settlement gives, never above. It is not exact there
-   *         because the pool is shared: which winner gets base depends on who settles first. For the same reason a
-   *         gain is not counted as base that later losses in the view could spend.
+   * @dev    A loss is paid from the base the account holds first: that part costs its margin only the base factor
+   *         (held base was counted at it), the rest is cash at par. Across losing series the base spent is
+   *         min(total owed, held), whatever order they settle in, so for losses margin before settlement equals margin
+   *         after, in any order.
+   *         A gain counts at the base factor, as the base the pool pays it in, and is never counted as base a loss in
+   *         the view could spend. In settlement a gain taken first can fund a later loss in base: then the view is
+   *         below what settlement gives, never above, in any order. So it is when the pool is short and pays a gain
+   *         in cash at par. Neither is exact because the pool is shared: which winner gets base depends on who
+   *         settles first.
    * @return margin the margin contribution, normally negative
    * @return pendingMtM the unsettled VM at spot, at par, in stable
    */
@@ -171,6 +173,7 @@ library FutureVMLib {
   }
 
   /// @dev One series' unsettled VM as settlement will pay it; a loss spends `m.heldBase`, so later losses see less.
+  ///      For losses the total spent is min(total owed, held) whatever the series' order.
   function _pendingMargin(MarketInputs memory m, int pending) private pure returns (int) {
     if (pending > 0) return uint(pending).multiplyDecimal(m.spotPrice).multiplyDecimal(m.marginFactor).toInt256();
     uint owed = uint(-pending);
