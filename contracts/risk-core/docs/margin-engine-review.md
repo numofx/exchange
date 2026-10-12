@@ -191,9 +191,9 @@ These are in the PR and tested, but they hold no funds.
   - Transfers with no price (liquidation, close-out) move at the mark and are not bounded.
   - **Residual:** a colluding pair can still move up to one band's width of value per contract at a maintenance-margin
     check, through a reduction.
-  - **The matcher must enforce the same bound before matching**, so out-of-band orders are refused instead of reverting at
-    settlement. markets-service has no futures path yet, so this is a requirement of the futures listing, and **the
-    enable batch refuses to open the market until it ships** (the proposer's `fills` gate, below).
+  - **markets-service enforces the same bound before matching**, so out-of-band orders are refused instead of reverting
+    at settlement (§8). **The enable batch refuses to open the market until `/v1/markets` reports that band and it
+    matches the chain** (the proposer's `fills` gate, below).
   - **A stale index on a fill** reverts inside `FutureAsset.handleAdjustment`, before the margin check, with the index
     feed's own `BLF_DataTooOld()`, the same error as every other path that reads a stale index (proved on a Base fork).
 - **Last trade:** trading closes at `lastTradeTime`. After that, only the manager moves positions: liquidations and
@@ -360,6 +360,17 @@ The engine is **24,142 of 24,576 bytes**; StandardManager had 1,174 bytes of hea
 enabled, immediately before the enable batch is proposed. CI runs it on every change. Nothing on chain enforces this;
 it is a step in the enable procedure.
 
+**The market maker's futures model is an enable requirement too.** The bot's (numofx/market-maker) futures model is
+the DFXM-era one, and it must be rebuilt before the future opens:
+- **notional is contracts × contract size (1,000 USDC)**, not contracts × price: its per-side notional cap and
+  budget otherwise mean something else entirely;
+- **no quoting near expiry:** it stops before the fixing window and never quotes past last trade.
+
+Until that lands, the bot refuses to start on the future (`Initialize` returns `ErrFuturesModelNotRebuilt` for a
+listing that carries `future.contract_size_usdc`, numofx/market-maker#34), so a future enabled without it has no
+market maker. Removing that refusal is the rebuild's last step, with tests for both rules. Nothing on chain enforces
+this either; it is a step in the enable procedure.
+
 The fork tests include:
 - **margin parity on live contracts:** the same spot and perp portfolio under the SRM and under the engine has
   identical IM, MM and mark-to-market;
@@ -400,18 +411,31 @@ The fork rehearsal runs:
 **One mutation survived, and is equivalent:** removing the close-only `continue` in the matcher, whose reduction check
 already passes.
 
-## 8. What the futures listing must ship
+## 8. The futures listing
 
-The vault proposer's `fills` gate holds the enable batch until markets-service serves this, and it must match the chain:
+The vault proposer's `fills` gate holds the enable batch until markets-service serves this, and it must match the chain.
+markets-service lists the future once `CNGN_FUTURE_*` is set on the API and the matcher (`services/markets/README.md`,
+"cNGN future"):
 
-- **The listing:** `GET /v1/markets` lists the future, by `asset_address` and `sub_id`, with:
+- **The listing:** `GET /v1/markets` lists the future, by `asset_address` and `sub_id` (the expiry), with:
   - `fill_band_enforced: true`;
-  - `fill_band_low` and `fill_band_high` (cNGN per USDC, decimal strings), the band outside which it refuses orders
-    before matching.
-- **The band:** the index ∓ `markIndexBand(expiry)`, within 10 bps of the gate's own read of the chain.
+  - `fill_band_low` and `fill_band_high` (cNGN per USDC, decimal strings), withheld while the band cannot be read.
+- **The band:** the index ∓ `markIndexBand(expiry)`, read from the chain and tested with `FutureAsset`'s own integer
+  arithmetic (`internal/futures`). A test runs the gate's own `fills_gate` on the listing: it passes, and fails once the
+  band is moved off the chain's.
+- **Where it is enforced:**
+  - the API refuses an order whose signed limit is outside the band now, from an account not under the engine, or after
+    the last trade time;
+  - the matcher re-checks every fill's on-chain price against a read at most 2 s old, so a resting order the index has
+    moved away from is held back, not settled into a revert;
+  - a stale or unreadable index refuses both.
 - **Revert classes for the matcher:**
-  - `FA_FillOutsideIndexBand` (`0x01bb8f43`): it should never be seen, because orders outside the band are refused first;
-  - `BLF_DataTooOld` (`0x1141796d`): transient. The index returns once the publisher resumes, so retry on backoff.
+  - `FA_FillOutsideIndexBand` (`0x01bb8f43`) is balance-dependent. It is rare but possible: the index can move between the
+    matcher's read and the block the fill lands in. The pair backs off and is retried against the next band.
+  - `BLF_DataTooOld` (`0x1141796d`) is balance-dependent and transient: the index returns once the publisher resumes.
+  - `FA_TradingClosed`, `FA_UnknownFuture`, `FA_InvalidSubId` and `MW_UnknownManager` are permanent for the pair.
+- **Fees:** 25 bps taker, 0 maker, of contracts × 1,000 USDC, so 2.5 USDC a contract at any price. Signed `worstFee` must
+  be at least `2.5e18`.
 
 ## 9. Known limitations
 
@@ -426,8 +450,11 @@ The vault proposer's `fills` gate holds the enable batch until markets-service s
   cutover").
 - **No migration code:** positions left open on the old SRM stay there under its existing keeper and pager.
 - **The keeper's holder scan** reads every account on each sweep: fine at dozens of accounts, not at thousands.
-- **The matcher's fill-band check** does not exist yet. The enable batch's `fills` gate refuses to open the market until
-  the listing serves it (§8).
+- **The matcher's margin pre-check for the future is an estimate.** It checks each account against
+  `getMargin(account, true)` less the IM the fill adds, holds back the short account's order from every counterparty,
+  and cancels it after 3 refusals over at least a minute (`insufficient_margin`). It is optimistic (no depeg penalty,
+  a fill-time VM gain at par, a loss ignored), so the engine remains the authority: a revert it did not foresee carries
+  no account, backs the pair off and cancels nothing.
 - **RFQ is not supported.** Engine accounts trade only through the TradeModule. The RfqModule `0x8399…` was deployed
   against the same Matching, has the perp and the future unregistered, and settles in the frozen DFXM-era cash:
   - **Today:** Matching no longer allows it, so any RFQ action is refused before it reaches a manager
