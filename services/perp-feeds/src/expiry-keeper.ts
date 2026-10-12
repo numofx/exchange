@@ -146,6 +146,9 @@ export class ExpiryKeeper {
     const ledger = await this.chain.read<Address>(this.config.FUTURE_ASSET, assetAbi, 'subAccounts');
     const last = await this.chain.read<bigint>(ledger, subAccountsAbi, 'lastAccountId');
     const holders: { id: bigint; manager: Address }[] = [];
+    // TODO: one read per account, plus one per holder, sequentially, on every sweep and at close-out:
+    // fine at a few dozen accounts, not at thousands. Then find holders from an index (the asset's
+    // balance-change events) or a holder set kept on-chain, and keep this scan as the reconciliation.
     for (let id = 1n; id <= last; id++) {
       const balance = await this.chain.read<bigint>(ledger, subAccountsAbi, 'getBalance', [
         id,
