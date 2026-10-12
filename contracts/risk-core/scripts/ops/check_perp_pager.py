@@ -23,6 +23,21 @@ Slack webhook, so the channel has the same record.
   peg-guard          perp-feeds refused the index because cNGN left NGN parity by more than
                      PEG_GUARD_BPS (read from its status file, PERP_INDEX_STATUS_FILE)
 
+The cNGN future (FUTURE_ARTIFACT, default deployments/8453/CNGN_NOV30_2026_FUTURE.json; skipped
+while it does not exist) liquidates through the same auction and SecurityModule, so:
+  sm-coverage        counts the future's one-side open interest beside the perp's, each at its own IM.
+  future-pool-reserve  the future's VM pool holds less than a quarter of its reserve target (Slack
+                     under half). The target is FUTURE_RESERVE_MOVE (30%) of one side's notional at
+                     the position cap, in cNGN at the index; FUTURE_POOL_RESERVE_CNGN overrides it.
+                     Below it, winners are paid in USDC, not cNGN: top it up from the pool's USDC
+                     (withdrawFromPool, buy cNGN, deposit). Armed once the future is open.
+  future-escrow-cap  the cNGN escrow's cap for the future's manager has less headroom left than the
+                     pool's reserve target: a full reserve top-up would no longer fit, and the
+                     deposit would revert. Slack from 75% used. Raise the cap (vault) or ask traders
+                     to margin in USDC.
+  future-pool-borrowing  the pool's USDC cash is below -FUTURE_POOL_BORROW_PAGE_USD: winners were paid
+                     in borrowed cash before losers paid in. Slack at any negative balance.
+
 Pager (one of; secrets from SSM via run-with-ssm-pager.sh):
   PAGER_PROVIDER=pushover     PUSHOVER_TOKEN, PUSHOVER_USER. Emergency priority: repeats every 60s
                               until acknowledged in the app, and can be set to break through Do Not
@@ -128,6 +143,20 @@ SEL_TOTAL_BORROW = "0x8285ef40"  # totalBorrow()
 NEGATIVE_CASH_WARN_USD = 1_500.0
 NEGATIVE_CASH_PAGE_USD = 3_000.0
 NEGATIVE_CASH_WARN_REPEAT_SEC = 6 * 3600
+# The cNGN future. Its artifact exists only once it is deployed; until then none of this is read.
+FUTURE_ARTIFACT = ROOT / "deployments" / "8453" / "CNGN_NOV30_2026_FUTURE.json"
+SEL_CONTRACT_SIZE = "0x3d7cc610"  # contractSize() -- `cast sig`, pinned in --self-test
+SEL_MARGIN_PARAMS = "0x691ef66f"  # marginParams() -> (mmReq, imReq, cngnMarginFactor, cngnIMScale)
+# The pool's cNGN only drains when a loser holds no cNGN and pays in USDC instead (the keeper's sweep
+# settles payers before receivers after every mark). Sized for a full side at the cap doing that
+# through a 25% move (SM_STEP), plus one mark's 5% move that a winner can draw by settling between
+# sweeps: 30% of one side's notional at the cap.
+FUTURE_RESERVE_MOVE = 0.30
+FUTURE_RESERVE_PAGE_FRACTION = 0.25
+FUTURE_RESERVE_WARN_FRACTION = 0.5
+FUTURE_POOL_BORROW_PAGE_USD = 250.0
+FUTURE_ESCROW_WARN_USED = 0.75
+FUTURE_WARN_REPEAT_SEC = 6 * 3600
 
 
 @dataclass(frozen=True)
@@ -248,6 +277,118 @@ def sm_covered_one_side_usd(sm_cash_usd: float, im: float) -> float:
   if not 0 < im < 1:
     return 0.0
   return sm_cash_usd / (SM_STEP * (1 - im))
+
+
+def sm_required_usd(books: list[tuple[float, float]]) -> float:
+  """What the SecurityModule pays if one whole side of every book is liquidated after a 25% step:
+  sum of one-side notional x 25% x (1 - IM), over (one-side USD, IM) pairs. The perp's term is the
+  fork-measured one; the future's uses the same formula (same auction, margin as a fraction of
+  notional) and has not been measured on a fork."""
+  return sum(one_side * SM_STEP * (1 - im) for one_side, im in books if 0 < im < 1)
+
+
+def sm_combined_condition(books: dict[str, tuple[float, float]], sm_cash_usd: float) -> Condition | None:
+  """sm-coverage across the perp and the future together: pages at 1.2x of what the module holds."""
+  required = sm_required_usd(list(books.values()))
+  if required <= 0 or required < SM_COVERAGE_PAGE_X * sm_cash_usd:
+    return None
+  parts = ", ".join(f"{name} one side ${one_side:,.0f} at IM {im * 100:.0f}%" for name, (one_side, im) in books.items())
+  return Condition("sm-coverage", f"cNGN SecurityModule ${sm_cash_usd:,.0f} covers less than 1/{SM_COVERAGE_PAGE_X:.1f} of a 25% step "
+                   f"across {parts} (needs ${required:,.0f}). Fund the SecurityModule, or set cap = current OI.")
+
+
+def sm_combined_warning(books: dict[str, tuple[float, float]], sm_cash_usd: float) -> str | None:
+  required = sm_required_usd(list(books.values()))
+  if required <= sm_cash_usd or required >= SM_COVERAGE_PAGE_X * sm_cash_usd:
+    return None
+  return (f"cNGN SecurityModule ${sm_cash_usd:,.0f} is short of the ${required:,.0f} a 25% step across the perp and the future "
+          f"would cost (page at {SM_COVERAGE_PAGE_X:.1f}x): fund it.")
+
+
+def future_pool_conditions(pool_cngn: float, pool_cash_usd: float, reserve_cngn: float | None,
+                           open_: bool) -> tuple[list[Condition], list[str]]:
+  """(pages, Slack warnings) for the future's VM pool. Nothing before the market opens."""
+  if not open_:
+    return [], []
+  pages: list[Condition] = []
+  warnings: list[str] = []
+  if reserve_cngn:
+    held = pool_cngn / reserve_cngn
+    if held < FUTURE_RESERVE_PAGE_FRACTION:
+      pages.append(Condition("future-pool-reserve", f"cNGN future VM pool holds {pool_cngn:,.0f} cNGN, {held * 100:.0f}% of its "
+                             f"{reserve_cngn:,.0f} reserve: winners are being paid in USDC, not cNGN. Top it up from the pool's USDC."))
+    elif held < FUTURE_RESERVE_WARN_FRACTION:
+      warnings.append(f"cNGN future VM pool at {held * 100:.0f}% of its {reserve_cngn:,.0f} cNGN reserve: top it up this week.")
+  else:
+    warnings.append("cNGN future is open but its VM pool reserve target is zero (unreadable index?): the reserve is not watched.")
+  if pool_cash_usd < -FUTURE_POOL_BORROW_PAGE_USD:
+    pages.append(Condition("future-pool-borrowing", f"cNGN future VM pool is ${-pool_cash_usd:,.0f} below zero in USDC cash: winners were "
+                           "paid in borrowed cash before losers paid in. Check the keeper's VM sweep, and top the pool up."))
+  elif pool_cash_usd < 0:
+    warnings.append(f"cNGN future VM pool is ${-pool_cash_usd:,.2f} below zero in USDC cash (page past ${FUTURE_POOL_BORROW_PAGE_USD:,.0f}).")
+  return pages, warnings
+
+
+def future_escrow_conditions(used_cngn: float, cap_cngn: float, reserve_cngn: float | None,
+                             open_: bool) -> tuple[list[Condition], list[str]]:
+  """(pages, Slack warnings) for the cNGN escrow cap under the future's manager, which holds both the
+  pool's reserve and traders' cNGN collateral. Nothing before the market opens."""
+  if not open_ or cap_cngn <= 0:
+    return [], []
+  headroom = cap_cngn - used_cngn
+  used = used_cngn / cap_cngn
+  if reserve_cngn and headroom < reserve_cngn:
+    return [Condition("future-escrow-cap", f"cNGN escrow cap for the future is {used * 100:.0f}% used ({used_cngn:,.0f} of {cap_cngn:,.0f}): "
+                      f"{max(headroom, 0):,.0f} left, less than the {reserve_cngn:,.0f} pool reserve, so a reserve top-up would revert. "
+                      "Raise the cap (vault), or ask traders to margin in USDC.")], []
+  if used >= FUTURE_ESCROW_WARN_USED:
+    return [], [f"cNGN escrow cap for the future is {used * 100:.0f}% used ({used_cngn:,.0f} of {cap_cngn:,.0f}): raise it before "
+                f"headroom falls under the pool reserve."]
+  return [], []
+
+
+def future_reserve_target_cngn(cap_contracts: float, contract_size_usd: float, usdc_per_cngn: float) -> float:
+  """The pool's cNGN reserve target: FUTURE_RESERVE_MOVE of one side's notional at the cap (the cap
+  counts both sides), in cNGN at the index."""
+  if usdc_per_cngn <= 0:
+    return 0.0
+  return cap_contracts / 2 * contract_size_usd * FUTURE_RESERVE_MOVE / usdc_per_cngn
+
+
+def account_balance(url: str, account: int, asset: str) -> int:
+  raw = rpc(url, "eth_call", [{"to": SUB_ACCOUNTS, "data": SEL_GET_BALANCE + f"{account:064x}"
+                               + asset.lower().removeprefix("0x").rjust(64, "0") + "0" * 64}, "latest"])
+  value = int(raw, 16)
+  return value - 2**256 if value >= 2**255 else value
+
+
+def read_future(url: str, future: dict) -> dict:
+  """The future's book, its IM, whether it is open, and its pool's balances."""
+  manager_word = future["manager"].lower().removeprefix("0x").rjust(64, "0")
+  call = lambda to, data: rpc(url, "eth_call", [{"to": to, "data": data}, "latest"])[2:]  # noqa: E731
+  total = int(call(future["future"], SEL_TOTAL_POSITION + manager_word), 16)
+  size = int(call(future["future"], SEL_CONTRACT_SIZE), 16)
+  cap = int(call(future["future"], SEL_TOTAL_POSITION_CAP + manager_word), 16)
+  im = int(call(future["manager"], SEL_MARGIN_PARAMS)[64:128], 16) / 1e18
+  spot = int(call(future["indexFeed"], SEL_GET_SPOT)[:64], 16) / 1e18
+  escrow_used = int(call(future["cngnEscrow"], SEL_TOTAL_POSITION + manager_word), 16) / 1e18
+  escrow_cap = int(call(future["cngnEscrow"], SEL_TOTAL_POSITION_CAP + manager_word), 16) / 1e18
+  pool = int(future["poolAccount"])
+  return {
+    "one_side_usd": (total / 2) / 1e18 * (size / 1e18),
+    "im": im,
+    "open": cap > 0,
+    "reserve_target_cngn": future_reserve_target_cngn(cap / 1e18, size / 1e18, spot),
+    "escrow_used_cngn": escrow_used,
+    "escrow_cap_cngn": escrow_cap,
+    "pool_cngn": account_balance(url, pool, future["cngnEscrow"]) / 1e18,
+    "pool_cash_usd": account_balance(url, pool, future["cash"]) / 1e18,
+  }
+
+
+def future_artifact() -> dict | None:
+  path = Path(os.environ.get("FUTURE_ARTIFACT", FUTURE_ARTIFACT))
+  return json.loads(path.read_text()) if path.exists() else None
 
 
 def sm_coverage_condition(one_side_usd: float, covered_usd: float, im: float) -> Condition | None:
@@ -556,17 +697,37 @@ def check_and_page(stack_path: Path, state: dict) -> int:
     print("oi: KEEPER_ACCOUNT unset, not watched")
 
   coverage = None
+  future_pages: list[Condition] = []
   try:
     im = read_perp_im(url, stack)
     one_side_now = read_one_side_usd(url, stack)
-    covered = sm_covered_one_side_usd(sm_cash, im)
-    coverage = sm_coverage_condition(one_side_now, covered, im)
-    warning = sm_coverage_warning(one_side_now, covered, im)
+    books = {"perp": (one_side_now, im)}
+    future = future_artifact()
+    if future is not None:
+      f = read_future(url, future)
+      books["future"] = (f["one_side_usd"], f["im"])
+      override = os.environ.get("FUTURE_POOL_RESERVE_CNGN", "").strip()
+      reserve = float(override) if override else f["reserve_target_cngn"]
+      future_pages, warnings = future_pool_conditions(f["pool_cngn"], f["pool_cash_usd"], reserve or None, f["open"])
+      escrow_pages, escrow_warnings = future_escrow_conditions(f["escrow_used_cngn"], f["escrow_cap_cngn"], reserve or None, f["open"])
+      future_pages += escrow_pages
+      warnings += escrow_warnings
+      if warnings and time.time() - state.get("futureWarnedAt", 0) >= FUTURE_WARN_REPEAT_SEC:
+        for warning in warnings:
+          mirror(f"{os.environ.get('PAGE_PREFIX', '')}{warning}")
+        state["futureWarnedAt"] = time.time()
+      print(f"future: one side ${f['one_side_usd']:,.0f} at IM {f['im'] * 100:.0f}%, {'open' if f['open'] else 'closed'}; "
+            f"pool {f['pool_cngn']:,.0f} cNGN (reserve {reserve:,.0f}{' set' if override else ' at the cap'}), ${f['pool_cash_usd']:,.2f} cash; "
+            f"escrow {f['escrow_used_cngn']:,.0f} of {f['escrow_cap_cngn']:,.0f} cNGN")
+    else:
+      print("future: not deployed (no artifact)")
+    coverage = sm_combined_condition(books, sm_cash)
+    warning = sm_combined_warning(books, sm_cash)
     if warning and time.time() - state.get("smCoverageWarnedAt", 0) >= SM_COVERAGE_WARN_REPEAT_SEC:
       mirror(f"{os.environ.get('PAGE_PREFIX', '')}{warning}")
       state["smCoverageWarnedAt"] = time.time()
-    print(f"sm coverage: ${sm_cash:,.0f} covers one side ${covered:,.0f} at IM {im * 100:.1f}%; one side now ${one_side_now:,.0f} "
-          f"(page at {SM_COVERAGE_PAGE_X:.1f}x)")
+    print(f"sm coverage: ${sm_cash:,.0f} against ${sm_required_usd(list(books.values())):,.0f} for a 25% step across "
+          f"{', '.join(f'{n} ${o:,.0f}' for n, (o, _) in books.items())} (page at {SM_COVERAGE_PAGE_X:.1f}x)")
   except Exception as exc:  # noqa: BLE001
     print(f"sm coverage: unreadable ({str(exc)[:80]})")
 
@@ -585,7 +746,7 @@ def check_and_page(stack_path: Path, state: dict) -> int:
   previous_sm = state.get("smCash")
   active = [c for c in (feed_condition(ages), keeper_condition(health, now, armed), insolvent_condition(health),
                         sm_condition(previous_sm, sm_cash), unwatched_condition(heartbeat_urls()[0]),
-                        peg_condition(read_index_status(), time.time()), coverage, oi, negative_cash, *gas, *matcher) if c is not None]
+                        peg_condition(read_index_status(), time.time()), coverage, oi, negative_cash, *future_pages, *gas, *matcher) if c is not None]
   to_page, resolved = step_state(state, active, now)
   state["smCash"] = sm_cash
 
@@ -656,6 +817,46 @@ def self_test() -> int:
   assert "$17,000" in sm_coverage_warning(17_000, 16_250, 0.2) and sm_coverage_condition(17_000, 16_250, 0.2) is None
   assert sm_coverage_condition(19_500, 16_250, 0.2).key == "sm-coverage" and sm_coverage_warning(19_500, 16_250, 0.2) is None
   assert sm_coverage_condition(2, 16_250, 0.2) is None and sm_covered_one_side_usd(3_250, 0) == 0.0
+  # Coverage across both books: the perp alone at $3,250 covers a $19,500 side at 3x; a $4,000 futures side
+  # at IM 25% adds $750 of need. Perp-only matches the single-book rule exactly.
+  assert round(sm_required_usd([(19_500, 1 / 3)])) == 3_250
+  assert round(sm_required_usd([(19_500, 1 / 3), (4_000, 0.25)])) == 4_000
+  assert sm_combined_condition({"perp": (19_500, 1 / 3)}, 3_250) is None
+  # +$1,000 a side of futures needs $187.50 more: past what the module holds, short of the 1.2x page
+  assert sm_combined_condition({"perp": (19_500, 1 / 3), "future": (1_000, 0.25)}, 3_250) is None
+  assert "3,438" in sm_combined_warning({"perp": (19_500, 1 / 3), "future": (1_000, 0.25)}, 3_250)
+  # +$4,000 needs $4,000 in all, past 1.2 x $3,250: a page the perp alone would not raise
+  assert sm_combined_condition({"perp": (19_500, 1 / 3), "future": (4_000, 0.25)}, 3_250).key == "sm-coverage"
+  combined = sm_combined_condition({"perp": (19_500, 1 / 3), "future": (20_000, 0.25)}, 3_250)
+  assert combined.key == "sm-coverage" and "future one side $20,000 at IM 25%" in combined.message
+  assert sm_combined_condition({"perp": (0, 1 / 3), "future": (0, 0.25)}, 0) is None
+  # The future's pool: nothing while closed; reserve page under a quarter, Slack under half; unset
+  # reserve warns; borrowing pages past $250, Slack below zero.
+  assert future_pool_conditions(0, -1_000, 1_000_000, open_=False) == ([], [])
+  assert future_pool_conditions(600_000, 0, 1_000_000, open_=True) == ([], [])
+  pages, warns = future_pool_conditions(400_000, 0, 1_000_000, open_=True)
+  assert pages == [] and "40%" in warns[0]
+  pages, warns = future_pool_conditions(249_999, 0, 1_000_000, open_=True)
+  assert [p.key for p in pages] == ["future-pool-reserve"] and warns == []
+  assert "not watched" in future_pool_conditions(0, 0, None, open_=True)[1][0]
+  # The escrow cap at 30M with an 8.2M reserve: fine at 70%, Slack from 75%, a page once under 8.2M is
+  # left (72.7% used), whichever comes first; nothing while closed or with no cap read.
+  assert future_escrow_conditions(15_000_000, 30_000_000, 8_200_000, open_=True) == ([], [])
+  assert future_escrow_conditions(21_000_000, 30_000_000, 5_000_000, open_=True) == ([], [])
+  pages, warns = future_escrow_conditions(22_500_000, 30_000_000, 5_000_000, open_=True)
+  assert pages == [] and "75% used" in warns[0]
+  pages, warns = future_escrow_conditions(21_900_000, 30_000_000, 8_200_000, open_=True)
+  assert [p.key for p in pages] == ["future-escrow-cap"] and "8,100,000 left" in pages[0].message and warns == []
+  assert future_escrow_conditions(30_000_000, 30_000_000, 8_200_000, open_=False) == ([], [])
+  assert future_escrow_conditions(1, 0, 8_200_000, open_=True) == ([], [])
+  # The reserve target: launch cap 40 contracts (20 a side) of $1,000 at 1,363.7 cNGN per USDC is
+  # 30% of $20,000 = $6,000, about 8.18M cNGN; it doubles with the cap and is zero with no index.
+  assert round(future_reserve_target_cngn(40, 1_000, 1 / 1_363.7)) == round(6_000 * 1_363.7)
+  assert round(future_reserve_target_cngn(80, 1_000, 1 / 1_363.7)) == round(12_000 * 1_363.7)
+  assert future_reserve_target_cngn(40, 1_000, 0) == 0.0
+  pages, warns = future_pool_conditions(1_000_000, -10, 1_000_000, open_=True)
+  assert pages == [] and "$10.00 below zero" in warns[0]
+  assert [p.key for p in future_pool_conditions(1_000_000, -251, 1_000_000, open_=True)[0]] == ["future-pool-borrowing"]
   # OI against the keeper's cash: warning from 2x, page from 3x, page at any OI with no cash.
   assert oi_condition(9_999, 5_000) is None and oi_warning(9_999, 5_000) is None
   assert "2.2x" in oi_warning(11_000, 5_000) and oi_condition(11_000, 5_000) is None
@@ -699,7 +900,8 @@ def self_test() -> int:
   for selector, signature in [(SEL_GET_BALANCE, "getBalance(uint256,address,uint256)"),
                               (SEL_SPOT_DIFF_DETAILS, "spotDiffDetails()"),
                               (SEL_TOTAL_POSITION_CAP, "totalPositionCap(address)"),
-                              (SEL_TOTAL_POSITION, "totalPosition(address)"), (SEL_GET_SPOT, "getSpot()")]:
+                              (SEL_TOTAL_POSITION, "totalPosition(address)"), (SEL_GET_SPOT, "getSpot()"),
+                              (SEL_CONTRACT_SIZE, "contractSize()"), (SEL_MARGIN_PARAMS, "marginParams()")]:
     assert selector == "0x" + keccak(signature.encode()).hex()[:8], signature
   # The peg guard pages from perp-feeds' status; missing or stale status is silent (feed-halt covers it).
   wall = 2_000_000_000.0
