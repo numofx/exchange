@@ -710,6 +710,20 @@ contract MarginEngine is IMarginEngine, ILiquidatableManager, BaseManager, Reent
     asset.withdraw(accId, amount, recipient);
   }
 
+  /**
+   * @dev The pool is the engine's own account: it takes no positions. The auction already refuses it (a bidder's owner
+   *      must be the caller), so this is defence in depth. VM is realised before a bid by the auction itself, which calls
+   *      settlePerpsWithIndex on the account first; a bidder's VM on what it takes accrues in FutureAsset.
+   */
+  function executeBid(uint accountId, uint liquidatorId, uint portion, uint bidAmount, uint reservedCash)
+    external
+    override(IBaseManager, BaseManager)
+    onlyLiquidations
+  {
+    if (liquidatorId == accId) revert ME_PoolCannotBid();
+    _executeBid(accountId, liquidatorId, portion, bidAmount, reservedCash);
+  }
+
   ////////////////////////
   //   View Functions   //
   ////////////////////////

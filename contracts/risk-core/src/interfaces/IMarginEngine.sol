@@ -181,6 +181,9 @@ interface IMarginEngine is IBaseManager {
   /// @dev No negative cash
   error SRM_NoNegativeCash();
 
+  /// @dev The pool account takes no positions, so it cannot bid in an auction
+  error ME_PoolCannotBid();
+
   /// @dev closeOutExpired before the contract's settlement price is fixed
   error ME_NotSettled();
 
