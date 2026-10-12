@@ -399,3 +399,21 @@ variable "perp_guardian_kms_enabled" {
   default     = true
 }
 
+
+variable "forward_signer_kms_enabled" {
+  description = <<-EOT
+    Create the KMS signing key for the cNGN future's forward publisher (numo-future-feeds on the
+    ops box) and grant the ops box's role Sign on it.
+
+    Its own key, deliberately NOT the perp index signer: FutureAsset bands every mark against the
+    index, which only bounds a bad forward if someone else signs the index. Held in KMS rather than
+    SSM so the private key never reaches the box the index signer lives on.
+
+    Creating the key authorises nothing: its address must be added as the forward feed's signer
+    (the deploy script's FORWARD_SIGNER). Defaults false because nothing it signs for is deployed.
+    Once it is a feed's signer, flip the default to true, as for the executor and rebalance keys:
+    a plan that resolves it to false would propose deleting a live signer.
+  EOT
+  type        = bool
+  default     = false
+}

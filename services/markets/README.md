@@ -128,6 +128,12 @@ Set them on the API **and** the matcher, and set `PERP_TRADE_MODULE_ADDRESS` on 
   the gate as `perp.trading_enabled` and the cap as `perp.position_cap`. The enable is a separate,
   final vault action (`risk-core/scripts/ops/propose_perp_enable_batch.py`), gated on live feeds, a
   live keeper, a seeded SecurityModule and a two-sided quote.
+- **Close-only manager (MarginEngine cutover).** `CNGN_PERP_CLOSE_ONLY_MANAGER` names a manager being
+  wound down, the old perp SRM once MarginEngine takes over. A perp fill is crossed for an account under
+  it only if it reduces that account's position (no opening, no flipping); its IM is the chain's to check.
+  The account's manager is read once from `SubAccounts.manager` and cached (it cannot change). Unset,
+  nothing is close-only and no manager is read. It must not be `CNGN_PERP_SRM_ADDRESS`, which on the
+  cutover day names the engine, as do `margin_manager_address` and the deposit manager.
 - **Pre-trade check.** Not the spot funding check (full notional, buyer only) but a margin check on
   both sides: IM surplus now, minus the price-vs-mark leg, the taker fee and the initial margin the
   fill adds. Reducing a position is always allowed. Fails open on RPC errors, like the funding check;

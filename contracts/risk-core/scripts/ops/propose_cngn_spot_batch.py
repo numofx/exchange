@@ -244,6 +244,9 @@ def self_test() -> int:
   re-proposing rather than crashing. That is safe but invisible, which is exactly why it needs a
   test: two of these were wrong when first written from memory.
   """
+  # every selector and signature this script pins must name a compiled function, not just match `cast sig`
+  from abi_selectors import assert_script
+  assert_script(__file__)
   sys.path.insert(0, str(Path(__file__).resolve().parent))
   from resolve_cngn_action6 import keccak  # same zero-dependency keccak, already vector-checked
 

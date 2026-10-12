@@ -10,7 +10,7 @@
 # place recreates the problem this script was written to remove.
 #
 #   ./scripts/verify.sh              # everything
-#   ./scripts/verify.sh risk-core    # one section: risk-core | execution | markets | node | abis | infra
+#   ./scripts/verify.sh risk-core    # one section: risk-core | execution | markets | node | perp-feeds | abis | infra
 #
 # BASE_RPC_URL is required. CI supplies it from secrets, and the fork suites fail in setUp
 # without it — which is the same divergence in the other direction.
@@ -47,13 +47,16 @@ step() {                       # step <section> <dir> <description> <command...>
 # ---- contracts-risk-core.yml -----------------------------------------------------------
 step risk-core contracts/risk-core "forge fmt --check" forge fmt --check
 step risk-core contracts/risk-core "forge build scripts/*.s.sol" bash -c 'forge build scripts/*.s.sol'
-step risk-core contracts/risk-core "resolve_cngn_action6 self-test" python3 scripts/ops/resolve_cngn_action6.py --self-test
-step risk-core contracts/risk-core "propose_cngn_spot_batch self-test" python3 scripts/ops/propose_cngn_spot_batch.py --self-test
-step risk-core contracts/risk-core "propose_market1_inert_batch self-test" python3 scripts/ops/propose_market1_inert_batch.py --self-test
-step risk-core contracts/risk-core "check_settlement_canary self-test" python3 scripts/ops/check_settlement_canary.py --self-test
-step risk-core contracts/risk-core "check_heartbeats self-test" python3 scripts/ops/check_heartbeats.py --self-test
-step risk-core contracts/risk-core "ops shell scripts parse" bash -n scripts/ops/run-with-heartbeat.sh scripts/ops/run-with-ssm-readonly.sh
-step risk-core contracts/risk-core "refresh_deployment_artifacts self-test" python3 scripts/ops/refresh_deployment_artifacts.py --self-test
+# Every ops script that has a self-test, found rather than listed: a list is how five went unrun
+# (check_perp_pager among them). `if`, not `grep && run`, so a script without one is not a failure.
+# Every ABI, in both trees: each self-test checks the selectors it pins name a compiled function
+# (abi_selectors.py), not only that they match `cast sig` of the same, possibly wrong, name.
+step risk-core contracts/risk-core "forge build (every ABI, for the selector check)" forge build
+step risk-core contracts/execution "forge build (TradeModule ABIs, for the selector check)" forge build
+step risk-core contracts/risk-core "ops self-tests" bash -c 'for f in scripts/ops/*.py; do if grep -q -- "--self-test" "$f"; then echo "$f"; python3 "$f" --self-test || exit 1; fi; done'
+# Every ops script, one at a time: `bash -n a.sh b.sh` parses only a.sh (b.sh is its argument), which
+# is how this step checked one file of the two it listed.
+step risk-core contracts/risk-core "ops shell scripts parse" bash -c 'for f in scripts/ops/*.sh; do bash -n "$f" || exit 1; done'
 step risk-core contracts/risk-core "forge test" forge test
 
 # ---- contracts-execution.yml -----------------------------------------------------------
@@ -96,6 +99,28 @@ step node . "execution image builds" execution_image
 # ---- services-rebalance.yml ------------------------------------------------------------
 step node . "cngn-rebalance check" pnpm --filter cngn-rebalance run check
 step node . "cngn-rebalance test" pnpm --filter cngn-rebalance test
+
+# ---- services-perp-feeds.yml -----------------------------------------------------------
+# The anvil suites deploy the real feed contracts and FutureAsset, so they need forge and anvil, and
+# a fresh anvil on the port the tests read: started here, stopped however the tests end.
+perp_feeds_anvil_tests() {
+  ( cd "$ROOT/contracts/risk-core" \
+    && forge build src/feeds/LyraSpotFeed.sol src/feeds/LyraSpotDiffFeed.sol src/feeds/LyraForwardFeed.sol \
+      src/periphery/OracleDataSubmitter.sol src/assets/FutureAsset.sol src/SubAccounts.sol >/dev/null ) || return 1
+  anvil --port 8599 --silent &
+  local anvil_pid=$!
+  sleep 2
+  ANVIL_RPC_URL=http://127.0.0.1:8599 pnpm --filter perp-feeds test
+  local rc=$?
+  kill "$anvil_pid" 2>/dev/null
+  wait "$anvil_pid" 2>/dev/null
+  return $rc
+}
+step perp-feeds . "pnpm install --frozen-lockfile" pnpm install --frozen-lockfile
+step perp-feeds . "build @numo/kms-signer" pnpm --filter @numo/kms-signer build
+step perp-feeds . "perp-feeds check" pnpm --filter perp-feeds run check
+step perp-feeds . "perp-feeds build" pnpm --filter perp-feeds run build
+step perp-feeds . "perp-feeds test (with the anvil suites)" perp_feeds_anvil_tests
 
 # ---- infra.yml -------------------------------------------------------------------------
 # -backend=false matches CI: the real backend is S3 and validate does not need it. Skipped

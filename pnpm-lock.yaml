@@ -91,6 +91,9 @@ importers:
 
   services/perp-feeds:
     dependencies:
+      '@numo/kms-signer':
+        specifier: workspace:*
+        version: link:../../packages/kms-signer
       cngn-rate-picker:
         specifier: 0.2.2
         version: 0.2.2

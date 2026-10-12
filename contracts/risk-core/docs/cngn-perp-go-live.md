@@ -447,6 +447,21 @@ cast send $SRM "setAdjustmentsPaused(bool)" false --aws --rpc-url $BASE_RPC_URL 
 cast call $SRM "adjustmentsPaused()(bool)" --rpc-url $BASE_RPC_URL                           # confirm
 ```
 
+**After the MarginEngine cutover: pause the engine, never the old SRM.** The engine has its own guardian pause (the
+setup batch sets the same guardian), and it is the one to use. The commands above take `$SRM`; after the cutover
+set it to the engine instead:
+
+```bash
+SRM=$(jq -r .manager contracts/risk-core/deployments/8453/MARGIN_ENGINE.json)   # the engine, not the old SRM
+```
+
+**Do not pause the old SRM while the engine is live.** The SecurityModule's account 21 sits under it. The fee every
+solvent auction pays the SecurityModule, and every insolvency payout, are transfers into or out of account 21, and
+they run the old SRM's adjustment hook. With it paused, no engine auction that charges a fee can start, and no
+insolvency can be paid. The TradeModule's fee account, 22, is under it as well, so no engine fill that pays a fee can
+settle either. The old SRM must also keep its cash whitelisting. `MarginEngineDeployFork` and
+`MarginEngineTradeModuleFork` pin all three.
+
 **Recovery, when the key is lost, unusable or compromised.** Suspect compromise if a pause or
 unpause happened that you did not send. The worst a compromised key can do is freeze or unfreeze
 the book; it cannot move funds. Recovery is the vault reclaiming the role and rotating the key:

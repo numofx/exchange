@@ -9,7 +9,7 @@
 import { encodeAbiParameters, type Address, type Hex } from 'viem';
 import type { LocalAccount } from 'viem/accounts';
 
-export type FeedKind = 'LyraSpotFeed' | 'LyraSpotDiffFeed';
+export type FeedKind = 'LyraSpotFeed' | 'LyraSpotDiffFeed' | 'LyraForwardFeed';
 
 const FEED_DATA_TYPES = {
   FeedData: [
@@ -30,6 +30,19 @@ export function encodeSpotData(price: bigint, confidence = FULL_CONFIDENCE): Hex
 /** Inner payload of a LyraSpotDiffFeed update: (int96 diff, uint64 confidence). */
 export function encodeSpotDiffData(diff: bigint, confidence = FULL_CONFIDENCE): Hex {
   return encodeAbiParameters([{ type: 'int96' }, { type: 'uint64' }], [diff, confidence]);
+}
+
+/**
+ * Inner payload of a LyraForwardFeed update: (uint64 expiry, uint256 settlementStartAggregate,
+ * uint256 currentSpotAggregate, int96 fwdSpotDifference, uint64 confidence). The aggregates are only
+ * read inside the feed's last 30 minutes before expiry (its settlement TWAP), and the forward
+ * publisher stops at last trade, an hour before; they are zero here.
+ */
+export function encodeForwardData(expiry: bigint, fwdSpotDifference: bigint, confidence = FULL_CONFIDENCE): Hex {
+  return encodeAbiParameters(
+    [{ type: 'uint64' }, { type: 'uint256' }, { type: 'uint256' }, { type: 'int96' }, { type: 'uint64' }],
+    [expiry, 0n, 0n, fwdSpotDifference, confidence],
+  );
 }
 
 export type SignedFeedUpdate = { feed: Address; data: Hex };

@@ -89,3 +89,44 @@ resource "aws_iam_role_policy" "ops_box_ssm_deny_outside_paths" {
   role   = data.aws_iam_role.ops_box.id
   policy = data.aws_iam_policy_document.ops_box_ssm_deny_outside_paths.json
 }
+
+# ------------------------------------------------- cNGN future forward signer (KMS)
+#
+# numo-future-feeds signs the future's forward with this key through the instance role; the key
+# never leaves KMS. See var.forward_signer_kms_enabled for why it is its own key.
+resource "aws_kms_key" "forward_signer" {
+  count                    = var.forward_signer_kms_enabled ? 1 : 0
+  description              = "${var.name} cNGN future forward signer (secp256k1)"
+  key_usage                = "SIGN_VERIFY"
+  customer_master_key_spec = "ECC_SECG_P256K1"
+  # A feed signer is an on-chain identity: retiring it means removing it from the forward feed
+  # first, not a terraform destroy.
+  deletion_window_in_days = 30
+  enable_key_rotation     = false
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_kms_alias" "forward_signer" {
+  count         = var.forward_signer_kms_enabled ? 1 : 0
+  name          = "alias/${var.name}-forward-signer"
+  target_key_id = aws_kms_key.forward_signer[0].key_id
+}
+
+# Sign and GetPublicKey on this one key only: the box can sign with it and read its address, and
+# can neither export it, schedule its deletion, nor change its policy.
+data "aws_iam_policy_document" "ops_box_forward_signer" {
+  count = var.forward_signer_kms_enabled ? 1 : 0
+  statement {
+    actions   = ["kms:Sign", "kms:GetPublicKey"]
+    resources = [aws_kms_key.forward_signer[0].arn]
+  }
+}
+
+resource "aws_iam_role_policy" "ops_box_forward_signer" {
+  count  = var.forward_signer_kms_enabled ? 1 : 0
+  name   = "numo-forward-signer-kms-sign"
+  role   = data.aws_iam_role.ops_box.id
+  policy = data.aws_iam_policy_document.ops_box_forward_signer[0].json
+}

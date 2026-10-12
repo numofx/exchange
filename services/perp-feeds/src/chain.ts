@@ -5,6 +5,7 @@ import {
   http,
   nonceManager,
   parseAbi,
+  type Abi,
   type Address,
   type Hex,
 } from 'viem';
@@ -33,6 +34,19 @@ export type Chain = {
   submit(managerData: Hex): Promise<Hex>;
 };
 
+/** Chain plus arbitrary contract reads and relayer writes, which the forward publisher needs. */
+export type ContractChain = Chain & {
+  /** A view call. */
+  read<T>(address: Address, abi: Abi, functionName: string, args?: readonly unknown[]): Promise<T>;
+  /** A transaction from the relayer, queued behind every other submission, awaited to its receipt. */
+  write(address: Address, abi: Abi, functionName: string, args?: readonly unknown[]): Promise<Hex>;
+};
+
+/** What createChain reads. FEED_SIGNER_KEY is only needed when no signer account is passed in. */
+export type ChainConfig = Pick<Config, 'RPC_URL' | 'CHAIN_ID' | 'RELAYER_KEY' | 'DATA_SUBMITTER'> & {
+  FEED_SIGNER_KEY?: string;
+};
+
 /**
  * Runs the tasks it is given one at a time, in order, each starting after the previous has settled.
  * The index and mark publishers tick on their own intervals and both pay gas from the one relayer;
@@ -51,7 +65,12 @@ export function serialized(): <T>(task: () => Promise<T>) => Promise<T> {
   };
 }
 
-export function createChain(config: Config): Chain {
+/**
+ * @param signer The feed signer. Omitted, it is FEED_SIGNER_KEY; the forward publisher passes a KMS
+ *   account instead, so its key never enters the process.
+ */
+export function createChain(config: ChainConfig, signer?: LocalAccount): ContractChain {
+  if (!signer && !config.FEED_SIGNER_KEY) throw new Error('createChain needs a signer or FEED_SIGNER_KEY');
   const submitOneAtATime = serialized();
   const transport = http(config.RPC_URL);
   // Base in production; any other id (a local anvil, a fork) gets a minimal definition so the
@@ -75,7 +94,7 @@ export function createChain(config: Config): Chain {
   const wallet = createWalletClient({ account: relayer, chain, transport });
 
   return {
-    signer: privateKeyToAccount(config.FEED_SIGNER_KEY as Hex),
+    signer: signer ?? privateKeyToAccount(config.FEED_SIGNER_KEY as Hex),
     relayer,
     chainId: config.CHAIN_ID,
     async headTimestamp() {
@@ -100,6 +119,17 @@ export function createChain(config: Config): Chain {
       } catch {
         return null;
       }
+    },
+    read<T>(address: Address, abi: Abi, functionName: string, args: readonly unknown[] = []) {
+      return publicClient.readContract({ address, abi, functionName, args } as never) as Promise<T>;
+    },
+    write(address, abi, functionName, args = []) {
+      return submitOneAtATime(async () => {
+        const hash = await wallet.writeContract({ account: relayer, chain, address, abi, functionName, args } as never);
+        const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
+        if (receipt.status !== 'success') throw new Error(`${functionName} reverted: ${hash}`);
+        return hash;
+      });
     },
     submit(managerData) {
       return submitOneAtATime(async () => {
