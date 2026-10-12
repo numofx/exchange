@@ -119,6 +119,8 @@ const abi = {
   ]),
   manager: parseAbi([
     'function getMargin(uint256 accountId, bool isInitial) view returns (int256)',
+    'function settleAccount(uint256 accountId)',
+    'function withdrawFromPool(address asset, uint256 amount, address recipient)',
   ]),
   future: parseAbi([
     'struct FutureContract { bool listed; bool settled; uint64 expiry; uint64 lastTradeTime; uint64 lastMarkTime; uint256 markPrice; int256 cumulativeVMPerContract; }',
@@ -126,6 +128,8 @@ const abi = {
     'function totalPosition(address manager) view returns (uint256)',
     'function markIndexBand(uint64 expiry) view returns (uint256)',
     'function getPendingVM(uint256 accountId, uint256 subId) view returns (int256)',
+    'function setContract(uint64 expiry, uint64 lastTradeTime, uint256 initialMarkPrice) returns (uint96)',
+    'function setMark(uint96 subId, uint64 markTime, uint256 markPrice)',
   ]),
   submitter: parseAbi(['function submitData(bytes managerData)']),
 };
@@ -272,9 +276,9 @@ async function main() {
   // propose_margin_engine_batch.py, in --local mode, rebuilds each batch from the deployment artifact and
   // reads every gate from the fork. It never proposes; the vault's side is played by impersonation.
   type Proposal = { gates: { name: string; ok: boolean; detail: string }[]; landed: boolean[] };
-  async function proposer(batch: 'setup' | 'enable'): Promise<Proposal> {
+  async function proposer(batch: 'setup' | 'enable' | 'pool-withdraw', extra: string[] = []): Promise<Proposal> {
     const out = await new Promise<string>((resolve) => {
-      const child = spawn('python3', ['scripts/ops/propose_margin_engine_batch.py', batch, '--local', '--dir', LOCAL, '--json'], {
+      const child = spawn('python3', ['scripts/ops/propose_margin_engine_batch.py', batch, '--local', '--dir', LOCAL, '--json', ...extra], {
         cwd: RISK_CORE,
         env: { PATH: process.env.PATH, HOME: OUT, RPC_URL: RPC, PAGER_STATE_FILE: join(OUT, 'proposer-pager-state.json') },
       });
@@ -386,11 +390,18 @@ async function main() {
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(book));
   }).listen(BOOK_PORT);
   const alerts: { text: string }[] = [];
+  const pages: string[] = []; // what the pager sent to the phone (its Pushover endpoint, stubbed)
   const hookServer = createServer((req, res) => {
     let body = '';
     req.on('data', (chunk) => (body += chunk));
     req.on('end', () => {
       // recorded before anything is awaited, so a check right after the sender exits sees it
+      if (req.url?.startsWith('/pushover')) {
+        pages.push(new URLSearchParams(body).get('message') ?? '');
+        res.writeHead(200, { 'content-type': 'application/json' }).end('{"status":1}');
+        return;
+      }
+      if (req.url?.startsWith('/heartbeat')) return void res.writeHead(200).end();
       alerts.push({ text: JSON.parse(body).text });
       res.writeHead(200).end();
     });
@@ -508,26 +519,29 @@ async function main() {
   rmSync(join(OUT, 'pager-state.json'), { force: true });
   // Async, not spawnSync: the pager posts its Slack warning to the stub webhook, which is served from
   // this process and cannot answer while a synchronous child blocks the event loop.
-  const pager = await new Promise<{ stdout: string; stderr: string }>((resolve) => {
-    const child = spawn('python3', ['scripts/ops/check_perp_pager.py'], {
-      cwd: RISK_CORE,
-      env: {
-        PATH: process.env.PATH,
-        HOME: OUT,
-        RPC_URL: RPC,
-        FUTURE_ARTIFACT: join(LOCAL, 'MARGIN_ENGINE.json'),
-        FUTURE_POOL_RESERVE_CNGN: '20000000',
-        PAGER_STATE_FILE: join(OUT, 'pager-state.json'),
-        MATCHER_HEALTH_URL: `http://127.0.0.1:${BOOK_PORT}/v1/health`,
-        ALERT_WEBHOOK_URL: `http://127.0.0.1:${HOOK_PORT}/hook`,
-      },
+  const runPager = (extra: Record<string, string> = {}) =>
+    new Promise<{ stdout: string; stderr: string }>((resolve) => {
+      const child = spawn('python3', ['scripts/ops/check_perp_pager.py'], {
+        cwd: RISK_CORE,
+        env: {
+          PATH: process.env.PATH,
+          HOME: OUT,
+          RPC_URL: RPC,
+          FUTURE_ARTIFACT: join(LOCAL, 'MARGIN_ENGINE.json'),
+          FUTURE_POOL_RESERVE_CNGN: '20000000',
+          PAGER_STATE_FILE: join(OUT, 'pager-state.json'),
+          MATCHER_HEALTH_URL: `http://127.0.0.1:${BOOK_PORT}/v1/health`,
+          ALERT_WEBHOOK_URL: `http://127.0.0.1:${HOOK_PORT}/hook`,
+          ...extra,
+        },
+      });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk) => (stdout += chunk));
+      child.stderr.on('data', (chunk) => (stderr += chunk));
+      child.on('exit', () => resolve({ stdout, stderr }));
     });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (chunk) => (stdout += chunk));
-    child.stderr.on('data', (chunk) => (stderr += chunk));
-    child.on('exit', () => resolve({ stdout, stderr }));
-  });
+  const pager = await runPager();
   writeFileSync(join(OUT, 'pager.log'), `${pager.stdout}\n${pager.stderr}`);
   const futureLine = pager.stdout.split('\n').find((line) => line.startsWith('future:'));
   const coverageLine = pager.stdout.split('\n').find((line) => line.startsWith('sm coverage:'));
@@ -628,6 +642,69 @@ async function main() {
   await send(await impersonated(USERS.alice), ESCROW, abi.deposit, 'withdraw', [alice, out, USERS.alice]);
   assert.equal(await read<bigint>(CNGN, abi.erc20, 'balanceOf', [USERS.alice]), out);
   log(`alice withdrew ${fmt(out, 6)} real cNGN`);
+
+  // ---- pager drill: the pool drained by settlement, the page fires, then clears ------------------
+  // A second series, so nothing above is disturbed. The pool's cNGN is withdrawn (no risk check on it), the market moves
+  // twice for the longs, and the winners settle before the loser: the pool pays them in cash it does not have.
+  await stopKeeper();
+  const poolCngn = await cngnOf(POOL);
+  // the vault's own path refuses this: withdrawFromPool has no risk check, so the proposer's gate is what holds the reserve
+  const emptying = ['--asset', 'cngn', '--amount', String(poolCngn / 10n ** 12n), '--recipient', USERS.treasury];
+  assert.deepEqual(failing(await proposer('pool-withdraw', emptying)), ['withdraw'], 'the proposer refuses to empty the pool below its reserve');
+  log('pool-withdraw refused: emptying the pool would breach its reserve (the drill withdraws as the vault directly)');
+  await send(vault, MANAGER, abi.manager, 'withdrawFromPool', [ESCROW, poolCngn / 10n ** 12n, USERS.treasury]);
+  assert.ok((await cngnOf(POOL)) < 10n ** 12n, 'the pool holds no cNGN');
+  const now0 = await head();
+  const drillSubId = BigInt(
+    (await pub.simulateContract({ address: FUTURE, abi: abi.future, functionName: 'setContract', args: [now0 + 30n * 86_400n, now0 + 30n * 86_400n - 3_600n, invert(spot)], account: VAULT })).result,
+  );
+  await send(vault, FUTURE, abi.future, 'setContract', [now0 + 30n * 86_400n, now0 + 30n * 86_400n - 3_600n, invert(spot)]);
+  const drillTrade = (seller: bigint, buyer: bigint) =>
+    send(operator, SUBACCOUNTS, abi.subAccounts, 'submitTransfer', [
+      { fromAcc: seller, toAcc: buyer, asset: FUTURE, subId: drillSubId, amount: ONE, assetData: toHex(invert(spot), { size: 32 }) },
+      '0x',
+    ]);
+  await drillTrade(bob, alice);
+  await drillTrade(bob, alice);
+  await drillTrade(bob, carol);
+  // cNGN weakens 10%: the index moves first, then three marks of 4% from the series' own mark, each inside the band and
+  // under the 5% move limit (12.5% in all, about $115 a contract)
+  await advance(3_601n, (spot * 100n) / 110n);
+  for (let i = 0; i < 3; i++) {
+    const last = ((await read(FUTURE, abi.future, 'futureContracts', [drillSubId])) as Contract).markPrice;
+    await advance(60n);
+    await send(vault, FUTURE, abi.future, 'setMark', [drillSubId, await head(), (last * 104n) / 100n]);
+  }
+  await send(operator, MANAGER, abi.manager, 'settleAccount', [alice]);
+  await send(operator, MANAGER, abi.manager, 'settleAccount', [carol]);
+  const poolCash = await bal(POOL, CASH);
+  log(`pager drill: pool emptied of cNGN, longs paid first: pool cash ${fmt(poolCash)} USDC`);
+  assert.ok(poolCash < -250n * ONE, 'the pool is past the -$250 page');
+  const pageEnv = {
+    PAGER_PROVIDER: 'pushover',
+    PUSHOVER_TOKEN: 'drill',
+    PUSHOVER_USER: 'drill',
+    PUSHOVER_URL: `http://127.0.0.1:${HOOK_PORT}/pushover`,
+    PAGER_HEARTBEAT_URL: `http://127.0.0.1:${HOOK_PORT}/heartbeat`,
+  };
+  const drilled = await runPager(pageEnv);
+  writeFileSync(join(OUT, 'pager-drill.log'), `${drilled.stdout}\n${drilled.stderr}`);
+  const borrowingPage = pages.find((p) => p.includes('below zero in USDC cash'));
+  assert.ok(borrowingPage, `the future-pool-borrowing page reached the phone; pages: ${JSON.stringify(pages)}`);
+  log(`pager paged: "${borrowingPage}"`);
+  // bob pays in (in cNGN, which he holds), and the treasury tops the pool's cash back up: the page resolves
+  await send(operator, MANAGER, abi.manager, 'settleAccount', [bob]);
+  // with 10 USDC to spare: interest accrues on the negative balance between reading it and the deposit landing
+  await depositTo(USERS.treasury, POOL, USDC, CASH, (-(await bal(POOL, CASH)) / 10n ** 12n) + 10_000_000n);
+  await runPager(pageEnv);
+  assert.ok(pages.some((p) => p.includes('future-pool-borrowing cleared')), 'and the resolved notice followed');
+  // cash out of the pool: never below zero
+  const poolCashNow = (await bal(POOL, CASH)) / 10n ** 12n;
+  const cashOut = (amount: bigint) => ['--asset', 'cash', '--amount', String(amount), '--recipient', USERS.treasury];
+  assert.deepEqual(failing(await proposer('pool-withdraw', cashOut(poolCashNow + 1n))), ['withdraw'], 'not past zero cash');
+  assert.deepEqual(failing(await proposer('pool-withdraw', cashOut(poolCashNow))), [], 'down to zero is fine');
+  log(`pool-withdraw gate: ${fmt(poolCashNow, 6)} USDC may leave the pool, one more unit may not`);
+  log('pager resolved the page once the pool was topped up');
 
   // ---- alerts ---------------------------------------------------------------------------------
   const keys = keeperLines.filter((line) => line.startsWith('[alert]')).map((line) => line.split(':')[0].replace('[alert] ', ''));

@@ -29,6 +29,11 @@ Enable gates (all read live, all required):
             (check_perp_pager.sm_required_usd)
   pager     check_perp_pager.py ran OK within 3 minutes, with a provider and a dead-man's switch
 
+pool-withdraw  engine.withdrawFromPool(asset, amount, recipient): take cNGN or cash out of the VM pool, e.g. to
+          rebalance it (the USDC losers paid in, out to buy cNGN). withdrawFromPool has no risk check, so the
+          gate is here: a cNGN withdrawal must leave the pool at or above its reserve target (30% of one side at
+          the cap, check_perp_pager.future_reserve_target_cngn), a cash one must leave its cash at or above 0.
+
 It NEVER signs, executes or broadcasts. Without --propose it prints the gates and the sheet. With
 --propose each action goes to the MPCVault app for a human to approve, one at a time, from the vault.
 
@@ -38,6 +43,7 @@ Env (or ~/.numo-mark-keeper.env): MPCVAULT_TOKEN, MPCVAULT_VAULT, VAULT_ADDRESS,
   python3 scripts/ops/propose_margin_engine_batch.py setup --propose
   python3 scripts/ops/propose_margin_engine_batch.py enable             # gates + sheet
   python3 scripts/ops/propose_margin_engine_batch.py enable --propose
+  python3 scripts/ops/propose_margin_engine_batch.py pool-withdraw --asset cash --amount 250000000 --recipient 0x...
   python3 scripts/ops/propose_margin_engine_batch.py --self-test
   python3 scripts/ops/propose_margin_engine_batch.py enable --local --dir deployments/31337 --json
                                                                  # a fork (31337): never proposes
@@ -100,6 +106,9 @@ SIGNATURES = {
   "contractSize": "contractSize()",
   "futureMarginRequirements": "futureMarginRequirements(uint256)",
   "setGuardian": "setGuardian(address)",
+  "withdrawFromPool": "withdrawFromPool(address,uint256,address)",
+  "wrappedAsset": "wrappedAsset()",
+  "decimals": "decimals()",
   "guardian": "guardian()",
   "getBalance": "getBalance(uint256,address,uint256)",
   "getSpot": "getSpot()",
@@ -111,6 +120,7 @@ PINNED = {
   "setDatedFutureAsset": "0x0ddd8a04", "isDatedFutureAsset": "0x761822ef", "futureContracts": "0xc3c74b34",
   "contractSize": "0x3d7cc610", "futureMarginRequirements": "0x84033e5e", "getBalance": "0x0806e640",
   "getSpot": "0x2b37269c", "setGuardian": "0x8a0dac4a", "guardian": "0x452a9320",
+  "withdrawFromPool": "0xfac95a9e", "wrappedAsset": "0xd9a1836a", "decimals": "0x313ce567",
 }
 
 
@@ -320,6 +330,50 @@ def report(gates: list[Gate]) -> bool:
 
 
 # ---------------------------------------------------------------------------------------------
+# pool withdrawals
+# ---------------------------------------------------------------------------------------------
+
+def withdraw_action(d: dict, kind: str, amount: int, recipient: str) -> dict:
+  """engine.withdrawFromPool(asset, amount, recipient): `amount` in the token's own units."""
+  asset = d["cngnEscrow"] if kind == "cngn" else d["cash"]
+  data = selector("withdrawFromPool") + word_address(asset) + word_uint(amount) + word_address(recipient)
+  return {"description": f"engine.withdrawFromPool({kind}, {amount}, {recipient}) [out of the VM pool]",
+          "to": d["manager"], "value": "0", "data": data, "digest": digest(d["manager"], data)}
+
+
+def withdraw_gate(held18: int, amount18: int, floor18: int, kind: str) -> Gate:
+  """The pool must keep `floor18` (18dp) after the withdrawal: its reserve target in cNGN, or 0 in cash."""
+  after = held18 - amount18
+  what = "its cNGN reserve target" if kind == "cngn" else "zero cash"
+  if amount18 <= 0:
+    return Gate("withdraw", False, "nothing to withdraw")
+  if after < floor18:
+    return Gate("withdraw", False, f"leaves the pool at {after / 1e18:,.2f} {kind}, under {what} ({floor18 / 1e18:,.2f})")
+  return Gate("withdraw", True, f"leaves the pool at {after / 1e18:,.2f} {kind} (floor {floor18 / 1e18:,.2f}, {what})")
+
+
+def gate_pool_withdraw(chain: Chain, d: dict, kind: str, amount: int, recipient: str, vault: str) -> list[Gate]:
+  gates = [Gate("custody", chain.address(d["manager"], "owner").lower() == vault.lower(), "vault owns the engine")]
+  if int(recipient, 16) == 0 or recipient.lower() == d["manager"].lower():
+    gates.append(Gate("recipient", False, f"recipient {recipient} is zero or the engine"))
+  asset = d["cngnEscrow"] if kind == "cngn" else d["cash"]
+  token = chain.address(asset, "wrappedAsset")
+  decimals = chain.word(token, selector("decimals"))
+  amount18 = amount * 10 ** (18 - decimals)
+  held18 = chain.balance(int(d["poolAccount"]), asset)
+  if kind == "cngn":
+    spot = chain.word(d["indexFeed"], selector("getSpot")) / 1e18
+    size = chain.word(d["future"], selector("contractSize")) / 1e18
+    m = word_address(d["manager"])
+    cap = chain.word(d["future"], selector("totalPositionCap") + m) / 1e18
+    floor18 = int(future_reserve_target_cngn(cap, size, spot) * 1e18)
+  else:
+    floor18 = 0
+  gates.append(withdraw_gate(held18, amount18, floor18, kind))
+  return gates
+
+
+# ---------------------------------------------------------------------------------------------
 # self-test
 # ---------------------------------------------------------------------------------------------
 
@@ -377,6 +431,17 @@ def self_test() -> int:
   assert sm_gate(3_250, {"perp": (801, 1 / 3), "future at the cap": (15_000, 0.25)}).ok
   assert not sm_gate(3_250, {"perp": (801, 1 / 3), "future at the cap": (20_000, 0.25)}).ok
   assert sm_gate(3_900, {"perp": (801, 1 / 3), "future at the cap": (20_000, 0.25)}).ok
+  # Pool withdrawals: the action is withdrawFromPool on the engine; cNGN keeps the reserve, cash keeps zero.
+  w = withdraw_action(d, "cash", 250 * 10**6, a(11))
+  assert w["to"] == d["manager"] and w["data"] == selector("withdrawFromPool") + word_address(d["cash"]) + word_uint(250 * 10**6) + word_address(a(11))
+  assert withdraw_action(d, "cngn", 1, a(11))["data"].startswith(selector("withdrawFromPool") + word_address(d["cngnEscrow"]))
+  reserve = int(6_000_000 * 1e18)
+  assert withdraw_gate(int(7_000_000 * 1e18), int(1_000_000 * 1e18), reserve, "cngn").ok, "down to the reserve exactly"
+  assert not withdraw_gate(int(7_000_000 * 1e18), int(1_000_001 * 1e18), reserve, "cngn").ok, "one cNGN under it"
+  assert withdraw_gate(300 * 10**18, 300 * 10**18, 0, "cash").ok, "the pool's cash down to zero"
+  assert not withdraw_gate(300 * 10**18, 301 * 10**18, 0, "cash").ok, "never below zero"
+  assert not withdraw_gate(-50 * 10**18, 1, 0, "cash").ok, "nothing out of a negative pool"
+  assert not withdraw_gate(100, 0, 0, "cash").ok, "a zero withdrawal is refused"
   with tempfile.TemporaryDirectory() as tmp:
     os.environ["PAGER_STATE_FILE"] = str(Path(tmp) / "none.json")
     assert not gate_pager(Path(os.environ["PAGER_STATE_FILE"])).ok
@@ -392,7 +457,10 @@ def self_test() -> int:
 
 def main() -> int:
   ap = argparse.ArgumentParser(description="Propose the cNGN future's vault batches")
-  ap.add_argument("batch", nargs="?", choices=("setup", "enable"))
+  ap.add_argument("batch", nargs="?", choices=("setup", "enable", "pool-withdraw"))
+  ap.add_argument("--asset", choices=("cngn", "cash"), help="pool-withdraw: which balance")
+  ap.add_argument("--amount", type=int, help="pool-withdraw: in the token's own units (USDC and cNGN: 6dp)")
+  ap.add_argument("--recipient", help="pool-withdraw: where the tokens go")
   ap.add_argument("--propose", action="store_true", help="create MPCVault signing requests, one at a time")
   ap.add_argument("--self-test", action="store_true")
   ap.add_argument("--local", action="store_true", help="a fork (chain 31337) only; never proposes")
@@ -421,6 +489,8 @@ def main() -> int:
     raise SystemExit(f"VAULT_ADDRESS {vault} is not the recorded vault {EXPECTED_VAULT}")
 
   d = json.loads((args.dir / f"{NAME}.json").read_text())
+  if args.batch == "pool-withdraw":
+    return run_pool_withdraw(args, d, Chain(rpc_url), rpc_url, vault)
   actions = json.loads((args.dir / FILES[args.batch]).read_text())
   verify_actions(args.batch, d, actions)
   stack = json.loads(args.stack.read_text())
@@ -473,6 +543,41 @@ def main() -> int:
     if not landed(chain, args.batch, d, i, vault):
       raise SystemExit(f"action {i} mined but its postcondition does not hold: stop and investigate")
   print(f"\n{args.batch}: done." + (" The future is open: markets-service can list it." if args.batch == "enable" else ""))
+  return 0
+
+
+def run_pool_withdraw(args, d: dict, chain: Chain, rpc_url: str, vault: str) -> int:
+  if not (args.asset and args.amount is not None and args.recipient):
+    raise SystemExit("pool-withdraw needs --asset, --amount and --recipient")
+  if args.amount <= 0:
+    raise SystemExit(f"--amount must be a positive number of token units, got {args.amount}")
+  if not (args.recipient.startswith("0x") and len(args.recipient) == 42):
+    raise SystemExit(f"--recipient {args.recipient} is not an address")
+  action = withdraw_action(d, args.asset, args.amount, args.recipient)
+  gates = gate_pool_withdraw(chain, d, args.asset, args.amount, args.recipient, vault)
+  passed = report(gates)
+  print(f"\n  {action['to']}  {action['digest']}  {action['description']}")
+  if args.json:
+    print(json.dumps({"gates": [asdict(g) for g in gates], "landed": [False]}))
+  if not passed:
+    print("\nGATES FAILED: nothing proposed.")
+    return 1
+  if not args.propose:
+    print("\ndry run: nothing proposed. Re-run with --propose; compare the digest with MPCVault before approving.")
+    return 0
+  token, vault_uuid = os.environ.get("MPCVAULT_TOKEN", ""), os.environ.get("MPCVAULT_VAULT", "")
+  if not token or not vault_uuid:
+    raise SystemExit("MPCVAULT_TOKEN and MPCVAULT_VAULT are required (run via run-with-ssm-mark.sh on the ops box)")
+  uuid = propose(token, vault_uuid, vault, action)
+  print(f"  proposed uuid={uuid}\n       {action['description']}\n       digest {action['digest']}\n       -> approve in MPCVault now")
+  deadline, tx_hash = time.time() + CONFIRM_TIMEOUT_SEC, None
+  while time.time() < deadline and not tx_hash:
+    time.sleep(CONFIRM_POLL_SEC)
+    tx_hash = request_tx_hash(token, uuid)
+  if not tx_hash:
+    raise SystemExit("not approved within the timeout")
+  confirm_on_chain(rpc_url, tx_hash)
+  print("pool-withdraw: done.")
   return 0
 
 
