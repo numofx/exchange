@@ -59,6 +59,7 @@ const PORT = Number(process.env.ANVIL_PORT ?? 8547);
 const RPC = `http://127.0.0.1:${PORT}`;
 const BOOK_PORT = PORT + 1;
 const HOOK_PORT = PORT + 2;
+const MARKETS_PORT = PORT + 3;
 
 const ROOT = join(import.meta.dirname, '../../..');
 const RISK_CORE = join(ROOT, 'contracts/risk-core');
@@ -145,6 +146,8 @@ const relDiff = (a: bigint, b: bigint) => Number(((a > b ? a - b : b - a) * 10n 
 
 async function main() {
   mkdirSync(OUT, { recursive: true });
+  // state a previous run left would pass gates this run must earn: the pager's and the proposer's pager state
+  for (const stale of ['pager-state.json', 'proposer-pager-state.json']) rmSync(join(OUT, stale), { force: true });
   const children: ChildProcess[] = [];
   const servers: Server[] = [];
   const cleanup = () => {
@@ -276,11 +279,38 @@ async function main() {
   // propose_margin_engine_batch.py, in --local mode, rebuilds each batch from the deployment artifact and
   // reads every gate from the fork. It never proposes; the vault's side is played by impersonation.
   type Proposal = { gates: { name: string; ok: boolean; detail: string }[]; landed: boolean[] };
+  // markets-service's /v1/markets, stubbed: until `listed`, the future is absent (no futures path yet); then it is
+  // listed with the band the venue would enforce, computed from the chain as markets-service would: the index -/+
+  // markIndexBand(expiry). The enable gate's `fills` check compares that with its own read of the chain.
+  let listed = false;
+  const marketsServer = createServer(async (req, res) => {
+    if (!req.url?.startsWith('/v1/markets')) return void res.writeHead(404).end();
+    const markets = [];
+    if (listed) {
+      const index = invert(spot);
+      const band = await read<bigint>(FUTURE, abi.future, 'markIndexBand', [EXPIRY]);
+      markets.push({
+        asset_address: FUTURE.toLowerCase(),
+        sub_id: SUB_ID.toString(),
+        fill_band_enforced: true,
+        fill_band_low: formatUnits(index - (index * band) / ONE, 18),
+        fill_band_high: formatUnits(index + (index * band) / ONE, 18),
+      });
+    }
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ markets }));
+  }).listen(MARKETS_PORT);
+  servers.push(marketsServer);
   async function proposer(batch: 'setup' | 'enable' | 'pool-withdraw', extra: string[] = []): Promise<Proposal> {
     const out = await new Promise<string>((resolve) => {
       const child = spawn('python3', ['scripts/ops/propose_margin_engine_batch.py', batch, '--local', '--dir', LOCAL, '--json', ...extra], {
         cwd: RISK_CORE,
-        env: { PATH: process.env.PATH, HOME: OUT, RPC_URL: RPC, PAGER_STATE_FILE: join(OUT, 'proposer-pager-state.json') },
+        env: {
+          PATH: process.env.PATH,
+          HOME: OUT,
+          RPC_URL: RPC,
+          PAGER_STATE_FILE: join(OUT, 'proposer-pager-state.json'),
+          MARKETS_URL: `http://127.0.0.1:${MARKETS_PORT}`,
+        },
       });
       let text = '';
       child.stdout.on('data', (chunk) => (text += chunk));
@@ -334,13 +364,15 @@ async function main() {
   // running, the proposer must refuse; after, everything must pass.
   const refused = failing(await proposer('enable'));
   // The launch cap is sized to the live SecurityModule, so sm passes without a top-up.
-  assert.deepEqual(refused.sort(), ['pager', 'reserve'], `before seeding, exactly these gates fail: ${refused}`);
-  log(`enable refused before the seed: ${refused.join(', ')} gates fail; custody, feeds, marks, escrow and sm pass`);
+  assert.deepEqual(refused.sort(), ['fills', 'pager', 'reserve'], `before seeding, exactly these gates fail: ${refused}`);
+  log(`enable refused before the seed and the listing: ${refused.join(', ')} gates fail; custody, feeds, marks, escrow and sm pass`);
   // 30% of one side at the cap, in cNGN at the index, plus 1% for the index moving meanwhile
   const reserve = ((BigInt(artifact.futureOICap) / 2n) * BigInt(artifact.contractSize) * 3n) / (10n * spot);
   await depositTo(USERS.treasury, POOL, CNGN, ESCROW, (reserve * 101n) / 100n / 10n ** 12n);
   // the pager gate reads its state file; a provider and dead-man's switch cannot be rehearsed here
   writeFileSync(join(OUT, 'proposer-pager-state.json'), JSON.stringify({ lastRunAt: Math.floor(Date.now() / 1000), lastRunOk: true, provider: 'pushover', heartbeatConfigured: true }));
+  // the futures listing ships, with its fill-band check: markets-service now lists the future and its band
+  listed = true;
   const allowed = await proposer('enable');
   assert.deepEqual(failing(allowed), [], `after seeding, every enable gate passes: ${JSON.stringify(allowed.gates.filter((g) => !g.ok))}`);
   log(`enable gates pass: pool seeded with ${fmt(reserve * 101n / 100n)} cNGN, the SecurityModule as it is on Base`);

@@ -28,6 +28,11 @@ Enable gates (all read live, all required):
             live SRM, until the cutover) and the future's one side at the cap being opened
             (check_perp_pager.sm_required_usd)
   pager     check_perp_pager.py ran OK within 3 minutes, with a provider and a dead-man's switch
+  fills     markets-service refuses futures orders priced outside the band FutureAsset enforces on fills, so an
+            out-of-band order is rejected before it matches instead of reverting at settlement. GET
+            {MARKETS_URL}/v1/markets must list the future (asset_address, sub_id) with fill_band_enforced: true and
+            fill_band_low / fill_band_high (cNGN per USDC, decimal strings), and those must equal the chain's band now,
+            the index -/+ markIndexBand(expiry), within FILL_BAND_TOLERANCE. Fails until the futures listing ships it.
 
 pool-withdraw  engine.withdrawFromPool(asset, amount, recipient): take cNGN or cash out of the VM pool, e.g. to
           rebalance it (the USDC losers paid in, out to buy cNGN). withdrawFromPool has no risk check, so the
@@ -79,13 +84,15 @@ from propose_cngn_spot_batch import (  # noqa: E402  one implementation of the M
   request_tx_hash,
   rpc,
 )
-from propose_perp_enable_batch import gate_pager  # noqa: E402
+from propose_perp_enable_batch import gate_pager, http_json  # noqa: E402
 from resolve_cngn_action6 import keccak  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 NAME = "MARGIN_ENGINE"
 FILES = {"setup": f"{NAME}_VAULT_ACTIONS.json", "enable": f"{NAME}_ENABLE_VAULT_ACTIONS.json"}
 FEED_MAX_AGE_SEC = 600
+# markets-service's fill band against the chain's: the index moves between the two reads, so they may differ this much
+FILL_BAND_TOLERANCE = 0.001
 MARK_MAX_AGE_SEC = 2 * 3600  # FORWARD_MARK_LATE_MS: an hourly pull, one missed
 SUB_ACCOUNTS = "0x7019244E25FA416e6Ca2ed2F3cA25277aef72843"
 
@@ -107,6 +114,7 @@ SIGNATURES = {
   "futureMarginRequirements": "futureMarginRequirements(uint256)",
   "setGuardian": "setGuardian(address)",
   "withdrawFromPool": "withdrawFromPool(address,uint256,address)",
+  "markIndexBand": "markIndexBand(uint64)",
   "wrappedAsset": "wrappedAsset()",
   "decimals": "decimals()",
   "guardian": "guardian()",
@@ -120,7 +128,7 @@ PINNED = {
   "setDatedFutureAsset": "0x0ddd8a04", "isDatedFutureAsset": "0x761822ef", "futureContracts": "0xc3c74b34",
   "contractSize": "0x3d7cc610", "futureMarginRequirements": "0x84033e5e", "getBalance": "0x0806e640",
   "getSpot": "0x2b37269c", "setGuardian": "0x8a0dac4a", "guardian": "0x452a9320",
-  "withdrawFromPool": "0xfac95a9e", "wrappedAsset": "0xd9a1836a", "decimals": "0x313ce567",
+  "withdrawFromPool": "0xfac95a9e", "markIndexBand": "0x968564c5", "wrappedAsset": "0xd9a1836a", "decimals": "0x313ce567",
 }
 
 
@@ -249,6 +257,46 @@ def gate_setup(chain: Chain, d: dict, vault: str) -> list[Gate]:
   ]
 
 
+def fills_gate(listing: dict | None, chain_low: float, chain_high: float) -> Gate:
+  """markets-service's fill band for the future (its /v1/markets entry) against the chain's."""
+  if listing is None:
+    return Gate("fills", False, "the future is not on markets-service /v1/markets: the listing must ship with its fill-band check")
+  if listing.get("fill_band_enforced") is not True:
+    return Gate("fills", False, "markets-service lists the future but does not report fill_band_enforced: true")
+  try:
+    low, high = float(listing["fill_band_low"]), float(listing["fill_band_high"])
+  except (KeyError, TypeError, ValueError):
+    return Gate("fills", False, "markets-service lists the future without a readable fill_band_low / fill_band_high")
+  off = max(abs(low - chain_low) / chain_low, abs(high - chain_high) / chain_high)
+  if off > FILL_BAND_TOLERANCE:
+    return Gate("fills", False, f"markets-service enforces {low:,.4f}-{high:,.4f}, the chain {chain_low:,.4f}-{chain_high:,.4f} "
+                f"({off * 1e4:.1f} bps apart, limit {FILL_BAND_TOLERANCE * 1e4:.0f})")
+  return Gate("fills", True, f"markets-service enforces the chain's fill band, {low:,.4f}-{high:,.4f} cNGN per USDC")
+
+
+def chain_fill_band(spot_word: int, band_word: int) -> tuple[float, float]:
+  """(low, high) in cNGN per USDC from the index feed's getSpot (USDC per cNGN, 18dp) and markIndexBand (18dp)."""
+  index = 1e18 / spot_word  # cNGN per USDC: the inverse of the feed's USDC per cNGN
+  band = band_word / 1e18
+  return index * (1 - band), index * (1 + band)
+
+
+def gate_fills(chain: Chain, d: dict, markets_url: str) -> Gate:
+  try:
+    body = http_json(f"{markets_url.rstrip('/')}/v1/markets")
+  except Exception as exc:  # noqa: BLE001 -- unreadable is a failed gate
+    return Gate("fills", False, f"markets-service /v1/markets unreadable: {str(exc)[:80]}")
+  entries = body.get("markets", body) if isinstance(body, dict) else body
+  listing = next((e for e in entries or [] if str(e.get("asset_address", "")).lower() == d["future"].lower()
+                  and str(e.get("sub_id", "")) == str(d["subId"])), None)
+  try:
+    low, high = chain_fill_band(chain.word(d["indexFeed"], selector("getSpot")),
+                                chain.word(d["future"], selector("markIndexBand") + word_uint(int(d["expiry"]))))
+  except Exception as exc:  # noqa: BLE001
+    return Gate("fills", False, f"the chain's fill band unreadable: {str(exc)[:80]}")
+  return fills_gate(listing, low, high)
+
+
 def reserve_gate(pool_cngn: float, target: float) -> Gate:
   if target <= 0:
     return Gate("reserve", False, "reserve target is zero (index unreadable?)")
@@ -319,6 +367,7 @@ def gate_enable(chain: Chain, d: dict, stack: dict, vault: str) -> list[Gate]:
     gates.append(Gate("sm", False, f"SecurityModule coverage unreadable: {str(exc)[:80]}"))
 
   gates.append(gate_pager(Path(os.environ.get("PAGER_STATE_FILE", Path.home() / ".numo-perp-pager.json"))))
+  gates.append(gate_fills(chain, d, os.environ.get("MARKETS_URL", "https://api.numofx.com")))
   return gates
 
 
@@ -431,6 +480,18 @@ def self_test() -> int:
   assert sm_gate(3_250, {"perp": (801, 1 / 3), "future at the cap": (15_000, 0.25)}).ok
   assert not sm_gate(3_250, {"perp": (801, 1 / 3), "future at the cap": (20_000, 0.25)}).ok
   assert sm_gate(3_900, {"perp": (801, 1 / 3), "future at the cap": (20_000, 0.25)}).ok
+  # The chain's band from raw words: the live index 0.000733418... USDC per cNGN is 1,363.48 cNGN per USDC; a 10% band
+  # is 1,227.1-1,499.8.
+  low, high = chain_fill_band(733418223364218, 10**17)
+  assert round(low, 1) == round(1e18 / 733418223364218 * 0.9, 1) and 1_227 < low < 1_228 and 1_499 < high < 1_500, (low, high)
+  # The fills gate: markets-service must list the future with the chain's band, enforced.
+  listed = {"fill_band_enforced": True, "fill_band_low": "1227.0", "fill_band_high": "1499.7"}
+  assert fills_gate(listed, 1227.0, 1499.7).ok
+  assert fills_gate({**listed, "fill_band_high": "1500.6"}, 1227.0, 1499.7).ok, "6 bps apart: inside the tolerance"
+  assert not fills_gate({**listed, "fill_band_high": "1502.0"}, 1227.0, 1499.7).ok, "15 bps apart"
+  assert not fills_gate(None, 1227.0, 1499.7).ok, "not listed"
+  assert not fills_gate({**listed, "fill_band_enforced": False}, 1227.0, 1499.7).ok, "listed but not enforcing"
+  assert not fills_gate({"fill_band_enforced": True}, 1227.0, 1499.7).ok, "no band reported"
   # Pool withdrawals: the action is withdrawFromPool on the engine; cNGN keeps the reserve, cash keeps zero.
   w = withdraw_action(d, "cash", 250 * 10**6, a(11))
   assert w["to"] == d["manager"] and w["data"] == selector("withdrawFromPool") + word_address(d["cash"]) + word_uint(250 * 10**6) + word_address(a(11))
