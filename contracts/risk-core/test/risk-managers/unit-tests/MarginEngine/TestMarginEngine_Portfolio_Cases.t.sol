@@ -14,7 +14,9 @@ contract UNIT_TestMarginEngine_Portfolio_Cases is TestCaseExpiries, TestMarginEn
   using stdJson for string;
   using SignedDecimalMath for int;
 
-  uint constant mockAccIdToRequest = 1;
+  /// @dev Not 1: in a fresh SubAccounts the engine's own account (its VM pool, accId) is 1, and the pool reads as never
+  ///      liquidatable (margin 0). StandardManager's copy of this suite uses 1, where accId is not special.
+  uint constant mockAccIdToRequest = 999;
 
   function setUp() public override {
     super.setUp();
