@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """cNGN reference-price basis logger for the SEP-16-2026 deliverable FX future.
 
-The mark — and, by default, the Sep-16 settlement price (`delivery_keeper.py --fix`
-defaults to on-chain spot) — both trace back to a single free FX API that refreshes
+The mark — and the Sep-16 settlement price, which the retired delivery keeper
+defaulted to on-chain spot — both trace back to a single free FX API that refreshes
 ONCE PER DAY (open.er-api.com). Because the future settles by PHYSICAL delivery of
 cNGN, the economically correct fixing is what cNGN actually exchanges for, not a
 generic NGN/USD reference. This logger accumulates the evidence needed to decide the
