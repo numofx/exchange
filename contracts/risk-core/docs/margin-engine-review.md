@@ -44,9 +44,10 @@ Every file under `src/` that changed between #361 and the import, and that the e
 |---|---|---|
 | `DutchAuction`, `CashAsset`, `WrappedERC20Asset`, `Allowances`, `ISubAccounts`, `BaseLyraFeed` | `95a0eb5` (forge fmt) | identical to #361 with whitespace removed |
 | `PerpAsset` | `0d81da6`: six functions made `virtual`, for `SquaredPerpAsset` | no behaviour change |
-| **`BaseManager`**, which the engine inherits | see below | **not yet in scope; recommended** |
+| **`BaseManager`**, which the engine inherits | see below | **in scope** (decided) |
 
-`BaseManager` has two changes since #361:
+`BaseManager` is in scope: the engine's pool guard depends on Numo's `_executeBid` split, and a reorder of cash steps
+is exactly what a review should see. Its diff against #361 has two sources:
 - **Lyra #362 (`57cdd00`, PMRM2):** made upgradeable. Immutables became storage, `Ownable2Step` became
   `Ownable2StepUpgradeable`, and a storage gap was added.
 - **Numo `1e9f8fa`:**
@@ -54,6 +55,38 @@ Every file under `src/` that changed between #361 and the import, and that the e
     override depends on this.
   - Cash settlement moved into `_applyCashDelta`. This reorders option settlement: `updateSettledCash` now runs before
     `managerAdjustment` rather than after.
+
+Reproduce it with `git show 12cb35a:src/risk-managers/BaseManager.sol` against
+`contracts/risk-core/src/risk-managers/BaseManager.sol`. The commits themselves are `git show 57cdd00 1e9f8fa --
+src/risk-managers/BaseManager.sol`.
+
+### Check before reviewing: how the engine gets its owner
+
+**The question:** since #362, `BaseManager` uses `Ownable2StepUpgradeable` and storage where it had immutables. The
+engine is deployed directly, not behind a proxy. How does it get its owner, and is any initializer left open for
+someone else to call first after deployment?
+
+**Our answer:**
+- **The owner comes from the constructor.** It calls `_transferOwnership(msg.sender)` and sets `subAccounts`,
+  `cashAsset`, `liquidation`, `viewer` and `accId`.
+- **The only later writer of those fields** is the owner-only `setLiquidation`.
+- **No initializer is exposed.** The engine inherits `Initializable` only through `Ownable2StepUpgradeable`, which has
+  no external initializer. `BaseManagerUpgradeable`'s initializer is `internal onlyInitializing`, behind
+  `_disableInitializers()`, and the engine does not inherit it.
+- **The engine's external interface** carries no `initialize`. Its only ownership functions are OZ's: `owner`,
+  `pendingOwner`, `transferOwnership`, `acceptOwnership` and `renounceOwnership`. Note `renounceOwnership`: the vault
+  could leave the engine ownerless, as on the SRM.
+- **The sequence:** straight after deploy the deployer owns the engine and the vault is nominated. The vault becomes
+  owner when the setup batch's `acceptOwnership` lands.
+
+**Pinned by** `MarginEngineDeployFork.testTheEngineIsOwnedFromItsConstructorAndNothingCanInitializeIt`:
+- after deploy: owner is the deployer, the vault is nominated, and the constructor's wiring is set;
+- a stranger can't call any initializer shape, accept or transfer ownership, or `setLiquidation`;
+- after the batch: the vault owns it, nothing is pending, and the wiring is unchanged.
+
+A planted open `initialize(address)` fails it.
+
+**Please confirm this before reviewing the rest.**
 
 Files changed since #361 that the engine does not run: PMRM2 and its libraries, the deliverable-FX manager and asset,
 `SquaredPerp*`, the Chainlink feeds, `SpotPassthroughDiffFeed`, `LyraRateFeedStatic` and `DatedFutureAsset`.
@@ -273,7 +306,7 @@ The engine is **24,142 of 24,576 bytes**; StandardManager had 1,174 bytes of hea
 |---|---|---|
 | StandardManager's suite on the engine | `forge test --match-path "test/risk-managers/unit-tests/MarginEngine/*"` | 141/141, the same as on StandardManager |
 | Futures suite (FutureManager's 65, ported) and engine tests | same path, `TestMarginEngine_Future` | 87: cross-margin, the depeg, close-only cap, reduction between MM and IM, settlement invariance (including series out of order and gain/loss in both orders), the negative pool, and the fill bound |
-| Fork tests (Base, real contracts) | `BASE_RPC_URL=… forge test --match-contract MarginEngineDeployFork` | 23 |
+| Fork tests (Base, real contracts) | `BASE_RPC_URL=… forge test --match-contract MarginEngineDeployFork` | 24 |
 | Fork rehearsal (keeper process, vault batches through the proposer) | `pnpm rehearse:future` in `services/perp-feeds` | passes |
 | Full CI equivalent | `./scripts/verify.sh` | risk-core 1,339, execution 261, perp-feeds 126 |
 
@@ -282,6 +315,7 @@ The fork tests include:
   identical IM, MM and mark-to-market;
 - spot, perp and future in one engine account;
 - the live SRM untouched;
+- the engine owned from its constructor, with no initializer to call;
 - liquidation through the real auction, and an insolvency paid by the real SecurityModule;
 - a stale index during the fixing, then the bounded fallback;
 - **the pool run negative:** a solvent liquidation still starts and its fee reaches the SecurityModule, with borrowing on

@@ -137,6 +137,49 @@ contract MarginEngineDeployFork is Test {
     script.checkParams(p);
   }
 
+  /**
+   * BaseManager is upgradeable-shaped since Lyra #362 (Ownable2StepUpgradeable, storage for what were immutables), but
+   * the engine is deployed directly: its constructor sets the owner and every field, and no initializer is exposed.
+   * Straight after deploy the deployer owns it with the vault nominated; nobody else can take it, call an initializer,
+   * or rewrite its wiring; the vault owns it once the setup batch accepts.
+   */
+  function testTheEngineIsOwnedFromItsConstructorAndNothingCanInitializeIt() public {
+    MarginEngine engine = d.engine;
+    assertEq(engine.owner(), address(script), "the deployer owns it from the constructor");
+    assertEq(engine.pendingOwner(), VAULT, "with the vault nominated");
+    assertEq(address(engine.subAccounts()), params.subAccounts, "the constructor set SubAccounts");
+    assertEq(address(engine.cashAsset()), params.cash, "and the cash");
+    assertEq(subAccounts.ownerOf(engine.accId()), address(engine), "and opened its own account");
+
+    address stranger = address(0xbad);
+    // no initializer of any shape: BaseManagerUpgradeable's is internal, and the engine does not inherit it
+    string[4] memory inits = [
+      "initialize()",
+      "initialize(address)",
+      "initialize(address,address,address,address)",
+      "__BaseManagerUpgradeable_init(address,address,address,address)"
+    ];
+    for (uint i; i < inits.length; ++i) {
+      vm.prank(stranger);
+      (bool ok,) = address(engine).call(abi.encodeWithSignature(inits[i], stranger, stranger, stranger, stranger));
+      assertFalse(ok, string.concat("no initializer: ", inits[i]));
+    }
+    vm.prank(stranger);
+    vm.expectRevert();
+    engine.acceptOwnership();
+    vm.prank(stranger);
+    vm.expectRevert();
+    engine.transferOwnership(stranger);
+    vm.prank(stranger);
+    vm.expectRevert();
+    engine.setLiquidation(IDutchAuction(stranger));
+
+    _executeVaultBatch();
+    assertEq(engine.owner(), VAULT, "the vault owns it once the setup batch accepts");
+    assertEq(engine.pendingOwner(), address(0));
+    assertEq(address(engine.subAccounts()), params.subAccounts, "wiring unchanged");
+  }
+
   function testVaultBatchHandsOverAndWires() public {
     address[] memory owned = script.ownedContracts(d);
     for (uint i = 0; i < owned.length; i++) {
