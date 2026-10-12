@@ -102,8 +102,8 @@ FILES = {"setup": f"{NAME}_VAULT_ACTIONS.json", "enable": f"{NAME}_ENABLE_VAULT_
 FEED_MAX_AGE_SEC = 600
 # RFQ is not supported. The RfqModule settles in the frozen DFXM-era cash and knows neither the perp nor the future
 # (an RFQ fill would price the future as an option and skip its index-band check), so it must be off the TradeModule's
-# Matching before the future opens; propose_retire_rfq_module.py retires it. Pinned here and checked against the
-# execution deployment in --self-test.
+# Matching before the future opens. It was retired on Base at block 52523521 (tx 0x5ab98ed1…74db); this gate keeps it off.
+# Pinned here and checked against the execution deployment in --self-test.
 RFQ_MODULE = "0x8399328AC53a279A3564E49c2cbC82Ce95ee62D3"
 EXECUTION_MATCHING_JSON = ROOT.parent / "execution" / "deployments" / "8453" / "matching.json"
 # BaseManager's whitelistedCallee mapping is internal; its slot in both StandardManager and MarginEngine
