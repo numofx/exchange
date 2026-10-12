@@ -15,6 +15,12 @@ deploy-margin-engine.s.sol). An action whose postcondition already holds is skip
 proposes only what is left.
 
 Enable gates (all read live, all required):
+  parity    every setting the deploy made, re-read now the vault owns it: market 1 on the engine against market 1
+            on the live SRM (as the deploy's assertParity), and the futures, index, forward-feed and wiring
+            settings against the artifact. Also run when the setup batch completes. The deployer (a single-use key,
+            recorded in the artifact) owned everything until the vault accepted and could have changed any of it.
+            The deployer must hold nothing now (not owner, not nominated, not a forward signer) and must have sent
+            nothing since the deploy.
   custody   the vault owns the engine, viewer, future and forward feed; the setup batch has landed (cash,
             escrow, perp and auction take the engine, the escrow cap and guardian are set); the engine is
             closed (its perp and futures caps are 0, the future is not on the TradeModule)
@@ -91,6 +97,9 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 NAME = "MARGIN_ENGINE"
 FILES = {"setup": f"{NAME}_VAULT_ACTIONS.json", "enable": f"{NAME}_ENABLE_VAULT_ACTIONS.json"}
 FEED_MAX_AGE_SEC = 600
+# BaseManager's whitelistedCallee mapping is internal; its slot in both StandardManager and MarginEngine
+# (`forge inspect ... storage-layout`), read to compare the callees the deploy copied
+WHITELISTED_CALLEE_SLOT = 12
 # markets-service's fill band against the chain's: the index moves between the two reads, so they may differ this much
 FILL_BAND_TOLERANCE = 0.001
 MARK_MAX_AGE_SEC = 2 * 3600  # FORWARD_MARK_LATE_MS: an hourly pull, one missed
@@ -115,6 +124,37 @@ SIGNATURES = {
   "setGuardian": "setGuardian(address)",
   "withdrawFromPool": "withdrawFromPool(address,uint256,address)",
   "markIndexBand": "markIndexBand(uint64)",
+  # the parity check
+  "maxAccountSize": "maxAccountSize()",
+  "borrowingEnabled": "borrowingEnabled()",
+  "stableFeed": "stableFeed()",
+  "depegParams": "depegParams()",
+  "perpMarginRequirements": "perpMarginRequirements(uint256)",
+  "baseMarginParams": "baseMarginParams(uint256)",
+  "oracleContingencyParams": "oracleContingencyParams(uint256)",
+  "assetMap": "assetMap(uint256,uint8)",
+  "getMarketFeeds": "getMarketFeeds(uint256)",
+  "feeRecipientAcc": "feeRecipientAcc()",
+  "minOIFee": "minOIFee()",
+  "liquidation": "liquidation()",
+  "viewer": "viewer()",
+  "marginEngine": "marginEngine()",
+  "maxMarkDeviation": "maxMarkDeviation()",
+  "maxMarkDelay": "maxMarkDelay()",
+  "maxMarkIndexDeviation": "maxMarkIndexDeviation()",
+  "minMarkIndexDeviation": "minMarkIndexDeviation()",
+  "bandNarrowingPeriod": "bandNarrowingPeriod()",
+  "fixingWindow": "fixingWindow()",
+  "maxSampleGap": "maxSampleGap()",
+  "fallbackDelay": "fallbackDelay()",
+  "minMarkInterval": "minMarkInterval()",
+  "indexFeed": "indexFeed()",
+  "forwardFeed": "forwardFeed()",
+  "isSigner": "isSigner(address)",
+  "requiredSigners": "requiredSigners()",
+  "heartbeat": "heartbeat()",
+  "spotFeed": "spotFeed()",
+  "OIFeeRateBPS": "OIFeeRateBPS(address)",
   "wrappedAsset": "wrappedAsset()",
   "decimals": "decimals()",
   "guardian": "guardian()",
@@ -128,7 +168,37 @@ PINNED = {
   "setDatedFutureAsset": "0x0ddd8a04", "isDatedFutureAsset": "0x761822ef", "futureContracts": "0xc3c74b34",
   "contractSize": "0x3d7cc610", "futureMarginRequirements": "0x84033e5e", "getBalance": "0x0806e640",
   "getSpot": "0x2b37269c", "setGuardian": "0x8a0dac4a", "guardian": "0x452a9320",
-  "withdrawFromPool": "0xfac95a9e", "markIndexBand": "0x968564c5", "wrappedAsset": "0xd9a1836a", "decimals": "0x313ce567",
+  "withdrawFromPool": "0xfac95a9e", "markIndexBand": "0x968564c5",
+  "maxAccountSize": "0xf1f8c61f",
+  "borrowingEnabled": "0xa35d1300",
+  "stableFeed": "0xf4d0508a",
+  "depegParams": "0x4deda10f",
+  "perpMarginRequirements": "0xbf270f9d",
+  "baseMarginParams": "0xcd27955d",
+  "oracleContingencyParams": "0x0addd056",
+  "assetMap": "0xed75d3f3",
+  "getMarketFeeds": "0xa95371a4",
+  "feeRecipientAcc": "0xec344f9e",
+  "minOIFee": "0x55950182",
+  "liquidation": "0xf2dfbf66",
+  "viewer": "0xf30878c1",
+  "marginEngine": "0x004006e0",
+  "maxMarkDeviation": "0x11901b5f",
+  "maxMarkDelay": "0xd442efcf",
+  "maxMarkIndexDeviation": "0xc676ae47",
+  "minMarkIndexDeviation": "0xd4fddd2c",
+  "bandNarrowingPeriod": "0x4f54ae98",
+  "fixingWindow": "0xf4360442",
+  "maxSampleGap": "0xcef28777",
+  "fallbackDelay": "0x802c24a5",
+  "minMarkInterval": "0x9bf95850",
+  "indexFeed": "0x198cae76",
+  "forwardFeed": "0x555449ad",
+  "isSigner": "0x7df73e27",
+  "requiredSigners": "0x2772aed9",
+  "heartbeat": "0x3defb962",
+  "spotFeed": "0xc8a2ba0a",
+  "OIFeeRateBPS": "0x2a84d6d9", "wrappedAsset": "0xd9a1836a", "decimals": "0x313ce567",
 }
 
 
@@ -257,6 +327,79 @@ def gate_setup(chain: Chain, d: dict, vault: str) -> list[Gate]:
   ]
 
 
+def parity_mismatches(pairs: list[tuple[str, object, object]]) -> list[str]:
+  """Names of the (name, actual, expected) pairs that differ, addresses compared case-insensitively."""
+  norm = lambda v: v.lower() if isinstance(v, str) else v  # noqa: E731
+  return [f"{name}: {actual} != {expected}" for name, actual, expected in pairs if norm(actual) != norm(expected)]
+
+
+def gate_parity(chain: Chain, d: dict, vault: str) -> Gate:
+  """Every setting the deploy made, re-read: market 1 against the live SRM, the rest against the artifact."""
+  engine, srm, future, feed, viewer = d["manager"], d["srm"], d["future"], d["forwardFeed"], d["viewer"]
+  m = int(d["marketId"])
+  w = lambda to, name, *args, index=0: chain.word(to, selector(name) + "".join(args), index)  # noqa: E731
+  a = lambda to, name, *args: "0x" + chain.call(to, selector(name) + "".join(args))[24:64]  # noqa: E731
+  callee = lambda mgr, x: int(rpc(chain.url, "eth_getStorageAt", [  # noqa: E731
+    mgr, "0x" + keccak(bytes.fromhex(word_address(x) + word_uint(WHITELISTED_CALLEE_SLOT))).hex(), "latest"]), 16)
+  pairs: list[tuple[str, object, object]] = []
+  # market 1, as on the SRM
+  for name in ("maxAccountSize", "borrowingEnabled", "feeRecipientAcc", "minOIFee"):
+    pairs.append((name, w(engine, name), w(srm, name)))
+  pairs.append(("stableFeed", a(engine, "stableFeed"), a(srm, "stableFeed")))
+  for i in range(2):
+    pairs.append((f"depegParams[{i}]", w(engine, "depegParams", index=i), w(srm, "depegParams", index=i)))
+  for name, n in (("perpMarginRequirements", 2), ("baseMarginParams", 2), ("oracleContingencyParams", 4)):
+    for i in range(n):
+      pairs.append((f"{name}[{i}]", w(engine, name, word_uint(m), index=i), w(srm, name, word_uint(1), index=i)))
+  for asset_type, name in ((2, "perp"), (3, "base")):
+    pairs.append((f"assetMap {name}", a(engine, "assetMap", word_uint(m), word_uint(asset_type)),
+                  a(srm, "assetMap", word_uint(1), word_uint(asset_type))))
+  pairs.append(("index feed", a(engine, "getMarketFeeds", word_uint(m)), a(srm, "getMarketFeeds", word_uint(1))))
+  callees = d.get("callees") or []
+  if len(callees) != 4:  # index, mark, impact ask, impact bid: an artifact without them would check nothing
+    return Gate("parity", False, f"the artifact records {len(callees)} callees, expected 4; redeploy writes them")
+  for x in callees:
+    pairs.append((f"callee {x} on the engine", callee(engine, x), 1))
+    pairs.append((f"callee {x} on the SRM", callee(srm, x), 1))
+  # the engine's own, against the artifact
+  pairs += [
+    ("assetMap perp is the perp", a(engine, "assetMap", word_uint(m), word_uint(2)), d["perp"]),
+    ("assetMap base is the escrow", a(engine, "assetMap", word_uint(m), word_uint(3)), d["cngnEscrow"]),
+    ("assetMap future", a(engine, "assetMap", word_uint(m), word_uint(4)), future),
+    ("futureMarginRequirements mm", w(engine, "futureMarginRequirements", word_uint(m), index=0), int(d["futureMMReq"])),
+    ("futureMarginRequirements im", w(engine, "futureMarginRequirements", word_uint(m), index=1), int(d["futureIMReq"])),
+    ("liquidation", a(engine, "liquidation"), d["auction"]),
+    ("viewer", a(engine, "viewer"), viewer),
+    ("viewer's engine", a(viewer, "marginEngine"), engine),
+    ("guardian", a(engine, "guardian"), d["guardian"]),
+    ("perp OI fee", w(viewer, "OIFeeRateBPS", word_address(d["perp"])), 0),
+    ("future OI fee", w(viewer, "OIFeeRateBPS", word_address(future)), 0),
+  ]
+  for name in ("maxMarkDeviation", "maxMarkDelay", "maxMarkIndexDeviation", "minMarkIndexDeviation", "bandNarrowingPeriod",
+               "fixingWindow", "maxSampleGap", "fallbackDelay", "minMarkInterval"):
+    pairs.append((f"future {name}", w(future, name), int(d[name])))
+  pairs += [
+    ("future index", a(future, "indexFeed"), d["indexFeed"]),
+    ("future forward feed", a(future, "forwardFeed"), feed),
+    ("forward feed's index", a(feed, "spotFeed"), d["indexFeed"]),
+    ("forward signer", w(feed, "isSigner", word_address(d["forwardSigner"])), 1),
+    ("forward quorum", w(feed, "requiredSigners"), 1),
+    ("forward heartbeat", w(feed, "heartbeat"), int(d["forwardHeartbeat"])),
+  ]
+  # the single-use deployer holds nothing
+  deployer = d["deployer"]
+  sent = int(rpc(chain.url, "eth_getTransactionCount", [deployer, "latest"]), 16)
+  pairs.append(("deployer transactions since the deploy", sent - int(d["deployerNonce"]), 0))
+  pairs.append(("deployer signs the forward", w(feed, "isSigner", word_address(deployer)), 0))
+  for c in owned(d):
+    pairs.append((f"{c} owner is not the deployer", a(c, "owner").lower() == deployer.lower(), False))
+    pairs.append((f"{c} nominee is not the deployer", a(c, "pendingOwner").lower() == deployer.lower(), False))
+  bad = parity_mismatches(pairs)
+  if bad:
+    return Gate("parity", False, f"{len(bad)} setting(s) differ from the deploy: " + "; ".join(bad[:4]))
+  return Gate("parity", True, f"all {len(pairs)} settings as deployed: market 1 as on the SRM, the rest as in the artifact; deployer {deployer} holds nothing")
+
+
 def fills_gate(listing: dict | None, chain_low: float, chain_high: float) -> Gate:
   """markets-service's fill band for the future (its /v1/markets entry) against the chain's."""
   if listing is None:
@@ -368,6 +511,7 @@ def gate_enable(chain: Chain, d: dict, stack: dict, vault: str) -> list[Gate]:
 
   gates.append(gate_pager(Path(os.environ.get("PAGER_STATE_FILE", Path.home() / ".numo-perp-pager.json"))))
   gates.append(gate_fills(chain, d, os.environ.get("MARKETS_URL", "https://api.numofx.com")))
+  gates.append(gate_parity(chain, d, vault))
   return gates
 
 
@@ -484,6 +628,9 @@ def self_test() -> int:
   # is 1,227.1-1,499.8.
   low, high = chain_fill_band(733418223364218, 10**17)
   assert round(low, 1) == round(1e18 / 733418223364218 * 0.9, 1) and 1_227 < low < 1_228 and 1_499 < high < 1_500, (low, high)
+  # Parity: equal pairs pass, addresses compare case-insensitively, and any difference is named.
+  assert parity_mismatches([("a", 1, 1), ("feed", "0xAbC", "0xabc")]) == []
+  assert parity_mismatches([("mm", 2, 1), ("ok", 3, 3)]) == ["mm: 2 != 1"]
   # The fills gate: markets-service must list the future with the chain's band, enforced.
   listed = {"fill_band_enforced": True, "fill_band_low": "1227.0", "fill_band_high": "1499.7"}
   assert fills_gate(listed, 1227.0, 1499.7).ok
@@ -566,10 +713,17 @@ def main() -> int:
   print()
   for i, a in enumerate(actions):
     print(f"  {i}  {'landed ' if done[i] else 'pending'}  {a['to']}  {a['digest']}  {a['description']}")
+  if all(done) and args.batch == "setup":
+    # the vault owns everything now: re-read what the deployer could have changed while it did
+    current.append(gate_parity(chain, d, vault))
+    report(current[-1:])
   if args.json:
     print(json.dumps({"gates": [asdict(g) for g in current], "landed": done}))
   if all(done):
     print(f"\n{args.batch}: every action has landed; nothing to propose.")
+    if args.batch == "setup" and not current[-1].ok:
+      print("\nPARITY BROKEN after the setup batch: a setting differs from the deploy. Do not enable; investigate.")
+      return 1
     return 0
   if not passed:
     print("\nGATES FAILED: nothing proposed.")
@@ -604,6 +758,18 @@ def main() -> int:
     if not landed(chain, args.batch, d, i, vault):
       raise SystemExit(f"action {i} mined but its postcondition does not hold: stop and investigate")
   print(f"\n{args.batch}: done." + (" The future is open: markets-service can list it." if args.batch == "enable" else ""))
+  if args.batch == "setup":
+    return setup_parity(chain, d, vault)
+  return 0
+
+
+def setup_parity(chain: Chain, d: dict, vault: str) -> int:
+  """After the vault accepts: re-read everything the deployer could have changed while it owned the contracts."""
+  gate = gate_parity(chain, d, vault)
+  report([gate])
+  if not gate.ok:
+    print("\nPARITY BROKEN after the setup batch: a setting differs from the deploy. Do not enable; investigate.")
+    return 1
   return 0
 
 
