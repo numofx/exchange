@@ -434,7 +434,7 @@ The vault proposer's `fills` gate holds the enable batch until markets-service s
   - **If its cash were ever changed:** it would price the future as an option premium and pass no fill price to the
     index-band check.
 
-  It has never been used: since its deployment its only logs are ownership events. #182 retires it from Matching
-  through the vault. The enable batch's `rfq` gate refuses to open the market while it is allowed, so it cannot quietly
-  come back. The rehearsal checks both: enable is refused with the module allowed, and passes once the vault has
-  retired it.
+  It was never used: from its deployment its only logs were ownership events. It is retired on Base at block 52523521
+  (tx `0x5ab98ed1…74db`), and the enable batch's `rfq` gate keeps it off: it refuses to open the market while the
+  module is allowed, so it cannot quietly come back. The rehearsal checks the gate at head: the vault re-allows the
+  module on the fork, enable is refused, and it passes again once the vault has retired it.

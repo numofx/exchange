@@ -398,9 +398,10 @@ async function main() {
   // running, the proposer must refuse; after, everything must pass.
   const refused = failing(await proposer('enable'));
   // The launch cap is sized to the live SecurityModule, so sm passes without a top-up.
-  // RFQ is not supported, and the RfqModule is still allowed on Matching until propose_retire_rfq_module.py lands
-  assert.deepEqual(refused.sort(), ['fills', 'pager', 'reserve', 'rfq'], `before seeding, exactly these gates fail: ${refused}`);
-  log(`enable refused before the seed, the listing and RFQ's retirement: ${refused.join(', ')} gates fail; custody, feeds, marks, escrow and sm pass`);
+  // RFQ is not supported. The RfqModule was retired on Base at block 52523521, so at head the rfq gate already passes;
+  // it is proved to fire below by re-allowing the module on the fork.
+  assert.deepEqual(refused.sort(), ['fills', 'pager', 'reserve'], `before seeding, exactly these gates fail: ${refused}`);
+  log(`enable refused before the seed and the listing: ${refused.join(', ')} gates fail; custody, feeds, marks, escrow, sm and rfq pass`);
   // 30% of one side at the cap, in cNGN at the index, plus 1% for the index moving meanwhile
   const reserve = ((BigInt(artifact.futureOICap) / 2n) * BigInt(artifact.contractSize) * 3n) / (10n * spot);
   await depositTo(USERS.treasury, POOL, CNGN, ESCROW, (reserve * 101n) / 100n / 10n ** 12n);
@@ -408,17 +409,24 @@ async function main() {
   writeFileSync(join(OUT, 'proposer-pager-state.json'), JSON.stringify({ lastRunAt: Math.floor(Date.now() / 1000), lastRunOk: true, provider: 'pushover', heartbeatConfigured: true }));
   // the futures listing ships, with its fill-band check: markets-service now lists the future and its band
   listed = true;
-  // the vault retires the RfqModule: the action propose_retire_rfq_module.py proposes, checked against its pinned digest
-  const rfqRetire = {
+  // the rfq gate keeps the RfqModule off: re-allowed on the fork, enable is refused on rfq alone
+  const setRfq = (allowed: boolean) => ({
     to: '0x9E90A9cD13d859Bd6a08168082FB1F6F7405F191' as Address,
     data: encodeFunctionData({
       abi: parseAbi(['function setAllowedModule(address module, bool allowed)']),
       functionName: 'setAllowedModule',
-      args: ['0x8399328AC53a279A3564E49c2cbC82Ce95ee62D3', false],
+      args: ['0x8399328AC53a279A3564E49c2cbC82Ce95ee62D3', allowed],
     }),
-  };
+  });
+  const reAllow = await vault.sendTransaction({ ...setRfq(true), chain, account: VAULT });
+  assert.equal((await pub.waitForTransactionReceipt({ hash: reAllow })).status, 'success', 'the vault re-allows the RfqModule on the fork');
+  const rfqBack = failing(await proposer('enable'));
+  assert.deepEqual(rfqBack, ['rfq'], `with the RfqModule allowed again, only the rfq gate fails: ${rfqBack}`);
+  log('enable refused with the RfqModule re-allowed: the rfq gate fires');
+  // the vault retires it again: the action propose_retire_rfq_module.py proposed, checked against its pinned digest
+  const rfqRetire = setRfq(false);
   assert.equal(keccak256(encodePacked(['address', 'bytes32'], [rfqRetire.to, keccak256(rfqRetire.data)])),
-    '0x41d668ad1ec34b68c812e2d46101483340793cc7bdcb4148b9b63bb5c5ed4d0f', 'the RFQ retirement is the action #182 proposes');
+    '0x41d668ad1ec34b68c812e2d46101483340793cc7bdcb4148b9b63bb5c5ed4d0f', 'the RFQ retirement is the action #182 proposed');
   const rfqHash = await vault.sendTransaction({ to: rfqRetire.to, data: rfqRetire.data, chain, account: VAULT });
   assert.equal((await pub.waitForTransactionReceipt({ hash: rfqHash })).status, 'success', 'the vault retires the RfqModule');
   const allowed = await proposer('enable');
