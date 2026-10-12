@@ -81,14 +81,17 @@ contract DeployCngnFuture is Utils {
   /// @dev USDC per contract.
   uint internal constant DEFAULT_CONTRACT_SIZE = 1_000e18;
 
-  /// @dev Launch OI cap for the ENABLE batch, in contracts summed over both sides: 20 contracts a side, $20k.
-  uint internal constant DEFAULT_FUTURE_OI_CAP = 40e18;
+  /// @dev Launch OI cap for the ENABLE batch, in contracts summed over both sides: 15 contracts a side, $15k. Sized to
+  ///      the SecurityModule as it stands ($3,250): a 25% step on a full side at IM 25% costs $15,000 x 25% x 75% =
+  ///      $2,812, plus ~$134 on the perp's open interest, $2,947 in all. The enable gate (propose_future_batch.py, sm)
+  ///      re-checks this live; a larger cap needs the module funded first.
+  uint internal constant DEFAULT_FUTURE_OI_CAP = 30e18;
 
   /// @dev How much cNGN the escrow takes under the new manager: the pool reserve plus traders' cNGN collateral. At the
-  ///      launch OI cap and an index of ~1,364: the reserve is 30% of one side ($6,000, ~8.2M cNGN), and margin posted
-  ///      wholly in cNGN is 25% IM at the 50% cNGN factor on $40k ($20,000, ~27.3M). 30M takes the reserve and ~80% of
-  ///      that margin, with no allowance for devaluation; the pager's future-escrow-cap check says when to raise it,
-  ///      before a reserve top-up would no longer fit. Raise it with the OI cap.
+  ///      launch OI cap and an index of ~1,364: the reserve is 30% of one side ($4,500, ~6.1M cNGN), and margin posted
+  ///      wholly in cNGN is 25% IM at the 50% cNGN factor on $30k ($15,000, ~20.5M). 30M takes both, ~26.6M, with
+  ///      ~3.4M (~13%) to spare for cNGN weakening; the pager's future-escrow-cap check says when to raise it, before a
+  ///      reserve top-up would no longer fit. Raise it with the OI cap.
   uint internal constant DEFAULT_FUTURE_CNGN_CAP = 30_000_000e18;
 
   uint internal constant MM_REQ = 0.15e18;
