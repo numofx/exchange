@@ -5,6 +5,27 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-12 20:15 UTC: RfqModule retirement proposed to the vault
+
+Run from the box over SSM through `run-with-ssm-mark.sh`. `propose_retire_rfq_module.py`, its
+import `resolve_cngn_action6.py` and `deployments/8453/RFQ_MODULE_RETIRE_VAULT_ACTIONS.json` were
+copied from `main` at `b9b70d5` (#182) into `/tmp/rfq-retire`, deleted after the run, so nothing on
+the box changed. The change is in the vault's queue.
+
+- **What.** MPCVault signing request `64d0928d-89f9-491a-87b3-4e6e61717fda`, PENDING: from the vault
+  `0x1dcA…F435` to Matching `0x9E90…F191`, `setAllowedModule(address,bool)` (`0xb1b62825`) with the
+  RfqModule `0x8399…62D3` and `false`. The calldata read back from MPCVault recomputes to the
+  artifact's digest `0x41d668ad…4d0f`.
+- **Why.** RFQ is not supported. The module had been allowed on Matching since its deploy, quoting
+  in the frozen DFXM cash, and would price a dated-future leg as an option premium.
+- **Checked first, on the box.** The dry run and the proposing run both passed: Matching owned by
+  the vault, `allowedModules(RfqModule)` true, the vault's call simulates, and blocks
+  48833365–52523401 hold 3 logs from the module, all ownership. Nothing has ever been sent
+  through it.
+- **Pending.** Approval in the MPCVault app, then
+  `propose_retire_rfq_module.py --confirm 64d0928d-89f9-491a-87b3-4e6e61717fda` from the box,
+  which waits for the receipt and reads `allowedModules(RfqModule)` back as false.
+
 ## 2026-10-11 11:20 UTC: 35 stale `setMarkPrice` signing requests rejected in MPCVault
 
 Run from the box over SSM through `run-with-ssm-mark.sh`. The script was a throwaway in `/tmp`,
