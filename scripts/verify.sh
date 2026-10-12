@@ -64,6 +64,10 @@ step execution contracts/execution "forge test" forge test
 # ---- services-markets.yml --------------------------------------------------------------
 step markets services/markets "go build ./..." go build ./...
 step markets services/markets "go vet ./..." go vet ./...
+# Every selector the service pins, against the contracts' compiled ABIs (the revert classifier by error name).
+step markets contracts/risk-core "forge build (ABIs, for the selector check)" forge build
+step markets contracts/execution "forge build (ABIs, for the selector check)" forge build
+step markets services/markets "selectors name compiled functions and errors" go test -tags abicheck -count=1 ./internal/selectorcheck/
 step markets services/markets "go test ./... against Postgres (none may skip)" ./scripts/test-with-db.sh
 
 # ---- services-execution.yml ------------------------------------------------------------
