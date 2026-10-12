@@ -14,7 +14,11 @@ export const fixingAbi = parseAbi([
   'function recordFixingSample(uint96 subId)',
   'function fixSettlementFromIndex(uint96 subId)',
 ]);
-const managerAbi = parseAbi(['function closeOutExpired(uint256 accountId, uint96 subId)']);
+const managerAbi = parseAbi([
+  'function closeOutExpired(uint256 accountId, uint96 subId)',
+  'function settleAccount(uint256 accountId)',
+]);
+const pendingAbi = parseAbi(['function getPendingVM(uint256 accountId, uint256 subId) view returns (int256)']);
 const subAccountsAbi = parseAbi([
   'function lastAccountId() view returns (uint256)',
   'function getBalance(uint256 accountId, address asset, uint256 subId) view returns (int256)',
@@ -37,9 +41,12 @@ export type ExpiryOutcome =
   | 'closed-out'
   | 'done';
 
+export type SweepOutcome = { settled: number; failed: number };
+
 /**
  * Takes a USDC/cNGN future through expiry, with nothing but permissionless calls:
  *
+ *  0. After every mark the forward publisher lands, settles every holder's VM, payers first (sweep).
  *  1. In the fixingWindow before expiry, records an index sample every FIXING_SAMPLE_INTERVAL_MS
  *     (well inside the contract's maxSampleGap, so one failed sample does not break the fixing).
  *  2. After expiry, fixes the settlement price from the samples. If the fixing is incomplete, it
@@ -63,7 +70,7 @@ export class ExpiryKeeper {
     private readonly alert: Alerter,
   ) {}
 
-  private future<T>(abi: typeof futureAbi | typeof fixingAbi, functionName: string, args: readonly unknown[] = []) {
+  private future<T>(abi: typeof futureAbi | typeof fixingAbi | typeof pendingAbi, functionName: string, args: readonly unknown[] = []) {
     return this.chain.read<T>(this.config.FUTURE_ASSET, abi, functionName, args);
   }
 
@@ -149,6 +156,38 @@ export class ExpiryKeeper {
       holders.push({ id, manager: await this.chain.read<Address>(ledger, subAccountsAbi, 'manager', [id]) });
     }
     return holders;
+  }
+
+  /**
+   * Realises every holder's VM after a mark, payers before receivers. FutureManager settles lazily:
+   * an account's VM moves only when something touches it, and a loser has no reason to. Without
+   * this, a winner who settles to withdraw is paid from the pool's reserve, and that reserve stays
+   * out until each loser happens to trade, be liquidated or be closed out at expiry. Payers first,
+   * so each sweep pays winners from what losers just paid in: the reserve then only covers what
+   * losers pay in USDC instead of cNGN, and winners who settle themselves between sweeps.
+   */
+  async sweep(): Promise<SweepOutcome> {
+    const holders = await this.holders();
+    const pending = await Promise.all(
+      holders.map(async (h) => ({
+        ...h,
+        vm: await this.future<bigint>(pendingAbi, 'getPendingVM', [h.id, this.config.FUTURE_SUB_ID]),
+      })),
+    );
+    const due = pending.filter((h) => h.vm !== 0n).sort((a, b) => (a.vm < b.vm ? -1 : a.vm > b.vm ? 1 : 0));
+    let settled = 0;
+    let failed = 0;
+    for (const { id, manager, vm } of due) {
+      try {
+        const tx = await this.chain.write(manager, managerAbi, 'settleAccount', [id]);
+        settled++;
+        console.log(`[sweep] settled account ${id} (${vm < 0n ? 'paid' : 'received'} ${vm < 0n ? -vm : vm} cNGN wei) tx=${tx}`);
+      } catch (error) {
+        failed++;
+        await this.alert(`settle-failed-${id}`, `settleAccount(${id}) failed: ${(error as Error).message.slice(0, 300)}`);
+      }
+    }
+    return { settled, failed };
   }
 
   private async closeOut(): Promise<ExpiryOutcome> {

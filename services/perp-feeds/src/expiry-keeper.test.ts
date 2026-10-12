@@ -40,6 +40,7 @@ type State = {
   lastSampleTime: bigint;
   largestGap: bigint;
   balances: bigint[]; // by account id - 1
+  pending?: bigint[]; // VM getPendingVM reports, by account id - 1
   failWrites?: Set<string>;
 };
 
@@ -73,6 +74,7 @@ function run(state: State, cfg = config) {
         lastAccountId: () => BigInt(state.balances.length),
         getBalance: () => state.balances[Number(args[0] as bigint) - 1],
         manager: () => MANAGER_OF(args[0] as bigint),
+        getPendingVM: () => state.pending?.[Number(args[0] as bigint) - 1] ?? 0n,
       };
       return values[functionName]() as T;
     },
@@ -171,6 +173,28 @@ describe('expiry keeper: close-out', () => {
     const { keeper, alerts } = run(state({ settled: true, balances: [1n], failWrites: new Set(['closeOutExpired']) }));
     assert.equal(await keeper.tick(), 'closing-out');
     assert.deepEqual(alerts, ['close-out-failed-1']);
+  });
+});
+
+describe('expiry keeper: VM sweep after a mark', () => {
+  it('settles payers before receivers, so the pool is paid in before it pays out', async () => {
+    // accounts 1-5: a receiver, a small payer, nothing pending, a large payer, no position
+    const { keeper, writes } = run(state({ balances: [3n, -1n, 2n, -4n, 0n], pending: [700n, -100n, 0n, -600n, 0n] }));
+    assert.deepEqual(await keeper.sweep(), { settled: 3, failed: 0 });
+    assert.deepEqual(writes.map((w) => [w.fn, w.args[0]]), [['settleAccount', 4n], ['settleAccount', 2n], ['settleAccount', 1n]]);
+  });
+
+  it("settles each account on its own manager, read from the future's ledger", async () => {
+    const { keeper, writes, readsFrom } = run(state({ balances: [1n, -1n], pending: [5n, -5n] }));
+    await keeper.sweep();
+    assert.deepEqual(writes.map((w) => [w.args[0], w.to]), [[2n, MANAGER_OF(2n)], [1n, MANAGER_OF(1n)]]);
+    assert.deepEqual([...new Set(readsFrom)].sort(), [FUTURE, LEDGER].sort());
+  });
+
+  it('alerts on a settle that fails and carries on with the rest', async () => {
+    const { keeper, alerts } = run(state({ balances: [1n, -1n], pending: [5n, -5n], failWrites: new Set(['settleAccount']) }));
+    assert.deepEqual(await keeper.sweep(), { settled: 0, failed: 2 });
+    assert.deepEqual(alerts, ['settle-failed-2', 'settle-failed-1']);
   });
 });
 

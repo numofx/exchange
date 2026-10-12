@@ -10,6 +10,8 @@
  *   - three traders open positions on the live perp cash and cNGN escrow, and a treasury funds the pool;
  *   - the real keeper (dist/forward-main.js) runs as its own process against the fork, reading a stub
  *     markets-service book and posting alerts to a stub webhook;
+ *   - the keeper's own sweep realises VM after each mark (the harness never settles an account);
+ *   - the pager runs once against the fork with the future open, and must count it;
  *   - the clock is walked through marks (no book, a deep book, a dust book), the band's narrowing, the
  *     fixing window (with the keeper killed and restarted inside it), settlement and close-out.
  *
@@ -24,7 +26,7 @@
  */
 import assert from 'node:assert/strict';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { copyFileSync, createWriteStream, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, createWriteStream, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -114,7 +116,6 @@ const abi = {
     'function withdraw(uint256 accountId, uint256 assetAmount, address recipient)',
   ]),
   manager: parseAbi([
-    'function settleAccount(uint256 accountId)',
     'function getMargin(uint256 accountId, bool isInitial) view returns (int256)',
   ]),
   future: parseAbi([
@@ -122,6 +123,7 @@ const abi = {
     'function futureContracts(uint256 subId) view returns (FutureContract)',
     'function totalPosition(address manager) view returns (uint256)',
     'function markIndexBand(uint64 expiry) view returns (uint256)',
+    'function getPendingVM(uint256 accountId, uint256 subId) view returns (int256)',
   ]),
   submitter: parseAbi(['function submitData(bytes managerData)']),
 };
@@ -252,7 +254,7 @@ async function main() {
     },
   );
   const forgeLog = join(OUT, 'forge-deploy.log');
-  createWriteStream(forgeLog).end(`${forge.stdout}\n${forge.stderr}`);
+  writeFileSync(forgeLog, `${forge.stdout}\n${forge.stderr}`);
   assert.equal(forge.status, 0, `forge script failed, see ${forgeLog}`);
   const artifact = JSON.parse(readFileSync(join(LOCAL, 'CNGN_NOV30_2026_FUTURE.json'), 'utf8'));
   const FUTURE = artifact.future as Address;
@@ -330,12 +332,13 @@ async function main() {
     }
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(book));
   }).listen(BOOK_PORT);
-  const alerts: { at: bigint; text: string }[] = [];
+  const alerts: { text: string }[] = [];
   const hookServer = createServer((req, res) => {
     let body = '';
     req.on('data', (chunk) => (body += chunk));
-    req.on('end', async () => {
-      alerts.push({ at: await head().catch(() => 0n), text: JSON.parse(body).text });
+    req.on('end', () => {
+      // recorded before anything is awaited, so a check right after the sender exits sees it
+      alerts.push({ text: JSON.parse(body).text });
       res.writeHead(200).end();
     });
   }).listen(HOOK_PORT);
@@ -395,8 +398,14 @@ async function main() {
       await sleep(400);
     }
   }
-  async function nextMark(label: string, expected: bigint, tolerance: number) {
+  /** Moves the clock, then waits for the keeper's next mark. The last mark time is read before the
+   *  clock moves: read after, a keeper that marks first leaves nothing to wait for. */
+  async function advanceToMark(seconds: bigint, label: string, expected: () => Promise<bigint>, tolerance: number, price = spot) {
     const before = (await contractOf()).lastMarkTime;
+    await advance(seconds, price);
+    return nextMark(label, await expected(), tolerance, before);
+  }
+  async function nextMark(label: string, expected: bigint, tolerance: number, before: bigint) {
     const c = await waitFor(`a mark (${label})`, async () => {
       const now = await contractOf();
       return now.lastMarkTime > before ? now : undefined;
@@ -414,42 +423,84 @@ async function main() {
   // ---- marks -----------------------------------------------------------------------------------
   const carryNow = async () => carryForward(invert(spot), CARRY, EXPIRY - (await head()));
 
-  await advance(3_601n);
-  await nextMark('1h, no book -> carry', await carryNow(), 0.0005);
+  await advanceToMark(3_601n, '1h, no book -> carry', carryNow, 0.0005);
 
   const fwd = await carryNow();
   book = {
     bids: [level(fwd * 1008n / 1000n, '3', 'buy')],
     asks: [level(fwd * 1012n / 1000n, '3', 'sell')],
   };
-  await advance(3_601n);
-  await nextMark('2h, 3,000 USDC each side at +0.8%/+1.2% -> book mid', (await carryNow()) * 101n / 100n, 0.001);
+  await advanceToMark(3_601n, '2h, 3,000 USDC each side at +0.8%/+1.2% -> book mid', async () => (await carryNow()) * 101n / 100n, 0.001);
 
   book = {
     bids: [level(fwd * 1030n / 1000n, '0.5', 'buy')],
     asks: [level(fwd * 1031n / 1000n, '0.5', 'sell')],
   };
-  await advance(3_601n);
-  const afterMarks = await nextMark('3h, 500 USDC dust at +3% -> ignored, carry', await carryNow(), 0.0005);
+  const afterMarks = await advanceToMark(3_601n, '3h, 500 USDC dust at +3% -> ignored, carry', carryNow, 0.0005);
   book = null;
 
-  for (const acc of all) await send(operator, MANAGER, abi.manager, 'settleAccount', [acc]);
+  // Nobody settles by hand: the keeper's sweep after each mark must have realised every account's VM.
+  await waitFor('the sweep to realise every account', async () => {
+    for (const a of all) if ((await read<bigint>(FUTURE, abi.future, 'getPendingVM', [a, SUB_ID])) !== 0n) return undefined;
+    return true;
+  });
+  log(`sweep: ${keeperLines.filter((line) => line.startsWith('[sweep] settled account')).length} settlements after 3 marks, no VM left pending`);
   const aliceVm = (await cngnOf(alice)) - cngnStart.get(alice)!;
   assert.equal(aliceVm, 2n * 1_000n * (afterMarks.markPrice - mark0), 'alice: 2 contracts of VM, in cNGN');
   assert.equal((await cngnOf(bob)) - cngnStart.get(bob)!, -3n * 1_000n * (afterMarks.markPrice - mark0), 'bob: 3, in cNGN');
   log(`VM after 3 marks settled: alice ${fmt(aliceVm)} cNGN, bob ${fmt((await cngnOf(bob)) - cngnStart.get(bob)!)} cNGN, carol ${fmt((await bal(carol, CASH)) - usdcStartCarol, 18)} USDC cash`);
 
+  // The pager, against the fork with the future open: it must read the deployed future's book and pool.
+  // A fresh state file: a kept one holds back a warning an earlier run already sent (its 6h repeat).
+  rmSync(join(OUT, 'pager-state.json'), { force: true });
+  // Async, not spawnSync: the pager posts its Slack warning to the stub webhook, which is served from
+  // this process and cannot answer while a synchronous child blocks the event loop.
+  const pager = await new Promise<{ stdout: string; stderr: string }>((resolve) => {
+    const child = spawn('python3', ['scripts/ops/check_perp_pager.py'], {
+      cwd: RISK_CORE,
+      env: {
+        PATH: process.env.PATH,
+        HOME: OUT,
+        RPC_URL: RPC,
+        FUTURE_ARTIFACT: join(LOCAL, 'CNGN_NOV30_2026_FUTURE.json'),
+        FUTURE_POOL_RESERVE_CNGN: '5000000',
+        PAGER_STATE_FILE: join(OUT, 'pager-state.json'),
+        MATCHER_HEALTH_URL: `http://127.0.0.1:${BOOK_PORT}/v1/health`,
+        ALERT_WEBHOOK_URL: `http://127.0.0.1:${HOOK_PORT}/hook`,
+      },
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => (stdout += chunk));
+    child.stderr.on('data', (chunk) => (stderr += chunk));
+    child.on('exit', () => resolve({ stdout, stderr }));
+  });
+  writeFileSync(join(OUT, 'pager.log'), `${pager.stdout}\n${pager.stderr}`);
+  const futureLine = pager.stdout.split('\n').find((line) => line.startsWith('future:'));
+  const coverageLine = pager.stdout.split('\n').find((line) => line.startsWith('sm coverage:'));
+  log(`pager ${futureLine}`);
+  log(`pager ${coverageLine}`);
+  assert.match(futureLine ?? '', /^future: one side \$3,000 at IM 25%, open; pool [\d,]+ cNGN \(reserve 5,000,000 set\)/, 'pager reads the future');
+  assert.match(coverageLine ?? '', /future \$3,000/, 'pager counts the future in SecurityModule coverage');
+  assert.match(futureLine ?? '', /; escrow [\d,]+ of 30,000,000 cNGN$/, 'pager reads the escrow cap the deploy set');
+  // ~2M of a 5M reserve is 40%: under half, over a quarter, so a Slack warning and no page
+  assert.ok(alerts.some((a) => a.text.includes('cNGN future VM pool at')), 'pool reserve warning reached the webhook');
+
   // ---- weeks later: the band narrows, cNGN weakens 2% ----------------------------------------
-  await advance(EXPIRY - 10n * 86_400n - (await head()), spot * 100n / 102n);
-  await nextMark('E-10d after a 39-day gap, index +2%', await carryNow(), 0.0005);
+  await advanceToMark(EXPIRY - 10n * 86_400n - (await head()), 'E-10d after a 39-day gap, index +2%', carryNow, 0.0005, spot * 100n / 102n);
   await waitFor('the late-mark alert at the webhook', async () => alerts.some((a) => a.text.includes('last mark')));
   log(`late-mark alert reached the webhook: "${alerts.find((a) => a.text.includes('last mark'))!.text}"`);
 
+  // Stopped straight after a mark, before (or during) its sweep: the restarted keeper must sweep on startup.
   await stopKeeper();
-  log('keeper stopped and restarted (resume from chain state)');
+  const pendingAtStop = (await Promise.all(all.map((a) => read<bigint>(FUTURE, abi.future, 'getPendingVM', [a, SUB_ID])))).filter((v) => v !== 0n).length;
   startKeeper();
-  await advance(LAST_TRADE - 20n * 60n - (await head()));
-  await nextMark('E-1h20m, band at its floor', await carryNow(), 0.0005);
+  await waitFor('the startup sweep', async () => {
+    for (const a of all) if ((await read<bigint>(FUTURE, abi.future, 'getPendingVM', [a, SUB_ID])) !== 0n) return undefined;
+    return true;
+  });
+  log(`keeper stopped with ${pendingAtStop} of 3 accounts' VM unrealised; restarted, its startup sweep left none`);
+  await advanceToMark(LAST_TRADE - 20n * 60n - (await head()), 'E-1h20m, band at its floor', carryNow, 0.0005);
 
   // ---- last trade, the fixing window ---------------------------------------------------------
   await advance(LAST_TRADE + 10n - (await head()));
