@@ -41,7 +41,7 @@ Enable gates (all read live, all required):
             out-of-band order is rejected before it matches instead of reverting at settlement. GET
             {MARKETS_URL}/v1/markets must list the future (asset_address, sub_id) with fill_band_enforced: true and
             fill_band_low / fill_band_high (cNGN per USDC, decimal strings), and those must equal the chain's band now,
-            the index -/+ markIndexBand(expiry), within FILL_BAND_TOLERANCE. Fails until the futures listing ships it.
+            the index -/+ markIndexBand(expiry), within FILL_BAND_TOLERANCE. Fails until CNGN_FUTURE_* is set on markets-service.
 
 pool-withdraw  engine.withdrawFromPool(asset, amount, recipient): take cNGN or cash out of the VM pool, e.g. to
           rebalance it (the USDC losers paid in, out to buy cNGN). withdrawFromPool has no risk check, so the
