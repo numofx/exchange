@@ -7,8 +7,8 @@
  * clock meanwhile: the anvil suites share one node, which is why `pnpm test` runs files one at a time
  * (--test-concurrency=1). Run concurrently, the perp suite's 60-second jump lands inside this window.
  *
- * Close-out is not here: it needs a full FutureManager stack (cash, cNGN escrow, auction), which
- * risk-core's fork suite (CngnFutureDeployFork) runs on real Base contracts. The keeper's scan and
+ * Close-out is not here: it needs a full MarginEngine stack (cash, cNGN escrow, perp, auction), which
+ * risk-core's fork suite (MarginEngineDeployFork) runs on real Base contracts. The keeper's scan and
  * batching are unit-tested in expiry-keeper.test.ts.
  *
  * Skipped without ANVIL_RPC_URL.
