@@ -101,6 +101,8 @@ interface IFutureAsset is IAsset, IPositionTracking {
   error FA_TradingClosed();
   error FA_InvalidIndexParams();
   error FA_MarkOutsideIndexBand();
+  /// @dev A fill priced outside the band a mark must sit in (markIndexBand around the index)
+  error FA_FillOutsideIndexBand();
   error FA_OutsideFixingWindow();
   error FA_FixingIncomplete();
   error FA_FixingAvailable();
