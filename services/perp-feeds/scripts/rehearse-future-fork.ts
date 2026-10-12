@@ -4,8 +4,9 @@
  *
  *   - anvil forks Base at head (chain id 31337, so the deploy artifacts land in the gitignored
  *     deployments/31337 and the keeper accepts a raw signer key);
- *   - deploy-cngn-future.s.sol is run unchanged with `forge script --broadcast`;
- *   - the vault's two batches go through propose_future_batch.py's checks (--local: rebuilt from the
+ *   - deploy-margin-engine.s.sol is run unchanged with `forge script --broadcast`: MarginEngine beside the live SRM,
+ *     with spot cNGN, the perp and the future in one account;
+ *   - the vault's two batches go through propose_margin_engine_batch.py's checks (--local: rebuilt from the
  *     deployment artifact, every gate read from the fork, the enable batch refused until the pool is
  *     seeded), then are executed by impersonating the vault;
  *   - three traders open positions on the live perp cash and cNGN escrow, and a treasury funds the pool;
@@ -50,7 +51,7 @@ import {
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
-import { encodeManagerData, encodeSpotData, signFeedUpdate } from '../src/feed-data.js';
+import { encodeManagerData, encodeSpotData, encodeSpotDiffData, signFeedUpdate } from '../src/feed-data.js';
 import { carryForward, invert, ONE } from '../src/forward-targets.js';
 
 const FORK_URL = process.env.FORK_URL ?? 'https://mainnet.base.org';
@@ -77,7 +78,7 @@ const CARRY = 2n * 10n ** 17n; // 20% a year
 const BALANCE_SLOT: Record<string, bigint> = { [USDC]: 9n, [CNGN]: 201n };
 const COPIED = ['core.json', 'CNGN_PERP_STACK.json', 'CNGN_PERP_COLLATERAL.json'];
 // what the deploy writes there: removed afterwards, so nothing reads a fork's addresses as real ones
-const WRITTEN = ['CNGN_NOV30_2026_FUTURE', 'CNGN_NOV30_2026_FUTURE_VAULT_ACTIONS', 'CNGN_NOV30_2026_FUTURE_ENABLE_VAULT_ACTIONS'].map((n) => `${n}.json`);
+const WRITTEN = ['MARGIN_ENGINE', 'MARGIN_ENGINE_VAULT_ACTIONS', 'MARGIN_ENGINE_ENABLE_VAULT_ACTIONS'].map((n) => `${n}.json`);
 
 // Derived, not anvil's defaults: well-known keys carry EIP-7702 delegations on Base.
 const key = (role: string) => keccak256(toHex(`numo.future-rehearsal.${role}`));
@@ -210,22 +211,22 @@ async function main() {
   let spot = liveSpot;
   const vault = await impersonated(VAULT);
   await send(vault, INDEX, abi.feed, 'addSigner', [addr(KEYS.index), true]);
+  // the perp's mark and impact feeds, kept at the index (diff 0: mark = index, no funding) so the perp can trade
+  const PERP_FEEDS = [stack.markFeed, stack.impactAskFeed, stack.impactBidFeed] as Address[];
+  for (const feed of PERP_FEEDS) await send(vault, feed, abi.feed, 'addSigner', [addr(KEYS.index), true]);
   const indexSigner = privateKeyToAccount(KEYS.index);
   /** Signs the index for `at` and submits it. With `at` ahead of head, the submission is the block that moves the clock. */
   async function pushIndex(price = spot, at?: bigint) {
     spot = price;
     const now = at ?? (await head());
-    const update = await signFeedUpdate({
-      signer: indexSigner,
-      kind: 'LyraSpotFeed',
-      feed: INDEX,
-      chainId: 31337,
-      data: encodeSpotData(price),
-      timestamp: now,
-      deadline: now + 120n,
-    });
+    const sign = (kind: 'LyraSpotFeed' | 'LyraSpotDiffFeed', feed: Address, data: Hex) =>
+      signFeedUpdate({ signer: indexSigner, kind, feed, chainId: 31337, data, timestamp: now, deadline: now + 120n });
+    const updates = [
+      await sign('LyraSpotFeed', INDEX, encodeSpotData(price)),
+      ...(await Promise.all(PERP_FEEDS.map((feed) => sign('LyraSpotDiffFeed', feed, encodeSpotDiffData(0n))))),
+    ];
     if (at !== undefined) await test.setNextBlockTimestamp({ timestamp: at });
-    await send(operator, SUBMITTER, abi.submitter, 'submitData', [encodeManagerData([update])]);
+    await send(operator, SUBMITTER, abi.submitter, 'submitData', [encodeManagerData(updates)]);
   }
   /**
    * Moves the clock by `seconds` in the index update's own block, so no block ever holds a stale
@@ -246,7 +247,7 @@ async function main() {
   log(`deploying: INITIAL_MARK ${fmt(initialMark)} (carry forward), FORWARD_SIGNER ${addr(KEYS.forward)}`);
   const forge = spawnSync(
     'forge',
-    ['script', 'scripts/deploy-cngn-future.s.sol', '--rpc-url', RPC, '--private-key', KEYS.deployer, '--broadcast'],
+    ['script', 'scripts/deploy-margin-engine.s.sol', '--rpc-url', RPC, '--private-key', KEYS.deployer, '--broadcast'],
     {
       cwd: RISK_CORE,
       env: { ...process.env, INITIAL_MARK: initialMark.toString(), CARRY: CARRY.toString(), FORWARD_SIGNER: addr(KEYS.forward) },
@@ -257,7 +258,7 @@ async function main() {
   const forgeLog = join(OUT, 'forge-deploy.log');
   writeFileSync(forgeLog, `${forge.stdout}\n${forge.stderr}`);
   assert.equal(forge.status, 0, `forge script failed, see ${forgeLog}`);
-  const artifact = JSON.parse(readFileSync(join(LOCAL, 'CNGN_NOV30_2026_FUTURE.json'), 'utf8'));
+  const artifact = JSON.parse(readFileSync(join(LOCAL, 'MARGIN_ENGINE.json'), 'utf8'));
   const FUTURE = artifact.future as Address;
   const MANAGER = artifact.manager as Address;
   const FORWARD_FEED = artifact.forwardFeed as Address;
@@ -268,12 +269,12 @@ async function main() {
   log(`deployed future ${FUTURE} #${SUB_ID}, manager ${MANAGER}, forward feed ${FORWARD_FEED}, pool account ${POOL}`);
 
   // ---- the vault's batches, through the proposer's checks -------------------------------------------
-  // propose_future_batch.py, in --local mode, rebuilds each batch from the deployment artifact and
+  // propose_margin_engine_batch.py, in --local mode, rebuilds each batch from the deployment artifact and
   // reads every gate from the fork. It never proposes; the vault's side is played by impersonation.
   type Proposal = { gates: { name: string; ok: boolean; detail: string }[]; landed: boolean[] };
   async function proposer(batch: 'setup' | 'enable'): Promise<Proposal> {
     const out = await new Promise<string>((resolve) => {
-      const child = spawn('python3', ['scripts/ops/propose_future_batch.py', batch, '--local', '--dir', LOCAL, '--json'], {
+      const child = spawn('python3', ['scripts/ops/propose_margin_engine_batch.py', batch, '--local', '--dir', LOCAL, '--json'], {
         cwd: RISK_CORE,
         env: { PATH: process.env.PATH, HOME: OUT, RPC_URL: RPC, PAGER_STATE_FILE: join(OUT, 'proposer-pager-state.json') },
       });
@@ -284,7 +285,7 @@ async function main() {
     });
     writeFileSync(join(OUT, `proposer-${batch}.log`), out);
     const last = out.trim().split('\n').filter((line) => line.startsWith('{')).at(-1);
-    assert.ok(last, `propose_future_batch.py ${batch} printed no report:\n${out.slice(-600)}`);
+    assert.ok(last, `propose_margin_engine_batch.py ${batch} printed no report:\n${out.slice(-600)}`);
     return JSON.parse(last) as Proposal;
   }
   const failing = (p: Proposal) => p.gates.filter((g) => !g.ok).map((g) => g.name);
@@ -301,7 +302,7 @@ async function main() {
   const setupBefore = await proposer('setup');
   assert.deepEqual(failing(setupBefore), [], 'setup gates pass on a fresh deploy');
   assert.ok(setupBefore.landed.every((l) => !l), 'nothing of the setup batch has landed yet');
-  await runBatch('CNGN_NOV30_2026_FUTURE_VAULT_ACTIONS');
+  await runBatch('MARGIN_ENGINE_VAULT_ACTIONS');
   assert.ok((await proposer('setup')).landed.every(Boolean), 'the proposer sees every setup action landed');
 
   // ---- accounts and positions ----------------------------------------------------------------
@@ -339,7 +340,7 @@ async function main() {
   const allowed = await proposer('enable');
   assert.deepEqual(failing(allowed), [], `after seeding, every enable gate passes: ${JSON.stringify(allowed.gates.filter((g) => !g.ok))}`);
   log(`enable gates pass: pool seeded with ${fmt(reserve * 101n / 100n)} cNGN, the SecurityModule as it is on Base`);
-  await runBatch('CNGN_NOV30_2026_FUTURE_ENABLE_VAULT_ACTIONS');
+  await runBatch('MARGIN_ENGINE_ENABLE_VAULT_ACTIONS');
   assert.ok((await proposer('enable')).landed.every(Boolean), 'the proposer sees the market open');
   const alice = await account(USERS.alice);
   const bob = await account(USERS.bob);
@@ -359,6 +360,16 @@ async function main() {
   // and one in USDC, and the winner is paid in cNGN either way (the pool fronts what Carol pays in USDC).
   await trade(bob, alice, 2n * ONE);
   await trade(bob, carol, ONE);
+  // the point of the engine: the perp in the same accounts as spot cNGN and the future
+  const PERP = stack.perp as Address;
+  await send(operator, SUBACCOUNTS, abi.subAccounts, 'submitTransfer', [
+    { fromAcc: bob, toAcc: alice, asset: PERP, subId: 0n, amount: 1_000_000n * ONE, assetData: toHex(0n, { size: 32 }) },
+    '0x',
+  ]);
+  assert.ok((await bal(alice, ESCROW)) > 0n && (await bal(alice, PERP)) > 0n && (await position(alice)) > 0n,
+    'alice holds spot cNGN, the perp and the future in one account');
+  log(`alice ${alice}: ${fmt(await cngnOf(alice))} spot cNGN, ${fmt(await bal(alice, PERP))} cNGN of perp, ${fmt(await position(alice))} futures, `
+    + `one margin: MM ${fmt(await read<bigint>(MANAGER, abi.manager, 'getMargin', [alice, false]))} USDC`);
   const all = [alice, bob, carol];
   const cngnStart = new Map<bigint, bigint>();
   for (const acc of [...all, POOL]) cngnStart.set(acc, await cngnOf(acc));
@@ -504,7 +515,7 @@ async function main() {
         PATH: process.env.PATH,
         HOME: OUT,
         RPC_URL: RPC,
-        FUTURE_ARTIFACT: join(LOCAL, 'CNGN_NOV30_2026_FUTURE.json'),
+        FUTURE_ARTIFACT: join(LOCAL, 'MARGIN_ENGINE.json'),
         FUTURE_POOL_RESERVE_CNGN: '20000000',
         PAGER_STATE_FILE: join(OUT, 'pager-state.json'),
         MATCHER_HEALTH_URL: `http://127.0.0.1:${BOOK_PORT}/v1/health`,
@@ -524,7 +535,7 @@ async function main() {
   log(`pager ${coverageLine}`);
   assert.match(futureLine ?? '', /^future: one side \$3,000 at IM 25%, open; pool [\d,]+ cNGN \(reserve 20,000,000 set\)/, 'pager reads the future');
   assert.match(coverageLine ?? '', /future \$3,000/, 'pager counts the future in SecurityModule coverage');
-  assert.match(futureLine ?? '', /; escrow [\d,]+ of 50,000,000 cNGN$/, 'pager reads the escrow cap the deploy set');
+  assert.match(futureLine ?? '', /; escrow [\d,]+ of 100,000,000 cNGN$/, 'pager reads the escrow cap the deploy set');
   // ~8.3M of a 20M reserve is ~41%: under half, over a quarter, so a Slack warning and no page
   assert.ok(alerts.some((a) => a.text.includes('cNGN future VM pool at')), 'pool reserve warning reached the webhook');
 

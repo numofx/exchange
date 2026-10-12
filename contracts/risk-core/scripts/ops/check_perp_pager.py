@@ -23,7 +23,7 @@ Slack webhook, so the channel has the same record.
   peg-guard          perp-feeds refused the index because cNGN left NGN parity by more than
                      PEG_GUARD_BPS (read from its status file, PERP_INDEX_STATUS_FILE)
 
-The cNGN future (FUTURE_ARTIFACT, default deployments/8453/CNGN_NOV30_2026_FUTURE.json; skipped
+The cNGN future on MarginEngine (FUTURE_ARTIFACT, default deployments/8453/MARGIN_ENGINE.json; skipped
 while it does not exist) liquidates through the same auction and SecurityModule, so:
   sm-coverage        counts the future's one-side open interest beside the perp's, each at its own IM.
   future-pool-reserve  the future's VM pool holds less than a quarter of its reserve target (Slack
@@ -144,9 +144,9 @@ NEGATIVE_CASH_WARN_USD = 1_500.0
 NEGATIVE_CASH_PAGE_USD = 3_000.0
 NEGATIVE_CASH_WARN_REPEAT_SEC = 6 * 3600
 # The cNGN future. Its artifact exists only once it is deployed; until then none of this is read.
-FUTURE_ARTIFACT = ROOT / "deployments" / "8453" / "CNGN_NOV30_2026_FUTURE.json"
+FUTURE_ARTIFACT = ROOT / "deployments" / "8453" / "MARGIN_ENGINE.json"
 SEL_CONTRACT_SIZE = "0x3d7cc610"  # contractSize() -- `cast sig`, pinned in --self-test
-SEL_MARGIN_PARAMS = "0x691ef66f"  # marginParams() -> (mmReq, imReq, cngnMarginFactor, cngnIMScale)
+SEL_FUTURE_MARGIN_REQUIREMENTS = "0x84033e5e"  # futureMarginRequirements(uint256) -> (mmReq, imReq) on MarginEngine
 # The pool's cNGN only drains when a loser holds no cNGN and pays in USDC instead (the keeper's sweep
 # settles payers before receivers after every mark). Sized for a full side at the cap doing that
 # through a 25% move (SM_STEP), plus one mark's 5% move that a winner can draw by settling between
@@ -369,7 +369,7 @@ def read_future(url: str, future: dict) -> dict:
   total = int(call(future["future"], SEL_TOTAL_POSITION + manager_word), 16)
   size = int(call(future["future"], SEL_CONTRACT_SIZE), 16)
   cap = int(call(future["future"], SEL_TOTAL_POSITION_CAP + manager_word), 16)
-  im = int(call(future["manager"], SEL_MARGIN_PARAMS)[64:128], 16) / 1e18
+  im = int(call(future["manager"], SEL_FUTURE_MARGIN_REQUIREMENTS + f"{int(future['marketId']):064x}")[64:128], 16) / 1e18
   spot = int(call(future["indexFeed"], SEL_GET_SPOT)[:64], 16) / 1e18
   escrow_used = int(call(future["cngnEscrow"], SEL_TOTAL_POSITION + manager_word), 16) / 1e18
   escrow_cap = int(call(future["cngnEscrow"], SEL_TOTAL_POSITION_CAP + manager_word), 16) / 1e18
@@ -407,16 +407,22 @@ def sm_coverage_warning(one_side_usd: float, covered_usd: float, im: float) -> s
           f"(page at {SM_COVERAGE_PAGE_X:.1f}x): fund it before the next step costs more than it holds.")
 
 
+def perp_manager(stack: dict) -> str:
+  """The manager the perp's open interest and margin are read under: the live SRM until the MarginEngine cutover, then
+  PERP_MANAGER set to the engine (one setting, changed on the cutover day)."""
+  return os.environ.get("PERP_MANAGER", "").strip() or stack["srm"]
+
+
 def read_perp_im(url: str, stack: dict) -> float:
   """The perp's initial margin requirement on the SRM, as a fraction."""
   market_word = f"{int(stack['marketId']):064x}"
-  raw = rpc(url, "eth_call", [{"to": stack["srm"], "data": SEL_PERP_MARGIN_REQUIREMENTS + market_word}, "latest"])[2:]
+  raw = rpc(url, "eth_call", [{"to": perp_manager(stack), "data": SEL_PERP_MARGIN_REQUIREMENTS + market_word}, "latest"])[2:]
   return int(raw[64:128], 16) / 1e18
 
 
 def read_one_side_usd(url: str, stack: dict) -> float:
   """One side's open interest in USD at the index: totalPosition(srm) / 2 x getSpot()."""
-  srm_word = stack["srm"].lower().removeprefix("0x").rjust(64, "0")
+  srm_word = perp_manager(stack).lower().removeprefix("0x").rjust(64, "0")
   total = int(rpc(url, "eth_call", [{"to": stack["perp"], "data": SEL_TOTAL_POSITION + srm_word}, "latest"]), 16)
   spot = int(rpc(url, "eth_call", [{"to": stack["indexFeed"], "data": SEL_GET_SPOT}, "latest"])[2:66], 16)
   return (total / 2) / 1e18 * (spot / 1e18)
@@ -460,7 +466,7 @@ def oi_warning(one_side_usd: float, keeper_cash_usd: float) -> str | None:
 
 def read_oi_and_keeper(url: str, stack: dict, keeper_account: int) -> tuple[float, float]:
   """(one side's OI in USD at the index, keeper account cash in USD)."""
-  srm_word = stack["srm"].lower().removeprefix("0x").rjust(64, "0")
+  srm_word = perp_manager(stack).lower().removeprefix("0x").rjust(64, "0")
   total = int(rpc(url, "eth_call", [{"to": stack["perp"], "data": SEL_TOTAL_POSITION + srm_word}, "latest"]), 16)
   spot = int(rpc(url, "eth_call", [{"to": stack["indexFeed"], "data": SEL_GET_SPOT}, "latest"])[2:66], 16)
   one_side_usd = (total / 2) / 1e18 * (spot / 1e18)
@@ -479,7 +485,7 @@ def read_gas(url: str, head_block: int, address: str) -> tuple[float, float]:
 
 
 def market_open(url: str, stack: dict) -> bool:
-  raw = rpc(url, "eth_call", [{"to": stack["perp"], "data": SEL_TOTAL_POSITION_CAP + stack["srm"].lower().removeprefix("0x").rjust(64, "0")}, "latest"])
+  raw = rpc(url, "eth_call", [{"to": stack["perp"], "data": SEL_TOTAL_POSITION_CAP + perp_manager(stack).lower().removeprefix("0x").rjust(64, "0")}, "latest"])
   return int(raw, 16) > 0
 
 
@@ -898,6 +904,12 @@ def self_test() -> int:
   assert "priority" not in pushover_payload("t", "u", "T", "m", emergency=False)
   assert pagerduty_payload("k", "feed-halt", "m", resolve=False)["dedup_key"] == "numo-perp-feed-halt"
   assert "payload" not in pagerduty_payload("k", "feed-halt", "m", resolve=True)
+  # The perp is read under the SRM until PERP_MANAGER names the engine.
+  os.environ.pop("PERP_MANAGER", None)
+  assert perp_manager({"srm": "0xsrm"}) == "0xsrm"
+  os.environ["PERP_MANAGER"] = "0xengine"
+  assert perp_manager({"srm": "0xsrm"}) == "0xengine"
+  os.environ.pop("PERP_MANAGER")
   # Selectors against their signatures, so a hand-typed one cannot ship (one did, in review).
   from resolve_cngn_action6 import keccak
   assert SEL_PERP_MARGIN_REQUIREMENTS == "0x" + keccak(b"perpMarginRequirements(uint256)").hex()[:8]
@@ -905,7 +917,8 @@ def self_test() -> int:
                               (SEL_SPOT_DIFF_DETAILS, "spotDiffDetails()"),
                               (SEL_TOTAL_POSITION_CAP, "totalPositionCap(address)"),
                               (SEL_TOTAL_POSITION, "totalPosition(address)"), (SEL_GET_SPOT, "getSpot()"),
-                              (SEL_CONTRACT_SIZE, "contractSize()"), (SEL_MARGIN_PARAMS, "marginParams()")]:
+                              (SEL_CONTRACT_SIZE, "contractSize()"),
+                              (SEL_FUTURE_MARGIN_REQUIREMENTS, "futureMarginRequirements(uint256)")]:
     assert selector == "0x" + keccak(signature.encode()).hex()[:8], signature
   # The peg guard pages from perp-feeds' status; missing or stale status is silent (feed-halt covers it).
   wall = 2_000_000_000.0
