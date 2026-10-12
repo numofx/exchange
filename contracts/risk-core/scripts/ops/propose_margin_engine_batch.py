@@ -8,6 +8,9 @@
           future on the perp TradeModule. The only actions that open the engine. Proposed only while every gate
           below passes, re-read before each action. Making the live SRM close-only is not here: it is set to
           the live open interest at the cutover, once markets-service refuses orders that would increase it.
+          Before proposing it, at the commit being enabled and against head, run the real-fills fork test
+          (`BASE_RPC_URL=... forge test --match-contract MarginEngineTradeModuleFork`): signed orders for the future
+          through the live Matching and TradeModule. It is a procedural step; no gate here can run it.
 
 Every action in the file is rebuilt here from the deployment artifact and must match it exactly (to,
 calldata, value), and its digest is recomputed (keccak(to || keccak(data)), the convention of

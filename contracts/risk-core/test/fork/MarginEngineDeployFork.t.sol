@@ -13,6 +13,7 @@ import {CashAsset} from "../../src/assets/CashAsset.sol";
 import {WrappedERC20Asset} from "../../src/assets/WrappedERC20Asset.sol";
 import {DutchAuction} from "../../src/liquidation/DutchAuction.sol";
 import {IDutchAuction} from "../../src/interfaces/IDutchAuction.sol";
+import {IBaseManager} from "../../src/interfaces/IBaseManager.sol";
 import {StandardManager} from "../../src/risk-managers/StandardManager.sol";
 import {IFutureAsset} from "../../src/interfaces/IFutureAsset.sol";
 import {ISpotFeed} from "../../src/interfaces/ISpotFeed.sol";
@@ -645,6 +646,61 @@ contract MarginEngineDeployFork is Test {
     int smBefore = subAccounts.getBalance(smAcc, _cash(), 0);
     auction.startAuction(bobAcc, 0);
     assertGt(subAccounts.getBalance(smAcc, _cash(), 0), smBefore, "the fee reached the SecurityModule");
+  }
+
+  /// @dev The SecurityModule's account sits under the old SRM, and the fee a solvent auction pays it is a transfer into
+  ///      that account, through the old SRM's adjustment hook. Pausing the old SRM stops every engine auction that
+  ///      charges a fee: the runbook's guardian pause targets the engine after the cutover, never the old SRM.
+  function testPausingTheOldSrmStopsEngineLiquidations() public {
+    (, uint bobAcc,) = _drainPoolWithTwoLosers();
+    StandardManager srm = StandardManager(params.srm);
+    DutchAuction auction = DutchAuction(params.auction);
+    vm.prank(srm.guardian());
+    srm.setAdjustmentsPaused(true);
+    vm.expectRevert(IBaseManager.BM_AdjustmentsPaused.selector);
+    auction.startAuction(bobAcc, 0);
+
+    vm.prank(srm.guardian());
+    srm.setAdjustmentsPaused(false);
+    int smBefore = subAccounts.getBalance(auction.smAccount(), _cash(), 0);
+    auction.startAuction(bobAcc, 0);
+    assertGt(subAccounts.getBalance(auction.smAccount(), _cash(), 0), smBefore, "unpaused, the same auction starts");
+  }
+
+  /// @dev And the SecurityModule's payout for an insolvent auction is a transfer out of that account: with the old SRM
+  ///      paused, no bid on an insolvent engine account can be paid.
+  function testPausingTheOldSrmStopsInsolvencyPayouts() public {
+    _executeVaultBatch();
+    _executeEnableBatch();
+    _holdIndex(spot);
+    _depositCngn(treasury, d.poolAccount, 2_000_000e6);
+    uint aliceAcc = _account(alice);
+    uint carolAcc = _account(address(0xca401));
+    _depositUsdc(alice, aliceAcc, 2_000e6);
+    _depositUsdc(address(0xca401), carolAcc, 260e6);
+    _trade(carolAcc, aliceAcc, 1e18, d.future.futureContracts(d.subId).markPrice);
+    for (uint i; i < 9; ++i) {
+      _rallyStep(450);
+    }
+    DutchAuction auction = DutchAuction(params.auction);
+    auction.startAuction(carolAcc, 0);
+    assertTrue(_isInsolvent(carolAcc), "insolvent auction");
+    address eve = address(0xe7e);
+    uint eveAcc = _account(eve);
+    _depositUsdc(eve, eveAcc, 5_000e6);
+
+    StandardManager srm = StandardManager(params.srm);
+    vm.prank(srm.guardian());
+    srm.setAdjustmentsPaused(true);
+    vm.prank(eve);
+    vm.expectRevert(IBaseManager.BM_AdjustmentsPaused.selector);
+    auction.bid(carolAcc, eveAcc, 1e18, 0, 0);
+
+    vm.prank(srm.guardian());
+    srm.setAdjustmentsPaused(false);
+    vm.prank(eve);
+    (,, uint cashToBidder) = auction.bid(carolAcc, eveAcc, 1e18, 0, 0);
+    assertGt(cashToBidder, 0, "unpaused, the SecurityModule pays the same bid");
   }
 
   /// @dev Before the fix an auction started on the pool, and the SecurityModule paid bidders to take its debt.
