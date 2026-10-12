@@ -5,12 +5,12 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
-## 2026-10-12 20:15 UTC: RfqModule retirement proposed to the vault
+## 2026-10-12 20:15 UTC: RfqModule retired on Matching
 
 Run from the box over SSM through `run-with-ssm-mark.sh`. `propose_retire_rfq_module.py`, its
 import `resolve_cngn_action6.py` and `deployments/8453/RFQ_MODULE_RETIRE_VAULT_ACTIONS.json` were
 copied from `main` at `b9b70d5` (#182) into `/tmp/rfq-retire`, deleted after the run, so nothing on
-the box changed. The change is in the vault's queue.
+the box changed.
 
 - **What.** MPCVault signing request `64d0928d-89f9-491a-87b3-4e6e61717fda`, PENDING: from the vault
   `0x1dcA…F435` to Matching `0x9E90…F191`, `setAllowedModule(address,bool)` (`0xb1b62825`) with the
@@ -22,9 +22,12 @@ the box changed. The change is in the vault's queue.
   the vault, `allowedModules(RfqModule)` true, the vault's call simulates, and blocks
   48833365–52523401 hold 3 logs from the module, all ownership. Nothing has ever been sent
   through it.
-- **Pending.** Approval in the MPCVault app, then
-  `propose_retire_rfq_module.py --confirm 64d0928d-89f9-491a-87b3-4e6e61717fda` from the box,
-  which waits for the receipt and reads `allowedModules(RfqModule)` back as false.
+- **Landed.** Approved in the MPCVault app, executed in tx
+  `0x5ab98ed1f84680ce46f4c5a3c1f892a262411250a4d8db3166274617f1a474db` (block 52523521, status 1).
+  `--confirm` from the box at 20:20 UTC read `allowedModules(RfqModule)` back as false.
+- **Read back independently.** From a laptop on a different RPC: `allowedModules(RfqModule)` false;
+  the tx is from the vault to Matching with the proposed calldata; `allowedModules` of the cNGN
+  TradeModule `0xDea9…699f` still true. The margin-engine enable batch's `rfq` gate now passes.
 
 ## 2026-10-11 11:20 UTC: 35 stale `setMarkPrice` signing requests rejected in MPCVault
 
