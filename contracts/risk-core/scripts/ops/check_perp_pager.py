@@ -839,8 +839,8 @@ def self_test() -> int:
   pages, warns = future_pool_conditions(249_999, 0, 1_000_000, open_=True)
   assert [p.key for p in pages] == ["future-pool-reserve"] and warns == []
   assert "not watched" in future_pool_conditions(0, 0, None, open_=True)[1][0]
-  # The escrow cap at 30M with an 8.2M reserve: fine at 70%, Slack from 75%, a page once under 8.2M is
-  # left (72.7% used), whichever comes first; nothing while closed or with no cap read.
+  # The escrow cap at 30M against an 8.2M reserve (a 40-contract cap): fine at 70%, Slack from 75%, a page
+  # once under 8.2M is left (72.7% used), whichever comes first; nothing while closed or with no cap read.
   assert future_escrow_conditions(15_000_000, 30_000_000, 8_200_000, open_=True) == ([], [])
   assert future_escrow_conditions(21_000_000, 30_000_000, 5_000_000, open_=True) == ([], [])
   pages, warns = future_escrow_conditions(22_500_000, 30_000_000, 5_000_000, open_=True)
@@ -849,10 +849,10 @@ def self_test() -> int:
   assert [p.key for p in pages] == ["future-escrow-cap"] and "8,100,000 left" in pages[0].message and warns == []
   assert future_escrow_conditions(30_000_000, 30_000_000, 8_200_000, open_=False) == ([], [])
   assert future_escrow_conditions(1, 0, 8_200_000, open_=True) == ([], [])
-  # The reserve target: launch cap 40 contracts (20 a side) of $1,000 at 1,363.7 cNGN per USDC is
-  # 30% of $20,000 = $6,000, about 8.18M cNGN; it doubles with the cap and is zero with no index.
-  assert round(future_reserve_target_cngn(40, 1_000, 1 / 1_363.7)) == round(6_000 * 1_363.7)
-  assert round(future_reserve_target_cngn(80, 1_000, 1 / 1_363.7)) == round(12_000 * 1_363.7)
+  # The reserve target: the launch cap, 30 contracts (15 a side) of $1,000 at 1,363.7 cNGN per USDC, is
+  # 30% of $15,000 = $4,500, about 6.14M cNGN; it doubles with the cap and is zero with no index.
+  assert round(future_reserve_target_cngn(30, 1_000, 1 / 1_363.7)) == round(4_500 * 1_363.7)
+  assert round(future_reserve_target_cngn(60, 1_000, 1 / 1_363.7)) == round(9_000 * 1_363.7)
   assert future_reserve_target_cngn(40, 1_000, 0) == 0.0
   pages, warns = future_pool_conditions(1_000_000, -10, 1_000_000, open_=True)
   assert pages == [] and "$10.00 below zero" in warns[0]
