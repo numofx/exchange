@@ -1,29 +1,32 @@
 #!/usr/bin/env python3
-"""Propose the cNGN future's two vault batches to MPCVault, from deploy-cngn-future.s.sol's artifacts.
+"""Propose MarginEngine's two vault batches to MPCVault, from deploy-margin-engine.s.sol's artifacts.
 
-  setup   CNGN_NOV30_2026_FUTURE_VAULT_ACTIONS.json: accept the four contracts the deployer nominated,
-          then wire the manager into the perp stack's cash, cNGN escrow (with its cap) and auction.
-          Opens nothing.
-  enable  CNGN_NOV30_2026_FUTURE_ENABLE_VAULT_ACTIONS.json: the future's position cap, then the future
-          on the perp TradeModule. The only action that opens the market. Proposed only while every
-          gate below passes, re-read before each action.
+  setup   MARGIN_ENGINE_VAULT_ACTIONS.json: accept the four contracts the deployer nominated (engine, viewer,
+          future, forward feed), wire the engine into the perp stack's cash, cNGN escrow (with its cap), perp
+          and auction, and grant it the SRM's guardian. Opens nothing.
+  enable  MARGIN_ENGINE_ENABLE_VAULT_ACTIONS.json: the perp's cap under the engine, the future's cap, then the
+          future on the perp TradeModule. The only actions that open the engine. Proposed only while every gate
+          below passes, re-read before each action. Making the live SRM close-only is not here: it is set to
+          the live open interest at the cutover, once markets-service refuses orders that would increase it.
 
 Every action in the file is rebuilt here from the deployment artifact and must match it exactly (to,
 calldata, value), and its digest is recomputed (keccak(to || keccak(data)), the convention of
-deploy-cngn-future.s.sol). An action whose postcondition already holds is skipped, so a re-run
+deploy-margin-engine.s.sol). An action whose postcondition already holds is skipped, so a re-run
 proposes only what is left.
 
 Enable gates (all read live, all required):
-  custody   the vault owns the future, viewer, manager and forward feed; the setup batch has landed
-            (cash, escrow and auction take the manager, the escrow cap is set); the market is closed
+  custody   the vault owns the engine, viewer, future and forward feed; the setup batch has landed (cash,
+            escrow, perp and auction take the engine, the escrow cap and guardian are set); the engine is
+            closed (its perp and futures caps are 0, the future is not on the TradeModule)
   feeds     the index answers and is <= 600s old
   marks     the future has been marked within FORWARD_MARK_LATE (2h): the keeper is publishing
   reserve   the VM pool holds its cNGN reserve: 30% of one side's notional at the cap being opened, in
             cNGN at the index (check_perp_pager.future_reserve_target_cngn). Seed it first: a cNGN
             deposit into the pool account, which is not a vault action
   escrow    the escrow cap still has a reserve's worth of headroom after the seed, so a top-up fits
-  sm        the SecurityModule's cash covers a 25% step across the perp's open interest now and the
-            future's one side at the cap being opened (check_perp_pager.sm_required_usd)
+  sm        the SecurityModule's cash covers a 25% step across the perp's open interest now (under the
+            live SRM, until the cutover) and the future's one side at the cap being opened
+            (check_perp_pager.sm_required_usd)
   pager     check_perp_pager.py ran OK within 3 minutes, with a provider and a dead-man's switch
 
 It NEVER signs, executes or broadcasts. Without --propose it prints the gates and the sheet. With
@@ -31,12 +34,12 @@ It NEVER signs, executes or broadcasts. Without --propose it prints the gates an
 
 Env (or ~/.numo-mark-keeper.env): MPCVAULT_TOKEN, MPCVAULT_VAULT, VAULT_ADDRESS, RPC_URL.
 
-  python3 scripts/ops/propose_future_batch.py setup              # check + sheet, proposes nothing
-  python3 scripts/ops/propose_future_batch.py setup --propose
-  python3 scripts/ops/propose_future_batch.py enable             # gates + sheet
-  python3 scripts/ops/propose_future_batch.py enable --propose
-  python3 scripts/ops/propose_future_batch.py --self-test
-  python3 scripts/ops/propose_future_batch.py enable --local --dir deployments/31337 --json
+  python3 scripts/ops/propose_margin_engine_batch.py setup              # check + sheet, proposes nothing
+  python3 scripts/ops/propose_margin_engine_batch.py setup --propose
+  python3 scripts/ops/propose_margin_engine_batch.py enable             # gates + sheet
+  python3 scripts/ops/propose_margin_engine_batch.py enable --propose
+  python3 scripts/ops/propose_margin_engine_batch.py --self-test
+  python3 scripts/ops/propose_margin_engine_batch.py enable --local --dir deployments/31337 --json
                                                                  # a fork (31337): never proposes
 """
 
@@ -74,7 +77,7 @@ from propose_perp_enable_batch import gate_pager  # noqa: E402
 from resolve_cngn_action6 import keccak  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-NAME = "CNGN_NOV30_2026_FUTURE"
+NAME = "MARGIN_ENGINE"
 FILES = {"setup": f"{NAME}_VAULT_ACTIONS.json", "enable": f"{NAME}_ENABLE_VAULT_ACTIONS.json"}
 FEED_MAX_AGE_SEC = 600
 MARK_MAX_AGE_SEC = 2 * 3600  # FORWARD_MARK_LATE_MS: an hourly pull, one missed
@@ -95,7 +98,9 @@ SIGNATURES = {
   "isDatedFutureAsset": "isDatedFutureAsset(address)",
   "futureContracts": "futureContracts(uint256)",
   "contractSize": "contractSize()",
-  "marginParams": "marginParams()",
+  "futureMarginRequirements": "futureMarginRequirements(uint256)",
+  "setGuardian": "setGuardian(address)",
+  "guardian": "guardian()",
   "getBalance": "getBalance(uint256,address,uint256)",
   "getSpot": "getSpot()",
 }
@@ -104,7 +109,8 @@ PINNED = {
   "setWhitelistManager": "0xe64cc9da", "whitelistedManager": "0x97d51c04", "managerWhitelisted": "0x9c7105d1",
   "setTotalPositionCap": "0x40a557bd", "totalPositionCap": "0x745ab570", "totalPosition": "0xa9578774",
   "setDatedFutureAsset": "0x0ddd8a04", "isDatedFutureAsset": "0x761822ef", "futureContracts": "0xc3c74b34",
-  "contractSize": "0x3d7cc610", "marginParams": "0x691ef66f", "getBalance": "0x0806e640", "getSpot": "0x2b37269c",
+  "contractSize": "0x3d7cc610", "futureMarginRequirements": "0x84033e5e", "getBalance": "0x0806e640",
+  "getSpot": "0x2b37269c", "setGuardian": "0x8a0dac4a", "guardian": "0x452a9320",
 }
 
 
@@ -136,7 +142,7 @@ class Gate:
 # ---------------------------------------------------------------------------------------------
 
 def owned(d: dict) -> list[str]:
-  return [d["future"], d["viewer"], d["manager"], d["forwardFeed"]]
+  return [d["manager"], d["viewer"], d["future"], d["forwardFeed"]]
 
 
 def expected_actions(batch: str, d: dict) -> list[tuple[str, str]]:
@@ -146,9 +152,12 @@ def expected_actions(batch: str, d: dict) -> list[tuple[str, str]]:
     return [*[(c, selector("acceptOwnership")) for c in owned(d)],
             (d["cash"], selector("setWhitelistManager") + manager + word_uint(1)),
             (d["cngnEscrow"], selector("setWhitelistManager") + manager + word_uint(1)),
-            (d["cngnEscrow"], selector("setTotalPositionCap") + manager + word_uint(int(d["futureCngnCap"]))),
-            (d["auction"], selector("setWhitelistManager") + manager + word_uint(1))]
-  return [(d["future"], selector("setTotalPositionCap") + manager + word_uint(int(d["futureOICap"]))),
+            (d["cngnEscrow"], selector("setTotalPositionCap") + manager + word_uint(int(d["engineCngnCap"]))),
+            (d["perp"], selector("setWhitelistManager") + manager + word_uint(1)),
+            (d["auction"], selector("setWhitelistManager") + manager + word_uint(1)),
+            (d["manager"], selector("setGuardian") + word_address(d["guardian"]))]
+  return [(d["perp"], selector("setTotalPositionCap") + manager + word_uint(int(d["perpOICap"]))),
+          (d["future"], selector("setTotalPositionCap") + manager + word_uint(int(d["futureOICap"]))),
           (d["perpTradeModule"], selector("setDatedFutureAsset") + word_address(d["future"]) + word_uint(1))]
 
 
@@ -201,10 +210,13 @@ def landed(chain: Chain, batch: str, d: dict, i: int, vault: str) -> bool:
     return [
       lambda: chain.word(d["cash"], selector("whitelistedManager") + m) == 1,
       lambda: chain.word(d["cngnEscrow"], selector("whitelistedManager") + m) == 1,
-      lambda: chain.word(d["cngnEscrow"], selector("totalPositionCap") + m) == int(d["futureCngnCap"]),
+      lambda: chain.word(d["cngnEscrow"], selector("totalPositionCap") + m) == int(d["engineCngnCap"]),
+      lambda: chain.word(d["perp"], selector("whitelistedManager") + m) == 1,
       lambda: chain.word(d["auction"], selector("managerWhitelisted") + m) == 1,
+      lambda: chain.address(d["manager"], "guardian").lower() == d["guardian"].lower(),
     ][i - 4]()
   return [
+    lambda: chain.word(d["perp"], selector("totalPositionCap") + m) == int(d["perpOICap"]),
     lambda: chain.word(d["future"], selector("totalPositionCap") + m) == int(d["futureOICap"]),
     lambda: chain.word(d["perpTradeModule"], selector("isDatedFutureAsset") + word_address(d["future"])) == 1,
   ][i]()
@@ -219,10 +231,11 @@ def gate_setup(chain: Chain, d: dict, vault: str) -> list[Gate]:
   what it is about to wire."""
   pending = [c for c in owned(d)
              if chain.address(c, "owner").lower() != vault.lower() and chain.address(c, "pendingOwner").lower() != vault.lower()]
-  reused = [c for c in (d["cash"], d["cngnEscrow"], d["auction"]) if chain.address(c, "owner").lower() != vault.lower()]
+  reused = [c for c in (d["cash"], d["cngnEscrow"], d["perp"], d["auction"])
+            if chain.address(c, "owner").lower() != vault.lower()]
   return [
     Gate("nominated", not pending, f"not nominated to the vault: {', '.join(pending)}" if pending else "all four nominated to or owned by the vault"),
-    Gate("reused", not reused, f"vault does not own {', '.join(reused)}" if reused else "vault owns the perp cash, escrow and auction"),
+    Gate("reused", not reused, f"vault does not own {', '.join(reused)}" if reused else "vault owns the perp cash, escrow, perp and auction"),
   ]
 
 
@@ -254,13 +267,15 @@ def gate_enable(chain: Chain, d: dict, stack: dict, vault: str) -> list[Gate]:
   m = word_address(d["manager"])
 
   not_owned = [c for c in owned(d) if chain.address(c, "owner").lower() != vault.lower()]
-  unwired = [i for i in range(4, 8) if not landed(chain, "setup", d, i, vault)]
+  unwired = [i for i in range(4, 10) if not landed(chain, "setup", d, i, vault)]
+  perp_cap = chain.word(d["perp"], selector("totalPositionCap") + m)
   cap = chain.word(d["future"], selector("totalPositionCap") + m)
   registered = chain.word(d["perpTradeModule"], selector("isDatedFutureAsset") + word_address(d["future"]))
   problems = ([f"vault does not own {', '.join(not_owned)}"] if not_owned else []) + \
              ([f"setup actions {unwired} have not landed"] if unwired else []) + \
-             ([f"market is not closed (cap {cap}, registered {bool(registered)})"] if cap or registered else [])
-  gates.append(Gate("custody", not problems, "; ".join(problems) or "vault owns all four; setup landed; market closed"))
+             ([f"engine is not closed (perp cap {perp_cap}, future cap {cap}, registered {bool(registered)})"]
+              if perp_cap or cap or registered else [])
+  gates.append(Gate("custody", not problems, "; ".join(problems) or "vault owns all four; setup landed; engine closed"))
 
   try:
     age, _ = feed_age(chain.url, d["indexFeed"])
@@ -286,7 +301,7 @@ def gate_enable(chain: Chain, d: dict, stack: dict, vault: str) -> list[Gate]:
 
   try:
     sm_cash = chain.balance(int(stack["securityModuleAccount"]), stack["cash"]) / 1e18
-    future_im = chain.word(d["manager"], selector("marginParams"), 1) / 1e18
+    future_im = chain.word(d["manager"], selector("futureMarginRequirements") + word_uint(int(d["marketId"])), 1) / 1e18
     books = {"perp": (read_one_side_usd(chain.url, stack), read_perp_im(chain.url, stack)),
              "future at the cap": (oi_cap / 2 * size, future_im)}
     gates.append(sm_gate(sm_cash, books))
@@ -316,8 +331,9 @@ def self_test() -> int:
 
   # A deployment, its batches as the deploy script writes them, and each way a file can be wrong.
   a = lambda n: "0x" + format(n, "040x")  # noqa: E731
-  d = {"future": a(1), "viewer": a(2), "manager": a(3), "forwardFeed": a(4), "cash": a(5), "cngnEscrow": a(6),
-       "auction": a(7), "perpTradeModule": a(8), "futureCngnCap": str(50_000_000 * 10**18), "futureOICap": str(30 * 10**18)}
+  d = {"manager": a(1), "viewer": a(2), "future": a(3), "forwardFeed": a(4), "cash": a(5), "cngnEscrow": a(6),
+       "auction": a(7), "perpTradeModule": a(8), "perp": a(9), "guardian": a(10),
+       "engineCngnCap": str(100_000_000 * 10**18), "futureOICap": str(30 * 10**18), "perpOICap": str(50_000_000 * 10**18)}
   for batch in ("setup", "enable"):
     good = [{"description": str(i), "to": to, "value": "0", "data": data, "digest": digest(to, data)}
             for i, (to, data) in enumerate(expected_actions(batch, d))]
@@ -339,8 +355,10 @@ def self_test() -> int:
         continue
       raise AssertionError(f"{batch}: a wrong {what} was accepted")
   # The cap in the escrow action is the artifact's, and the OI cap in the enable action likewise.
-  assert expected_actions("setup", d)[6][1].endswith(word_uint(50_000_000 * 10**18))
-  assert expected_actions("enable", d)[0][1].endswith(word_uint(30 * 10**18))
+  assert expected_actions("setup", d)[6][1].endswith(word_uint(100_000_000 * 10**18))
+  assert expected_actions("setup", d)[-1] == (a(1), selector("setGuardian") + word_address(a(10)))
+  assert expected_actions("enable", d)[0][1].endswith(word_uint(50_000_000 * 10**18))
+  assert expected_actions("enable", d)[1][1].endswith(word_uint(30 * 10**18))
   # The digest convention: keccak(to || keccak(data)), checked on a known action.
   assert digest(a(1), selector("acceptOwnership")) == "0x" + keccak(bytes.fromhex(a(1)[2:]) + keccak(bytes.fromhex("79ba5097"))).hex()
 
