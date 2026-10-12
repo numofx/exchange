@@ -5,8 +5,9 @@
  *   - anvil forks Base at head (chain id 31337, so the deploy artifacts land in the gitignored
  *     deployments/31337 and the keeper accepts a raw signer key);
  *   - deploy-cngn-future.s.sol is run unchanged with `forge script --broadcast`;
- *   - the vault's two batches are executed from the artifacts it wrote, each digest checked, by
- *     impersonating the vault;
+ *   - the vault's two batches go through propose_future_batch.py's checks (--local: rebuilt from the
+ *     deployment artifact, every gate read from the fork, the enable batch refused until the pool is
+ *     seeded), then are executed by impersonating the vault;
  *   - three traders open positions on the live perp cash and cNGN escrow, and a treasury funds the pool;
  *   - the real keeper (dist/forward-main.js) runs as its own process against the fork, reading a stub
  *     markets-service book and posting alerts to a stub webhook;
@@ -266,8 +267,28 @@ async function main() {
   const LAST_TRADE = BigInt(artifact.lastTradeTime);
   log(`deployed future ${FUTURE} #${SUB_ID}, manager ${MANAGER}, forward feed ${FORWARD_FEED}, pool account ${POOL}`);
 
-  // ---- the vault's batches, from the artifacts ---------------------------------------------------
-  for (const name of ['CNGN_NOV30_2026_FUTURE_VAULT_ACTIONS', 'CNGN_NOV30_2026_FUTURE_ENABLE_VAULT_ACTIONS']) {
+  // ---- the vault's batches, through the proposer's checks -------------------------------------------
+  // propose_future_batch.py, in --local mode, rebuilds each batch from the deployment artifact and
+  // reads every gate from the fork. It never proposes; the vault's side is played by impersonation.
+  type Proposal = { gates: { name: string; ok: boolean; detail: string }[]; landed: boolean[] };
+  async function proposer(batch: 'setup' | 'enable'): Promise<Proposal> {
+    const out = await new Promise<string>((resolve) => {
+      const child = spawn('python3', ['scripts/ops/propose_future_batch.py', batch, '--local', '--dir', LOCAL, '--json'], {
+        cwd: RISK_CORE,
+        env: { PATH: process.env.PATH, HOME: OUT, RPC_URL: RPC, PAGER_STATE_FILE: join(OUT, 'proposer-pager-state.json') },
+      });
+      let text = '';
+      child.stdout.on('data', (chunk) => (text += chunk));
+      child.stderr.on('data', (chunk) => (text += chunk));
+      child.on('exit', () => resolve(text));
+    });
+    writeFileSync(join(OUT, `proposer-${batch}.log`), out);
+    const last = out.trim().split('\n').filter((line) => line.startsWith('{')).at(-1);
+    assert.ok(last, `propose_future_batch.py ${batch} printed no report:\n${out.slice(-600)}`);
+    return JSON.parse(last) as Proposal;
+  }
+  const failing = (p: Proposal) => p.gates.filter((g) => !g.ok).map((g) => g.name);
+  async function runBatch(name: string) {
     const actions = JSON.parse(readFileSync(join(LOCAL, `${name}.json`), 'utf8')) as { description: string; to: Address; data: Hex; digest: Hex }[];
     for (const action of actions) {
       assert.equal(action.digest, keccak256(encodePacked(['address', 'bytes32'], [action.to, keccak256(action.data)])), `digest of ${action.description}`);
@@ -276,6 +297,12 @@ async function main() {
     }
     log(`vault ran ${name}: ${actions.length} actions`);
   }
+
+  const setupBefore = await proposer('setup');
+  assert.deepEqual(failing(setupBefore), [], 'setup gates pass on a fresh deploy');
+  assert.ok(setupBefore.landed.every((l) => !l), 'nothing of the setup batch has landed yet');
+  await runBatch('CNGN_NOV30_2026_FUTURE_VAULT_ACTIONS');
+  assert.ok((await proposer('setup')).landed.every(Boolean), 'the proposer sees every setup action landed');
 
   // ---- accounts and positions ----------------------------------------------------------------
   const dealt = async (token: Address, to: Address, amount: bigint) => {
@@ -298,7 +325,25 @@ async function main() {
   const position = (acc: bigint) => bal(acc, FUTURE, SUB_ID);
   const contractOf = () => read<Contract>(FUTURE, abi.future, 'futureContracts', [SUB_ID]);
 
-  await depositTo(USERS.treasury, POOL, CNGN, ESCROW, 2_000_000n * 10n ** 6n);
+  // The enable batch, gated. Before the pool is seeded, the SecurityModule topped up and the pager
+  // running, the proposer must refuse; after, everything must pass.
+  const refused = failing(await proposer('enable'));
+  assert.deepEqual(refused.sort(), ['pager', 'reserve', 'sm'], `before seeding, exactly these gates fail: ${refused}`);
+  log(`enable refused before the seed: ${refused.join(', ')} gates fail; custody, feeds, marks and escrow pass`);
+  // 30% of one side at the cap, in cNGN at the index, plus 1% for the index moving meanwhile
+  const reserve = ((BigInt(artifact.futureOICap) / 2n) * BigInt(artifact.contractSize) * 3n) / (10n * spot);
+  await depositTo(USERS.treasury, POOL, CNGN, ESCROW, (reserve * 101n) / 100n / 10n ** 12n);
+  // The live SecurityModule does not cover a full futures side beside the perp (see the sm gate):
+  // here it is topped up, on the fork only, so the rest of the rehearsal can open the market.
+  const smAccount = BigInt(stack.securityModuleAccount);
+  await depositTo(USERS.treasury, smAccount, USDC, CASH, 1_000n * 10n ** 6n);
+  // the pager gate reads its state file; a provider and dead-man's switch cannot be rehearsed here
+  writeFileSync(join(OUT, 'proposer-pager-state.json'), JSON.stringify({ lastRunAt: Math.floor(Date.now() / 1000), lastRunOk: true, provider: 'pushover', heartbeatConfigured: true }));
+  const allowed = await proposer('enable');
+  assert.deepEqual(failing(allowed), [], `after seeding, every enable gate passes: ${JSON.stringify(allowed.gates.filter((g) => !g.ok))}`);
+  log(`enable gates pass: pool seeded with ${fmt(reserve * 101n / 100n)} cNGN, SecurityModule +$1,000 (fork only)`);
+  await runBatch('CNGN_NOV30_2026_FUTURE_ENABLE_VAULT_ACTIONS');
+  assert.ok((await proposer('enable')).landed.every(Boolean), 'the proposer sees the market open');
   const alice = await account(USERS.alice);
   const bob = await account(USERS.bob);
   const carol = await account(USERS.carol);
@@ -321,7 +366,7 @@ async function main() {
   const cngnStart = new Map<bigint, bigint>();
   for (const acc of [...all, POOL]) cngnStart.set(acc, await cngnOf(acc));
   const usdcStartCarol = await bal(carol, CASH);
-  log(`accounts alice ${alice} (long 2), bob ${bob} (short 3), carol ${carol} (long 1, USDC only), pool ${POOL} (2,000,000 cNGN); entry ${fmt(mark0)}`);
+  log(`accounts alice ${alice} (long 2), bob ${bob} (short 3), carol ${carol} (long 1, USDC only), pool ${POOL} (the reserve); entry ${fmt(mark0)}`);
 
   // ---- stub book and webhook -----------------------------------------------------------------
   let book: { bids: Order[]; asks: Order[] } | null = null;
@@ -463,7 +508,7 @@ async function main() {
         HOME: OUT,
         RPC_URL: RPC,
         FUTURE_ARTIFACT: join(LOCAL, 'CNGN_NOV30_2026_FUTURE.json'),
-        FUTURE_POOL_RESERVE_CNGN: '5000000',
+        FUTURE_POOL_RESERVE_CNGN: '20000000',
         PAGER_STATE_FILE: join(OUT, 'pager-state.json'),
         MATCHER_HEALTH_URL: `http://127.0.0.1:${BOOK_PORT}/v1/health`,
         ALERT_WEBHOOK_URL: `http://127.0.0.1:${HOOK_PORT}/hook`,
@@ -480,10 +525,10 @@ async function main() {
   const coverageLine = pager.stdout.split('\n').find((line) => line.startsWith('sm coverage:'));
   log(`pager ${futureLine}`);
   log(`pager ${coverageLine}`);
-  assert.match(futureLine ?? '', /^future: one side \$3,000 at IM 25%, open; pool [\d,]+ cNGN \(reserve 5,000,000 set\)/, 'pager reads the future');
+  assert.match(futureLine ?? '', /^future: one side \$3,000 at IM 25%, open; pool [\d,]+ cNGN \(reserve 20,000,000 set\)/, 'pager reads the future');
   assert.match(coverageLine ?? '', /future \$3,000/, 'pager counts the future in SecurityModule coverage');
   assert.match(futureLine ?? '', /; escrow [\d,]+ of 30,000,000 cNGN$/, 'pager reads the escrow cap the deploy set');
-  // ~2M of a 5M reserve is 40%: under half, over a quarter, so a Slack warning and no page
+  // ~8.3M of a 20M reserve is ~41%: under half, over a quarter, so a Slack warning and no page
   assert.ok(alerts.some((a) => a.text.includes('cNGN future VM pool at')), 'pool reserve warning reached the webhook');
 
   // ---- weeks later: the band narrows, cNGN weakens 2% ----------------------------------------
