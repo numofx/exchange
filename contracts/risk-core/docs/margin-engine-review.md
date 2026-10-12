@@ -360,16 +360,19 @@ The engine is **24,142 of 24,576 bytes**; StandardManager had 1,174 bytes of hea
 enabled, immediately before the enable batch is proposed. CI runs it on every change. Nothing on chain enforces this;
 it is a step in the enable procedure.
 
-**The market maker's futures model is an enable requirement too.** The bot's (numofx/market-maker) futures model is
-the DFXM-era one, and it must be rebuilt before the future opens:
-- **notional is contracts × contract size (1,000 USDC)**, not contracts × price: its per-side notional cap and
-  budget otherwise mean something else entirely;
-- **no quoting near expiry:** it stops before the fixing window and never quotes past last trade.
+**The market maker's futures model is an enable requirement too.** numofx/market-maker#35 quotes the future on its
+own model, in place of the DFXM-era one:
+- **notional is contracts × contract size (1,000 USDC)**, for its per-side cap, the inventory value and the signed
+  `worstFee` (3e18 a contract);
+- **sized by the engine's IM**, not cash: at most 80% of `getMargin(account, true)` over the IM a contract adds;
+- **priced off the future's own index** (`MM_ANCHOR_SOURCE_TYPE=future_index_carry`, required), and kept inside the
+  fill band;
+- **no quoting near expiry:** off from an hour before the earlier of the fixing window and last trade, and no order
+  signed to expire after that.
 
-Until that lands, the bot refuses to start on the future (`Initialize` returns `ErrFuturesModelNotRebuilt` for a
-listing that carries `future.contract_size_usdc`, numofx/market-maker#34), so a future enabled without it has no
-market maker. Removing that refusal is the rebuild's last step, with tests for both rules. Nothing on chain enforces
-this either; it is a step in the enable procedure.
+The requirement is met once #35 is merged and the bot runs it: an instance with
+`MM_MARKET_SYMBOL=USDC-cNGN-<DDMONYY>`, `MM_ANCHOR_SOURCE_TYPE=future_index_carry` and an account under the engine,
+quoting both sides. Nothing on chain enforces this; it is a step in the enable procedure.
 
 The fork tests include:
 - **margin parity on live contracts:** the same spot and perp portfolio under the SRM and under the engine has
