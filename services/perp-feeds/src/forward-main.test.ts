@@ -5,7 +5,7 @@ import { keccak256, toHex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 import { loadForwardConfig } from './forward-config.js';
-import { obtainSigner } from './forward-main.js';
+import { obtainSigner, sweep } from './forward-main.js';
 
 const config = loadForwardConfig({
   RPC_URL: 'http://127.0.0.1:8545',
@@ -46,5 +46,13 @@ describe('forward signer at startup', () => {
       /KMS down/,
     );
     assert.deepEqual(alerts, ['forward-signer-unavailable']);
+  });
+});
+
+describe('VM sweep', () => {
+  it('alerts a sweep that throws, and does not take the loop down with it', async () => {
+    const alerts: string[] = [];
+    await sweep({ sweep: async () => Promise.reject(new Error('rpc down')) }, async (key) => void alerts.push(key));
+    assert.deepEqual(alerts, ['sweep-error']);
   });
 });
