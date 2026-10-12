@@ -66,6 +66,18 @@ var knownReverts = map[string]settlementRevert{
 	"0xe5b25796": {Name: "WERC_CannotBeNegative", Class: revertBalanceDependent},
 	"0x8102bcdc": {Name: "BM_AssetCapExceeded", Class: revertBalanceDependent},
 	"0x83d3980b": {Name: "BM_AdjustmentsPaused", Class: revertBalanceDependent},
+	// An account in a liquidation auction cannot trade until the auction ends.
+	"0x72d35b56": {Name: "BM_AccountUnderLiquidation", Class: revertBalanceDependent},
+
+	// The cNGN future (FutureAsset). The band and the index move, so a fill refused for either can
+	// pass later: balance-dependent. A series that is closed, unknown or misaddressed never will.
+	"0x01bb8f43": {Name: "FA_FillOutsideIndexBand", Class: revertBalanceDependent},
+	"0x1141796d": {Name: "BLF_DataTooOld", Class: revertBalanceDependent},
+	"0x3111bbbd": {Name: "FA_TradingClosed", Class: revertPermanentForPair},
+	"0x098de4a3": {Name: "FA_UnknownFuture", Class: revertPermanentForPair},
+	"0xa6ac8918": {Name: "FA_InvalidSubId", Class: revertPermanentForPair},
+	// An account under a manager the future does not whitelist (the old SRM): it cannot hold the future.
+	"0xbd8ac1f7": {Name: "MW_UnknownManager", Class: revertPermanentForPair},
 }
 
 // execution-service returns viem's message verbatim. The form seen in production is

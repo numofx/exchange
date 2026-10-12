@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/numofx/matching-backend/internal/config"
+	"github.com/numofx/matching-backend/internal/futures"
 	"github.com/numofx/matching-backend/internal/instruments"
 	"github.com/numofx/matching-backend/internal/orders"
 )
@@ -25,6 +26,7 @@ type Engine struct {
 	funding  fundingChecker
 	margin   marginChecker
 	perpGate *perpTradingGate
+	future   *futures.Reader
 	alerts   *settlementAlerter
 }
 
@@ -40,6 +42,7 @@ func NewEngine(cfg config.Config, pool *pgxpool.Pool) *Engine {
 		funding:  newFundingChecker(cfg),
 		margin:   newMarginChecker(cfg),
 		perpGate: newPerpTradingGate(cfg),
+		future:   newFutureReader(cfg),
 		alerts:   newSettlementAlerter(cfg.AlertWebhookURL),
 	}
 }
@@ -52,6 +55,13 @@ func (e *Engine) Run(ctx context.Context) error {
 	}
 	if err := verifyPerpQuoteAsset(ctx, e.cfg); err != nil {
 		return err
+	}
+	for _, instrument := range e.registry.Enabled() {
+		if instrument.IsFuture() {
+			if err := verifyFutureContractSize(ctx, e.future, instrument); err != nil {
+				return err
+			}
+		}
 	}
 
 	// The ledger reduce-only orders are clamped against follows positions the venue did not move:
@@ -81,6 +91,10 @@ func (e *Engine) Run(ctx context.Context) error {
 			for _, instrument := range e.registry.Enabled() {
 				// A perp not yet opened on chain is listed (so quotes can rest) but never crossed.
 				if instrument.IsPerpetual() && (e.perpGate == nil || !e.perpGate.Open(ctx)) {
+					continue
+				}
+				// So is a future before the enable batch, after its last trade time, or while its manager is paused.
+				if instrument.IsFuture() && !e.futureOpen(ctx, instrument) {
 					continue
 				}
 				e.tickInstrument(ctx, instrument)
@@ -224,10 +238,21 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 		return
 	}
 
+	// A future's fill carries its price to the asset, which refuses one outside the index band: checked
+	// here on the price the chain will see, against the band now, so a resting order the index has
+	// moved away from is held back instead of settled into a revert.
+	if instrument.IsFuture() && !e.futureFillInBand(ctx, instrument, *candidate, executionFill.FillPrice) {
+		return
+	}
+
 	// The fee the taker will actually be charged, from this market's own schedule. Computed once
 	// here and reused for the funding reservation, so the number the buyer is checked against is
 	// the number that reaches the chain.
-	fillFee, feeErr := takerFillFee(instrument.TakerFeeBps, executionFill.FillPrice, executionFill.FillAmount)
+	notional, feeErr := e.feeNotionalPrice(ctx, instrument, executionFill.FillPrice)
+	fillFee := ""
+	if feeErr == nil {
+		fillFee, feeErr = takerFillFee(instrument.TakerFeeBps, notional, executionFill.FillAmount)
+	}
 	if feeErr != nil {
 		e.noteMatchFailure(instrument.Symbol, *candidate, "fee_computation_failed", settlementRevert{})
 		slog.Error("fee_computation_failed", "market", instrument.Symbol, "error", feeErr)
@@ -253,12 +278,20 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 		)
 	}
 
-	if instrument.IsPerpetual() {
+	switch {
+	case instrument.IsPerpetual():
 		if !e.perpMarginAllows(ctx, instrument, *candidate, executionFill.FillPrice, executionFill.FillAmount, fillFee) {
 			return
 		}
-	} else if !e.buyerFunded(ctx, instrument, *candidate, executionFill.FillPrice, executionFill.FillAmount, fillFee) {
-		return
+	case instrument.IsFuture():
+		// No pre-check: the MarginEngine checks both accounts in the fill, and a refusal reverts
+		// SRM_PortfolioBelowMargin, which is balance-dependent and backs the pair off. A future fill
+		// moves no quote leg, so the spot funding check below would reserve price x amount of cash
+		// that never moves.
+	default:
+		if !e.buyerFunded(ctx, instrument, *candidate, executionFill.FillPrice, executionFill.FillAmount, fillFee) {
+			return
+		}
 	}
 
 	slog.Info(
