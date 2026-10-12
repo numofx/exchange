@@ -29,7 +29,7 @@ const envSchema = z
     ALERT_WEBHOOK_URL: z.string().url().optional().or(z.literal('')),
     DRY_RUN: bool.default('false'),
 
-    // From risk-core/deployments/8453/CNGN_NOV30_2026_FUTURE.json and core.json.
+    // From risk-core/deployments/8453/MARGIN_ENGINE.json and core.json.
     DATA_SUBMITTER: address,
     INDEX_FEED: address,
     FORWARD_FEED: address,

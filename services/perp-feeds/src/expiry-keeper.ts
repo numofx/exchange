@@ -159,7 +159,7 @@ export class ExpiryKeeper {
   }
 
   /**
-   * Realises every holder's VM after a mark, payers before receivers. FutureManager settles lazily:
+   * Realises every holder's VM after a mark, payers before receivers. MarginEngine settles lazily:
    * an account's VM moves only when something touches it, and a loser has no reason to. Without
    * this, a winner who settles to withdraw is paid from the pool's reserve, and that reserve stays
    * out until each loser happens to trade, be liquidated or be closed out at expiry. Payers first,
