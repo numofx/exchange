@@ -47,15 +47,12 @@ step() {                       # step <section> <dir> <description> <command...>
 # ---- contracts-risk-core.yml -----------------------------------------------------------
 step risk-core contracts/risk-core "forge fmt --check" forge fmt --check
 step risk-core contracts/risk-core "forge build scripts/*.s.sol" bash -c 'forge build scripts/*.s.sol'
-step risk-core contracts/risk-core "resolve_cngn_action6 self-test" python3 scripts/ops/resolve_cngn_action6.py --self-test
-step risk-core contracts/risk-core "propose_cngn_spot_batch self-test" python3 scripts/ops/propose_cngn_spot_batch.py --self-test
-step risk-core contracts/risk-core "propose_market1_inert_batch self-test" python3 scripts/ops/propose_market1_inert_batch.py --self-test
-step risk-core contracts/risk-core "check_settlement_canary self-test" python3 scripts/ops/check_settlement_canary.py --self-test
-step risk-core contracts/risk-core "check_heartbeats self-test" python3 scripts/ops/check_heartbeats.py --self-test
+# Every ops script that has a self-test, found rather than listed: a list is how five went unrun
+# (check_perp_pager among them). `if`, not `grep && run`, so a script without one is not a failure.
+step risk-core contracts/risk-core "ops self-tests" bash -c 'for f in scripts/ops/*.py; do if grep -q -- "--self-test" "$f"; then echo "$f"; python3 "$f" --self-test || exit 1; fi; done'
 # Every ops script, one at a time: `bash -n a.sh b.sh` parses only a.sh (b.sh is its argument), which
 # is how this step checked one file of the two it listed.
 step risk-core contracts/risk-core "ops shell scripts parse" bash -c 'for f in scripts/ops/*.sh; do bash -n "$f" || exit 1; done'
-step risk-core contracts/risk-core "refresh_deployment_artifacts self-test" python3 scripts/ops/refresh_deployment_artifacts.py --self-test
 step risk-core contracts/risk-core "forge test" forge test
 
 # ---- contracts-execution.yml -----------------------------------------------------------
