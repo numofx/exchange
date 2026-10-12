@@ -546,8 +546,9 @@ contract MarginEngine is IMarginEngine, ILiquidatableManager, BaseManager, Reent
 
   /**
    * @notice Margin for every futures position in a market (FutureVMLib.marketMargin): the requirement and any depeg
-   *         penalty, gross, on |position| x contractSize, plus unsettled VM (owed at par, due at the base factor, as held
-   *         base is). Mark-to-market is the VM at par, in stable.
+   *         penalty, gross, on |position| x contractSize, plus unsettled VM valued as settlement will pay it: a loss
+   *         from held base first (at the base factor), the rest at par; a gain at the base factor. Mark-to-market is
+   *         the VM at par, in stable.
    */
   function _getFutureMarginAndMtM(
     uint accountId,
@@ -560,15 +561,19 @@ contract MarginEngine is IMarginEngine, ILiquidatableManager, BaseManager, Reent
     uint marketId = marketHolding.marketId;
     BaseMarginParams memory params = baseMarginParams[marketId];
     (margin, markToMarket) = FutureVMLib.marketMargin(
-      marketHolding.future,
-      marketHolding.futurePositions,
-      accountId,
-      spotPrice,
-      // the depeg penalty on the futures' own notional, as on a perp's (0 for maintenance)
-      (isInitial ? futureMarginRequirements[marketId].imReq : futureMarginRequirements[marketId].mmReq)
-        + depegMultiplier,
-      isInitial ? params.marginFactor.multiplyDecimal(params.IMScale) : params.marginFactor,
-      stableFeed
+      FutureVMLib.MarketInputs({
+        future: marketHolding.future,
+        accountId: accountId,
+        spotPrice: spotPrice,
+        // the depeg penalty on the futures' own notional, as on a perp's (0 for maintenance)
+        requirement: (isInitial ? futureMarginRequirements[marketId].imReq : futureMarginRequirements[marketId].mmReq)
+          + depegMultiplier,
+        marginFactor: isInitial ? params.marginFactor.multiplyDecimal(params.IMScale) : params.marginFactor,
+        // losses are paid from the base the account holds first
+        heldBase: marketHolding.basePosition,
+        stableFeed: stableFeed
+      }),
+      marketHolding.futurePositions
     );
   }
 

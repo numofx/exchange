@@ -29,6 +29,21 @@ library FutureVMLib {
   using SafeCast for uint;
   using SafeCast for int;
 
+  /// @dev What marketMargin needs about the account and its market
+  struct MarketInputs {
+    IFutureAsset future;
+    uint accountId;
+    uint spotPrice;
+    /// @dev the futures margin requirement, initial or maintenance, plus the depeg multiplier (initial only), as
+    ///      fractions of notional
+    uint requirement;
+    /// @dev the market's base margin factor, already scaled for initial margin
+    uint marginFactor;
+    /// @dev the base the account holds in the market, which its losses are paid from first
+    uint heldBase;
+    ISpotFeed stableFeed;
+  }
+
   struct Accounts {
     ISubAccounts subAccounts;
     IAsset base;
@@ -121,35 +136,49 @@ library FutureVMLib {
 
   /**
    * @notice Margin for every futures position in a market, gross: the requirement on each, |position| x contractSize x
-   *         requirement (a contract is a fixed USDC amount whatever its price), plus each position's unsettled VM.
-   * @param  requirement the market's futures margin requirement, initial or maintenance, plus the depeg multiplier
-   *         (initial margin only, 0 otherwise), both fractions of notional
-   * @param  marginFactor the market's base margin factor, already scaled for initial margin by the caller
+   *         requirement (a contract is a fixed USDC amount whatever its price), plus each position's unsettled VM, valued
+   *         as settlement will pay it.
+   * @dev    Series are taken in the order settlement takes them (the account's balance order). A loss is paid from the
+   *         base the account holds first: that part costs its margin only the base factor (held base was counted at
+   *         it), the rest is cash at par. So for losses, margin before settlement equals margin after.
+   *         A gain counts at the base factor, as the base the pool pays it in. If the pool is short, settlement pays the
+   *         rest in cash at par: then the view is below what settlement gives, never above. It is not exact there
+   *         because the pool is shared: which winner gets base depends on who settles first. For the same reason a
+   *         gain is not counted as base that later losses in the view could spend.
    * @return margin the margin contribution, normally negative
    * @return pendingMtM the unsettled VM at spot, at par, in stable
    */
-  function marketMargin(
-    IFutureAsset future,
-    IMarginEngine.FuturePosition[] memory positions,
-    uint accountId,
-    uint spotPrice,
-    uint requirement,
-    uint marginFactor,
-    ISpotFeed stableFeed
-  ) external view returns (int margin, int pendingMtM) {
-    uint size = future.contractSize();
+  function marketMargin(MarketInputs memory m, IMarginEngine.FuturePosition[] memory positions)
+    external
+    view
+    returns (int margin, int pendingMtM)
+  {
+    uint size = m.future.contractSize();
     for (uint i = 0; i < positions.length; ++i) {
       uint notional = SignedMath.abs(positions[i].balance).multiplyDecimal(size);
-      margin -= notional.multiplyDecimal(requirement).toInt256();
-      (int m, int mtm) = _pendingValue(future, accountId, positions[i].subId, spotPrice, marginFactor);
-      margin += m;
-      pendingMtM += mtm;
+      margin -= notional.multiplyDecimal(m.requirement).toInt256();
+
+      int pending = m.future.getPendingVM(m.accountId, positions[i].subId);
+      if (pending == 0) continue;
+      pendingMtM += pending.multiplyDecimal(m.spotPrice.toInt256());
+      margin += _pendingMargin(m, pending);
     }
     // mark-to-market is denominated in stable, as StandardManager's base mark-to-market is
     if (pendingMtM != 0) {
-      (uint stablePrice,) = stableFeed.getSpot();
+      (uint stablePrice,) = m.stableFeed.getSpot();
       pendingMtM = pendingMtM.divideDecimal(stablePrice.toInt256());
     }
+  }
+
+  /// @dev One series' unsettled VM as settlement will pay it; a loss spends `m.heldBase`, so later losses see less.
+  function _pendingMargin(MarketInputs memory m, int pending) private pure returns (int) {
+    if (pending > 0) return uint(pending).multiplyDecimal(m.spotPrice).multiplyDecimal(m.marginFactor).toInt256();
+    uint owed = uint(-pending);
+    uint fromHeld = owed < m.heldBase ? owed : m.heldBase;
+    m.heldBase -= fromHeld;
+    return -(fromHeld.multiplyDecimal(m.spotPrice).multiplyDecimal(m.marginFactor)
+        + (owed - fromHeld).multiplyDecimal(m.spotPrice))
+    .toInt256();
   }
 
   /**
@@ -172,25 +201,6 @@ library FutureVMLib {
       emit IMarginEngine.PositionClosedOut(accountId, subId, position);
     }
     return true;
-  }
-
-  /**
-   * @notice An account's unsettled VM on one series, in margin and mark-to-market terms (cash units, 18dp).
-   * @dev    Unsettled VM is cNGN not yet moved. Owed, it is a debt at par; due to the account, it counts at the base
-   *         asset's margin factor, as held cNGN does, so cNGN counts the same settled or not.
-   * @param  marginFactor the market's base margin factor, already scaled for initial margin by the caller
-   * @return margin the margin contribution
-   * @return markToMarket the value at spot, at par either way
-   */
-  function _pendingValue(IFutureAsset future, uint accountId, uint subId, uint spotPrice, uint marginFactor)
-    internal
-    view
-    returns (int margin, int markToMarket)
-  {
-    int pending = future.getPendingVM(accountId, subId);
-    if (pending == 0) return (0, 0);
-    markToMarket = pending.multiplyDecimal(spotPrice.toInt256());
-    margin = pending > 0 ? markToMarket.multiplyDecimal(marginFactor.toInt256()) : markToMarket;
   }
 
   /**
