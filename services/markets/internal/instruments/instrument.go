@@ -8,7 +8,14 @@ import (
 const (
 	ContractTypeSpot      = "spot"
 	ContractTypePerpetual = "perpetual"
+	ContractTypeFuture    = "future"
 )
+
+// IsFuture reports whether the market is a dated future: a FutureAsset series whose fills carry their
+// price to the asset and move no quote leg, bounded on chain by the index band.
+func (m Metadata) IsFuture() bool {
+	return m.ContractType == ContractTypeFuture
+}
 
 // IsPerpetual reports whether the market is the perp, whose fills move margin, not balances.
 func (m Metadata) IsPerpetual() bool {

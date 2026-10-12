@@ -565,7 +565,7 @@ func validateActionJSON(raw json.RawMessage, ownerAddress string, signerAddress 
 func (s *Server) admitReduceOnly(ctx context.Context, params orders.CreateOrderParams) (int, string) {
 	instrument, ok := s.instruments.ByAssetAndSubID(strings.ToLower(params.AssetAddress), params.SubID)
 	if !ok || !instrument.IsPerpetual() {
-		return http.StatusBadRequest, "reduce_only is only accepted on the perpetual: a spot order has no position to reduce"
+		return http.StatusBadRequest, "reduce_only is only accepted on the perpetual: the venue tracks no other position to reduce"
 	}
 	if s.perp == nil {
 		return http.StatusServiceUnavailable, "reduce_only needs the account's perp position, which this deployment cannot read"
