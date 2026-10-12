@@ -121,7 +121,6 @@ TOPIC_ASSET_WHITELISTED = "0x65e6c2e07fd179979855ae720448f582bc92322fc62ed1cd98a
 # Revert selectors worth naming in an alert. Anything else is reported as raw returndata.
 KNOWN_ERRORS = {
   "0x1141796d": "BLF_DataTooOld()",
-  "0x93ce63e9": "BF_DataTooOld()",
   "0x1607767a": "BLF_InvalidSignature()",
 }
 
@@ -538,6 +537,9 @@ def alert(webhook: str | None, msg: str) -> None:
 
 
 def self_test() -> None:
+  # every selector and signature this script pins must name a compiled function, not just match `cast sig`
+  from abi_selectors import assert_script
+  assert_script(__file__)
   sys.path.insert(0, str(Path(__file__).resolve().parent))
   from resolve_cngn_action6 import keccak
 

@@ -571,6 +571,9 @@ def gate_pool_withdraw(chain: Chain, d: dict, kind: str, amount: int, recipient:
 # ---------------------------------------------------------------------------------------------
 
 def self_test() -> int:
+  # every selector and signature this script pins must name a compiled function, not just match `cast sig`
+  from abi_selectors import assert_script
+  assert_script(__file__)
   assert keccak(b"").hex() == "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470", "keccak broken"
   for name, want in PINNED.items():
     assert selector(name) == want, f"{name}: {selector(name)} != {want}"

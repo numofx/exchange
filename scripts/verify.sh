@@ -49,6 +49,10 @@ step risk-core contracts/risk-core "forge fmt --check" forge fmt --check
 step risk-core contracts/risk-core "forge build scripts/*.s.sol" bash -c 'forge build scripts/*.s.sol'
 # Every ops script that has a self-test, found rather than listed: a list is how five went unrun
 # (check_perp_pager among them). `if`, not `grep && run`, so a script without one is not a failure.
+# Every ABI, in both trees: each self-test checks the selectors it pins name a compiled function
+# (abi_selectors.py), not only that they match `cast sig` of the same, possibly wrong, name.
+step risk-core contracts/risk-core "forge build (every ABI, for the selector check)" forge build
+step risk-core contracts/execution "forge build (TradeModule ABIs, for the selector check)" forge build
 step risk-core contracts/risk-core "ops self-tests" bash -c 'for f in scripts/ops/*.py; do if grep -q -- "--self-test" "$f"; then echo "$f"; python3 "$f" --self-test || exit 1; fi; done'
 # Every ops script, one at a time: `bash -n a.sh b.sh` parses only a.sh (b.sh is its argument), which
 # is how this step checked one file of the two it listed.
