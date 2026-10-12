@@ -27,23 +27,26 @@ type Engine struct {
 	margin   marginChecker
 	perpGate *perpTradingGate
 	future   *futures.Reader
-	alerts   *settlementAlerter
+	// marginRefusals holds back, and in time cancels, futures orders whose own account cannot carry a fill.
+	marginRefusals *futureMarginRefusals
+	alerts         *settlementAlerter
 }
 
 const reconciliationTimeout = 5 * time.Second
 
 func NewEngine(cfg config.Config, pool *pgxpool.Pool) *Engine {
 	return &Engine{
-		cfg:      cfg,
-		orders:   orders.NewRepository(pool),
-		executor: NewExecutorClient(cfg.ExecutorURL, cfg.ExecutorManagerData, cfg.ExecutorTimeout),
-		registry: instruments.DefaultRegistry(cfg),
-		backoff:  newMatchBackoff(),
-		funding:  newFundingChecker(cfg),
-		margin:   newMarginChecker(cfg),
-		perpGate: newPerpTradingGate(cfg),
-		future:   newFutureReader(cfg),
-		alerts:   newSettlementAlerter(cfg.AlertWebhookURL),
+		cfg:            cfg,
+		orders:         orders.NewRepository(pool),
+		executor:       NewExecutorClient(cfg.ExecutorURL, cfg.ExecutorManagerData, cfg.ExecutorTimeout),
+		registry:       instruments.DefaultRegistry(cfg),
+		backoff:        newMatchBackoff(),
+		funding:        newFundingChecker(cfg),
+		margin:         newMarginChecker(cfg),
+		perpGate:       newPerpTradingGate(cfg),
+		future:         newFutureReader(cfg),
+		marginRefusals: newFutureMarginRefusals(),
+		alerts:         newSettlementAlerter(cfg.AlertWebhookURL),
 	}
 }
 
@@ -109,7 +112,7 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 	now := time.Now()
 
 	candidate, err := e.orders.AcquireMatchCandidate(
-		ctx, instrument.AssetAddress, instrument.SubID, now, e.backoff.shouldSkip,
+		ctx, instrument.AssetAddress, instrument.SubID, now, e.matchGate,
 	)
 	if err != nil {
 		slog.Error("acquire match candidate", "market", instrument.Symbol, "error", err)
@@ -284,10 +287,12 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 			return
 		}
 	case instrument.IsFuture():
-		// No pre-check: the MarginEngine checks both accounts in the fill, and a refusal reverts
-		// SRM_PortfolioBelowMargin, which is balance-dependent and backs the pair off. A future fill
-		// moves no quote leg, so the spot funding check below would reserve price x amount of cash
-		// that never moves.
+		// Each account against the engine's IM, so the account that cannot carry the fill is named and
+		// its order held back (future_margin.go). A future fill moves no quote leg, so the spot funding
+		// check below would reserve price x amount of cash that never moves.
+		if !e.futureMarginAllows(ctx, instrument, *candidate, executionFill.FillPrice, executionFill.FillAmount, fillFee) {
+			return
+		}
 	default:
 		if !e.buyerFunded(ctx, instrument, *candidate, executionFill.FillPrice, executionFill.FillAmount, fillFee) {
 			return

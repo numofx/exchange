@@ -97,6 +97,8 @@ type Reader struct {
 	mu           sync.Mutex
 	feed         string
 	subAccounts  string
+	imRate       *big.Int
+	imRateAt     time.Time
 	contractSize *big.Int
 	band         *Band
 	contract     *Contract
@@ -290,21 +292,9 @@ func (r *Reader) readOpen(ctx context.Context, tradeModule, manager string) (boo
 // ManagerOf is SubAccounts.manager(account), lowercased: the future admits a position only under a
 // manager it whitelists (MW_UnknownManager otherwise). Not cached: an account can migrate.
 func (r *Reader) ManagerOf(ctx context.Context, account *big.Int) (string, error) {
-	r.mu.Lock()
-	ledger := r.subAccounts
-	r.mu.Unlock()
-	if ledger == "" {
-		raw, err := r.call(ctx, r.future, sigSubAccounts)
-		if err != nil {
-			return "", err
-		}
-		if len(raw) < 2+64 {
-			return "", errors.New("subAccounts: short result")
-		}
-		ledger = "0x" + raw[len(raw)-40:]
-		r.mu.Lock()
-		r.subAccounts = ledger
-		r.mu.Unlock()
+	ledger, err := r.ledger(ctx)
+	if err != nil {
+		return "", err
 	}
 	raw, err := r.call(ctx, ledger, sigManager+uintWord(account))
 	if err != nil {
@@ -314,6 +304,28 @@ func (r *Reader) ManagerOf(ctx context.Context, account *big.Int) (string, error
 		return "", errors.New("manager: short result")
 	}
 	return "0x" + raw[len(raw)-40:], nil
+}
+
+// ledger is the future's SubAccounts, read once.
+func (r *Reader) ledger(ctx context.Context) (string, error) {
+	r.mu.Lock()
+	ledger := r.subAccounts
+	r.mu.Unlock()
+	if ledger != "" {
+		return ledger, nil
+	}
+	raw, err := r.call(ctx, r.future, sigSubAccounts)
+	if err != nil {
+		return "", err
+	}
+	if len(raw) < 2+64 {
+		return "", errors.New("subAccounts: short result")
+	}
+	ledger = "0x" + raw[len(raw)-40:]
+	r.mu.Lock()
+	r.subAccounts = ledger
+	r.mu.Unlock()
+	return ledger, nil
 }
 
 func (r *Reader) indexFeed(ctx context.Context) (string, error) {

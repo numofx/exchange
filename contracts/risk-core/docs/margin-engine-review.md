@@ -439,9 +439,11 @@ markets-service lists the future once `CNGN_FUTURE_*` is set on the API and the 
   cutover").
 - **No migration code:** positions left open on the old SRM stay there under its existing keeper and pager.
 - **The keeper's holder scan** reads every account on each sweep: fine at dozens of accounts, not at thousands.
-- **The matcher has no margin pre-check for the future.** The engine checks both accounts in the fill and refuses an
-  under-margined one (`SRM_PortfolioBelowMargin`); the pair backs off. The perp's pre-check reads the SRM's perp margin
-  and does not apply.
+- **The matcher's margin pre-check for the future is an estimate.** It checks each account against
+  `getMargin(account, true)` less the IM the fill adds, holds back the short account's order from every counterparty,
+  and cancels it after 3 refusals over at least a minute (`insufficient_margin`). It is optimistic (no depeg penalty,
+  a fill-time VM gain at par, a loss ignored), so the engine remains the authority: a revert it did not foresee carries
+  no account, backs the pair off and cancels nothing.
 - **RFQ is not supported.** Engine accounts trade only through the TradeModule. The RfqModule `0x8399…` was deployed
   against the same Matching, has the perp and the future unregistered, and settles in the frozen DFXM-era cash:
   - **Today:** Matching no longer allows it, so any RFQ action is refused before it reaches a manager
