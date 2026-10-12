@@ -11,9 +11,9 @@
           Before proposing it, at the commit being enabled and against head, run the real-fills fork test
           (`BASE_RPC_URL=... forge test --match-contract MarginEngineTradeModuleFork`): signed orders for the future
           through the live Matching and TradeModule. It is a procedural step; no gate here can run it.
-          So is the market maker's rebuilt futures model (notional = contracts x 1,000 USDC, no quoting near
-          expiry): until it ships, numofx/market-maker refuses to quote the future (ErrFuturesModelNotRebuilt),
-          and the future must not be enabled without a market maker that can.
+          So is the market maker's futures model (numofx/market-maker#35: notional = contracts x 1,000 USDC, IM
+          sizing, no quoting near expiry): the future must not be enabled until an instance runs it
+          (MM_ANCHOR_SOURCE_TYPE=future_index_carry, an account under the engine) and quotes both sides.
 
 Every action in the file is rebuilt here from the deployment artifact and must match it exactly (to,
 calldata, value), and its digest is recomputed (keccak(to || keccak(data)), the convention of
