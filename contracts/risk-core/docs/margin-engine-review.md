@@ -360,6 +360,17 @@ The engine is **24,142 of 24,576 bytes**; StandardManager had 1,174 bytes of hea
 enabled, immediately before the enable batch is proposed. CI runs it on every change. Nothing on chain enforces this;
 it is a step in the enable procedure.
 
+**The market maker's futures model is an enable requirement too.** The bot's (numofx/market-maker) futures model is
+the DFXM-era one, and it must be rebuilt before the future opens:
+- **notional is contracts × contract size (1,000 USDC)**, not contracts × price: its per-side notional cap and
+  budget otherwise mean something else entirely;
+- **no quoting near expiry:** it stops before the fixing window and never quotes past last trade.
+
+Until that lands, the bot refuses to start on the future (`Initialize` returns `ErrFuturesModelNotRebuilt` for a
+listing that carries `future.contract_size_usdc`, numofx/market-maker#34), so a future enabled without it has no
+market maker. Removing that refusal is the rebuild's last step, with tests for both rules. Nothing on chain enforces
+this either; it is a step in the enable procedure.
+
 The fork tests include:
 - **margin parity on live contracts:** the same spot and perp portfolio under the SRM and under the engine has
   identical IM, MM and mark-to-market;
