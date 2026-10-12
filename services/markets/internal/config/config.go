@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
@@ -102,6 +103,10 @@ type Config struct {
 	CNGNPerpTradeModuleAddress string
 	CNGNPerpCashAddress        string
 	CNGNPerpSRMAddress         string
+	// CNGNPerpCloseOnlyManager is a manager being wound down (the live SRM, after the MarginEngine
+	// cutover): the matcher crosses a perp order from an account under it only if the fill reduces
+	// that account's position. Unset, nothing is close-only and no account's manager is read.
+	CNGNPerpCloseOnlyManager string
 	// CNGNPerpCollateralAddress is the perp stack's own cNGN escrow (risk-core
 	// CNGN_PERP_COLLATERAL.json `escrow`), once the vault has whitelisted it as a base asset on the
 	// perp SRM. Optional: unset, the perp is margined in its cash only and /v1/positions reports no
@@ -188,6 +193,7 @@ func Load() (Config, error) {
 		CNGNPerpTradeModuleAddress:   strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_TRADE_MODULE_ADDRESS"))),
 		CNGNPerpCashAddress:          strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_CASH_ADDRESS"))),
 		CNGNPerpSRMAddress:           strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_SRM_ADDRESS"))),
+		CNGNPerpCloseOnlyManager:     strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_CLOSE_ONLY_MANAGER"))),
 		CNGNPerpCollateralAddress:    strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_COLLATERAL_ADDRESS"))),
 		IndexStatusToken:             strings.TrimSpace(os.Getenv("INDEX_STATUS_TOKEN")),
 		IndexLagGate:                 getenvBool("INDEX_LAG_GATE", false),
@@ -381,11 +387,22 @@ func (c Config) validatePerpStack() error {
 			missing = append(missing, name)
 		}
 	}
-	if len(set) == 0 || len(missing) == 0 {
-		return nil
+	if len(set) != 0 && len(missing) != 0 {
+		return fmt.Errorf("the perp stack is configured partially: %s set but %s missing; set all four or none",
+			strings.Join(set, ", "), strings.Join(missing, ", "))
 	}
-	return fmt.Errorf("the perp stack is configured partially: %s set but %s missing; set all four or none",
-		strings.Join(set, ", "), strings.Join(missing, ", "))
+	if closeOnly := strings.TrimSpace(c.CNGNPerpCloseOnlyManager); closeOnly != "" {
+		if !isConfiguredAddress(closeOnly) {
+			return fmt.Errorf("CNGN_PERP_CLOSE_ONLY_MANAGER %q is not an address", closeOnly)
+		}
+		if len(set) == 0 {
+			return errors.New("CNGN_PERP_CLOSE_ONLY_MANAGER is set without a perp stack")
+		}
+		if strings.EqualFold(closeOnly, c.CNGNPerpSRMAddress) {
+			return errors.New("CNGN_PERP_CLOSE_ONLY_MANAGER is CNGN_PERP_SRM_ADDRESS: the manager accounts open under cannot be close-only")
+		}
+	}
+	return nil
 }
 
 func isConfiguredAddress(value string) bool {

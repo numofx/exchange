@@ -102,6 +102,13 @@ func hexWord(v *big.Int) string {
 // position.
 func stubPerpChain(t *testing.T, surplus, position map[string]*big.Int) *httptest.Server {
 	t.Helper()
+	return stubPerpChainWithManagers(t, surplus, position, nil)
+}
+
+// stubPerpChainWithManagers also answers SubAccounts.manager(id) from `managers`; with nil, a
+// manager read is an unexpected call.
+func stubPerpChainWithManagers(t *testing.T, surplus, position map[string]*big.Int, managers map[string]string) *httptest.Server {
+	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Params []json.RawMessage `json:"params"`
@@ -132,6 +139,11 @@ func stubPerpChain(t *testing.T, surplus, position map[string]*big.Int) *httptes
 			result = hexWord(surplus[account()])
 		case getBalanceSelector:
 			result = hexWord(position[account()])
+		case managerSelector:
+			if managers == nil {
+				t.Errorf("manager read without a close-only manager configured")
+			}
+			result = "000000000000000000000000" + strings.TrimPrefix(managers[account()], "0x")
 		default:
 			t.Errorf("unexpected call %s to %s", data[:10], call.To)
 		}
@@ -151,7 +163,13 @@ func perpInstrument() instruments.Metadata {
 
 func perpCheckerFor(t *testing.T, url string) marginChecker {
 	t.Helper()
+	return perpCheckerWithCloseOnly(t, url, "")
+}
+
+func perpCheckerWithCloseOnly(t *testing.T, url, closeOnly string) marginChecker {
+	t.Helper()
 	checker := newMarginChecker(config.Config{
+		CNGNPerpCloseOnlyManager:   closeOnly,
 		ChainRPCURL:                url,
 		MatchingAddress:            "0x1111111111111111111111111111111111111111",
 		CNGNPerpAssetAddress:       stubPerp,
@@ -207,5 +225,77 @@ func TestCheckPerpFillPassesWhenBothSidesAreMargined(t *testing.T) {
 func TestNoPerpNoMarginChecker(t *testing.T) {
 	if newMarginChecker(config.Config{ChainRPCURL: "http://x", MatchingAddress: "0x1111111111111111111111111111111111111111"}) != nil {
 		t.Fatal("without a perp configured there is nothing to check")
+	}
+}
+
+// The MarginEngine cutover: the old SRM is close-only, the engine is the instrument's manager.
+const (
+	stubOldSRM = "0x9999999999999999999999999999999999999999"
+)
+
+func closeOnlyCase(t *testing.T, takerPosition *big.Int, takerSide orders.Side, takerSurplus *big.Int) marginVerdict {
+	t.Helper()
+	srv := stubPerpChainWithManagers(t,
+		map[string]*big.Int{"7": takerSurplus, "8": usd(5_000)},
+		map[string]*big.Int{"7": takerPosition, "8": big.NewInt(0)},
+		map[string]string{"7": stubOldSRM, "8": stubSRM},
+	)
+	defer srv.Close()
+	makerSide := orders.SideSell
+	if takerSide == orders.SideSell {
+		makerSide = orders.SideBuy
+	}
+	candidate := orders.MatchCandidate{
+		Taker: orders.Order{OrderID: "t", SubaccountID: "7", Side: takerSide},
+		Maker: orders.Order{OrderID: "m", SubaccountID: "8", Side: makerSide},
+	}
+	verdict, err := perpCheckerWithCloseOnly(t, srv.URL, stubOldSRM).CheckPerpFill(context.Background(), perpInstrument(),
+		candidate, perpMark.String(), ngn(10_000_000).String(), "0")
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	return verdict
+}
+
+func TestCloseOnlyAccountCannotOpen(t *testing.T) {
+	v := closeOnlyCase(t, big.NewInt(0), orders.SideBuy, usd(1_000_000))
+	if v.OK || !v.CloseOnly || v.Account != "7" {
+		t.Fatalf("an account under the close-only manager opening a position must be refused as close-only, got %+v", v)
+	}
+}
+
+func TestCloseOnlyAccountCannotFlip(t *testing.T) {
+	v := closeOnlyCase(t, negate(ngn(5_000_000)), orders.SideBuy, usd(1_000_000))
+	if v.OK || !v.CloseOnly {
+		t.Fatalf("buying 10M against a 5M short flips it long: refused, got %+v", v)
+	}
+}
+
+func TestCloseOnlyAccountMayReduceWithoutInitialMargin(t *testing.T) {
+	// a 10M short bought back in full, by an account already below initial margin
+	v := closeOnlyCase(t, negate(ngn(10_000_000)), orders.SideBuy, negate(usd(100)))
+	if !v.OK {
+		t.Fatalf("closing is always allowed under the close-only manager, and its IM is the chain's to check: got %+v", v)
+	}
+}
+
+func TestEngineAccountsAreStillMarginCheckedWithCloseOnlySet(t *testing.T) {
+	srv := stubPerpChainWithManagers(t,
+		map[string]*big.Int{"7": usd(5_000), "8": usd(1_000)},
+		map[string]*big.Int{"7": big.NewInt(0), "8": big.NewInt(0)},
+		map[string]string{"7": stubSRM, "8": stubSRM},
+	)
+	defer srv.Close()
+	candidate := orders.MatchCandidate{
+		Taker: orders.Order{OrderID: "t", SubaccountID: "7", Side: orders.SideBuy},
+		Maker: orders.Order{OrderID: "m", SubaccountID: "8", Side: orders.SideSell},
+	}
+	v, err := perpCheckerWithCloseOnly(t, srv.URL, stubOldSRM).CheckPerpFill(context.Background(), perpInstrument(),
+		candidate, perpMark.String(), ngn(10_000_000).String(), "0")
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if v.OK || v.CloseOnly || v.Account != "8" {
+		t.Fatalf("an engine account short of IM is refused on margin, not close-only: got %+v", v)
 	}
 }

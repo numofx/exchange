@@ -578,6 +578,17 @@ func (e *Engine) perpMarginAllows(ctx context.Context, instrument instruments.Me
 	if verdict.OK {
 		return true
 	}
+	if verdict.CloseOnly {
+		e.noteMatchFailure(instrument.Symbol, candidate, "perp_close_only", settlementRevert{})
+		slog.Warn(
+			"match_trace_perp_close_only",
+			"market", instrument.Symbol,
+			"taker_order_id", candidate.Taker.OrderID,
+			"maker_order_id", candidate.Maker.OrderID,
+			"subaccount_id", verdict.Account,
+		)
+		return false
+	}
 	e.noteMatchFailure(instrument.Symbol, candidate, "perp_margin_insufficient", settlementRevert{})
 	surplus := ""
 	if verdict.SurplusAfter != nil {

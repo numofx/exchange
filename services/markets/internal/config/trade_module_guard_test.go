@@ -95,3 +95,33 @@ func TestPerpStackMustBeConfiguredWhole(t *testing.T) {
 		t.Fatalf("a stack without its SRM must be refused naming it, got %v", err)
 	}
 }
+
+// The close-only manager (the old SRM at the MarginEngine cutover) must be an address, beside a
+// perp stack, and not the manager new accounts open under.
+func TestCloseOnlyManagerIsValidated(t *testing.T) {
+	whole := Config{
+		CNGNPerpAssetAddress:       "0x3333333333333333333333333333333333333333",
+		CNGNPerpTradeModuleAddress: "0x2222222222222222222222222222222222222222",
+		CNGNPerpCashAddress:        "0x4444444444444444444444444444444444444444",
+		CNGNPerpSRMAddress:         "0x5555555555555555555555555555555555555555",
+	}
+	cutover := whole
+	cutover.CNGNPerpCloseOnlyManager = "0x9999999999999999999999999999999999999999"
+	if err := cutover.validatePerpStack(); err != nil {
+		t.Fatalf("a close-only manager beside the engine must be accepted: %v", err)
+	}
+	same := whole
+	same.CNGNPerpCloseOnlyManager = whole.CNGNPerpSRMAddress
+	if err := same.validatePerpStack(); err == nil {
+		t.Fatal("the manager accounts open under cannot also be close-only")
+	}
+	bad := whole
+	bad.CNGNPerpCloseOnlyManager = "srm"
+	if err := bad.validatePerpStack(); err == nil {
+		t.Fatal("a close-only manager that is not an address must be refused")
+	}
+	alone := Config{CNGNPerpCloseOnlyManager: "0x9999999999999999999999999999999999999999"}
+	if err := alone.validatePerpStack(); err == nil {
+		t.Fatal("a close-only manager without a perp stack must be refused")
+	}
+}
