@@ -1,5 +1,10 @@
 # Physical delivery — SEP-16-2026 cNGN future: flow map + runbook
 
+> **Retired.** Physical delivery has been dropped. The new cNGN future is cash-settled and expires through
+> the perp-feeds expiry keeper (#178). The delivery keeper (`scripts/delivery_keeper.py`), the delivery
+> readiness alert and their `numo-delivery-*` units were deleted so nobody can run them against that series.
+> This page is kept only as a record of the SEP-16 DeliverableFXManager flow.
+
 How the `USDCcNGN-SEP16-2026` deliverable FX future settles by **physical delivery** at expiry, what
 must be true on-chain for it to work, the current gaps, and the operational checklist for Sep 16.
 Status: **mapped, NOT yet exercised** on the Base deployment. Everything below is derived from
