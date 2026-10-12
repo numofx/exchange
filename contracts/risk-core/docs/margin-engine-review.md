@@ -396,3 +396,13 @@ The vault proposer's `fills` gate holds the enable batch until markets-service s
 - **The keeper's holder scan** reads every account on each sweep: fine at dozens of accounts, not at thousands.
 - **The matcher's fill-band check** does not exist yet. The enable batch's `fills` gate refuses to open the market until
   the listing serves it (§8).
+- **RFQ is not supported.** Engine accounts trade only through the TradeModule. The RfqModule `0x8399…` sits on the same
+  Matching, but it has the perp and the future unregistered and settles in the frozen DFXM-era cash:
+  - **Today:** an RFQ fill on an engine account reverts (`SRM_UnsupportedAsset`).
+  - **If its cash were ever changed:** it would price the future as an option premium and pass no fill price to the
+    index-band check.
+
+  It has never been used: since its deployment its only logs are ownership events. #182 retires it from Matching
+  through the vault. The enable batch's `rfq` gate refuses to open the market while it is allowed, so it cannot quietly
+  come back. The rehearsal checks both: enable is refused with the module allowed, and passes once the vault has
+  retired it.
