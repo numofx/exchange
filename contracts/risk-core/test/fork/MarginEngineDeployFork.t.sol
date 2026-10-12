@@ -12,6 +12,7 @@ import {ISubAccounts} from "../../src/interfaces/ISubAccounts.sol";
 import {CashAsset} from "../../src/assets/CashAsset.sol";
 import {WrappedERC20Asset} from "../../src/assets/WrappedERC20Asset.sol";
 import {DutchAuction} from "../../src/liquidation/DutchAuction.sol";
+import {IDutchAuction} from "../../src/interfaces/IDutchAuction.sol";
 import {StandardManager} from "../../src/risk-managers/StandardManager.sol";
 import {IFutureAsset} from "../../src/interfaces/IFutureAsset.sol";
 import {ISpotFeed} from "../../src/interfaces/ISpotFeed.sol";
@@ -548,6 +549,74 @@ contract MarginEngineDeployFork is Test {
     assertEq(smBefore - subAccounts.getBalance(smAcc, _cash(), 0), int(cashToBidder), "paid by the SecurityModule");
     assertEq(subAccounts.getBalance(eveAcc, d.future, d.subId), -1e18, "eve holds carol's short");
     assertEq(subAccounts.getBalance(carolAcc, d.future, d.subId), 0, "carol is closed out");
+  }
+
+  ////////////////////////////
+  //  the pool, run negative  //
+  ////////////////////////////
+
+  /// @dev An unseeded pool pays alice, long two contracts, in cash before her two shorts pay in: about -$330.
+  function _drainPoolWithTwoLosers() internal returns (uint aliceAcc, uint bobAcc, uint carolAcc) {
+    _executeVaultBatch();
+    _executeEnableBatch();
+    _holdIndex(spot);
+    aliceAcc = _account(alice);
+    bobAcc = _account(bob);
+    carolAcc = _account(address(0xca401));
+    _depositUsdc(alice, aliceAcc, 4_000e6);
+    _depositUsdc(bob, bobAcc, 300e6); // thin: below maintenance after the rally
+    _depositUsdc(address(0xca401), carolAcc, 2_000e6); // well margined: never liquidated
+    uint mark0 = d.future.futureContracts(d.subId).markPrice;
+    _trade(bobAcc, aliceAcc, 1e18, mark0);
+    _trade(carolAcc, aliceAcc, 1e18, mark0);
+    for (uint i; i < 4; ++i) {
+      _rallyStep(450);
+    }
+    d.engine.settleAccount(aliceAcc);
+    assertLt(subAccounts.getBalance(d.poolAccount, _cash(), 0), -300e18, "the pool owes the cash");
+  }
+
+  /// @dev The liquidation fee to the SecurityModule's account (under the old SRM) passes through the pool; a negative
+  ///      pool must not block it. Before the fix this reverted SRM_PortfolioBelowMargin on the pool's margin check.
+  function testASolventLiquidationStartsWhileThePoolIsNegative() public {
+    (, uint bobAcc,) = _drainPoolWithTwoLosers();
+    assertLt(d.engine.getMargin(bobAcc, false), 0, "bob below maintenance");
+    assertGt(_mtm(bobAcc), 0, "but solvent");
+    DutchAuction auction = DutchAuction(params.auction);
+    uint smAcc = auction.smAccount();
+    int smBefore = subAccounts.getBalance(smAcc, _cash(), 0);
+    auction.startAuction(bobAcc, 0);
+    assertGt(subAccounts.getBalance(smAcc, _cash(), 0), smBefore, "the fee reached the SecurityModule");
+    assertLt(subAccounts.getBalance(d.poolAccount, _cash(), 0), 0, "with the pool still negative (carol owes)");
+  }
+
+  /// @dev The same with borrowing off: the risk check refuses cash out of an account with negative cash
+  ///      (SRM_NoNegativeCash), which a negative pool always is. Only the pool's exemption from the risk check lets the
+  ///      fee through; the never-liquidatable view alone does not.
+  function testASolventLiquidationStartsWhileThePoolIsNegativeWithBorrowingOff() public {
+    (, uint bobAcc,) = _drainPoolWithTwoLosers();
+    vm.prank(VAULT);
+    d.engine.setBorrowingEnabled(false);
+    DutchAuction auction = DutchAuction(params.auction);
+    uint smAcc = auction.smAccount();
+    int smBefore = subAccounts.getBalance(smAcc, _cash(), 0);
+    auction.startAuction(bobAcc, 0);
+    assertGt(subAccounts.getBalance(smAcc, _cash(), 0), smBefore, "the fee reached the SecurityModule");
+  }
+
+  /// @dev Before the fix an auction started on the pool, and the SecurityModule paid bidders to take its debt.
+  function testThePoolCannotBeAuctioned() public {
+    _drainPoolWithTwoLosers();
+    assertEq(d.engine.getMargin(d.poolAccount, false), 0, "never below maintenance");
+    vm.expectRevert(IDutchAuction.DA_AccountIsAboveMaintenanceMargin.selector);
+    DutchAuction(params.auction).startAuction(d.poolAccount, 0);
+  }
+
+  function testTheTreasuryCanTopUpANegativePool() public {
+    _drainPoolWithTwoLosers();
+    int before = subAccounts.getBalance(d.poolAccount, _cash(), 0);
+    _depositUsdc(treasury, d.poolAccount, 100e6);
+    assertEq(subAccounts.getBalance(d.poolAccount, _cash(), 0), before + 100e18);
   }
 
   function _isInsolvent(uint acc) internal view returns (bool) {

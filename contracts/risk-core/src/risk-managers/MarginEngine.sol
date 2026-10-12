@@ -47,6 +47,8 @@ import {FutureVMLib} from "../libraries/FutureVMLib.sol";
  *           settlement price. A bidder's VM on what it takes accrues in FutureAsset and is counted by the views.
  *         - A trade that only reduces futures is held to maintenance margin, so an account can always deleverage.
  *         - The viewer skips assets a trade did not touch in the cap check (MarginEnginePortfolioViewer).
+ *         - The VM pool `accId` may run negative in cash: it is not risk checked, never auctioned, and so never blocks a
+ *           transfer the engine makes through it (a liquidation fee, cash to an account under another manager).
  */
 contract MarginEngine is IMarginEngine, ILiquidatableManager, BaseManager, ReentrancyGuard {
   using SignedDecimalMath for int;
@@ -308,6 +310,13 @@ contract MarginEngine is IMarginEngine, ILiquidatableManager, BaseManager, Reent
   ) external override onlyAccounts nonReentrant {
     _preAdjustmentHooks(accountId, tradeId, caller, assetDeltas, managerData);
 
+    // The VM pool is the engine's own account and may run negative in cash while it owes winners. Nothing but the engine
+    // moves it: leaving it needs its owner's (the engine's) allowance, and FutureAsset and PerpAsset require an allowance
+    // for any adjustment, so no position can be pushed in. It is not risk checked, never auctioned (see
+    // _getMarginAndMarkToMarket), and so never blocks a transfer the engine makes through it: a liquidation fee to the
+    // SecurityModule's account, under another manager, passes through it. The hooks above still apply: pause and caps.
+    if (accountId == accId) return;
+
     // Block any transfers where an account is under liquidation
     _checkIfLiveAuction(accountId);
 
@@ -438,6 +447,9 @@ contract MarginEngine is IMarginEngine, ILiquidatableManager, BaseManager, Reent
 
     totalMarkToMarket += portfolio.cash;
     netMargin += portfolio.cash;
+
+    // The pool is never liquidatable: its deficit is repaid as losers settle. Mark-to-market still reports it.
+    if (accountId == accId) netMargin = 0;
   }
 
   /**
