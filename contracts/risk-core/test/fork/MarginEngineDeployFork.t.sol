@@ -4,7 +4,9 @@ pragma solidity ^0.8.20;
 import "forge-std/Test.sol";
 import {IERC20Metadata} from "openzeppelin/token/ERC20/extensions/IERC20Metadata.sol";
 
-import {DeployCngnFuture} from "../../scripts/deploy-cngn-future.s.sol";
+import {DeployMarginEngine} from "../../scripts/deploy-margin-engine.s.sol";
+import {MarginEngine} from "../../src/risk-managers/MarginEngine.sol";
+import {PerpAsset} from "../../src/assets/PerpAsset.sol";
 import {SubAccounts} from "../../src/SubAccounts.sol";
 import {ISubAccounts} from "../../src/interfaces/ISubAccounts.sol";
 import {CashAsset} from "../../src/assets/CashAsset.sol";
@@ -13,6 +15,7 @@ import {DutchAuction} from "../../src/liquidation/DutchAuction.sol";
 import {StandardManager} from "../../src/risk-managers/StandardManager.sol";
 import {IFutureAsset} from "../../src/interfaces/IFutureAsset.sol";
 import {ISpotFeed} from "../../src/interfaces/ISpotFeed.sol";
+import {ISpotDiffFeed} from "../../src/interfaces/ISpotDiffFeed.sol";
 import {IManager} from "../../src/interfaces/IManager.sol";
 import {IBaseLyraFeed} from "../../src/interfaces/IBaseLyraFeed.sol";
 import {BaseLyraFeed} from "../../src/feeds/BaseLyraFeed.sol";
@@ -28,9 +31,13 @@ interface ITradeModuleLike {
 }
 
 /**
- * Runs deploy-cngn-future.s.sol's own `deploy` on a Base fork at head, plays the vault's side by executing the
- * generated batches exactly as written, and takes a position through its life on the live perp cash, cNGN escrow and
- * index feed: open, daily marks, the index fixing, close-out, and withdrawal of real USDC and cNGN.
+ * Runs deploy-margin-engine.s.sol's own `deploy` on a Base fork at head, plays the vault's side by executing the
+ * generated batches exactly as written, and proves on the live stack that:
+ *   - market 1 on the engine margins spot and the perp exactly as market 1 on the live SRM does (parity);
+ *   - spot cNGN, the perp and the future share one engine account;
+ *   - a future lives through its whole life on the live perp cash, cNGN escrow, index feed, auction and SecurityModule:
+ *     open, marks, the index fixing, close-out, and withdrawal of real USDC and cNGN;
+ *   - the live SRM is never touched.
  *
  * At head because it is about deploying into the world as it is now. The index feed goes stale once the test warps
  * past its heartbeat, so from the first warp it is held at its live value with mockCall; that is the only thing
@@ -38,7 +45,7 @@ interface ITradeModuleLike {
  *
  * Requires BASE_RPC_URL.
  */
-contract CngnFutureDeployFork is Test {
+contract MarginEngineDeployFork is Test {
   address constant VAULT = 0x1dcA42ab54Bd3862853A821F84B29BF65245F435;
   address constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
   address constant CNGN = 0x46C85152bFe9f96829aA94755D9f915F9B10EF5F;
@@ -54,9 +61,9 @@ contract CngnFutureDeployFork is Test {
   uint forwardPk = uint(keccak256("cngn-future-deploy-fork-forward-signer"));
   address forwardSigner = vm.addr(forwardPk);
 
-  DeployCngnFuture script;
-  DeployCngnFuture.Params params;
-  DeployCngnFuture.Deployment d;
+  DeployMarginEngine script;
+  DeployMarginEngine.Params params;
+  DeployMarginEngine.Deployment d;
   SubAccounts subAccounts;
 
   uint spot; // USDC per cNGN, live
@@ -65,7 +72,7 @@ contract CngnFutureDeployFork is Test {
 
   function setUp() public {
     vm.createSelectFork(vm.envString("BASE_RPC_URL"));
-    script = new DeployCngnFuture();
+    script = new DeployMarginEngine();
 
     // The initial mark is the operator's input, checked against index * (1 + carry * tau); here it is exactly that.
     string memory stack = vm.readFile(string.concat(vm.projectRoot(), "/deployments/8453/CNGN_PERP_STACK.json"));
@@ -78,7 +85,7 @@ contract CngnFutureDeployFork is Test {
 
     params = script.loadParams();
     subAccounts = SubAccounts(params.subAccounts);
-    perpMarketsBefore = StandardManager(params.perpSrm).lastMarketId();
+    perpMarketsBefore = StandardManager(params.srm).lastMarketId();
     d = script.deploy(params);
   }
 
@@ -91,14 +98,14 @@ contract CngnFutureDeployFork is Test {
   }
 
   function testInitialMarkOutsideTheIndexBandIsRefused() public {
-    DeployCngnFuture.Params memory p = params;
+    DeployMarginEngine.Params memory p = params;
     p.initialMark = index * 111 / 100;
     vm.expectRevert(bytes("INITIAL_MARK is outside the index band"));
     script.checkParams(p);
   }
 
   function testInitialMarkOffTheCarryForwardIsRefused() public {
-    DeployCngnFuture.Params memory p = params;
+    DeployMarginEngine.Params memory p = params;
     uint fair = script.fairForward(p);
     p.initialMark = fair * 103 / 100; // inside the 10% spot band, 3% off the carry forward
     assertLt(p.initialMark, index * 110 / 100, "the spot band alone would pass it");
@@ -110,20 +117,20 @@ contract CngnFutureDeployFork is Test {
   }
 
   function testCarryInTheWrongUnitsIsRefused() public {
-    DeployCngnFuture.Params memory p = params;
+    DeployMarginEngine.Params memory p = params;
     p.carry = 20e18; // "20" for 20%
     vm.expectRevert(bytes("CARRY over 100% a year: give it 18dp (0.2e18 for 20%)"));
     script.checkParams(p);
   }
 
   function testLaunchMarginIsIM25MM15() public view {
-    (uint mm, uint im,,) = d.manager.marginParams();
+    (uint mm, uint im) = d.engine.futureMarginRequirements(d.marketId);
     assertEq(im, 0.25e18);
     assertEq(mm, 0.15e18);
   }
 
   function testLastTradeAfterTheFixingWindowStartIsRefused() public {
-    DeployCngnFuture.Params memory p = params;
+    DeployMarginEngine.Params memory p = params;
     p.lastTradeTime = p.expiry - 30 minutes;
     vm.expectRevert(bytes("last trade must be no later than the fixing window's start"));
     script.checkParams(p);
@@ -141,14 +148,17 @@ contract CngnFutureDeployFork is Test {
       assertEq(IOwnableLike(owned[i]).owner(), VAULT, "vault must own every contract");
       assertEq(IOwnableLike(owned[i]).pendingOwner(), address(0), "no nomination left pending");
     }
-    assertTrue(CashAsset(params.cash).whitelistedManager(address(d.manager)), "cash takes the manager");
-    assertTrue(WrappedERC20Asset(params.cngnEscrow).whitelistedManager(address(d.manager)), "escrow takes it");
-    assertEq(WrappedERC20Asset(params.cngnEscrow).totalPositionCap(d.manager), params.futureCngnCap);
-    assertTrue(DutchAuction(params.auction).managerWhitelisted(address(d.manager)), "auction takes it");
+    assertTrue(CashAsset(params.cash).whitelistedManager(address(d.engine)), "cash takes the manager");
+    assertTrue(WrappedERC20Asset(params.cngnEscrow).whitelistedManager(address(d.engine)), "escrow takes it");
+    assertEq(WrappedERC20Asset(params.cngnEscrow).totalPositionCap(d.engine), params.engineCngnCap);
+    assertTrue(DutchAuction(params.auction).managerWhitelisted(address(d.engine)), "auction takes it");
+    assertTrue(PerpAsset(params.perp).whitelistedManager(address(d.engine)), "the perp takes it");
+    assertEq(PerpAsset(params.perp).totalPositionCap(d.engine), 0, "but stays closed under it");
+    assertEq(d.engine.guardian(), params.guardian, "the SRM's guardian");
 
     vm.prank(address(script));
     vm.expectRevert();
-    d.future.setTotalPositionCap(d.manager, type(uint).max);
+    d.future.setTotalPositionCap(d.engine, type(uint).max);
   }
 
   function testDeploysClosedUntilTheEnableBatch() public {
@@ -160,19 +170,94 @@ contract CngnFutureDeployFork is Test {
     _trade(bobAcc, aliceAcc, 1e18, mark);
 
     _executeEnableBatch();
-    assertEq(d.future.totalPositionCap(d.manager), params.futureOICap);
+    assertEq(d.future.totalPositionCap(d.engine), params.futureOICap);
+    assertEq(PerpAsset(params.perp).totalPositionCap(d.engine), params.perpOICap, "the perp opens on the engine");
     assertTrue(ITradeModuleLike(params.perpTradeModule).isDatedFutureAsset(address(d.future)), "registered");
     _trade(bobAcc, aliceAcc, 1e18, mark);
     assertEq(subAccounts.getBalance(aliceAcc, d.future, d.subId), 1e18);
   }
 
-  function testThePerpIsUntouched() public {
+  function testTheLiveSrmIsUntouched() public {
+    StandardManager srm = StandardManager(params.srm);
+    uint perpCapBefore = PerpAsset(params.perp).totalPositionCap(srm);
+    uint escrowCapBefore = WrappedERC20Asset(params.cngnEscrow).totalPositionCap(srm);
     _executeVaultBatch();
     _executeEnableBatch();
-    StandardManager perpSrm = StandardManager(params.perpSrm);
-    assertEq(perpSrm.lastMarketId(), perpMarketsBefore, "perp srm gained a market");
-    assertFalse(d.future.whitelistedManager(params.perpSrm), "future must not accept the perp srm");
-    assertEq(address(perpSrm.cashAsset()), params.cash, "perp cash moved");
+    assertEq(srm.lastMarketId(), perpMarketsBefore, "srm gained a market");
+    assertFalse(d.future.whitelistedManager(params.srm), "future must not accept the srm");
+    assertEq(address(srm.cashAsset()), params.cash, "srm cash moved");
+    assertEq(
+      PerpAsset(params.perp).totalPositionCap(srm), perpCapBefore, "the srm's perp cap is the cutover's to change"
+    );
+    assertEq(WrappedERC20Asset(params.cngnEscrow).totalPositionCap(srm), escrowCapBefore, "the srm's escrow cap moved");
+    assertTrue(PerpAsset(params.perp).whitelistedManager(params.srm), "the perp still takes the srm");
+  }
+
+  ///////////////////
+  //    parity     //
+  ///////////////////
+
+  /**
+   * The same spot and perp portfolio, held once under the live SRM and once under the engine: identical initial
+   * margin, maintenance margin and mark-to-market, on the live perp, cash, escrow and feeds.
+   */
+  function testSpotAndPerpMarginExactlyAsOnTheLiveSrm() public {
+    _executeVaultBatch();
+    _executeEnableBatch();
+    _holdPerpFeeds(spot);
+    IManager srm = IManager(params.srm);
+
+    (uint srmLong, uint srmShort) = (_accountUnder(alice, srm), _accountUnder(bob, srm));
+    (uint engLong, uint engShort) = (_account(alice), _account(bob));
+    uint[4] memory accs = [srmLong, srmShort, engLong, engShort];
+    for (uint i; i < 4; ++i) {
+      _depositUsdc(i % 2 == 0 ? alice : bob, accs[i], 1_000e6);
+      _depositCngn(i % 2 == 0 ? alice : bob, accs[i], 400_000e6);
+    }
+    // 1,000,000 cNGN of perp each, about $730 of notional
+    _tradePerp(srmShort, srmLong, 1_000_000e18);
+    _tradePerp(engShort, engLong, 1_000_000e18);
+
+    for (uint i; i < 2; ++i) {
+      (uint onSrm, uint onEngine) = (accs[i], accs[i + 2]);
+      for (uint im; im < 2; ++im) {
+        (int srmMargin, int srmMtm) = StandardManager(params.srm).getMarginAndMarkToMarket(onSrm, im == 1, 0);
+        (int engMargin, int engMtm) = d.engine.getMarginAndMarkToMarket(onEngine, im == 1, 0);
+        assertEq(engMargin, srmMargin, im == 1 ? "initial margin as on the srm" : "maintenance margin as on the srm");
+        assertEq(engMtm, srmMtm, "mark-to-market as on the srm");
+      }
+    }
+  }
+
+  /// @dev Spot cNGN, the perp and the future in one engine account: one margin, gross in v1. The future adds exactly
+  ///      its own requirement, and its unsettled VM, to the spot-and-perp margin the SRM would give.
+  function testSpotPerpAndFutureInOneEngineAccount() public {
+    _executeVaultBatch();
+    _executeEnableBatch();
+    _holdPerpFeeds(spot);
+    _depositCngn(treasury, d.poolAccount, 1_000_000e6);
+    (uint aliceAcc, uint bobAcc) = _fundedAccounts();
+    _tradePerp(bobAcc, aliceAcc, 1_000_000e18);
+    (int imSpotPerp, int mmSpotPerp) = (d.engine.getMargin(aliceAcc, true), d.engine.getMargin(aliceAcc, false));
+
+    uint mark0 = d.future.futureContracts(d.subId).markPrice;
+    _trade(bobAcc, aliceAcc, 1e18, mark0);
+    assertEq(d.engine.getMargin(aliceAcc, true), imSpotPerp - 250e18, "plus 25% of the 1,000 USDC contract");
+    assertEq(d.engine.getMargin(aliceAcc, false), mmSpotPerp - 150e18, "plus 15% at maintenance");
+
+    // a day later the forward is 2% up: alice is due 2% of the mark on 1,000 USDC, in cNGN, before anyone settles
+    vm.warp(block.timestamp + 1 days);
+    _holdPerpFeeds(spot);
+    uint mark1 = mark0 * 102 / 100;
+    vm.prank(VAULT);
+    d.future.setMark(d.subId, uint64(block.timestamp), mark1);
+    int due = int(1_000 * (mark1 - mark0));
+    assertEq(d.future.getPendingVM(aliceAcc, d.subId), due);
+    int mmUnsettled = d.engine.getMargin(aliceAcc, false);
+    d.engine.settleAccount(aliceAcc);
+    d.engine.settleAccount(bobAcc);
+    assertEq(_cngnBalance(aliceAcc), 500_000e18 + due, "paid in spot cNGN, in the same account");
+    assertEq(d.engine.getMargin(aliceAcc, false), mmUnsettled, "margin reads the same settled or not");
   }
 
   ///////////////////
@@ -199,8 +284,8 @@ contract CngnFutureDeployFork is Test {
 
     int expectedVM = int(2 * 1_000 * (mark1 - mark0));
     assertEq(d.future.getPendingVM(aliceAcc, d.subId), expectedVM);
-    d.manager.settleAccount(bobAcc);
-    d.manager.settleAccount(aliceAcc);
+    d.engine.settleAccount(bobAcc);
+    d.engine.settleAccount(aliceAcc);
     assertEq(_cngnBalance(aliceAcc), 500_000e18 + expectedVM, "alice paid in cNGN");
     assertEq(_cngnBalance(bobAcc), 500_000e18 - expectedVM, "bob paid in cNGN");
     assertEq(_cngnBalance(d.poolAccount), 1_000_000e18, "pool back to its reserve");
@@ -217,11 +302,11 @@ contract CngnFutureDeployFork is Test {
     assertEq(d.future.futureContracts(d.subId).markPrice, index, "settles at the index");
 
     // the last leg converges alice back from mark1 to the index
-    d.manager.closeOutExpired(bobAcc, d.subId);
-    d.manager.closeOutExpired(aliceAcc, d.subId);
+    d.engine.closeOutExpired(bobAcc, d.subId);
+    d.engine.closeOutExpired(aliceAcc, d.subId);
     assertEq(subAccounts.getBalance(aliceAcc, d.future, d.subId), 0);
     assertEq(subAccounts.getBalance(bobAcc, d.future, d.subId), 0);
-    assertEq(d.future.totalPosition(d.manager), 0, "no open interest left");
+    assertEq(d.future.totalPosition(d.engine), 0, "no open interest left");
 
     int aliceTotal = int(2 * 1_000) * (int(index) - int(mark0));
     assertEq(_cngnBalance(aliceAcc), 500_000e18 + aliceTotal, "in all, alice made index - entry");
@@ -256,9 +341,9 @@ contract CngnFutureDeployFork is Test {
     d.future.setMark(d.subId, uint64(block.timestamp), mark0 * 102 / 100);
 
     // accrue interest first, so the delta below is the VM payment alone
-    d.manager.settleInterest(aliceAcc);
+    d.engine.settleInterest(aliceAcc);
     int cashBefore = subAccounts.getBalance(aliceAcc, _cash(), 0);
-    d.manager.settleAccount(aliceAcc);
+    d.engine.settleAccount(aliceAcc);
     int cashAfter = subAccounts.getBalance(aliceAcc, _cash(), 0);
     uint vmCngn = 1_000 * (mark0 * 102 / 100 - mark0);
     assertApproxEqAbs(cashAfter - cashBefore, int(vmCngn * spot / 1e18), 1, "paid the cNGN's value in USDC");
@@ -339,7 +424,7 @@ contract CngnFutureDeployFork is Test {
   }
 
   function testTheForwardSignerMustNotSignTheIndex() public {
-    DeployCngnFuture.Params memory p = params;
+    DeployMarginEngine.Params memory p = params;
     vm.prank(VAULT);
     BaseLyraFeed(params.indexFeed).addSigner(p.forwardSigner, true);
     vm.expectRevert(bytes("FORWARD_SIGNER must not also sign the index"));
@@ -361,7 +446,7 @@ contract CngnFutureDeployFork is Test {
   }
 
   function _mtm(uint acc) internal view returns (int mtm) {
-    (, mtm) = d.manager.getMarginAndMarkToMarket(acc, false, 0);
+    (, mtm) = d.engine.getMarginAndMarkToMarket(acc, false, 0);
   }
 
   /**
@@ -389,7 +474,7 @@ contract CngnFutureDeployFork is Test {
       _rallyStep(350); // +3.5%, inside the 5% mark limit and the 10% index band
       // the long is settled first each day: the reserve pays it before the shorts have paid in
       uint poolBefore = uint(_cngnBalance(d.poolAccount));
-      d.manager.settleAccount(aliceAcc);
+      d.engine.settleAccount(aliceAcc);
       assertLt(uint(_cngnBalance(d.poolAccount)), poolBefore, "the reserve fronted the long");
     }
     uint markEnd = d.future.futureContracts(d.subId).markPrice;
@@ -399,8 +484,8 @@ contract CngnFutureDeployFork is Test {
     assertEq(_cngnBalance(aliceAcc), int(3 * 1_000 * (markEnd - mark0)), "long paid in cNGN, fronted by the pool");
 
     // the shorts have paid nothing yet; both are below maintenance, neither is insolvent
-    assertLt(d.manager.getMargin(bobAcc, false), 0, "bob below MM");
-    assertLt(d.manager.getMargin(carolAcc, false), 0, "carol below MM");
+    assertLt(d.engine.getMargin(bobAcc, false), 0, "bob below MM");
+    assertLt(d.engine.getMargin(carolAcc, false), 0, "carol below MM");
     assertGt(_mtm(bobAcc), 0, "bob still solvent");
     assertGt(_mtm(carolAcc), 0, "carol still solvent");
 
@@ -447,7 +532,7 @@ contract CngnFutureDeployFork is Test {
       vm.readFile(string.concat(vm.projectRoot(), "/deployments/8453/CNGN_PERP_STACK.json")), ".securityModuleAccount"
     );
     // accrue the SecurityModule's interest first, so the delta below is the payout alone
-    StandardManager(params.perpSrm).settleInterest(smAcc);
+    StandardManager(params.srm).settleInterest(smAcc);
     int smBefore = subAccounts.getBalance(smAcc, _cash(), 0);
     auction.startAuction(carolAcc, 0);
     (bool insolvent) = _isInsolvent(carolAcc);
@@ -520,9 +605,9 @@ contract CngnFutureDeployFork is Test {
     assertTrue(d.future.futureContracts(d.subId).settled);
 
     // close-out reads no feed: any USDC part of the last leg converts at the settlement price (getSpot still reverts)
-    d.manager.closeOutExpired(bobAcc, d.subId);
-    d.manager.closeOutExpired(aliceAcc, d.subId);
-    assertEq(d.future.totalPosition(d.manager), 0);
+    d.engine.closeOutExpired(bobAcc, d.subId);
+    d.engine.closeOutExpired(aliceAcc, d.subId);
+    assertEq(d.future.totalPosition(d.engine), 0);
   }
 
   ///////////////////
@@ -555,12 +640,39 @@ contract CngnFutureDeployFork is Test {
     vm.mockCall(params.indexFeed, abi.encodeWithSelector(ISpotFeed.getSpot.selector), abi.encode(price, 1e18));
   }
 
+  /// @dev The perp reads its mark and impact feeds on every trade; hold them at `price` with the index, as _holdIndex does.
+  function _holdPerpFeeds(uint price) internal {
+    _holdIndex(price);
+    string memory stack = vm.readFile(string.concat(vm.projectRoot(), "/deployments/8453/CNGN_PERP_STACK.json"));
+    string[3] memory feeds = [".markFeed", ".impactAskFeed", ".impactBidFeed"];
+    for (uint i; i < 3; ++i) {
+      vm.mockCall(
+        vm.parseJsonAddress(stack, feeds[i]),
+        abi.encodeWithSelector(ISpotDiffFeed.getResult.selector),
+        abi.encode(price, 1e18)
+      );
+    }
+  }
+
+  function _accountUnder(address user, IManager manager) internal returns (uint) {
+    return subAccounts.createAccountWithApproval(user, address(this), manager);
+  }
+
+  function _tradePerp(uint seller, uint buyer, int amount) internal {
+    subAccounts.submitTransfer(
+      ISubAccounts.AssetTransfer({
+        fromAcc: seller, toAcc: buyer, asset: PerpAsset(params.perp), subId: 0, amount: amount, assetData: bytes32(0)
+      }),
+      ""
+    );
+  }
+
   function _cash() internal view returns (CashAsset) {
     return CashAsset(params.cash);
   }
 
   function _account(address user) internal returns (uint) {
-    return subAccounts.createAccountWithApproval(user, address(this), IManager(address(d.manager)));
+    return subAccounts.createAccountWithApproval(user, address(this), IManager(address(d.engine)));
   }
 
   function _fundedAccounts() internal returns (uint aliceAcc, uint bobAcc) {
