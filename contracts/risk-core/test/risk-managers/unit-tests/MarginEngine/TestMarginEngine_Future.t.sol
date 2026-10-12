@@ -1104,4 +1104,98 @@ contract TestMarginEngine_Future is Test {
     manager.settleAccount(aliceAcc);
     assertEq(_cngn(aliceAcc), 110_000e18);
   }
+
+  /////////////////////////////////////////////////////////////
+  //  invariance: views value unsettled VM as settlement pays  //
+  /////////////////////////////////////////////////////////////
+
+  struct MarginReads {
+    int im;
+    int mm;
+    int mtm;
+  }
+
+  function _reads(uint acc) internal view returns (MarginReads memory r) {
+    r.im = manager.getMargin(acc, true);
+    r.mm = manager.getMargin(acc, false);
+    (, r.mtm) = manager.getMarginAndMarkToMarket(acc, false, 0);
+  }
+
+  /// @dev settles `acc` and asserts IM, MM and mark-to-market read the same after as before
+  function _assertSettlingChangesNothing(uint acc, string memory why) internal {
+    MarginReads memory before = _reads(acc);
+    manager.settleAccount(acc);
+    MarginReads memory afterwards = _reads(acc);
+    assertEq(afterwards.im, before.im, string.concat(why, ": initial margin"));
+    assertEq(afterwards.mm, before.mm, string.concat(why, ": maintenance margin"));
+    assertEq(afterwards.mtm, before.mtm, string.concat(why, ": mark-to-market"));
+  }
+
+  function testInvariantGainPaidInCngn() public {
+    _openAtMark(); // the pool holds 100,000 cNGN
+    _mark(1010e18); // alice is due 10,000 cNGN
+    _assertSettlingChangesNothing(aliceAcc, "gain paid in cNGN by the pool");
+  }
+
+  function testInvariantLossPaidInCash() public {
+    _fundCash(aliceAcc, 1_000e18);
+    _fundCash(bobAcc, 1_000e18); // bob holds no cNGN
+    _depositCngn(pool, 100_000e18);
+    _trade(bobAcc, aliceAcc, 1e18, MARK);
+    _mark(1010e18); // bob owes 10,000 cNGN
+    _assertSettlingChangesNothing(bobAcc, "loss paid in cash");
+  }
+
+  function testInvariantLossPaidFromHeldCngn() public {
+    _openAtMark(); // bob holds 100,000 cNGN
+    _mark(1010e18); // and owes 10,000
+    _assertSettlingChangesNothing(bobAcc, "loss paid from held cNGN");
+  }
+
+  function testInvariantLossPaidPartlyInCngnPartlyInCash() public {
+    _fundCash(aliceAcc, 1_000e18);
+    _fundCash(bobAcc, 1_000e18);
+    _depositCngn(bobAcc, 4_000e18); // bob holds 4,000 cNGN of the 10,000 he will owe
+    _depositCngn(pool, 100_000e18);
+    _trade(bobAcc, aliceAcc, 1e18, MARK);
+    _mark(1010e18);
+    _assertSettlingChangesNothing(bobAcc, "loss paid 4,000 in cNGN and 6,000 in cash");
+    assertEq(_cngn(bobAcc), 0, "his cNGN went first");
+  }
+
+  /// @dev Two series, both losing: the first spends the held cNGN, the second pays the rest of it and then cash, in the
+  ///      order settlement takes them.
+  function testInvariantLossesOnTwoSeriesSpendHeldCngnInSettlementOrder() public {
+    uint96 subId2 = future.setContract(uint64(expiry + 30 days), uint64(lastTradeTime + 30 days), MARK);
+    _fundCash(aliceAcc, 5_000e18);
+    _fundCash(bobAcc, 5_000e18);
+    _depositCngn(bobAcc, 15_000e18); // 15,000 cNGN against 20,000 owed across the two
+    _depositCngn(pool, 100_000e18);
+    _trade(bobAcc, aliceAcc, 1e18, MARK);
+    subAccounts.submitTransfer(
+      ISubAccounts.AssetTransfer({
+        fromAcc: bobAcc, toAcc: aliceAcc, asset: future, subId: subId2, amount: 1e18, assetData: bytes32(MARK)
+      }),
+      ""
+    );
+    _mark(1010e18);
+    future.setMark(subId2, uint64(block.timestamp), 1010e18);
+    _assertSettlingChangesNothing(bobAcc, "losses on two series");
+    assertEq(_cngn(bobAcc), 0);
+  }
+
+  /// @dev The one case the view does not match exactly: the pool is short, so settlement pays the gain in cash, at par,
+  ///      where the view counted it at the base factor. The view is lower, never higher, than after settlement.
+  function testGainPaidInCashFromAnEmptyPoolIsCountedConservatively() public {
+    _fundCash(aliceAcc, 1_000e18);
+    _fundCash(bobAcc, 1_000e18); // the pool holds no cNGN
+    _trade(bobAcc, aliceAcc, 1e18, MARK);
+    _mark(1010e18);
+    MarginReads memory before = _reads(aliceAcc);
+    manager.settleAccount(aliceAcc);
+    MarginReads memory afterwards = _reads(aliceAcc);
+    assertEq(afterwards.mm - before.mm, 5e18, "10 USDC due: counted at 0.5 before, paid as cash at par");
+    assertEq(afterwards.im - before.im, 5e18);
+    assertEq(afterwards.mtm, before.mtm, "mark-to-market counts it at par either way");
+  }
 }
