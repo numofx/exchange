@@ -97,6 +97,12 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 NAME = "MARGIN_ENGINE"
 FILES = {"setup": f"{NAME}_VAULT_ACTIONS.json", "enable": f"{NAME}_ENABLE_VAULT_ACTIONS.json"}
 FEED_MAX_AGE_SEC = 600
+# RFQ is not supported. The RfqModule settles in the frozen DFXM-era cash and knows neither the perp nor the future
+# (an RFQ fill would price the future as an option and skip its index-band check), so it must be off the TradeModule's
+# Matching before the future opens; propose_retire_rfq_module.py retires it. Pinned here and checked against the
+# execution deployment in --self-test.
+RFQ_MODULE = "0x8399328AC53a279A3564E49c2cbC82Ce95ee62D3"
+EXECUTION_MATCHING_JSON = ROOT.parent / "execution" / "deployments" / "8453" / "matching.json"
 # BaseManager's whitelistedCallee mapping is internal; its slot in both StandardManager and MarginEngine
 # (`forge inspect ... storage-layout`), read to compare the callees the deploy copied
 WHITELISTED_CALLEE_SLOT = 12
@@ -124,6 +130,8 @@ SIGNATURES = {
   "setGuardian": "setGuardian(address)",
   "withdrawFromPool": "withdrawFromPool(address,uint256,address)",
   "markIndexBand": "markIndexBand(uint64)",
+  "matching": "matching()",
+  "allowedModules": "allowedModules(address)",
   # the parity check
   "maxAccountSize": "maxAccountSize()",
   "borrowingEnabled": "borrowingEnabled()",
@@ -168,7 +176,7 @@ PINNED = {
   "setDatedFutureAsset": "0x0ddd8a04", "isDatedFutureAsset": "0x761822ef", "futureContracts": "0xc3c74b34",
   "contractSize": "0x3d7cc610", "futureMarginRequirements": "0x84033e5e", "getBalance": "0x0806e640",
   "getSpot": "0x2b37269c", "setGuardian": "0x8a0dac4a", "guardian": "0x452a9320",
-  "withdrawFromPool": "0xfac95a9e", "markIndexBand": "0x968564c5",
+  "withdrawFromPool": "0xfac95a9e", "markIndexBand": "0x968564c5", "matching": "0xae5ec2e9", "allowedModules": "0x8ba5a0c2",
   "maxAccountSize": "0xf1f8c61f",
   "borrowingEnabled": "0xa35d1300",
   "stableFeed": "0xf4d0508a",
@@ -400,6 +408,15 @@ def gate_parity(chain: Chain, d: dict, vault: str) -> Gate:
   return Gate("parity", True, f"all {len(pairs)} settings as deployed: market 1 as on the SRM, the rest as in the artifact; deployer {deployer} holds nothing")
 
 
+def gate_rfq(chain: Chain, d: dict) -> Gate:
+  """RFQ is not supported: the RfqModule must not be allowed on the Matching the TradeModule trades through."""
+  matching = chain.address(d["perpTradeModule"], "matching")
+  if chain.word(matching, selector("allowedModules") + word_address(RFQ_MODULE)):
+    return Gate("rfq", False, f"the RfqModule {RFQ_MODULE} is allowed on Matching {matching}: retire it first "
+                              "(propose_retire_rfq_module.py); an RFQ fill would price the future as an option")
+  return Gate("rfq", True, f"the RfqModule is not allowed on Matching {matching}")
+
+
 def fills_gate(listing: dict | None, chain_low: float, chain_high: float) -> Gate:
   """markets-service's fill band for the future (its /v1/markets entry) against the chain's."""
   if listing is None:
@@ -511,6 +528,7 @@ def gate_enable(chain: Chain, d: dict, stack: dict, vault: str) -> list[Gate]:
 
   gates.append(gate_pager(Path(os.environ.get("PAGER_STATE_FILE", Path.home() / ".numo-perp-pager.json"))))
   gates.append(gate_fills(chain, d, os.environ.get("MARKETS_URL", "https://api.numofx.com")))
+  gates.append(gate_rfq(chain, d))
   gates.append(gate_parity(chain, d, vault))
   return gates
 
@@ -631,6 +649,8 @@ def self_test() -> int:
   # is 1,227.1-1,499.8.
   low, high = chain_fill_band(733418223364218, 10**17)
   assert round(low, 1) == round(1e18 / 733418223364218 * 0.9, 1) and 1_227 < low < 1_228 and 1_499 < high < 1_500, (low, high)
+  # The RfqModule pinned for the rfq gate is the one the execution deployment records.
+  assert json.loads(EXECUTION_MATCHING_JSON.read_text())["rfq"].lower() == RFQ_MODULE.lower(), "RfqModule drifted"
   # Parity: equal pairs pass, addresses compare case-insensitively, and any difference is named.
   assert parity_mismatches([("a", 1, 1), ("feed", "0xAbC", "0xabc")]) == []
   assert parity_mismatches([("mm", 2, 1), ("ok", 3, 3)]) == ["mm: 2 != 1"]
