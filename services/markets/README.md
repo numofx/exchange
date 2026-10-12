@@ -184,9 +184,17 @@ Set them on the API **and** the matcher.
   the engine is not paused, and it is before the series' last trade time. Orders rest while it is
   closed; after the last trade time none are accepted. `/v1/markets` reports the gate as
   `future.trading_open` and why as `future.trading_closed_reason`.
-- **No margin pre-check.** The engine checks both accounts in the fill; a refusal reverts
-  `SRM_PortfolioBelowMargin` and backs the pair off. Not on `/v1/integrations/*`, which serve
-  spot-style pairs.
+- **Margin pre-check, per order.** Before submitting, the matcher checks each account against the
+  engine's IM: `getMargin(account, true)` less the IM the fill adds (contracts beyond the old
+  |position| × 1,000 USDC × the futures IM rate) and the taker's fee, plus any VM gain at the fill.
+  It is optimistic (no depeg penalty, a gain at par, a loss ignored), so a refusal is one the engine
+  would make, and only fills the engine treats as adding risk are checked: an account can always
+  reduce. The short account's order, not the pair, is held back for 30s from every counterparty, so
+  the walk passes over it and nothing behind it waits. Refused 3 times in a row, at least a minute
+  after the first, it is cancelled with `cancel_reason: insufficient_margin`. A fill or a pass resets
+  the count. A revert the pre-check did not foresee cannot say which side was short, so it backs the
+  pair off and cancels nothing.
+- Not on `/v1/integrations/*`, which serve spot-style pairs.
 
 ## Configuration
 
