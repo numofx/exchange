@@ -355,6 +355,16 @@ contract FutureAsset is IFutureAsset, PositionTracking, ManagerWhitelist {
     if (diff * 1e18 > index * band) revert FA_MarkOutsideIndexBand();
   }
 
+  /// @dev The same test marks pass (_observeIndexAndCheckBand), without recording the index: no band, no check.
+  function _checkFillInsideIndexBand(uint fillPrice, uint64 expiry) internal view {
+    if (address(indexFeed) == address(0)) return;
+    uint band = markIndexBand(expiry);
+    if (band == 0) return;
+    uint index = _indexPrice();
+    uint diff = fillPrice > index ? fillPrice - index : index - fillPrice;
+    if (diff * 1e18 > index * band) revert FA_FillOutsideIndexBand();
+  }
+
   /// @notice The band a mark must sit within of the index now, for a contract expiring at `expiry`.
   function markIndexBand(uint64 expiry) public view returns (uint) {
     uint maxBand = maxMarkIndexDeviation;
@@ -393,6 +403,12 @@ contract FutureAsset is IFutureAsset, PositionTracking, ManagerWhitelist {
 
     finalBalance = preBalance + adjustment.amount;
 
+    // A fill carries its price, and VM is realised at it at once: bound it by the band a mark must sit in, so two
+    // accounts cannot move value between them at an arbitrary price. Transfers with no price (liquidation, close-out)
+    // move at the mark and are not checked.
+    if (adjustment.assetData != bytes32(0) && adjustment.amount != 0) {
+      _checkFillInsideIndexBand(uint(adjustment.assetData), market.expiry);
+    }
     _blendVM(adjustment.acc, adjustment.subId, preBalance, finalBalance, uint(adjustment.assetData));
 
     // always require allowance for transfer-like adjustments
