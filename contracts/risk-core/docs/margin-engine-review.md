@@ -8,28 +8,72 @@ USDC/cNGN dated futures, **cash settled in cNGN**, margined in **one account wit
 
 | File | Lines | How to read it |
 |---|---|---|
-| `src/risk-managers/MarginEngine.sol` | 866 | **As a diff against `StandardManager.sol`** (194 changed lines): `diff -u src/risk-managers/StandardManager.sol src/risk-managers/MarginEngine.sol`. The contract header lists every change. |
-| `src/risk-managers/MarginEnginePortfolioViewer.sol` | 238 | As a diff against `SRMPortfolioViewer.sol` (90 lines): type renames, futures excluded from `depegPenaltyPos`, and the `_checkAssetCap` override. |
-| `src/risk-managers/MarginEngineOptionHelper.sol` | 228 | As a diff against `OptionMarginHelper.sol` (31 lines): struct types renamed, **no logic change**. |
+| `src/risk-managers/MarginEngine.sol` | 866 | **As a diff against Lyra's audited StandardManager, #361 (`12cb35a`)**: 453 changed lines. That covers Numo's carried changes and the fork's (see below). The contract header lists the fork's own changes. |
+| `src/risk-managers/MarginEnginePortfolioViewer.sol` | 238 | As a diff against Lyra's `SRMPortfolioViewer.sol` at #361: 205 changed lines. They are the dated-future arrangement, type renames, futures excluded from `depegPenaltyPos`, and the `_checkAssetCap` override. |
+| `src/risk-managers/MarginEngineOptionHelper.sol` | 228 | Against the option margin that Lyra's #361 StandardManager computes inline. `4480270` + `3063ff0` moved it into a helper; this copy renames only the struct types (31 lines against `OptionMarginHelper.sol`). |
 | `src/libraries/FutureVMLib.sol` | 244 | **New, in full.** Futures VM settlement, futures margin, close-out. |
 | `src/assets/FutureAsset.sol` | 524 | **New, in full.** The dated future: marks, VM accounting, fixing, settlement. |
-| `src/interfaces/IMarginEngine.sol`, `IMarginEnginePortfolioViewer.sol`, `IFutureAsset.sol` | 234, 21, 114 | Interfaces. |
+| `src/interfaces/IMarginEngine.sol`, `IMarginEnginePortfolioViewer.sol`, `IFutureAsset.sol` | 234, 21, 114 | Interfaces. `IMarginEngine` against Lyra's `IStandardManager` at #361: 38 lines. |
 | `src/risk-managers/BasePortfolioViewer.sol` | 1 word | `_checkAssetCap` made `virtual`. No behaviour change for existing managers. |
 | `scripts/deploy-margin-engine.s.sol` | 585 | The deployment, its postconditions, and the two vault batches it writes. |
 
-### Carried, unaudited code (recommended in scope)
+### Scope: against Lyra's #361, including Numo's earlier SRM changes (decided)
 
-The live perp SRM is not Lyra's audited StandardManager. Numo changed it after the import, and the fork inherits
-those changes:
+The baseline is Lyra's last audited StandardManager, #361 (`12cb35a`), not today's. The live perp SRM carries Numo
+changes made after the import, the fork inherits them, and **they are in scope**:
 
-- `0d81da6` added a USDC-settled `DatedFuture` asset type. **The fork reworks this path.** It replaces it with the
-  cNGN-settled `FutureAsset`, so that code is new either way.
-- `3063ff0` moved option margin into `OptionMarginHelper` to fit the contract size limit (309 lines out of the
-  manager). **Options are retained in the fork, unlisted.**
+| Commit | What it changed | Diff |
+|---|---|---|
+| `0d81da6` | The `DatedFuture` asset type: margin hook, settle-before-risk-check, viewer arrangement. The commit message reads "add SquaredPerpAsset"; the change is in the same commit. **The fork reworks this path**, replacing the USDC-settled `DatedFutureAsset` with the cNGN-settled `FutureAsset`. | +218 −75 across the manager, viewer and interface |
+| `4480270` + `3063ff0` | Option margin moved out of StandardManager into `OptionMarginHelper`, to fit the contract size limit. Options are retained in the fork, unlisted. | the helper added; 309 lines out of the manager |
 
-The cumulative diff from Lyra's last audited version (#361, `12cb35a`) is about 389 lines in `StandardManager.sol`
-and 179 in `SRMPortfolioViewer.sol`. Reviewing the fork against today's `StandardManager.sol` trusts those changes as
-they stand. Reviewing it against `12cb35a` covers them too.
+`1e9f8fa` (deliverable-FX wiring) and `8166d52` (its removal) leave no deliverable code in the manager, viewer or
+interface. **They do not net to zero:** `1e9f8fa` also changed `BaseManager`, and `8166d52` did not revert that (see
+below).
+
+**Also in scope:** `FutureVMLib` in full, and `FutureAsset` in full.
+
+Reviewing against #361 also reviews the live SRM's own unaudited changes, since it runs the same code at `0d81da6` and
+`3063ff0`.
+
+### Also changed since #361 on the engine's path
+
+Every file under `src/` that changed between #361 and the import, and that the engine runs, was checked:
+
+| File | Since #361 | Verdict |
+|---|---|---|
+| `DutchAuction`, `CashAsset`, `WrappedERC20Asset`, `Allowances`, `ISubAccounts`, `BaseLyraFeed` | `95a0eb5` (forge fmt) | identical to #361 with whitespace removed |
+| `PerpAsset` | `0d81da6`: six functions made `virtual`, for `SquaredPerpAsset` | no behaviour change |
+| **`BaseManager`**, which the engine inherits | see below | **not yet in scope; recommended** |
+
+`BaseManager` has two changes since #361:
+- **Lyra #362 (`57cdd00`, PMRM2):** made upgradeable. Immutables became storage, `Ownable2Step` became
+  `Ownable2StepUpgradeable`, and a storage gap was added.
+- **Numo `1e9f8fa`:**
+  - `executeBid` was made `virtual`, with its body moved into an internal `_executeBid`. The engine's `executeBid`
+    override depends on this.
+  - Cash settlement moved into `_applyCashDelta`. This reorders option settlement: `updateSettledCash` now runs before
+    `managerAdjustment` rather than after.
+
+Files changed since #361 that the engine does not run: PMRM2 and its libraries, the deliverable-FX manager and asset,
+`SquaredPerp*`, the Chainlink feeds, `SpotPassthroughDiffFeed`, `LyraRateFeedStatic` and `DatedFutureAsset`.
+
+To reproduce the diffs:
+
+```sh
+git show 12cb35a:src/risk-managers/StandardManager.sol    > /tmp/lyra-StandardManager.sol
+git show 12cb35a:src/risk-managers/SRMPortfolioViewer.sol > /tmp/lyra-SRMPortfolioViewer.sol
+diff -u /tmp/lyra-StandardManager.sol    contracts/risk-core/src/risk-managers/MarginEngine.sol
+diff -u /tmp/lyra-SRMPortfolioViewer.sol contracts/risk-core/src/risk-managers/MarginEnginePortfolioViewer.sol
+git show 0d81da6 -- src/risk-managers/StandardManager.sol src/risk-managers/SRMPortfolioViewer.sol src/interfaces/IStandardManager.sol
+git show 4480270 3063ff0
+```
+
+The Numo commits live in the imported history, under paths without `contracts/risk-core/`.
+
+The parity evidence: StandardManager's suite passes 141/141 on the engine, and on a Base fork the same portfolio has
+identical margin under the live SRM and the engine. That shows the fork preserved the carried behaviour. It does not
+show the carried behaviour is right; reviewing it is.
 
 ### Out of scope
 
@@ -218,7 +262,7 @@ The engine is **24,142 of 24,576 bytes**; StandardManager had 1,174 bytes of hea
 | Futures IM / MM | 25% / 15% | deploy script |
 | Futures OI cap | 30 contracts (15 a side, $15k) | sized so the SecurityModule's $3,250 covers a 25% step (~$2,947 with the perp) |
 | Perp OI cap on the engine | the SRM's (50M cNGN) | deploy script |
-| cNGN escrow cap on the engine | 100M (**proposed, awaiting sign-off**) | spot and perp collateral (50M) plus futures (50M) |
+| cNGN escrow cap on the engine | 100M (**decided**) | spot and perp collateral (50M) plus futures (50M) |
 | Pool reserve | 30% of one side at the cap, ~6.1M cNGN | a 25% move paid in cash, plus one 5% mark |
 | Marks | 1h pull interval; 5% move limit; 10% → 1% band over 14 days; 2h forward heartbeat | deploy script |
 | Fixing | 1h window, 15-minute gap limit, fallback after 24h within 2% | deploy script |
