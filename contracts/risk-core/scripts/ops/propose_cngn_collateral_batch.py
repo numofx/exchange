@@ -251,6 +251,9 @@ def print_sheet(actions: list[dict]) -> None:
 
 
 def self_test() -> int:
+  # every selector and signature this script pins must name a compiled function, not just match `cast sig`
+  from abi_selectors import assert_script
+  assert_script(__file__)
   for sig, expected in SELECTORS.items():
     assert sel(sig) == expected, (sig, sel(sig))
   art = json.loads(COLLATERAL.read_text())

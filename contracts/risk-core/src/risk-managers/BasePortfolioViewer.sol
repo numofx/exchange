@@ -104,7 +104,7 @@ contract BasePortfolioViewer is Ownable2Step, IBasePortfolioViewer {
   /**
    * @dev check that an asset is not over the total position cap for this manager
    */
-  function _checkAssetCap(IManager manager, IPositionTracking asset, uint tradeId) internal view {
+  function _checkAssetCap(IManager manager, IPositionTracking asset, uint tradeId) internal view virtual {
     uint totalPosCap = asset.totalPositionCap(manager);
     (, uint preTradePos) = asset.totalPositionBeforeTrade(manager, tradeId);
     uint postTradePos = asset.totalPosition(manager);

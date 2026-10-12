@@ -3,9 +3,10 @@ name: contracts-risk-core
 on:
   push:
     branches: [main]
-    paths: ['contracts/risk-core/**', '.github/workflows/contracts-risk-core.yml']
+    paths: ['contracts/risk-core/**', 'contracts/execution/src/**', '.github/workflows/contracts-risk-core.yml']
   pull_request:
-    paths: ['contracts/risk-core/**', '.github/workflows/contracts-risk-core.yml']
+    # contracts/execution/src: the ops scripts pin TradeModule selectors, checked against its compiled ABI
+    paths: ['contracts/risk-core/**', 'contracts/execution/src/**', '.github/workflows/contracts-risk-core.yml']
 concurrency:
   group: risk-core-${{ github.ref }}
   cancel-in-progress: true
@@ -24,18 +25,17 @@ jobs:
           version: "1.7.1"  # exact pin — `stable` differs across machines (local foundryup vs GH). Run `foundryup --install 1.7.1` locally.
       - run: forge fmt --check   # requires foundry.toml [fmt] keys to be valid — see PLAN note
       - run: forge build scripts/*.s.sol   # scripts/ sits outside foundry's default `script` path, so forge test never compiles it
-      # offline: covers keccak, the setOracleContingencyParams selector, and the provenance checks
-      # (log.address / tx.to == SRM, tx.from == vault) that gate action-6 confirmation
-      - run: python3 scripts/ops/resolve_cngn_action6.py --self-test
-      # offline: the 10 selectors propose_cngn_spot_batch.py hardcodes. Its skip check swallows
-      # errors into "not landed", so a wrong selector degrades silently rather than crashing.
-      - run: python3 scripts/ops/propose_cngn_spot_batch.py --self-test
-      # Added with the market-1 batch and the settlement canary. Each of these scripts hardcodes
-      # function selectors and hashes; every one of the three had a wrong selector when first
-      # written from memory, and the self-tests are what caught them. Unrun, they prove nothing.
-      - run: python3 scripts/ops/propose_market1_inert_batch.py --self-test
-      - run: python3 scripts/ops/check_settlement_canary.py --self-test
-      - run: python3 scripts/ops/refresh_deployment_artifacts.py --self-test
+      # Every ops script with a self-test, found rather than listed (mirrors verify.sh). Each hardcodes
+      # selectors or hashes, and a hand-written one was wrong four separate times; the self-tests are
+      # what caught them. A list is how five went unrun, check_perp_pager among them.
+      # Every ABI, in both trees: each self-test checks the selectors it pins name a compiled function
+      # (abi_selectors.py), not only that they match `cast sig` of the same, possibly wrong, name. Mirrors verify.sh.
+      - run: forge build
+      - run: forge build
+        working-directory: contracts/execution
+      - run: for f in scripts/ops/*.py; do if grep -q -- "--self-test" "$f"; then echo "$f"; python3 "$f" --self-test || exit 1; fi; done
+      # Every ops script, one at a time: `bash -n a.sh b.sh` parses only a.sh. Mirrors verify.sh.
+      - run: for f in scripts/ops/*.sh; do bash -n "$f" || exit 1; done
       - run: forge test -vvv
         env:
           BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}   # every suite under test/fork/ needs it

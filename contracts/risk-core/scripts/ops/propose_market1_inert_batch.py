@@ -161,6 +161,9 @@ def self_test() -> int:
   action_landed() swallows errors into "not landed", so a wrong selector degrades silently
   to re-proposing rather than crashing. Safe, but invisible -- which is why it needs a test.
   """
+  # every selector and signature this script pins must name a compiled function, not just match `cast sig`
+  from abi_selectors import assert_script
+  assert_script(__file__)
   from resolve_cngn_action6 import keccak
 
   assert keccak(b"").hex() == "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470", "keccak broken"

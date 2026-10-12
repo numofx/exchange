@@ -9,6 +9,7 @@ import {IDutchAuction} from "../src/interfaces/IDutchAuction.sol";
 import {IPMRMLib} from "../src/interfaces/IPMRMLib.sol";
 import {IPMRM} from "../src/interfaces/IPMRMLib.sol";
 import {IStandardManager} from "../src/interfaces/IStandardManager.sol";
+import {IMarginEngine} from "../src/interfaces/IMarginEngine.sol";
 
 library Config {
   //////////
@@ -212,6 +213,29 @@ library Config {
     });
 
     baseMarginParams = IStandardManager.BaseMarginParams({marginFactor: 0.8e18, IMScale: 0.8e18});
+  }
+
+  /// @dev getSRMParams, as MarginEngine's structs (the same layout): one set of defaults for both suites
+  function getMarginEngineParams()
+    public
+    pure
+    returns (
+      IMarginEngine.PerpMarginRequirements memory perpMarginRequirements,
+      IMarginEngine.OptionMarginParams memory optionMarginParams,
+      IMarginEngine.OracleContingencyParams memory oracleContingencyParams,
+      IMarginEngine.BaseMarginParams memory baseMarginParams
+    )
+  {
+    (
+      IStandardManager.PerpMarginRequirements memory perp,
+      IStandardManager.OptionMarginParams memory option,
+      IStandardManager.OracleContingencyParams memory oc,
+      IStandardManager.BaseMarginParams memory base
+    ) = getSRMParams();
+    perpMarginRequirements = abi.decode(abi.encode(perp), (IMarginEngine.PerpMarginRequirements));
+    optionMarginParams = abi.decode(abi.encode(option), (IMarginEngine.OptionMarginParams));
+    oracleContingencyParams = abi.decode(abi.encode(oc), (IMarginEngine.OracleContingencyParams));
+    baseMarginParams = abi.decode(abi.encode(base), (IMarginEngine.BaseMarginParams));
   }
 
   //////////////

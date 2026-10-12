@@ -1,6 +1,8 @@
 # perp-feeds
 
-Price publishers for `USDCcNGN-PERP`. One process, one feed signer, one relayer:
+Price publishers for `USDCcNGN-PERP` (`dist/main.js`: one process, one feed signer, one relayer),
+and, as a separate process, the forward publisher for the cNGN future (`dist/forward-main.js`,
+[below](#forward-publisher-cngn-future)). The perp publishers:
 
 - **Index.** Every minute, three fiat USDT/NGN providers from
   [`cngn-rate-picker`](https://github.com/wrappedcbdc/cngn-rate-picker) (Quidax `usdtngn`, Textile,
@@ -98,3 +100,55 @@ anvil --port 8599 &
 (cd ../../contracts/risk-core && forge build)
 ANVIL_RPC_URL=http://127.0.0.1:8599 pnpm test    # + the real feed contracts accept what we sign
 ```
+
+## Forward publisher (cNGN future)
+
+`dist/forward-main.js` marks a USDC/cNGN `FutureAsset`. Each tick, once the contract's
+`minMarkInterval` (an hour) has passed and until last trade, it:
+
+1. works out the forward in cNGN per USDC (`src/forward-targets.ts`): the futures book's mid if both
+   sides fill `FORWARD_MIN_BOOK_DEPTH_USDC` (2,000; each side's price is its depth-weighted average
+   over that, so a dust order cannot set the mark), else the carry forward
+   `index × (1 + CARRY × τ)`, then clamps it to the carry forward
+   ± `FORWARD_MAX_BASIS_BPS`, inside the contract's current index band, and inside its per-mark move
+   limit (both less `FORWARD_SAFETY_BPS`). If the band and the move limit cannot both be met, it
+   publishes nothing and alerts `forward-unreachable`;
+2. signs `forward − index` (USDC per cNGN) into the future's `LyraForwardFeed` and relays it;
+3. calls `FutureAsset.pullMark`, which reads it back, checks it again, and accrues VM.
+
+**Its own process, signer and relayer.** The forward key must not sign the index: the contract
+bands every mark against the index, which only bounds a bad forward if someone else signs it (the
+deploy script refuses one key for both). The signer is a **KMS key** (`FORWARD_SIGNER_KMS_KEY_ID`,
+`aws_kms_key.forward_signer`), so its private key never reaches the box; a raw `FORWARD_SIGNER_KEY`
+is refused on Base mainnet. The relayer is its own too (`/numo/feeds/forward_relayer_key`): one
+relayer shared by two processes races for nonces.
+
+**Expiry** (`src/expiry-keeper.ts`, the same process, every tick after the publisher), with nothing
+but permissionless calls, each reading its state back from the chain first so a restart resumes:
+
+1. in the contract's `fixingWindow` (1 h) it records an index sample every `FIXING_SAMPLE_INTERVAL_MS`
+   (5 min), at most half the contract's `maxSampleGap` so one failed sample cannot break the fixing
+   (it refuses to start otherwise; a failed sample alerts `fixing-sample-failed`);
+2. after expiry it calls `fixSettlementFromIndex`. If the fixing is incomplete it alerts
+   `fixing-incomplete`, then `fixing-fallback-due` once the vault's bounded fallback opens;
+3. once settled it calls `closeOutExpired` on every account still holding the series,
+   `CLOSE_OUT_BATCH` per tick. The list is read from the chain, not configured: the ledger is the one
+   the future records (`FutureAsset.subAccounts`), walked to its `lastAccountId` (Base has a few dozen),
+   and each account is closed out on its own manager (`SubAccounts.manager`). Close-out reads no feed,
+   so it works with the index down.
+
+It alerts `forward-mark-late` when the contract's last mark is older than `FORWARD_MARK_LATE_MS`
+(2 h) while trading is open, and on every refusal. At startup it refuses a threshold no larger than
+the contract's `minMarkInterval` plus `FORWARD_TICK_MS`, which an on-time mark would trip. If KMS
+cannot be reached at startup it stays up, retrying each minute and alerting
+`forward-signer-unavailable`, rather than crash-looping under systemd; a signing failure later alerts
+`forward-sign-failed`. Config: `src/forward-config.ts`. Unit:
+`numo-future-feeds.service`, secrets through `run-with-ssm-forward.sh`, non-secret config in
+`/etc/numo/future-feeds.env` (template `contracts/risk-core/scripts/ops/future-feeds.env`). Not
+installed: nothing it marks is deployed yet.
+
+`src/forward.anvil.e2e.test.ts` runs it against the real `LyraSpotFeed`, `LyraForwardFeed`,
+`FutureAsset` and `OracleDataSubmitter` on anvil, and `src/expiry.anvil.e2e.test.ts` runs a real fixing
+on `FutureAsset`. The anvil suites share one chain clock, so `pnpm test` runs test files one at a time
+(`--test-concurrency=1`): concurrently, one suite's `evm_increaseTime` expires another's signatures or
+skips its fixing window.

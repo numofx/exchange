@@ -41,6 +41,7 @@ const (
 	getPerpPriceSelector           = "0x90f76b18" // getPerpPrice()
 	assetDetailsSelector           = "0xd21415a3" // assetDetails(address)
 	perpMarginRequirementsSelector = "0xbf270f9d" // perpMarginRequirements(uint256)
+	managerSelector                = "0x52981457" // SubAccounts.manager(uint256)
 )
 
 // perpSide is one account's view of a prospective fill, in engine units (18dp).
@@ -103,6 +104,8 @@ type marginChecker interface {
 
 type marginVerdict struct {
 	OK bool
+	// CloseOnly: the refused leg's account is under the close-only manager and the fill would not reduce it.
+	CloseOnly bool
 	// Account is the subaccount that would fail, and SurplusAfter its projected IM surplus.
 	Account      string
 	SurplusAfter *big.Int
@@ -117,6 +120,11 @@ type chainMarginChecker struct {
 	markCache map[string]cachedBalance
 	markTTL   time.Duration
 	now       func() time.Time
+
+	// closeOnly is CNGN_PERP_CLOSE_ONLY_MANAGER; managers caches each account's manager, read once:
+	// SubAccounts has no way to change it.
+	closeOnly string
+	managers  map[string]string
 }
 
 // newMarginChecker returns nil when there is no chain to read or no perp configured; a nil checker
@@ -145,6 +153,8 @@ func newMarginChecker(cfg config.Config) marginChecker {
 		markCache: map[string]cachedBalance{},
 		markTTL:   2 * time.Second,
 		now:       time.Now,
+		closeOnly: strings.ToLower(strings.TrimSpace(cfg.CNGNPerpCloseOnlyManager)),
+		managers:  map[string]string{},
 	}
 }
 
@@ -181,10 +191,6 @@ func (c *chainMarginChecker) CheckPerpFill(ctx context.Context, instrument instr
 		order   orders.Order
 		isTaker bool
 	}{{candidate.Taker, true}, {candidate.Maker, false}} {
-		surplus, err := c.imSurplus(ctx, srm, leg.order.SubaccountID)
-		if err != nil {
-			return marginVerdict{}, fmt.Errorf("read margin of %s: %w", leg.order.SubaccountID, err)
-		}
 		position, err := c.position(ctx, perp, leg.order.SubaccountID)
 		if err != nil {
 			return marginVerdict{}, fmt.Errorf("read position of %s: %w", leg.order.SubaccountID, err)
@@ -192,6 +198,25 @@ func (c *chainMarginChecker) CheckPerpFill(ctx context.Context, instrument instr
 		delta := new(big.Int).Set(amount)
 		if leg.order.Side == orders.SideSell {
 			delta.Neg(delta)
+		}
+		// An account under the close-only manager may only shrink its position: an opening fill would
+		// revert on the cap set at the cutover, after matching. A reduction needs no IM, and its own
+		// manager (not the instrument's) is what checks it on chain.
+		if c.closeOnly != "" {
+			manager, err := c.managerOf(ctx, leg.order.SubaccountID)
+			if err != nil {
+				return marginVerdict{}, fmt.Errorf("read manager of %s: %w", leg.order.SubaccountID, err)
+			}
+			if manager == c.closeOnly {
+				if !reducesOnly(position, new(big.Int).Add(position, delta)) {
+					return marginVerdict{OK: false, CloseOnly: true, Account: leg.order.SubaccountID}, nil
+				}
+				continue
+			}
+		}
+		surplus, err := c.imSurplus(ctx, srm, leg.order.SubaccountID)
+		if err != nil {
+			return marginVerdict{}, fmt.Errorf("read margin of %s: %w", leg.order.SubaccountID, err)
 		}
 		sideFee := big.NewInt(0)
 		if leg.isTaker {
@@ -215,6 +240,37 @@ func (c *chainMarginChecker) imSurplus(ctx context.Context, srm, subaccountID st
 		return nil, err
 	}
 	return decodeInt256(raw)
+}
+
+// managerOf is SubAccounts.manager(subaccountID), lowercased, read once per account.
+func (c *chainMarginChecker) managerOf(ctx context.Context, subaccountID string) (string, error) {
+	c.mu.Lock()
+	cached, ok := c.managers[subaccountID]
+	c.mu.Unlock()
+	if ok {
+		return cached, nil
+	}
+	subAccounts, err := c.rpc.subAccountsAddress(ctx)
+	if err != nil {
+		return "", err
+	}
+	account, err := encodeUint256Word(subaccountID)
+	if err != nil {
+		return "", err
+	}
+	raw, err := c.rpc.ethCall(ctx, subAccounts, managerSelector+account)
+	if err != nil {
+		return "", err
+	}
+	word := strings.TrimPrefix(strings.ToLower(raw), "0x")
+	if len(word) < 64 {
+		return "", fmt.Errorf("manager(%s): short response", subaccountID)
+	}
+	manager := "0x" + word[24:64]
+	c.mu.Lock()
+	c.managers[subaccountID] = manager
+	c.mu.Unlock()
+	return manager, nil
 }
 
 func (c *chainMarginChecker) Position(ctx context.Context, perp, subaccountID string) (*big.Int, error) {
