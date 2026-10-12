@@ -3,9 +3,11 @@ name: services-markets
 on:
   push:
     branches: [main]
-    paths: ['services/markets/**', '.github/workflows/services-markets.yml']
+    paths: ['services/markets/**', 'contracts/risk-core/src/**', 'contracts/execution/src/**', '.github/workflows/services-markets.yml']
   pull_request:
-    paths: ['services/markets/**', '.github/workflows/services-markets.yml']
+    # the contracts' src: the service pins their selectors (the revert classifier among them), checked against
+    # their compiled ABIs, so renaming an error there must rerun the check here
+    paths: ['services/markets/**', 'contracts/risk-core/src/**', 'contracts/execution/src/**', '.github/workflows/services-markets.yml']
 concurrency:
   group: services-markets-${{ github.ref }}
   cancel-in-progress: true
@@ -30,12 +32,25 @@ jobs:
         working-directory: services/markets
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive        # the contracts' libs, for the selector check's forge build
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: "1.7.1"  # the same exact pin as contracts-risk-core.yml
       - uses: actions/setup-go@v5
         with:
           go-version-file: services/markets/go.mod
           cache-dependency-path: services/markets/go.sum
       - run: go build ./...
       - run: go vet ./...
+      # Every selector the service pins names a compiled function or error, and every revert classifier entry is the
+      # selector of a compiled error with that name: a wrong one never matches, and its revert falls through to the
+      # default class. Behind a build tag so test-with-db.sh needs no contracts. verify.sh runs the same.
+      - run: forge build
+        working-directory: contracts/risk-core
+      - run: forge build
+        working-directory: contracts/execution
+      - run: go test -tags abicheck -count=1 ./internal/selectorcheck/
       # Not a bare `go test ./...`: without a database every database-backed test skipped, and a
       # skip reads as a pass. The script migrates, runs the suite, and fails if any test skipped
       # for want of a database. verify.sh runs the same script.

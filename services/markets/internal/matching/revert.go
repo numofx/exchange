@@ -41,7 +41,7 @@ type settlementRevert struct {
 
 // knownReverts maps custom-error selectors to what they mean for retrying the pair. Selectors are
 // derived with `cast sig` from the contract sources (contracts/execution, contracts/risk-core), never
-// by hand.
+// by hand, and internal/selectorcheck checks each against the compiled error of that name.
 //
 // WERC_CannotBeNegative has no arguments and both legs of cNGN-USDC are WrappedERC20Assets, so it
 // cannot say which side is short; it is balance-dependent, not attributable.
