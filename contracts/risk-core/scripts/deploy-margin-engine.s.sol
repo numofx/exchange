@@ -49,7 +49,8 @@ interface ITradeModuleQuote {
  *
  * @dev UNITS. Futures prices are cNGN per USDC; the index and forward feeds are USDC per cNGN.
  *
- * Usage (the deployer is forge's sender: a keystore account, never a key on the command line):
+ * Usage (the deployer is forge's sender: a fresh keystore account, used for this deploy only, never a key on the
+ * command line; the script refuses one that has sent a transaction before):
  *   INITIAL_MARK=<cNGN per USDC, 18dp> CARRY=<annual carry, 18dp> FORWARD_SIGNER=<forward key> \
  *     forge script scripts/deploy-margin-engine.s.sol --rpc-url $BASE_RPC_URL --account numo-deployer --broadcast
  *
@@ -142,6 +143,12 @@ contract DeployMarginEngine is Utils {
     if (msg.sender == FORGE_DEFAULT_SENDER) {
       revert("run with --account <keystore> (or --private-key): no sender given");
     }
+    // The deployer owns everything until the vault accepts, and could change any setting in that window. A fresh key,
+    // used for this deploy only and recorded in the artifact: the setup batch's parity check
+    // (propose_margin_engine_batch.py) re-reads every setting once the vault owns it, checks the key has sent nothing
+    // since the deploy, and the key is then retired. Forge deploys the linked FutureVMLib from the deployer before
+    // run(), so a fresh key arrives here with nonce 1 (0 if that exact library build already exists on chain).
+    if (vm.getNonce(msg.sender) > 1) revert("deployer key must be single use: it has sent transactions before");
 
     vm.startBroadcast();
     Deployment memory d = deploy(params);
@@ -461,6 +468,23 @@ contract DeployMarginEngine is Utils {
     vm.serializeAddress(obj, "future", address(d.future));
     vm.serializeAddress(obj, "forwardFeed", address(d.forwardFeed));
     vm.serializeAddress(obj, "forwardSigner", params.forwardSigner);
+    vm.serializeAddress(obj, "deployer", msg.sender);
+    // the deployer's nonce once the deploy is done: anything it sends afterwards, the parity check sees
+    vm.serializeUint(obj, "deployerNonce", vm.getNonce(msg.sender));
+    vm.serializeAddress(obj, "callees", params.callees);
+    // what the deploy set, so the setup batch can re-check it once the vault owns everything
+    vm.serializeUint(obj, "futureMMReq", FUTURE_MM_REQ);
+    vm.serializeUint(obj, "futureIMReq", FUTURE_IM_REQ);
+    vm.serializeUint(obj, "maxMarkDeviation", MAX_MARK_DEVIATION);
+    vm.serializeUint(obj, "maxMarkDelay", MAX_MARK_DELAY);
+    vm.serializeUint(obj, "maxMarkIndexDeviation", MAX_MARK_INDEX_DEVIATION);
+    vm.serializeUint(obj, "minMarkIndexDeviation", MIN_MARK_INDEX_DEVIATION);
+    vm.serializeUint(obj, "bandNarrowingPeriod", BAND_NARROWING_PERIOD);
+    vm.serializeUint(obj, "fixingWindow", FIXING_WINDOW);
+    vm.serializeUint(obj, "maxSampleGap", MAX_SAMPLE_GAP);
+    vm.serializeUint(obj, "fallbackDelay", FALLBACK_DELAY);
+    vm.serializeUint(obj, "minMarkInterval", MIN_MARK_INTERVAL);
+    vm.serializeUint(obj, "forwardHeartbeat", FORWARD_HEARTBEAT);
     vm.serializeUint(obj, "marketId", d.marketId);
     vm.serializeUint(obj, "poolAccount", d.poolAccount);
     vm.serializeUint(obj, "subId", d.subId);

@@ -86,6 +86,29 @@ someone else to call first after deployment?
 
 A planted open `initialize(address)` fails it.
 
+**The deployer's window.** Between deploy and the vault's `acceptOwnership`, the deployer key owns the engine, viewer,
+future and forward feed, and could change any setting. Two measures close it:
+- **A single-use deployer key.** The deploy script refuses a key that has sent a transaction before. Forge's deploy
+  of the linked `FutureVMLib` is the key's first transaction, so the script allows nonce 1 and nothing more. It
+  records the address in `MARGIN_ENGINE.json` as `deployer`, and its nonce at the end of the deploy as
+  `deployerNonce`. Retire the key once the vault has accepted.
+- **Parity re-checked after the vault accepts.** `propose_margin_engine_batch.py` re-reads every setting the deploy made
+  once the setup batch has landed, and again as an enable gate, so a change in the window is caught before enable:
+  - market 1 on the engine against market 1 on the live SRM, as the deploy's `assertParity` does, including the four
+    copied callees (read from storage, slot 12);
+  - the futures margin, `FutureAsset`'s mark and fixing settings, the forward feed's signer, quorum and heartbeat, and
+    the engine's wiring, against the values the deploy recorded in the artifact;
+  - that the deployer holds nothing: not an owner, not a nominee, not a forward signer;
+  - that the deployer has sent no transaction since the deploy: its nonce still equals `deployerNonce`. This catches
+    anything sent in the window, including changes to settings parity does not read.
+
+  The fork rehearsal breaks both measures:
+  - a deployer key that has sent one transaction is refused;
+  - the deployer halves the futures MM before the vault accepts, the batch lands, and parity goes red naming
+    `futureMarginRequirements mm`.
+
+  A clean deploy passes.
+
 **Please confirm this before reviewing the rest.**
 
 Files changed since #361 that the engine does not run: PMRM2 and its libraries, the deliverable-FX manager and asset,

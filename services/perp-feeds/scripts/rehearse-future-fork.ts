@@ -122,6 +122,7 @@ const abi = {
     'function getMargin(uint256 accountId, bool isInitial) view returns (int256)',
     'function settleAccount(uint256 accountId)',
     'function withdrawFromPool(address asset, uint256 amount, address recipient)',
+    'function setFutureMarginRequirements(uint256 marketId, uint256 mmFutureReq, uint256 imFutureReq)',
   ]),
   future: parseAbi([
     'struct FutureContract { bool listed; bool settled; uint64 expiry; uint64 lastTradeTime; uint64 lastMarkTime; uint256 markPrice; int256 cumulativeVMPerContract; }',
@@ -252,7 +253,7 @@ async function main() {
   const expiryDefault = 1796047200n;
   const initialMark = carryForward(invert(spot), CARRY, expiryDefault - deployHead);
   log(`deploying: INITIAL_MARK ${fmt(initialMark)} (carry forward), FORWARD_SIGNER ${addr(KEYS.forward)}`);
-  const forge = spawnSync(
+  const deployWith = () => spawnSync(
     'forge',
     ['script', 'scripts/deploy-margin-engine.s.sol', '--rpc-url', RPC, '--private-key', KEYS.deployer, '--broadcast'],
     {
@@ -262,6 +263,16 @@ async function main() {
       maxBuffer: 64 * 1024 * 1024,
     },
   );
+  // A deployer key that has sent anything before is refused: the deploy must come from a single-use key.
+  const beforeUsedKey = await test.snapshot();
+  const used = as(KEYS.deployer);
+  await pub.waitForTransactionReceipt({ hash: await used.sendTransaction({ to: addr(KEYS.deployer), value: 0n, chain, account: used.account! }) });
+  const usedKeyDeploy = deployWith();
+  assert.notEqual(usedKeyDeploy.status, 0, 'a used deployer key is refused');
+  assert.match(`${usedKeyDeploy.stdout}${usedKeyDeploy.stderr}`, /deployer key must be single use/, 'with the single-use message');
+  log('a used deployer key is refused, as it should be');
+  await test.revert({ id: beforeUsedKey });
+  const forge = deployWith();
   const forgeLog = join(OUT, 'forge-deploy.log');
   writeFileSync(forgeLog, `${forge.stdout}\n${forge.stderr}`);
   assert.equal(forge.status, 0, `forge script failed, see ${forgeLog}`);
@@ -336,8 +347,30 @@ async function main() {
   const setupBefore = await proposer('setup');
   assert.deepEqual(failing(setupBefore), [], 'setup gates pass on a fresh deploy');
   assert.ok(setupBefore.landed.every((l) => !l), 'nothing of the setup batch has landed yet');
+  assert.equal((artifact.deployer as string).toLowerCase(), addr(KEYS.deployer).toLowerCase(), 'the artifact records the deployer');
+  const gate = (p: Proposal, name: string) => p.gates.find((g) => g.name === name);
+
+  // The deployer owns everything until the vault accepts. Break it: in that window, the deployer loosens the
+  // futures margin. The vault's batch still lands (it re-sets nothing of the kind), and the proposer's parity check,
+  // run once the batch has landed, must name the change.
+  const beforeWindow = await test.snapshot();
+  const MARKET = BigInt(artifact.marketId);
+  await send(as(KEYS.deployer), MANAGER, abi.manager, 'setFutureMarginRequirements', [MARKET, BigInt(artifact.futureMMReq) / 2n, BigInt(artifact.futureIMReq)]);
   await runBatch('MARGIN_ENGINE_VAULT_ACTIONS');
-  assert.ok((await proposer('setup')).landed.every(Boolean), 'the proposer sees every setup action landed');
+  const tampered = await proposer('setup');
+  assert.ok(tampered.landed.every(Boolean), 'the setup batch lands despite the change');
+  const tamperedParity = gate(tampered, 'parity');
+  assert.ok(tamperedParity && !tamperedParity.ok, `parity goes red on a change in the deployer's window: ${JSON.stringify(tamperedParity)}`);
+  assert.match(tamperedParity.detail, /futureMarginRequirements mm/, 'and names the setting');
+  log(`parity broken by the deployer, as it should be: ${tamperedParity.detail}`);
+  await test.revert({ id: beforeWindow });
+
+  await runBatch('MARGIN_ENGINE_VAULT_ACTIONS');
+  const setupAfter = await proposer('setup');
+  assert.ok(setupAfter.landed.every(Boolean), 'the proposer sees every setup action landed');
+  const parity = gate(setupAfter, 'parity');
+  assert.ok(parity?.ok, `parity holds once the vault owns everything: ${JSON.stringify(parity)}`);
+  log(`parity: ${parity.detail}`);
 
   // ---- accounts and positions ----------------------------------------------------------------
   const dealt = async (token: Address, to: Address, amount: bigint) => {
