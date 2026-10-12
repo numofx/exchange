@@ -8,18 +8,19 @@ USDC/cNGN dated futures, **cash settled in cNGN**, margined in **one account wit
 
 | File | Lines | How to read it |
 |---|---|---|
-| `src/risk-managers/MarginEngine.sol` | 866 | **As a diff against Lyra's audited StandardManager, #361 (`12cb35a`)**: 453 changed lines. That covers Numo's carried changes and the fork's (see below). The contract header lists the fork's own changes. |
+| `src/risk-managers/MarginEngine.sol` | 866 | **As a diff against Lyra's StandardManager at #361 (`12cb35a`)**: 453 changed lines. That covers Numo's carried changes and the fork's (see below). The contract header lists the fork's own changes. |
 | `src/risk-managers/MarginEnginePortfolioViewer.sol` | 238 | As a diff against Lyra's `SRMPortfolioViewer.sol` at #361: 205 changed lines. They are the dated-future arrangement, type renames, futures excluded from `depegPenaltyPos`, and the `_checkAssetCap` override. |
 | `src/risk-managers/MarginEngineOptionHelper.sol` | 228 | Against the option margin that Lyra's #361 StandardManager computes inline. `4480270` + `3063ff0` moved it into a helper; this copy renames only the struct types (31 lines against `OptionMarginHelper.sol`). |
 | `src/libraries/FutureVMLib.sol` | 244 | **New, in full.** Futures VM settlement, futures margin, close-out. |
 | `src/assets/FutureAsset.sol` | 524 | **New, in full.** The dated future: marks, VM accounting, fixing, settlement. |
 | `src/interfaces/IMarginEngine.sol`, `IMarginEnginePortfolioViewer.sol`, `IFutureAsset.sol` | 234, 21, 114 | Interfaces. `IMarginEngine` against Lyra's `IStandardManager` at #361: 38 lines. |
+| `src/risk-managers/BaseManager.sol` | 480 | As a diff against Lyra's at #361: Lyra #362 made it upgradeable, Numo `1e9f8fa` split `executeBid` and moved cash settlement into `_applyCashDelta` (see below). The engine inherits it. |
 | `src/risk-managers/BasePortfolioViewer.sol` | 1 word | `_checkAssetCap` made `virtual`. No behaviour change for existing managers. |
 | `scripts/deploy-margin-engine.s.sol` | 585 | The deployment, its postconditions, and the two vault batches it writes. |
 
 ### Scope: against Lyra's #361, including Numo's earlier SRM changes (decided)
 
-The baseline is Lyra's last audited StandardManager, #361 (`12cb35a`), not today's. The live perp SRM carries Numo
+The baseline is Lyra's StandardManager at #361 (`12cb35a`), the last Lyra commit before Numo's changes, not today's. The live perp SRM carries Numo
 changes made after the import, the fork inherits them, and **they are in scope**:
 
 | Commit | What it changed | Diff |
@@ -33,7 +34,7 @@ below).
 
 **Also in scope:** `FutureVMLib` in full, and `FutureAsset` in full.
 
-Reviewing against #361 also reviews the live SRM's own unaudited changes, since it runs the same code at `0d81da6` and
+Reviewing against #361 also reviews the live SRM's own Numo changes, since it runs the same code at `0d81da6` and
 `3063ff0`.
 
 ### Also changed since #361 on the engine's path
@@ -214,8 +215,12 @@ These are in the PR and tested, but they hold no funds.
      `borrowingEnabled`, and the engine copies it.
 2. **Views count unsettled VM, as StandardManager counts unrealised perp PnL.** It is valued as settlement will pay it:
    - **A loss** is paid from the account's held cNGN first, which costs it only the base factor (held cNGN was counted
-     at it), then the rest at par. Series are taken in settlement's order.
-   - **A gain** counts at the base factor.
+     at it), then the rest at par.
+   - **A gain** counts at the base factor, whatever the pool holds. That is the least settlement can pay it: the pool
+     pays in cNGN (worth the factor) while it has it, then in cash at par. Valuing a gain by what the pool could pay
+     instead would credit cash at par while the pool is short, and a treasury top-up in cNGN would then switch it to
+     cNGN at the factor, lowering other accounts' margin. Ignoring the pool's balance keeps a top-up from ever doing
+     that.
    - So **margin before settlement equals margin after** for losses, whatever order the series settle in: across
      losing series the cNGN spent is min(total owed, held).
    - With a gain, the view is at most what settlement gives, in any order. That covers a gain while the pool is short
@@ -291,6 +296,12 @@ The engine is **24,142 of 24,576 bytes**; StandardManager had 1,174 bytes of hea
 
 - **The delegatecall library:** state read through `address(this)` getters mid-adjustment, reentrancy across
   `SubAccounts.managerAdjustment`, and whether any external call in a view path could be steered.
+- **The old SRM stays load-bearing:** the SecurityModule's account 21 sits under the old SRM `0xDE04…`. The fee
+  `startAuction` pays it goes through `_transferCash`'s cross-manager branch (`submitTransfer` into account 21), and
+  the SecurityModule pays insolvencies with `submitTransfer` out of it. Both run the old SRM's `handleAdjustment`, so
+  **pausing the old SRM stops every engine auction that charges a fee, and every insolvency payout**. The TradeModule's
+  fee account, 22, is under it too, so a pause also stops every engine fill that pays a fee. It must stay deployed and
+  unpaused, and keep its cash whitelisting, for as long as the engine is live. Fork tests pin all three.
 - **The pool exemption:** any path where an account that is not the engine could adjust `accId`, or where skipping its
   live-auction or risk check matters.
 - **The fill bound:** reading the index in `FutureAsset.handleAdjustment` on every priced fill (a stale index reverts
@@ -316,7 +327,7 @@ The engine is **24,142 of 24,576 bytes**; StandardManager had 1,174 bytes of hea
 | Oracle contingency | 0.55 / 0.55 / 0.55, factor 1.0 | copied |
 | Depeg | threshold 0.99, factor 2 | copied |
 | Futures IM / MM | 25% / 15% | deploy script |
-| Futures OI cap | 30 contracts (15 a side, $15k) | sized so the SecurityModule's $3,250 covers a 25% step (~$2,947 with the perp) |
+| Futures OI cap | 30 contracts (15 a side, $15k) | sized so the SecurityModule's $3,250 covers a 25% step (~$2,947 with the perp) **at today's open interest**. Coverage is checked at enable (the proposer's `sm` gate) and watched afterwards by the pager's `sm-coverage`, which counts the perp and the future together |
 | Perp OI cap on the engine | the SRM's (50M cNGN) | deploy script |
 | cNGN escrow cap on the engine | 100M (**decided**) | spot and perp collateral (50M) plus futures (50M) |
 | Pool reserve | 30% of one side at the cap, ~6.1M cNGN | a 25% move paid in cash, plus one 5% mark |
@@ -329,9 +340,25 @@ The engine is **24,142 of 24,576 bytes**; StandardManager had 1,174 bytes of hea
 |---|---|---|
 | StandardManager's suite on the engine | `forge test --match-path "test/risk-managers/unit-tests/MarginEngine/*"` | 141/141, the same as on StandardManager |
 | Futures suite (FutureManager's 65, ported) and engine tests | same path, `TestMarginEngine_Future` | 87: cross-margin, the depeg, close-only cap, reduction between MM and IM, settlement invariance (including series out of order and gain/loss in both orders), the negative pool, and the fill bound |
-| Fork tests (Base, real contracts) | `BASE_RPC_URL=… forge test --match-contract MarginEngineDeployFork` | 24 |
+| Fork tests (Base, real contracts) | `BASE_RPC_URL=… forge test --match-contract MarginEngineDeployFork` | 26 |
+| Real fills, through the live Matching and cNGN TradeModule (**an enable requirement**, below) | `BASE_RPC_URL=… forge test --match-contract MarginEngineTradeModuleFork` | 7 |
 | Fork rehearsal (keeper process, vault batches through the proposer) | `pnpm rehearse:future` in `services/perp-feeds` | passes |
-| Full CI equivalent | `./scripts/verify.sh` | risk-core 1,339, execution 261, perp-feeds 126 |
+| Full CI equivalent | `./scripts/verify.sh` | risk-core 1,367, execution 261, markets 517 (database-backed, none skipped), perp-feeds 126 |
+
+`MarginEngineTradeModuleFork` signs orders as the matcher's clients sign them and matches them through
+`Matching.verifyAndMatch`, on accounts under the engine:
+- **the venue is closed until enable:** before the enable batch the future is unregistered, and a fill reverts;
+- **a fill lands:** one contract each side, no quote leg, and both sides margined by the engine;
+- **the fill price reaches the future:** a fill 1% above the mark moves the VM in the fill. Planting a `FutureAsset`
+  that ignores the price fails this test;
+- **the index band holds on the venue path:** a fill outside it reverts `FA_FillOutsideIndexBand`;
+- **fees:** the taker fee lands in the TradeModule's fee account, which sits under the old SRM;
+- **an under-margined order** is refused by the engine (`SRM_PortfolioBelowMargin`);
+- **pausing the old SRM** stops every fill that pays a fee.
+
+**It is an enable requirement.** It runs at head, so it must pass against the chain as it stands, at the commit to be
+enabled, immediately before the enable batch is proposed. CI runs it on every change. Nothing on chain enforces this;
+it is a step in the enable procedure.
 
 The fork tests include:
 - **margin parity on live contracts:** the same spot and perp portfolio under the SRM and under the engine has
@@ -339,6 +366,7 @@ The fork tests include:
 - spot, perp and future in one engine account;
 - the live SRM untouched;
 - the engine owned from its constructor, with no initializer to call;
+- pausing the old SRM stops engine auctions and insolvency payouts (`testPausingTheOldSrm…`);
 - liquidation through the real auction, and an insolvency paid by the real SecurityModule;
 - a stale index during the fixing, then the bounded fallback;
 - **the pool run negative:** a solvent liquidation still starts and its fee reaches the SecurityModule, with borrowing on
@@ -388,10 +416,14 @@ The vault proposer's `fills` gate holds the enable batch until markets-service s
 ## 9. Known limitations
 
 - **Not covered by any test:**
-  - fills through the TradeModule and matcher (tests and the rehearsal submit transfers directly);
+  - the matcher process itself (`MarginEngineTradeModuleFork` signs and submits orders as the matcher's clients do,
+    through the live Matching and TradeModule, but not through markets-service);
   - the KMS signer and the systemd unit on the ops box.
 - **Gain valuation with a short pool** is conservative, not exact (§3).
 - **No offsets:** a perp/future basis trade pays both requirements.
+- **Engine liquidations depend on the old SRM** (§5): it must never be paused while the engine is live. The runbook's
+  guardian pause targets the engine after the cutover (`docs/cngn-perp-go-live.md`, "After the MarginEngine
+  cutover").
 - **No migration code:** positions left open on the old SRM stay there under its existing keeper and pager.
 - **The keeper's holder scan** reads every account on each sweep: fine at dozens of accounts, not at thousands.
 - **The matcher's fill-band check** does not exist yet. The enable batch's `fills` gate refuses to open the market until
