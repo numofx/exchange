@@ -293,6 +293,9 @@ def render(stack_path: Path, stack_actions: Path, module_path: Path, module_acti
 
 
 def self_test() -> int:
+  # every selector and signature this script pins must name a compiled function, not just match `cast sig`
+  from abi_selectors import assert_script
+  assert_script(__file__)
   assert set(SELECTORS.values()) == set(FUNCTIONS)
   assert "0x79ba5097" in SELECTORS  # acceptOwnership(), `cast sig`
   cap = "0x40a557bd" + "00" * 12 + "ab" * 20 + f"{50_000_000 * 10**18:064x}"

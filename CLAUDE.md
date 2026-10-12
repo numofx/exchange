@@ -123,3 +123,9 @@ Recompute with the formula belonging to the script that emitted the artifact.
 Derive them with `cast sig`, never by hand. The self-tests in `scripts/ops/*.py` exist because
 hand-written selectors were wrong four separate times, and a wrong selector fails silently — the
 call reverts or reads empty space, and the surrounding code treats that as "not done yet".
+
+Matching `cast sig` is not enough on its own: it proves the selector and the name agree, not that the name exists.
+`scripts/ops/abi_selectors.py` checks every signature and 4-byte literal in every script against the compiled ABIs
+of both contract trees, and each script's `--self-test` runs it on itself. A new script gets this by calling
+`assert_script(__file__)` in its self-test; a call to a contract compiled in neither tree goes in `NOT_COMPILED`
+with its reason.

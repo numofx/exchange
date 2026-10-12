@@ -222,6 +222,9 @@ def render(cap_cngn: int) -> int:
 
 
 def self_test() -> int:
+  # every selector and signature this script pins must name a compiled function, not just match `cast sig`
+  from abi_selectors import assert_script
+  assert_script(__file__)
   for sig, want in SELECTORS.items():
     assert selector(sig) == want, (sig, selector(sig), want)
   action = build_action(50_000_000)

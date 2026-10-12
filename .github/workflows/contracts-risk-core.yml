@@ -3,9 +3,10 @@ name: contracts-risk-core
 on:
   push:
     branches: [main]
-    paths: ['contracts/risk-core/**', '.github/workflows/contracts-risk-core.yml']
+    paths: ['contracts/risk-core/**', 'contracts/execution/src/**', '.github/workflows/contracts-risk-core.yml']
   pull_request:
-    paths: ['contracts/risk-core/**', '.github/workflows/contracts-risk-core.yml']
+    # contracts/execution/src: the ops scripts pin TradeModule selectors, checked against its compiled ABI
+    paths: ['contracts/risk-core/**', 'contracts/execution/src/**', '.github/workflows/contracts-risk-core.yml']
 concurrency:
   group: risk-core-${{ github.ref }}
   cancel-in-progress: true
@@ -27,6 +28,11 @@ jobs:
       # Every ops script with a self-test, found rather than listed (mirrors verify.sh). Each hardcodes
       # selectors or hashes, and a hand-written one was wrong four separate times; the self-tests are
       # what caught them. A list is how five went unrun, check_perp_pager among them.
+      # Every ABI, in both trees: each self-test checks the selectors it pins name a compiled function
+      # (abi_selectors.py), not only that they match `cast sig` of the same, possibly wrong, name. Mirrors verify.sh.
+      - run: forge build
+      - run: forge build
+        working-directory: contracts/execution
       - run: for f in scripts/ops/*.py; do if grep -q -- "--self-test" "$f"; then echo "$f"; python3 "$f" --self-test || exit 1; fi; done
       # Every ops script, one at a time: `bash -n a.sh b.sh` parses only a.sh. Mirrors verify.sh.
       - run: for f in scripts/ops/*.sh; do bash -n "$f" || exit 1; done

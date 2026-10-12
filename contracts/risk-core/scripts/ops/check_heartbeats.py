@@ -68,6 +68,9 @@ def post(webhook: str | None, msg: str) -> None:
 
 
 def self_test() -> None:
+  # every selector and signature this script pins must name a compiled function, not just match `cast sig`
+  from abi_selectors import assert_script
+  assert_script(__file__)
   checks = [
     {"name": "settlement-canary", "status": "up"},
     {"name": "rebalance-check", "status": "new"},
