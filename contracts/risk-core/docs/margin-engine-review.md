@@ -91,7 +91,10 @@ These are in the PR and tested, but they hold no funds.
   - **Residual:** a colluding pair can still move up to one band's width of value per contract at a maintenance-margin
     check, through a reduction.
   - **The matcher must enforce the same bound before matching**, so out-of-band orders are refused instead of reverting at
-    settlement. It is a requirement of the futures listing in markets-service, which has no futures path yet.
+    settlement. markets-service has no futures path yet, so this is a requirement of the futures listing, and **the
+    enable batch refuses to open the market until it ships** (the proposer's `fills` gate, below).
+  - **A stale index on a fill** reverts inside `FutureAsset.handleAdjustment`, before the margin check, with the index
+    feed's own `BLF_DataTooOld()`, the same error as every other path that reads a stale index (proved on a Base fork).
 - **Last trade:** trading closes at `lastTradeTime`. After that, only the manager moves positions: liquidations and
   close-out.
 - **Settlement:**
@@ -268,7 +271,20 @@ The fork rehearsal runs:
 **One mutation survived, and is equivalent:** removing the close-only `continue` in the matcher, whose reduction check
 already passes.
 
-## 8. Known limitations
+## 8. What the futures listing must ship
+
+The vault proposer's `fills` gate holds the enable batch until markets-service serves this, and it must match the chain:
+
+- **The listing:** `GET /v1/markets` lists the future, by `asset_address` and `sub_id`, with:
+  - `fill_band_enforced: true`;
+  - `fill_band_low` and `fill_band_high` (cNGN per USDC, decimal strings), the band outside which it refuses orders
+    before matching.
+- **The band:** the index ∓ `markIndexBand(expiry)`, within 10 bps of the gate's own read of the chain.
+- **Revert classes for the matcher:**
+  - `FA_FillOutsideIndexBand` (`0x01bb8f43`): it should never be seen, because orders outside the band are refused first;
+  - `BLF_DataTooOld` (`0x1141796d`): transient. The index returns once the publisher resumes, so retry on backoff.
+
+## 9. Known limitations
 
 - **Not covered by any test:**
   - fills through the TradeModule and matcher (tests and the rehearsal submit transfers directly);
@@ -277,5 +293,5 @@ already passes.
 - **No offsets:** a perp/future basis trade pays both requirements.
 - **No migration code:** positions left open on the old SRM stay there under its existing keeper and pager.
 - **The keeper's holder scan** reads every account on each sweep: fine at dozens of accounts, not at thousands.
-- **The matcher's fill-band check** is required before the enable batch, as part of the futures listing. Until then, an
-  out-of-band order would match and revert at settlement.
+- **The matcher's fill-band check** does not exist yet. The enable batch's `fills` gate refuses to open the market until
+  the listing serves it (§8).
