@@ -81,11 +81,18 @@ contract MarginEngineDeployFork is Test {
     (spot,) = ISpotFeed(vm.parseJsonAddress(stack, ".indexFeed")).getSpot();
     index = 1e36 / spot;
     uint tau = uint(EXPIRY) - block.timestamp;
+    uint initialMark = index + index * CARRY / 1e18 * tau / 365 days;
     vm.setEnv("CARRY", vm.toString(CARRY));
-    vm.setEnv("INITIAL_MARK", vm.toString(index + index * CARRY / 1e18 * tau / 365 days));
+    vm.setEnv("INITIAL_MARK", vm.toString(initialMark));
     vm.setEnv("FORWARD_SIGNER", vm.toString(forwardSigner));
 
     params = script.loadParams();
+    // The environment is one per process and forge runs suites in parallel: another fork suite can set these between
+    // the setEnv above and loadParams. This suite's own values, put back and checked again, are what it deploys with.
+    params.carry = CARRY;
+    params.initialMark = initialMark;
+    params.forwardSigner = forwardSigner;
+    script.checkParams(params);
     subAccounts = SubAccounts(params.subAccounts);
     perpMarketsBefore = StandardManager(params.srm).lastMarketId();
     d = script.deploy(params);

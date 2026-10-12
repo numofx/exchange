@@ -118,10 +118,17 @@ contract MarginEngineTradeModuleFork is Test {
     string memory stack = vm.readFile(string.concat(vm.projectRoot(), "/deployments/8453/CNGN_PERP_STACK.json"));
     (spot,) = ISpotFeed(vm.parseJsonAddress(stack, ".indexFeed")).getSpot();
     uint index = 1e36 / spot;
+    uint initialMark = index + index * CARRY / 1e18 * (uint(EXPIRY) - block.timestamp) / 365 days;
     vm.setEnv("CARRY", vm.toString(CARRY));
-    vm.setEnv("INITIAL_MARK", vm.toString(index + index * CARRY / 1e18 * (uint(EXPIRY) - block.timestamp) / 365 days));
+    vm.setEnv("INITIAL_MARK", vm.toString(initialMark));
     vm.setEnv("FORWARD_SIGNER", vm.toString(vm.addr(forwardPk)));
     params = script.loadParams();
+    // The environment is one per process and forge runs suites in parallel: MarginEngineDeployFork sets these too,
+    // with its own signer. This suite's own values, put back and checked again, are what it deploys with.
+    params.carry = CARRY;
+    params.initialMark = initialMark;
+    params.forwardSigner = vm.addr(forwardPk);
+    script.checkParams(params);
     subAccounts = SubAccounts(params.subAccounts);
     d = script.deploy(params);
 
