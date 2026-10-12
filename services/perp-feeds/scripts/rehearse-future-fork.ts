@@ -524,7 +524,7 @@ async function main() {
   log(`pager ${coverageLine}`);
   assert.match(futureLine ?? '', /^future: one side \$3,000 at IM 25%, open; pool [\d,]+ cNGN \(reserve 20,000,000 set\)/, 'pager reads the future');
   assert.match(coverageLine ?? '', /future \$3,000/, 'pager counts the future in SecurityModule coverage');
-  assert.match(futureLine ?? '', /; escrow [\d,]+ of 30,000,000 cNGN$/, 'pager reads the escrow cap the deploy set');
+  assert.match(futureLine ?? '', /; escrow [\d,]+ of 50,000,000 cNGN$/, 'pager reads the escrow cap the deploy set');
   // ~8.3M of a 20M reserve is ~41%: under half, over a quarter, so a Slack warning and no page
   assert.ok(alerts.some((a) => a.text.includes('cNGN future VM pool at')), 'pool reserve warning reached the webhook');
 

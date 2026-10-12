@@ -848,6 +848,10 @@ def self_test() -> int:
   pages, warns = future_escrow_conditions(21_900_000, 30_000_000, 8_200_000, open_=True)
   assert [p.key for p in pages] == ["future-escrow-cap"] and "8,100,000 left" in pages[0].message and warns == []
   assert future_escrow_conditions(30_000_000, 30_000_000, 8_200_000, open_=False) == ([], [])
+  # The launch: a full book margined in cNGN (~20.5M) beside the ~6.14M reserve is ~26.6M. Under a 30M cap
+  # that leaves 3.4M, less than one reserve, so it pages; under 50M it leaves ~23.4M and says nothing.
+  assert [p.key for p in future_escrow_conditions(26_600_000, 30_000_000, 6_140_000, open_=True)[0]] == ["future-escrow-cap"]
+  assert future_escrow_conditions(26_600_000, 50_000_000, 6_140_000, open_=True) == ([], [])
   assert future_escrow_conditions(1, 0, 8_200_000, open_=True) == ([], [])
   # The reserve target: the launch cap, 30 contracts (15 a side) of $1,000 at 1,363.7 cNGN per USDC, is
   # 30% of $15,000 = $4,500, about 6.14M cNGN; it doubles with the cap and is zero with no index.
