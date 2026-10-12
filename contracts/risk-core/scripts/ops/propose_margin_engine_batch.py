@@ -11,6 +11,9 @@
           Before proposing it, at the commit being enabled and against head, run the real-fills fork test
           (`BASE_RPC_URL=... forge test --match-contract MarginEngineTradeModuleFork`): signed orders for the future
           through the live Matching and TradeModule. It is a procedural step; no gate here can run it.
+          So is the market maker's rebuilt futures model (notional = contracts x 1,000 USDC, no quoting near
+          expiry): until it ships, numofx/market-maker refuses to quote the future (ErrFuturesModelNotRebuilt),
+          and the future must not be enabled without a market maker that can.
 
 Every action in the file is rebuilt here from the deployment artifact and must match it exactly (to,
 calldata, value), and its digest is recomputed (keccak(to || keccak(data)), the convention of
@@ -41,7 +44,7 @@ Enable gates (all read live, all required):
             out-of-band order is rejected before it matches instead of reverting at settlement. GET
             {MARKETS_URL}/v1/markets must list the future (asset_address, sub_id) with fill_band_enforced: true and
             fill_band_low / fill_band_high (cNGN per USDC, decimal strings), and those must equal the chain's band now,
-            the index -/+ markIndexBand(expiry), within FILL_BAND_TOLERANCE. Fails until the futures listing ships it.
+            the index -/+ markIndexBand(expiry), within FILL_BAND_TOLERANCE. Fails until CNGN_FUTURE_* is set on markets-service.
 
 pool-withdraw  engine.withdrawFromPool(asset, amount, recipient): take cNGN or cash out of the VM pool, e.g. to
           rebalance it (the USDC losers paid in, out to buy cNGN). withdrawFromPool has no risk check, so the

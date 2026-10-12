@@ -167,3 +167,31 @@ func TestResolveRefusesDisabledMarkets(t *testing.T) {
 		t.Fatalf("nil registry Identifiers() = %v", ids)
 	}
 }
+
+func TestTheFutureIsListedUnderItsExpiryOnlyWhenConfigured(t *testing.T) {
+	if _, ok := DefaultRegistry(config.Config{}).BySymbol(FutureSymbol(1798675200)); ok {
+		t.Fatal("no future is listed without CNGN_FUTURE_ASSET_ADDRESS")
+	}
+	cfg := config.Config{
+		CNGNPerpTradeModuleAddress: "0x2222222222222222222222222222222222222222",
+		CNGNPerpCashAddress:        "0x3333333333333333333333333333333333333333",
+		CNGNFutureAssetAddress:     "0x5555555555555555555555555555555555555555",
+		CNGNFutureExpiry:           1798675200,
+		CNGNFutureManagerAddress:   "0x6666666666666666666666666666666666666666",
+	}
+	future, ok := DefaultRegistry(cfg).ByAssetAndSubID("0x5555555555555555555555555555555555555555", "1798675200")
+	if !ok {
+		t.Fatal("the future is listed under (asset, expiry)")
+	}
+	if future.Symbol != "USDC-cNGN-31DEC26" || !future.IsFuture() || future.IsPerpetual() {
+		t.Fatalf("future: %s %s", future.Symbol, future.ContractType)
+	}
+	// on the perp's TradeModule and cash, under the engine; no ui_intent contract
+	if future.TradeModuleAddress != cfg.CNGNPerpTradeModuleAddress || future.QuoteAssetAddress != cfg.CNGNPerpCashAddress ||
+		future.MarginManagerAddress != cfg.CNGNFutureManagerAddress || future.OrderEntrySpec != "" {
+		t.Fatalf("future stack: %+v", future)
+	}
+	if future.TakerFeeBps != 25 || future.MakerFeeBps != 0 || future.ContractMultiplier != FutureContractSizeUSDC {
+		t.Fatalf("future fees and size: %d/%d %s", future.TakerFeeBps, future.MakerFeeBps, future.ContractMultiplier)
+	}
+}

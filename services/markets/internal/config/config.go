@@ -112,6 +112,13 @@ type Config struct {
 	// perp SRM. Optional: unset, the perp is margined in its cash only and /v1/positions reports no
 	// collateral. It is also a withdrawable asset by default.
 	CNGNPerpCollateralAddress string
+	// The cNGN future (risk-core MARGIN_ENGINE.json): a FutureAsset series quoted in cNGN per USDC,
+	// traded on the perp's TradeModule and settled in the perp's cash, margined by the MarginEngine.
+	// All three or none, and only beside a perp stack. The series' sub id is its expiry. Unset, no
+	// future is listed.
+	CNGNFutureAssetAddress   string
+	CNGNFutureExpiry         int64
+	CNGNFutureManagerAddress string
 	// The index-lag gate (api/index_lag.go). IndexStatusToken authenticates the publisher's spot
 	// reports on POST /v1/internal/index-status; empty disables the endpoint and the gate. With
 	// IndexLagGate on, a new perp order is refused while the latest good spot sample is more than
@@ -195,6 +202,8 @@ func Load() (Config, error) {
 		CNGNPerpSRMAddress:           strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_SRM_ADDRESS"))),
 		CNGNPerpCloseOnlyManager:     strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_CLOSE_ONLY_MANAGER"))),
 		CNGNPerpCollateralAddress:    strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_COLLATERAL_ADDRESS"))),
+		CNGNFutureAssetAddress:       strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_FUTURE_ASSET_ADDRESS"))),
+		CNGNFutureManagerAddress:     strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_FUTURE_MANAGER_ADDRESS"))),
 		IndexStatusToken:             strings.TrimSpace(os.Getenv("INDEX_STATUS_TOKEN")),
 		IndexLagGate:                 getenvBool("INDEX_LAG_GATE", false),
 		IndexLagMaxBps:               getenvIntDefault("INDEX_LAG_MAX_BPS", 100),
@@ -268,6 +277,16 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if err := cfg.validateTradeModule(); err != nil {
+		return Config{}, err
+	}
+	if raw := strings.TrimSpace(os.Getenv("CNGN_FUTURE_EXPIRY")); raw != "" {
+		expiry, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || expiry <= 0 {
+			return Config{}, fmt.Errorf("CNGN_FUTURE_EXPIRY %q is not a unix timestamp", raw)
+		}
+		cfg.CNGNFutureExpiry = expiry
+	}
+	if err := cfg.validateFutureStack(); err != nil {
 		return Config{}, err
 	}
 	if err := cfg.validatePerpStack(); err != nil {
@@ -401,6 +420,55 @@ func (c Config) validatePerpStack() error {
 		if strings.EqualFold(closeOnly, c.CNGNPerpSRMAddress) {
 			return errors.New("CNGN_PERP_CLOSE_ONLY_MANAGER is CNGN_PERP_SRM_ADDRESS: the manager accounts open under cannot be close-only")
 		}
+	}
+	return nil
+}
+
+// FutureEnabled reports whether the cNGN future is configured. The asset address is the switch; the
+// rest is required alongside it by validateFutureStack.
+func (c Config) FutureEnabled() bool {
+	return strings.TrimSpace(c.CNGNFutureAssetAddress) != ""
+}
+
+// FutureSubID is the series' sub id on its FutureAsset: getSubId(expiry) is the expiry itself.
+func (c Config) FutureSubID() string {
+	return strconv.FormatInt(c.CNGNFutureExpiry, 10)
+}
+
+// validateFutureStack refuses a partial future configuration. The future trades on the perp's
+// TradeModule and settles in its cash, so it needs the perp stack; without its expiry the venue would
+// book orders under a series that does not exist, and without its manager it could not tell a paused
+// engine from an open one. The fill band is read from the chain, so CHAIN_RPC_URL is required too:
+// a future whose band cannot be read is a future whose fills cannot be checked.
+func (c Config) validateFutureStack() error {
+	set := map[string]bool{
+		"CNGN_FUTURE_ASSET_ADDRESS":   isConfiguredAddress(c.CNGNFutureAssetAddress),
+		"CNGN_FUTURE_EXPIRY":          c.CNGNFutureExpiry > 0,
+		"CNGN_FUTURE_MANAGER_ADDRESS": isConfiguredAddress(c.CNGNFutureManagerAddress),
+	}
+	var present, missing []string
+	for _, name := range []string{"CNGN_FUTURE_ASSET_ADDRESS", "CNGN_FUTURE_EXPIRY", "CNGN_FUTURE_MANAGER_ADDRESS"} {
+		if set[name] {
+			present = append(present, name)
+		} else {
+			missing = append(missing, name)
+		}
+	}
+	if len(present) == 0 {
+		return nil
+	}
+	if len(missing) != 0 {
+		return fmt.Errorf("the future is configured partially: %s set but %s missing; set all three or none",
+			strings.Join(present, ", "), strings.Join(missing, ", "))
+	}
+	if !c.PerpEnabled() {
+		return errors.New("CNGN_FUTURE_ASSET_ADDRESS is set without a perp stack: the future trades on the perp's TradeModule and settles in its cash")
+	}
+	if strings.TrimSpace(c.ChainRPCURL) == "" {
+		return errors.New("CNGN_FUTURE_ASSET_ADDRESS is set without CHAIN_RPC_URL: the future's fill band is read from the chain")
+	}
+	if strings.EqualFold(c.CNGNFutureAssetAddress, c.CNGNPerpAssetAddress) {
+		return errors.New("CNGN_FUTURE_ASSET_ADDRESS is the perp's asset")
 	}
 	return nil
 }

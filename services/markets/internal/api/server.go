@@ -20,6 +20,7 @@ import (
 
 	"github.com/numofx/matching-backend/internal/config"
 	"github.com/numofx/matching-backend/internal/events"
+	"github.com/numofx/matching-backend/internal/futures"
 	"github.com/numofx/matching-backend/internal/instruments"
 	"github.com/numofx/matching-backend/internal/orders"
 	"github.com/numofx/matching-backend/internal/wsauth"
@@ -43,6 +44,8 @@ type Server struct {
 	deposits *depositService
 	// perp reads cNGN-PERP's chain state for /v1/markets and /v1/positions; nil without a perp.
 	perp *perpStateReader
+	// future reads the cNGN future's band and state; nil when no future is listed.
+	future *futures.Reader
 	// indexLag is the index-lag gate; nil without INDEX_STATUS_TOKEN.
 	indexLag *indexLagGate
 }
@@ -89,6 +92,13 @@ type marketPresentation struct {
 	// Perp is cNGN-PERP's live state from chain; absent for spot, and absent for the perp when
 	// the chain could not be read (a client must treat that as unknown, not as zero).
 	Perp *perpMarketState `json:"perp,omitempty"`
+	// The fill band, on a future only: the venue admits orders and fills only between fill_band_low
+	// and fill_band_high (cNGN per USDC, the index -/+ markIndexBand), the band FutureAsset enforces.
+	// The edges are absent while the band cannot be read; then nothing fills.
+	FillBandEnforced *bool              `json:"fill_band_enforced,omitempty"`
+	FillBandLow      string             `json:"fill_band_low,omitempty"`
+	FillBandHigh     string             `json:"fill_band_high,omitempty"`
+	Future           *futureMarketState `json:"future,omitempty"`
 }
 
 type presentedOrder struct {
@@ -237,6 +247,7 @@ func NewServer(cfg config.Config, pool *pgxpool.Pool, registry *instruments.Regi
 		withdrawals: newWithdrawalService(cfg, signatures),
 		deposits:    newDepositService(cfg, signatures, pool),
 		perp:        newPerpStateReader(cfg),
+		future:      newFutureStateReader(cfg),
 		indexLag:    newIndexLagGate(cfg),
 		hub:         events.NewHub(pool, cfg, slog.Default()),
 		wsAuth:      wsauth.Verifier{Domain: cfg.WSAuthDomain, MaxTTL: cfg.WSAuthMaxTTL},
@@ -342,6 +353,9 @@ func (s *Server) handleMarkets(w http.ResponseWriter, r *http.Request) {
 	response := make([]marketPresentation, 0, len(items))
 	for _, item := range items {
 		presentation := s.presentMarket(r.Context(), item)
+		if item.IsFuture() {
+			s.presentFuture(r.Context(), item, &presentation)
+		}
 		if item.IsPerpetual() && s.perp != nil {
 			state, raw, err := s.perp.marketState(r.Context(), item)
 			if err != nil {
@@ -655,6 +669,13 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, status, map[string]string{"error": err.Error()})
 				return
 			}
+		}
+	}
+	if instrument, ok := s.instruments.ByAssetAndSubID(strings.ToLower(params.AssetAddress), params.SubID); ok && instrument.IsFuture() {
+		if status, msg := s.admitFuture(r.Context(), instrument, params); msg != "" {
+			slog.Info("order_submit_rejected_future", "order_id", params.OrderID, "market", instrument.Symbol, "error", msg)
+			writeJSON(w, status, map[string]string{"error": msg})
+			return
 		}
 	}
 	if params.ReduceOnly {

@@ -148,6 +148,54 @@ Set them on the API **and** the matcher, and set `PERP_TRADE_MODULE_ADDRESS` on 
   cNGN), `ui_notional_usdc` (that size at the index), `mark_price_ui`/`index_price_ui`, unrealized
   PnL, IM/MM surplus and an estimated `liquidation_price_ui` in USDC per cNGN.
 
+## cNGN future
+
+A cash-settled cNGN future: a `FutureAsset` series under the MarginEngine (risk-core
+`MARGIN_ENGINE.json`), quoted in cNGN per USDC, one contract 1,000 USDC, traded on the perp's
+TradeModule and settled in the perp's cash. Listed as `USDC-cNGN-<DDMONYY>` (for example
+`USDC-cNGN-31DEC26`) under `(asset_address, sub_id)`, where the sub id is the expiry. Enabled by three
+variables, all or none, and only beside the perp stack and `CHAIN_RPC_URL` — anything else refuses to
+boot:
+
+| Env | Source |
+| --- | --- |
+| `CNGN_FUTURE_ASSET_ADDRESS` | `MARGIN_ENGINE.json` `future` |
+| `CNGN_FUTURE_EXPIRY` | `MARGIN_ENGINE.json` `expiry` (unix seconds; also the sub id) |
+| `CNGN_FUTURE_MANAGER_ADDRESS` | `MARGIN_ENGINE.json` `manager` (the engine) |
+
+Set them on the API **and** the matcher.
+
+- **The fill band.** `FutureAsset` refuses a fill priced more than `markIndexBand(expiry)` from the
+  index (`1e36 / indexFeed.getSpot()`), and so does the venue, with the same integer test
+  (`internal/futures`): the API refuses an order whose signed limit is outside the band now (422
+  `fill_band: …`), and the matcher re-checks every fill's on-chain price against a read at most 2s old,
+  holding back a resting order the index has moved away from (backoff, as `FA_FillOutsideIndexBand`).
+  A stale index (`BLF_DataTooOld`) or an unreadable band refuses both: the chain cannot settle a fill
+  then either. `/v1/markets` reports `fill_band_enforced: true` and, while the band can be read,
+  `fill_band_low` / `fill_band_high` (cNGN per USDC); the enable batch's `fills` gate checks them
+  against the chain.
+- **Accounts.** Only accounts under the MarginEngine can hold the future (`MW_UnknownManager`
+  otherwise); the API refuses an order from any other account.
+- **Fees.** 25 bps taker, 0 maker, of the notional: contracts × 1,000 USDC, so 2.5 USDC a contract
+  whatever the price. A taker's signed `worstFee` must be at least `2.5e18`. The matcher reads
+  `contractSize()` from the chain for every fee and refuses to start if the registry's differs.
+- **Closed until enabled.** The matcher skips the series until the TradeModule treats it as a dated
+  future (`isDatedFutureAsset`, the enable batch's last action), the engine has a position cap on it,
+  the engine is not paused, and it is before the series' last trade time. Orders rest while it is
+  closed; after the last trade time none are accepted. `/v1/markets` reports the gate as
+  `future.trading_open` and why as `future.trading_closed_reason`.
+- **Margin pre-check, per order.** Before submitting, the matcher checks each account against the
+  engine's IM: `getMargin(account, true)` less the IM the fill adds (contracts beyond the old
+  |position| × 1,000 USDC × the futures IM rate) and the taker's fee, plus any VM gain at the fill.
+  It is optimistic (no depeg penalty, a gain at par, a loss ignored), so a refusal is one the engine
+  would make, and only fills the engine treats as adding risk are checked: an account can always
+  reduce. The short account's order, not the pair, is held back for 30s from every counterparty, so
+  the walk passes over it and nothing behind it waits. Refused 3 times in a row, at least a minute
+  after the first, it is cancelled with `cancel_reason: insufficient_margin`. A fill or a pass resets
+  the count. A revert the pre-check did not foresee cannot say which side was short, so it backs the
+  pair off and cancels nothing.
+- Not on `/v1/integrations/*`, which serve spot-style pairs.
+
 ## Configuration
 
 Copy `.env.example` into your own environment and set the required values.
