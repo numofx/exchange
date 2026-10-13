@@ -33,9 +33,10 @@ Enable gates (all read live, all required):
             closed (its perp and futures caps are 0, the future is not on the TradeModule)
   feeds     the index answers and is <= 600s old
   marks     the future has been marked within FORWARD_MARK_LATE (2h): the keeper is publishing
-  reserve   the VM pool holds its cNGN reserve: 30% of one side's notional at the cap being opened, in
-            cNGN at the index (check_perp_pager.future_reserve_target_cngn). Seed it first: a cNGN
-            deposit into the pool account, which is not a vault action
+  reserve   the VM pool holds its cNGN reserve: FUTURE_RESERVE_MOVE of one side's notional at the cap being
+            opened, in cNGN at the index (check_perp_pager.future_reserve_target_cngn). 0 since 2026-10-13:
+            no seed (winners are paid in USDC once the pool holds no cNGN; the pager pages a pool deficit
+            that outlasts a mark and its sweep). Refuses only if the index is unreadable
   escrow    the escrow cap still has a reserve's worth of headroom after the seed, so a top-up fits
   sm        the SecurityModule's cash covers a 25% step across the perp's open interest now (under the
             live SRM, until the cutover) and the future's one side at the cap being opened
@@ -54,8 +55,8 @@ Enable gates (all read live, all required):
 
 pool-withdraw  engine.withdrawFromPool(asset, amount, recipient): take cNGN or cash out of the VM pool, e.g. to
           rebalance it (the USDC losers paid in, out to buy cNGN). withdrawFromPool has no risk check, so the
-          gate is here: a cNGN withdrawal must leave the pool at or above its reserve target (30% of one side at
-          the cap, check_perp_pager.future_reserve_target_cngn), a cash one must leave its cash at or above 0.
+          gate is here: a cNGN withdrawal must leave the pool at or above its reserve target
+          (check_perp_pager.future_reserve_target_cngn, 0 at launch), a cash one must leave its cash at or above 0.
 
 It NEVER signs, executes or broadcasts. Without --propose it prints the gates and the sheet. With
 --propose each action goes to the MPCVault app for a human to approve, one at a time, from the vault.
@@ -483,16 +484,18 @@ def gate_fills(chain: Chain, d: dict, markets_url: str) -> Gate:
   return fills_gate(listing, low, high)
 
 
-def reserve_gate(pool_cngn: float, target: float) -> Gate:
-  if target <= 0:
-    return Gate("reserve", False, "reserve target is zero (index unreadable?)")
+def reserve_gate(pool_cngn: float, target: float | None) -> Gate:
+  if target is None:
+    return Gate("reserve", False, "reserve target unreadable (index?)")
+  if target == 0:
+    return Gate("reserve", True, f"no reserve (FUTURE_RESERVE_MOVE 0): pool holds {pool_cngn:,.0f} cNGN; winners paid in USDC once it has none")
   if pool_cngn < target:
     return Gate("reserve", False, f"VM pool holds {pool_cngn:,.0f} cNGN, under its {target:,.0f} reserve: seed the pool account before opening")
   return Gate("reserve", True, f"VM pool holds {pool_cngn:,.0f} cNGN (reserve {target:,.0f})")
 
 
-def escrow_gate(used: float, cap: float, target: float) -> Gate:
-  headroom = cap - used
+def escrow_gate(used: float, cap: float, target: float | None) -> Gate:
+  headroom, target = cap - used, target or 0.0
   if headroom < target:
     return Gate("escrow", False, f"escrow cap {cap:,.0f} cNGN, {used:,.0f} used: {headroom:,.0f} left, under one reserve ({target:,.0f}); a top-up would revert")
   return Gate("escrow", True, f"escrow cap {cap:,.0f} cNGN, {used:,.0f} used, {headroom:,.0f} left")
@@ -625,7 +628,10 @@ def gate_pool_withdraw(chain: Chain, d: dict, kind: str, amount: int, recipient:
     size = chain.word(d["future"], selector("contractSize")) / 1e18
     m = word_address(d["manager"])
     cap = chain.word(d["future"], selector("totalPositionCap") + m) / 1e18
-    floor18 = int(future_reserve_target_cngn(cap, size, spot) * 1e18)
+    target = future_reserve_target_cngn(cap, size, spot)
+    if target is None:
+      return gates + [Gate("withdraw", False, "the index is unreadable, so the pool's cNGN floor cannot be read")]
+    floor18 = int(target * 1e18)
   else:
     floor18 = 0
   gates.append(withdraw_gate(held18, amount18, floor18, kind))
@@ -678,10 +684,12 @@ def self_test() -> int:
   # The digest convention: keccak(to || keccak(data)), checked on a known action.
   assert digest(a(1), selector("acceptOwnership")) == "0x" + keccak(bytes.fromhex(a(1)[2:]) + keccak(bytes.fromhex("79ba5097"))).hex()
 
-  # Gates: the reserve, the escrow headroom after it, and coverage across both books.
-  target = future_reserve_target_cngn(30, 1_000, 1 / 1_363.7)
+  # Gates: the reserve, the escrow headroom after it, and coverage across both books. At launch there is no
+  # reserve: an empty pool passes, an unreadable target refuses; a nonzero target is still enforced.
+  assert future_reserve_target_cngn(30, 1_000, 1 / 1_363.7) == 0.0 and reserve_gate(0, 0.0).ok
+  assert not reserve_gate(1, None).ok and escrow_gate(0, 50_000_000, None).ok
+  target = 30 / 2 * 1_000 * 0.30 * 1_363.7
   assert not reserve_gate(0, target).ok and not reserve_gate(target - 1, target).ok and reserve_gate(target, target).ok
-  assert not reserve_gate(1, 0).ok
   assert escrow_gate(target, 50_000_000, target).ok
   assert not escrow_gate(50_000_000 - target + 1, 50_000_000, target).ok
   # a full cNGN-margined book (~20.5M) beside the reserve: a 30M cap has under a reserve left, 50M has plenty
