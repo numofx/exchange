@@ -45,6 +45,29 @@ func TestBandAllowsExactlyWhatTheChainAdmits(t *testing.T) {
 	}
 }
 
+// The edges are the last prices Allows admits, whatever the index. 1400.123456789 x 0.1 is a whole
+// number of wei, so the case above cannot tell index x (1 - w) from index - floor(index x w); an index
+// that does not divide can (the live series' index on 2026-10-13, where fill_band_low read 1 wei below
+// the chain's edge).
+func TestBandEdgesAreTheLastAdmittedPricesWhenIndexTimesWidthDoesNotDivide(t *testing.T) {
+	for _, band := range []Band{
+		{Index: e18("1365.749460529001828479"), Width: e18("0.1")},
+		{Index: e18("1386.044666769033003345"), Width: e18("0.013")},
+		{Index: big.NewInt(7), Width: e18("0.5")},
+	} {
+		if new(big.Int).Mod(new(big.Int).Mul(band.Index, band.Width), one18).Sign() == 0 {
+			t.Fatalf("fixture %s x %s divides: it cannot catch the rounding", band.Index, band.Width)
+		}
+		low, high := band.Low(), band.High()
+		if !band.Allows(low) || band.Allows(new(big.Int).Sub(low, big.NewInt(1))) {
+			t.Errorf("index %s: Low %s is not the lowest admitted price", band.Index, low)
+		}
+		if !band.Allows(high) || band.Allows(new(big.Int).Add(high, big.NewInt(1))) {
+			t.Errorf("index %s: High %s is not the highest admitted price", band.Index, high)
+		}
+	}
+}
+
 func TestZeroWidthIsNoCheckAsOnChain(t *testing.T) {
 	band := Band{Index: e18("1400"), Width: big.NewInt(0)}
 	if !band.Allows(e18("1")) || !band.Allows(e18("100000")) {
