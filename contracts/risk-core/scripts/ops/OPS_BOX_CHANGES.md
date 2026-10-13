@@ -5,7 +5,7 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
-## 2026-10-13 13:56–15:35 UTC: perp maker stopped; #24's cash moved to the futures maker's engine account #32
+## 2026-10-13 13:56–14:45 UTC: perp maker stopped; #24's cash moved to the futures maker's engine account #32
 
 Signed on the box with the MM key from SSM, through `run-with-ssm-mm.sh` and `scripts/local-venue/migrate-spot-mm.ts`
 in `/home/ec2-user/exchange-future` (moved to `04397223` (#196), then `98e9c9ae` (#197); `pnpm install
@@ -17,7 +17,7 @@ in `/home/ec2-user/exchange-future` (moved to `04397223` (#196), then `98e9c9ae`
   expired (300 s) by the execute run. The perp book has been empty since; spot (#26) untouched.
 - **MM-key grant, one parameter, temporary.** Applied from `main` with `-var ops_box_mm_key_grant=true`
   (#196): `numo-mm-key-ssm-read-one-off` (ssm:GetParameter on `/numo/exchange/mm_private_key` only) and that
-  ARN excluded from the explicit Deny. **Removed 15:3x UTC** by an apply from `main` (0 add, 1 change,
+  ARN excluded from the explicit Deny. **Removed ~14:44 UTC** by an apply from `main` (0 add, 1 change,
   1 destroy); from the box the read is refused (`AccessDeniedException … explicit deny`), `/numo/feeds/*`
   still reads. Re-add the same way, briefly, for #24's close.
 - **Withdrawal.** `perp-withdraw 4002000000` (#197: refused if under \$4 of IM surplus would remain):
