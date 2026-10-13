@@ -5,6 +5,26 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-13 16:43–17:05 UTC: forward publisher on `main`; #24's perp closed; MM key grant applied and revoked
+
+- **`/home/ec2-user/exchange-future` moved to `95270de`** (main, after #207–#209), `pnpm --filter perp-feeds`
+  rebuilt, `numo-future-feeds` restarted at 16:44. Unit and `/etc/numo/future-feeds.env` byte-identical to
+  the repo's. Why: #207's pinned reads (the VM sweep and close-out read after their own transactions).
+- **The MM key grant, applied and revoked from `main`.** `terraform apply -var ops_box_mm_key_grant=true`
+  (1 add, 1 change) at ~16:51; revoked by a plain apply from `main` (0 add, 1 change, 1 destroy) at ~17:04.
+  After the revoke the box's role lists no `numo-mm-key-ssm-read-one-off`, and three reads of
+  `/numo/exchange/mm_private_key` from the box were each refused with an explicit deny. The first
+  `--execute` after the grant was itself refused the read (IAM propagation, seconds after the apply);
+  nothing was sent, and the retry two dry runs later went through.
+- **#24's perp short closed against #27.** `perp-close 0.0007322 --against=27 --execute`: #24 bought
+  2,502 cNGN-PERP at 0.0007322 from #27's reduce-only ask of 2,521 (tx `0xe7f9a486…3e0d`, 16:53:28). Both
+  accounts read 0 perp after; the perp's total position under the SRM reads 0; the venue cancelled #27's
+  remaining 19 and the book is empty. #27 is left at −0.012338 USDC cash (its fee and P&L).
+- **#24 withdrawn.** `perp-withdraw --execute`: 5.297749 USDC to the MM wallet `0x3448…B47B`; #24 holds
+  0.000001.
+- **Why.** Perp open interest to 0 (the perp is close-only, no market maker), which frees #23's cash
+  to fund the engine keeper.
+
 ## 2026-10-13 11:26–11:50 UTC: MarginEngine setup batch landed
 
 Run from the box over SSM through `run-with-ssm-mark.sh`. `propose_margin_engine_batch.py`, its six
