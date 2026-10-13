@@ -59,6 +59,7 @@ from propose_cngn_spot_batch import (  # noqa: E402  single implementation of th
   CONFIRM_TIMEOUT_SEC,
   EXPECTED_VAULT,
   confirm_on_chain,
+  gates_after_mining,
   load_env_file,
   propose,
   request_tx_hash,
@@ -425,7 +426,7 @@ def main() -> int:
   for i, a in enumerate(actions):
     # Gates are re-read before each action: the first can take a while to be approved, and a keeper
     # or feed that died in the meantime must stop the second.
-    if i > 0 and not report(run_gates_after_cap(rpc_url, venue, args, vault)):
+    if i > 0 and not report(gates_after_mining(lambda: run_gates_after_cap(rpc_url, venue, args, vault))):
       raise SystemExit(f"a gate failed before action {i}; the cap is raised but the venue is not open. Stop and investigate.")
     uuid = propose(token, vault_uuid, vault, a)
     print(f"  [{i}] proposed uuid={uuid}\n       {a['description']}\n       digest {a['digest']}\n       -> approve in MPCVault now")
