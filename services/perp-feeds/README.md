@@ -144,8 +144,8 @@ cannot be reached at startup it stays up, retrying each minute and alerting
 `forward-signer-unavailable`, rather than crash-looping under systemd; a signing failure later alerts
 `forward-sign-failed`. Config: `src/forward-config.ts`. Unit:
 `numo-future-feeds.service`, secrets through `run-with-ssm-forward.sh`, non-secret config in
-`/etc/numo/future-feeds.env` (template `contracts/risk-core/scripts/ops/future-feeds.env`). Not
-installed: nothing it marks is deployed yet.
+`/etc/numo/future-feeds.env` (`contracts/risk-core/scripts/ops/future-feeds.env`, as installed). Running on
+the ops box since 2026-10-13 for USDC-cNGN-30NOV26, from its own checkout `/home/ec2-user/exchange-future`.
 
 `src/forward.anvil.e2e.test.ts` runs it against the real `LyraSpotFeed`, `LyraForwardFeed`,
 `FutureAsset` and `OracleDataSubmitter` on anvil, and `src/expiry.anvil.e2e.test.ts` runs a real fixing
