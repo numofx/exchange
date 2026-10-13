@@ -6,11 +6,12 @@
 Description=Numo USDCcNGN-PERP pager check
 
 [Service]
-# Installed on the ops box running from the exchange-perp checkout (ops-main), not /home/ec2-user/exchange (an older,
-# dirty main checkout). Recorded as installed, 2026-10-10.
+# Runs from its own checkout, /home/ec2-user/exchange-pager, kept at main (since 2026-10-13; before, exchange-perp, whose
+# af584bc predates the MarginEngine and read no future). Not exchange-perp: that is the live perp keeper's checkout,
+# and updating the pager must not move the keeper's code. Not /home/ec2-user/exchange (an older, dirty checkout).
 Type=oneshot
 User=ec2-user
-WorkingDirectory=/home/ec2-user/exchange-perp/contracts/risk-core
+WorkingDirectory=/home/ec2-user/exchange-pager/contracts/risk-core
 EnvironmentFile=/etc/numo/perp-pager.env
-ExecStart=/home/ec2-user/exchange-perp/contracts/risk-core/scripts/ops/run-with-ssm-pager.sh /usr/bin/python3 scripts/ops/check_perp_pager.py
+ExecStart=/home/ec2-user/exchange-pager/contracts/risk-core/scripts/ops/run-with-ssm-pager.sh /usr/bin/python3 scripts/ops/check_perp_pager.py
 Environment=AWS_REGION=us-east-1
