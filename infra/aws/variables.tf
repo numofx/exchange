@@ -441,3 +441,13 @@ variable "forward_signer_kms_enabled" {
   type        = bool
   default     = true
 }
+
+variable "ops_box_mm_key_grant" {
+  description = <<-EOT
+    Let the ops box read /numo/exchange/mm_private_key, and nothing else under /numo/exchange/ (see
+    ops-box.tf). Only for the length of one task, applied with -var and removed by the next apply from
+    main; never set true here. Last used: the futures market maker's MarginEngine account.
+  EOT
+  type        = bool
+  default     = false
+}
