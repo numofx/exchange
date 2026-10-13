@@ -368,6 +368,11 @@ func (s *Server) handleMarkets(w http.ResponseWriter, r *http.Request) {
 					shown.IndexLag = &lag
 					state = &shown
 				}
+				if s.cfg.CNGNPerpCloseOnly {
+					shown := *state
+					shown.CloseOnly = true
+					state = &shown
+				}
 				presentation.Perp = state
 			}
 		}
@@ -678,6 +683,7 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	params = s.perpCloseOnlyOrder(params)
 	if params.ReduceOnly {
 		if status, msg := s.admitReduceOnly(r.Context(), params); msg != "" {
 			slog.Info("order_submit_rejected_reduce_only", "order_id", params.OrderID, "subaccount_id", params.SubaccountID, "error", msg)
