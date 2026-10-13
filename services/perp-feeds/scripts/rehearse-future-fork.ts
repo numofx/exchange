@@ -431,7 +431,7 @@ async function main() {
   const reserve = ((BigInt(artifact.futureOICap) / 2n) * BigInt(artifact.contractSize) * 3n) / (10n * spot);
   await depositTo(USERS.treasury, POOL, CNGN, ESCROW, (reserve * 101n) / 100n / 10n ** 12n);
   // the pager gate reads its state file; a provider and dead-man's switch cannot be rehearsed here
-  writeFileSync(join(OUT, 'proposer-pager-state.json'), JSON.stringify({ lastRunAt: Math.floor(Date.now() / 1000), lastRunOk: true, provider: 'pushover', heartbeatConfigured: true }));
+  writeFileSync(join(OUT, 'proposer-pager-state.json'), JSON.stringify({ lastRunAt: Math.floor(Date.now() / 1000), lastRunOk: true, provider: 'pushover', heartbeatConfigured: true, futureManager: MANAGER }));
   // the futures listing ships, with its fill-band check: markets-service now lists the future and its band
   listed = true;
   // and the engine keeper leaves DRY_RUN
@@ -670,6 +670,9 @@ async function main() {
     });
   const pager = await runPager();
   writeFileSync(join(OUT, 'pager.log'), `${pager.stdout}\n${pager.stderr}`);
+  // what the enable batch's pager gate reads: the real pager's run recorded the engine as the future's manager
+  assert.equal(JSON.parse(readFileSync(join(OUT, 'pager-state.json'), 'utf8')).futureManager?.toLowerCase(), MANAGER.toLowerCase(),
+    'the pager\'s state says it read the future under the engine');
   const futureLine = pager.stdout.split('\n').find((line) => line.startsWith('future:'));
   const coverageLine = pager.stdout.split('\n').find((line) => line.startsWith('sm coverage:'));
   log(`pager ${futureLine}`);

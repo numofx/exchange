@@ -303,7 +303,9 @@ def gate_quoter(rpc_url: str, v: Venue, markets_url: str, min_usd: float, owner:
 PAGER_MAX_AGE_SEC = 180
 
 
-def gate_pager(state_file: Path, now: float | None = None) -> Gate:
+def gate_pager(state_file: Path, now: float | None = None, future_manager: str | None = None) -> Gate:
+  """The pager ran OK recently with a provider and a dead-man's switch. With `future_manager` (the MarginEngine
+  enable batch), its last run must also have read that manager's future: an older pager copy reads none."""
   if not state_file.exists():
     return Gate("pager", False, f"no pager state at {state_file}: is numo-perp-pager.timer running?")
   state = json.loads(state_file.read_text())
@@ -316,7 +318,11 @@ def gate_pager(state_file: Path, now: float | None = None) -> Gate:
     return Gate("pager", False, f"PAGER_PROVIDER is {state.get('provider')!r}: nothing can page your phone")
   if not state.get("heartbeatConfigured"):
     return Gate("pager", False, "no dead-man's switch (PAGER_HEARTBEAT_URL): a dead pager would go unnoticed")
-  return Gate("pager", True, f"ran {age}s ago via {state['provider']}, dead-man's switch set")
+  if future_manager and str(state.get("futureManager", "")).lower() != future_manager.lower():
+    return Gate("pager", False, f"the pager's last run read the future under {state.get('futureManager') or 'no manager'}, "
+                f"not {future_manager}: it would not page on the future (an old pager copy, or no artifact?)")
+  watching = f", watching the future under {future_manager}" if future_manager else ""
+  return Gate("pager", True, f"ran {age}s ago via {state['provider']}, dead-man's switch set{watching}")
 
 
 def run_gates(rpc_url: str, v: Venue, args, vault: str) -> list[Gate]:
@@ -375,6 +381,14 @@ def self_test() -> int:
     for broken in ({"lastRunOk": False}, {"provider": ""}, {"heartbeatConfigured": False}):
       state.write_text(json.dumps({**good, **broken}))
       assert not gate_pager(state, now=1_060).ok, broken
+    # With a future manager: refused until the pager's last run read that manager's future.
+    engine = "0xA19E296021c9DF25b90D96C2A0793CC3D0800758"
+    state.write_text(json.dumps(good))
+    assert gate_pager(state, now=1_060).ok and not gate_pager(state, now=1_060, future_manager=engine).ok, "an old pager reads no future"
+    state.write_text(json.dumps({**good, "futureManager": "0x" + "11" * 20}))
+    assert not gate_pager(state, now=1_060, future_manager=engine).ok, "another manager's future"
+    state.write_text(json.dumps({**good, "futureManager": engine.lower()}))
+    assert gate_pager(state, now=1_060, future_manager=engine).ok
   # keeper_gate, each refusal: the health and the chain stubbed, everything else real.
   g = globals()
   saved = {k: g[k] for k in ("http_json", "call", "rpc")}
