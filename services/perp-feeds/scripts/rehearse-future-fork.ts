@@ -7,8 +7,8 @@
  *   - deploy-margin-engine.s.sol is run unchanged with `forge script --broadcast`: MarginEngine beside the live SRM,
  *     with spot cNGN, the perp and the future in one account;
  *   - the vault's two batches go through propose_margin_engine_batch.py's checks (--local: rebuilt from the
- *     deployment artifact, every gate read from the fork, the enable batch refused until the pool is
- *     seeded), then are executed by impersonating the vault;
+ *     deployment artifact, every gate read from the fork, the enable batch refused until the pager runs
+ *     and the future is listed), then are executed by impersonating the vault;
  *   - three traders open positions on the live perp cash and cNGN escrow, and a treasury funds the pool;
  *   - the real keeper (dist/forward-main.js) runs as its own process against the fork, reading a stub
  *     markets-service book and posting alerts to a stub webhook;
@@ -61,6 +61,7 @@ const RPC = `http://127.0.0.1:${PORT}`;
 const BOOK_PORT = PORT + 1;
 const HOOK_PORT = PORT + 2;
 const MARKETS_PORT = PORT + 3;
+const KEEPER_PORT = PORT + 4;
 
 const ROOT = join(import.meta.dirname, '../../..');
 const RISK_CORE = join(ROOT, 'contracts/risk-core');
@@ -111,6 +112,7 @@ const abi = {
   subAccounts: parseAbi([
     'struct AssetTransfer { uint256 fromAcc; uint256 toAcc; address asset; uint256 subId; int256 amount; bytes32 assetData; }',
     'function createAccountWithApproval(address owner, address spender, address manager) returns (uint256)',
+    'function createAccount(address owner, address manager) returns (uint256)',
     'function lastAccountId() view returns (uint256)',
     'function getBalance(uint256 accountId, address asset, uint256 subId) view returns (int256)',
     'function submitTransfer(AssetTransfer assetTransfer, bytes managerData)',
@@ -264,10 +266,13 @@ async function main() {
       maxBuffer: 64 * 1024 * 1024,
     },
   );
-  // A deployer key that has sent anything before is refused: the deploy must come from a single-use key.
+  // A deployer key that has sent anything before is refused: the deploy must come from a single-use key. The
+  // script allows nonce 1 (its own library deploy, deploy-margin-engine.s.sol:150), so two prior sends.
   const beforeUsedKey = await test.snapshot();
   const used = as(KEYS.deployer);
-  await pub.waitForTransactionReceipt({ hash: await used.sendTransaction({ to: addr(KEYS.deployer), value: 0n, chain, account: used.account! }) });
+  for (let i = 0; i < 2; i++) {
+    await pub.waitForTransactionReceipt({ hash: await used.sendTransaction({ to: addr(KEYS.deployer), value: 0n, chain, account: used.account! }) });
+  }
   const usedKeyDeploy = deployWith();
   assert.notEqual(usedKeyDeploy.status, 0, 'a used deployer key is refused');
   assert.match(`${usedKeyDeploy.stdout}${usedKeyDeploy.stderr}`, /deployer key must be single use/, 'with the single-use message');
@@ -322,6 +327,7 @@ async function main() {
           RPC_URL: RPC,
           PAGER_STATE_FILE: join(OUT, 'proposer-pager-state.json'),
           MARKETS_URL: `http://127.0.0.1:${MARKETS_PORT}`,
+          ENGINE_KEEPER_HEALTH_URL: `http://127.0.0.1:${KEEPER_PORT}/health`,
         },
       });
       let text = '';
@@ -335,8 +341,10 @@ async function main() {
     return JSON.parse(last) as Proposal;
   }
   const failing = (p: Proposal) => p.gates.filter((g) => !g.ok).map((g) => g.name);
-  async function runBatch(name: string) {
-    const actions = JSON.parse(readFileSync(join(LOCAL, `${name}.json`), 'utf8')) as { description: string; to: Address; data: Hex; digest: Hex }[];
+  type Action = { description: string; to: Address; data: Hex; digest: Hex };
+  // `skip`: actions the proposer defers (propose_margin_engine_batch DEFERRED), which the vault never runs at this step
+  async function runBatch(name: string, skip: number[] = []) {
+    const actions = (JSON.parse(readFileSync(join(LOCAL, `${name}.json`), 'utf8')) as Action[]).filter((_, i) => !skip.includes(i));
     for (const action of actions) {
       assert.equal(action.digest, keccak256(encodePacked(['address', 'bytes32'], [action.to, keccak256(action.data)])), `digest of ${action.description}`);
       const hash = await vault.sendTransaction({ to: action.to, data: action.data, chain, account: VAULT });
@@ -394,21 +402,40 @@ async function main() {
   const position = (acc: bigint) => bal(acc, FUTURE, SUB_ID);
   const contractOf = () => read<Contract>(FUTURE, abi.future, 'futureContracts', [SUB_ID]);
 
-  // The enable batch, gated. Before the pool is seeded, the SecurityModule topped up and the pager
-  // running, the proposer must refuse; after, everything must pass.
+  // The enable batch, gated. Before the pager runs and the future is listed the proposer must refuse; after,
+  // everything must pass. There is no reserve at launch (FUTURE_RESERVE_MOVE 0), so an empty pool passes.
+  // numo-engine-keeper as the gate sees it: a funding account owned by the keeper EOA under the engine, holding a
+  // full futures side's IM in cash (3,750 at the launch cap), and its /health, stubbed (the keeper itself runs against
+  // the engine in perp-keeper's engine-keeper.anvil.test.ts). In DRY_RUN until the listing ships, so the gate must fire.
+  const KEEPER_EOA = '0x00000000000000000000000000000000e4e1e401' as Address;
+  await test.setBalance({ address: KEEPER_EOA, value: 10n ** 16n });
+  await send(await impersonated(KEEPER_EOA), SUBACCOUNTS, abi.subAccounts, 'createAccount', [KEEPER_EOA, MANAGER]);
+  const keeperAccount = await read<bigint>(SUBACCOUNTS, abi.subAccounts, 'lastAccountId');
+  await depositTo(KEEPER_EOA, keeperAccount, USDC, CASH, 3_750n * 10n ** 6n);
+  let keeperDryRun = true;
+  const keeperServer = createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
+      lastPassAt: Math.floor(Date.now() / 1000), lastPassOk: true, dryRun: keeperDryRun, pollIntervalMs: 15_000,
+      manager: MANAGER, keeperAccount: keeperAccount.toString(), keeperAddress: KEEPER_EOA,
+    }));
+  }).listen(KEEPER_PORT);
+  servers.push(keeperServer);
   const refused = failing(await proposer('enable'));
   // The launch cap is sized to the live SecurityModule, so sm passes without a top-up.
   // RFQ is not supported. The RfqModule was retired on Base at block 52523521, so at head the rfq gate already passes;
   // it is proved to fire below by re-allowing the module on the fork.
-  assert.deepEqual(refused.sort(), ['fills', 'pager', 'reserve'], `before seeding, exactly these gates fail: ${refused}`);
-  log(`enable refused before the seed and the listing: ${refused.join(', ')} gates fail; custody, feeds, marks, escrow, sm and rfq pass`);
-  // 30% of one side at the cap, in cNGN at the index, plus 1% for the index moving meanwhile
+  assert.deepEqual(refused.sort(), ['fills', 'keeper', 'pager'], `before the pager, the keeper and the listing, exactly these gates fail: ${refused}`);
+  log(`enable refused before the pager, the keeper and the listing: ${refused.join(', ')} gates fail; custody, feeds, marks, reserve (none), escrow, sm and rfq pass`);
+  // The treasury seeds the pool anyway, so the rehearsal still covers winners paid in cNGN: 30% of one side
+  // at the cap (the earlier reserve), in cNGN at the index, plus 1% for the index moving meanwhile
   const reserve = ((BigInt(artifact.futureOICap) / 2n) * BigInt(artifact.contractSize) * 3n) / (10n * spot);
   await depositTo(USERS.treasury, POOL, CNGN, ESCROW, (reserve * 101n) / 100n / 10n ** 12n);
   // the pager gate reads its state file; a provider and dead-man's switch cannot be rehearsed here
-  writeFileSync(join(OUT, 'proposer-pager-state.json'), JSON.stringify({ lastRunAt: Math.floor(Date.now() / 1000), lastRunOk: true, provider: 'pushover', heartbeatConfigured: true }));
+  writeFileSync(join(OUT, 'proposer-pager-state.json'), JSON.stringify({ lastRunAt: Math.floor(Date.now() / 1000), lastRunOk: true, provider: 'pushover', heartbeatConfigured: true, futureManager: MANAGER }));
   // the futures listing ships, with its fill-band check: markets-service now lists the future and its band
   listed = true;
+  // and the engine keeper leaves DRY_RUN
+  keeperDryRun = false;
   // the rfq gate keeps the RfqModule off: re-allowed on the fork, enable is refused on rfq alone
   const setRfq = (allowed: boolean) => ({
     to: '0x9E90A9cD13d859Bd6a08168082FB1F6F7405F191' as Address,
@@ -432,8 +459,16 @@ async function main() {
   const allowed = await proposer('enable');
   assert.deepEqual(failing(allowed), [], `after seeding, every enable gate passes: ${JSON.stringify(allowed.gates.filter((g) => !g.ok))}`);
   log(`enable gates pass: pool seeded with ${fmt(reserve * 101n / 100n)} cNGN, the SecurityModule as it is on Base`);
-  await runBatch('MARGIN_ENGINE_ENABLE_VAULT_ACTIONS');
-  assert.ok((await proposer('enable')).landed.every(Boolean), 'the proposer sees the market open');
+  // The perp's cap under the engine (action 0) is deferred to the perp's own cutover: the vault runs the future's cap
+  // and its registration, and the perp stays closed under the engine.
+  const enableActions = JSON.parse(readFileSync(join(LOCAL, 'MARGIN_ENGINE_ENABLE_VAULT_ACTIONS.json'), 'utf8')) as Action[];
+  assert.ok(enableActions[0].to.toLowerCase() === (stack.perp as string).toLowerCase(), 'action 0 is the perp\'s cap');
+  await runBatch('MARGIN_ENGINE_ENABLE_VAULT_ACTIONS', [0]);
+  const opened = (await proposer('enable')).landed;
+  assert.ok(!opened[0] && opened[1] && opened[2], `the future is open and the perp's cap is not: ${opened}`);
+  const capAbi = parseAbi(['function totalPositionCap(address manager) view returns (uint256)']);
+  assert.equal(await read<bigint>(stack.perp as Address, capAbi, 'totalPositionCap', [MANAGER]), 0n, 'the perp\'s cap under the engine still reads 0');
+  log('enable batch ran without the deferred perp cap: the future is open, the perp\'s cap under the engine is 0');
   const alice = await account(USERS.alice);
   const bob = await account(USERS.bob);
   const carol = await account(USERS.carol);
@@ -452,7 +487,11 @@ async function main() {
   // and one in USDC, and the winner is paid in cNGN either way (the pool fronts what Carol pays in USDC).
   await trade(bob, alice, 2n * ONE);
   await trade(bob, carol, ONE);
-  // the point of the engine: the perp in the same accounts as spot cNGN and the future
+  // the point of the engine: the perp in the same accounts as spot cNGN and the future. Not at launch: this is the
+  // perp's own cutover, the deferred action 0, run here so the rehearsal still covers one account holding all three.
+  const cutover = await vault.sendTransaction({ to: enableActions[0].to, data: enableActions[0].data, chain, account: VAULT });
+  assert.equal((await pub.waitForTransactionReceipt({ hash: cutover })).status, 'success', 'the perp cutover: its cap under the engine');
+  assert.ok((await proposer('enable')).landed.every(Boolean), 'after the perp cutover, every enable action has landed');
   const PERP = stack.perp as Address;
   await send(operator, SUBACCOUNTS, abi.subAccounts, 'submitTransfer', [
     { fromAcc: bob, toAcc: alice, asset: PERP, subId: 0n, amount: 1_000_000n * ONE, assetData: toHex(0n, { size: 32 }) },
@@ -631,6 +670,9 @@ async function main() {
     });
   const pager = await runPager();
   writeFileSync(join(OUT, 'pager.log'), `${pager.stdout}\n${pager.stderr}`);
+  // what the enable batch's pager gate reads: the real pager's run recorded the engine as the future's manager
+  assert.equal(JSON.parse(readFileSync(join(OUT, 'pager-state.json'), 'utf8')).futureManager?.toLowerCase(), MANAGER.toLowerCase(),
+    'the pager\'s state says it read the future under the engine');
   const futureLine = pager.stdout.split('\n').find((line) => line.startsWith('future:'));
   const coverageLine = pager.stdout.split('\n').find((line) => line.startsWith('sm coverage:'));
   log(`pager ${futureLine}`);
@@ -736,10 +778,10 @@ async function main() {
   // twice for the longs, and the winners settle before the loser: the pool pays them in cash it does not have.
   await stopKeeper();
   const poolCngn = await cngnOf(POOL);
-  // the vault's own path refuses this: withdrawFromPool has no risk check, so the proposer's gate is what holds the reserve
+  // with no reserve the proposer's gate lets the pool's cNGN go to zero (cash is still held at zero, below)
   const emptying = ['--asset', 'cngn', '--amount', String(poolCngn / 10n ** 12n), '--recipient', USERS.treasury];
-  assert.deepEqual(failing(await proposer('pool-withdraw', emptying)), ['withdraw'], 'the proposer refuses to empty the pool below its reserve');
-  log('pool-withdraw refused: emptying the pool would breach its reserve (the drill withdraws as the vault directly)');
+  assert.deepEqual(failing(await proposer('pool-withdraw', emptying)), [], 'with no reserve the proposer lets the pool be emptied of cNGN');
+  log('pool-withdraw allowed: no reserve, so the pool may be emptied of cNGN (the drill withdraws as the vault directly)');
   await send(vault, MANAGER, abi.manager, 'withdrawFromPool', [ESCROW, poolCngn / 10n ** 12n, USERS.treasury]);
   assert.ok((await cngnOf(POOL)) < 10n ** 12n, 'the pool holds no cNGN');
   const now0 = await head();
@@ -780,12 +822,24 @@ async function main() {
   const borrowingPage = pages.find((p) => p.includes('below zero in USDC cash'));
   assert.ok(borrowingPage, `the future-pool-borrowing page reached the phone; pages: ${JSON.stringify(pages)}`);
   log(`pager paged: "${borrowingPage}"`);
+  // The deficit outlasts a mark and its sweep: the pager's own timer says so after 75 min. Backdate where it
+  // started rather than wait; the next run must page at any size.
+  const pagerState = JSON.parse(readFileSync(join(OUT, 'pager-state.json'), 'utf8'));
+  assert.ok(pagerState.futurePoolNegativeSince, 'the pager started its deficit timer on the negative read');
+  pagerState.futurePoolNegativeSince -= 76 * 60;
+  writeFileSync(join(OUT, 'pager-state.json'), JSON.stringify(pagerState));
+  await runPager(pageEnv);
+  const stuckPage = pages.find((p) => p.includes('past a mark and its sweep'));
+  assert.ok(stuckPage, `the future-pool-deficit-stuck page reached the phone; pages: ${JSON.stringify(pages)}`);
+  log(`pager paged: "${stuckPage}"`);
   // bob pays in (in cNGN, which he holds), and the treasury tops the pool's cash back up: the page resolves
   await send(operator, MANAGER, abi.manager, 'settleAccount', [bob]);
   // with 10 USDC to spare: interest accrues on the negative balance between reading it and the deposit landing
   await depositTo(USERS.treasury, POOL, USDC, CASH, (-(await bal(POOL, CASH)) / 10n ** 12n) + 10_000_000n);
   await runPager(pageEnv);
   assert.ok(pages.some((p) => p.includes('future-pool-borrowing cleared')), 'and the resolved notice followed');
+  assert.ok(pages.some((p) => p.includes('future-pool-deficit-stuck cleared')), 'and the stuck deficit resolved with it');
+  assert.ok(!JSON.parse(readFileSync(join(OUT, 'pager-state.json'), 'utf8')).futurePoolNegativeSince, 'and its timer stopped');
   // cash out of the pool: never below zero
   const poolCashNow = (await bal(POOL, CASH)) / 10n ** 12n;
   const cashOut = (amount: bigint) => ['--asset', 'cash', '--amount', String(amount), '--recipient', USERS.treasury];

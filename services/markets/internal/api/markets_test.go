@@ -74,8 +74,9 @@ func TestHandleMarketsIncludesSpotMetadata(t *testing.T) {
 	if found.TickSize != "0.000000000000000001" {
 		t.Fatalf("spot tick size = %q", found.TickSize)
 	}
-	if found.MinSize != "0.000001" {
-		t.Fatalf("spot min size = %q", found.MinSize)
+	// Whole cNGN: the step intake enforces (it used to say 0.000001, which intake refused).
+	if found.MinSize != "1" || found.AmountStep != "1" {
+		t.Fatalf("spot min size = %q, amount step = %q", found.MinSize, found.AmountStep)
 	}
 	if found.ContractMultiplier != "1" {
 		t.Fatalf("spot contract multiplier = %q", found.ContractMultiplier)
