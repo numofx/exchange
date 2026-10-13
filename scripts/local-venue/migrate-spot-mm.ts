@@ -16,6 +16,13 @@
  *              to set as MM_SUBACCOUNT_ID / MM_RECIPIENT_ID
  *   deposit-cngn <id>  escrow.deposit of the wallet's whole cNGN into an existing unified account
  *              (the second half of `deposit` when its first half landed and the second did not)
+ *   perp-cancel  cancel the perp maker's resting cNGN-PERP orders (stop market-maker-perp first: it does
+ *              not cancel on shutdown). Spot orders, the other bot's, are not touched.
+ *   perp-close <price> --against=<id>  buy back the perp maker's short on #MM_PERP_SUBACCOUNT_ID (24) at
+ *              <price> USDC per cNGN, crossing the operator's resting sell on account <id>; refuses unless
+ *              that account's asks cover the whole size and no one else's ask is at or under the price.
+ *   perp-withdraw  the perp maker's whole cash to the MM wallet (WithdrawalModule), once it holds no
+ *              perp position and has no resting orders.
  *   engine-account <usdc units>  open the futures market maker's account under the MarginEngine:
  *              SubAccountCreator.createAndDepositSubAccount with that much USDC into the future's cash
  *              (the perp's), manager the engine, both read from the future's listing; prints the id to
@@ -31,6 +38,7 @@ const MARKETS = process.env.MARKETS_URL ?? 'https://api.numofx.com';
 const RPC = process.env.RPC_URL ?? 'https://mainnet.base.org';
 const KEY = process.env.MM_OWNER_PRIVATE_KEY as Hex | undefined;
 const SPOT_ACCOUNT = BigInt(process.env.MM_SPOT_SUBACCOUNT_ID ?? '15');
+const PERP_ACCOUNT = BigInt(process.env.MM_PERP_SUBACCOUNT_ID ?? '24');
 const WS_AUTH_DOMAIN = process.env.WS_AUTH_DOMAIN ?? 'markets.numo.xyz';
 const SPOT_SYMBOL = process.env.SPOT_SYMBOL ?? 'cNGN-USDC';
 
@@ -63,7 +71,7 @@ const abi = parseAbi([
 const client = createPublicClient({ chain: base, transport: http(RPC) });
 const [phase, ...flags] = process.argv.slice(2);
 const execute = flags.includes('--execute');
-if (!phase) throw new Error('usage: migrate-spot-mm.ts <status|cancel|withdraw|deposit|deposit-cngn|engine-account> [--execute]');
+if (!phase) throw new Error('usage: migrate-spot-mm.ts <status|cancel|withdraw|deposit|deposit-cngn|perp-cancel|perp-close|perp-withdraw|engine-account> [--execute]');
 if (!KEY) throw new Error('MM_OWNER_PRIVATE_KEY is not in the environment (run through the SSM wrapper on the box)');
 // The relayer's lesson (perp-feeds): a load-balanced RPC can hand out a mined nonce again; viem's
 // nonce manager never reissues one at or below the last it sent.
@@ -105,7 +113,7 @@ async function authHeader() {
 type HistoryOrder = { order_id: string; nonce: string; status: string; market?: string; owner_address: string };
 
 /** Every resting order of the MM: the order history, newest first, 100 a page, walked to its end. */
-async function restingOrders() {
+async function restingOrders(market = SPOT_SYMBOL) {
   const auth = await authHeader();
   const resting: HistoryOrder[] = [];
   let before = '';
@@ -116,7 +124,7 @@ async function restingOrders() {
     const body = (await response.json()) as { orders: HistoryOrder[]; next_before?: string };
     // The venue's resting statuses: active on the book, or matching (a fill in flight). Spot only:
     // the perp maker quotes from the same wallet, and its orders are not this migration's to touch.
-    resting.push(...body.orders.filter((o) => (o.status === 'active' || o.status === 'matching') && o.market === SPOT_SYMBOL));
+    resting.push(...body.orders.filter((o) => (o.status === 'active' || o.status === 'matching') && o.market === market));
     if (!body.next_before) break;
     before = body.next_before;
   }
@@ -161,8 +169,8 @@ async function cancel() {
 }
 
 /** A signed WithdrawalModule action for `amount` (token decimals) of `escrow`, submitted to the venue. */
-async function withdrawOne(escrow: Address, token: Address, decimals: number) {
-  const held = await ledger(SPOT_ACCOUNT, escrow);
+async function withdrawOne(escrow: Address, token: Address, decimals: number, account = SPOT_ACCOUNT) {
+  const held = await ledger(account, escrow);
   if (held <= 0n) {
     console.log(`${escrow}: nothing to withdraw`);
     return;
@@ -172,7 +180,7 @@ async function withdrawOne(escrow: Address, token: Address, decimals: number) {
   const expiry = BigInt(Math.floor(Date.now() / 1000) + 600);
   const nonce = BigInt(Date.now());
   if (!execute) {
-    console.log(`dry run: would withdraw ${amount} (token units) of ${escrow} from #${SPOT_ACCOUNT} to ${owner.address}`);
+    console.log(`dry run: would withdraw ${amount} (token units) of ${escrow} from #${account} to ${owner.address}`);
     return;
   }
   const signature = await owner.signTypedData({
@@ -189,14 +197,14 @@ async function withdrawOne(escrow: Address, token: Address, decimals: number) {
         { name: 'signer', type: 'address' },
       ],
     },
-    message: { subaccountId: SPOT_ACCOUNT, nonce, module: WITHDRAWAL_MODULE, data, expiry, owner: owner.address, signer: owner.address },
+    message: { subaccountId: account, nonce, module: WITHDRAWAL_MODULE, data, expiry, owner: owner.address, signer: owner.address },
   });
   const before = await client.readContract({ address: token, abi, functionName: 'balanceOf', args: [owner.address] });
   const response = await fetch(`${MARKETS}/v1/withdrawals`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      action: { subaccount_id: SPOT_ACCOUNT.toString(), nonce: nonce.toString(), module: WITHDRAWAL_MODULE, data, expiry: expiry.toString(), owner: owner.address, signer: owner.address },
+      action: { subaccount_id: account.toString(), nonce: nonce.toString(), module: WITHDRAWAL_MODULE, data, expiry: expiry.toString(), owner: owner.address, signer: owner.address },
       signature,
     }),
   });
@@ -333,7 +341,140 @@ async function engineAccount() {
   console.log(`set mm_future_subaccount_id = "${id}" (infra/aws/market-maker-future.tf) before starting the future market maker`);
 }
 
-const phases: Record<string, () => Promise<void>> = { status, cancel, withdraw, deposit, 'deposit-cngn': depositCngn, 'engine-account': engineAccount };
+/** The perp as the venue lists it: never typed in by hand. */
+async function perpListing() {
+  const markets = (await (await fetch(`${MARKETS}/v1/markets`)).json()) as Record<string, unknown>[];
+  const m = markets.find((x) => x.contract_type === 'perpetual');
+  if (!m) throw new Error('the venue serves no perpetual');
+  return {
+    market: String(m.market),
+    asset: getAddress(m.asset_address as string),
+    subId: BigInt(m.sub_id as string),
+    module: getAddress(m.trade_module_address as string),
+    cash: getAddress(m.quote_asset_address as string),
+    takerFeeBps: BigInt(m.taker_fee_bps as number),
+  };
+}
+
+const signAction = (subaccountId: bigint, nonce: bigint, module: Address, data: Hex, expiry: bigint) =>
+  owner.signTypedData({
+    domain: { name: 'Matching', version: '1.0', chainId: base.id, verifyingContract: MATCHING },
+    primaryType: 'Action',
+    types: {
+      Action: [
+        { name: 'subaccountId', type: 'uint256' },
+        { name: 'nonce', type: 'uint256' },
+        { name: 'module', type: 'address' },
+        { name: 'data', type: 'bytes' },
+        { name: 'expiry', type: 'uint256' },
+        { name: 'owner', type: 'address' },
+        { name: 'signer', type: 'address' },
+      ],
+    },
+    message: { subaccountId, nonce, module, data, expiry, owner: owner.address, signer: owner.address },
+  });
+
+async function perpCancel() {
+  const perp = await perpListing();
+  const orders = await restingOrders(perp.market);
+  console.log(`${orders.length} resting ${perp.market} order(s) of ${owner.address}`);
+  for (const order of orders) {
+    if (!execute) {
+      console.log(`dry run: would cancel ${order.order_id} (nonce ${order.nonce})`);
+      continue;
+    }
+    const response = await fetch(`${MARKETS}/v1/orders/cancel`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ owner_address: owner.address.toLowerCase(), nonce: order.nonce, reason: 'perp_maker_stopped', service: 'migrate-spot-mm' }),
+    });
+    console.log(`cancel ${order.order_id} -> ${response.status}`);
+  }
+}
+
+/** USDC per cNGN as a decimal string to 18dp, exactly. */
+function parsePrice(raw: string): bigint {
+  const m = /^([0-9]+)(?:\.([0-9]{1,18}))?$/.exec(raw.trim());
+  if (!m) throw new Error(`price ${raw} is not a decimal with at most 18 places`);
+  return BigInt(m[1]) * 10n ** 18n + BigInt((m[2] ?? '').padEnd(18, '0'));
+}
+const decimal18 = (v: bigint) => `${v / 10n ** 18n}.${(v % 10n ** 18n).toString().padStart(18, '0')}`.replace(/\.?0+$/, '');
+
+async function perpClose() {
+  const raw = flags.find((f) => /^[0-9.]+$/.test(f));
+  if (!raw) throw new Error('perp-close needs the price, USDC per cNGN, e.g. 0.000732');
+  const price = parsePrice(raw);
+  const perp = await perpListing();
+  const position = await ledger(PERP_ACCOUNT, perp.asset);
+  if (position >= 0n) throw new Error(`#${PERP_ACCOUNT} holds ${position} of the perp: no short to close`);
+  if (position % 10n ** 18n !== 0n) throw new Error(`#${PERP_ACCOUNT}'s short ${position} is not a whole cNGN`);
+  const amount = -position; // 18dp
+  // The counterparty: the operator's own account, whose resting sell this buy is meant to cross. Every
+  // ask at or under the price must be its, so the buy cannot fill against anyone else.
+  const against = flags.find((f) => f.startsWith('--against='))?.slice('--against='.length);
+  if (!against || !/^[0-9]+$/.test(against)) throw new Error('perp-close needs --against=<the account whose sell it crosses>');
+  type Resting = { subaccount_id: string; limit_price: string; desired_amount: string; filled_amount: string };
+  const book = (await (await fetch(`${MARKETS}/v1/book?symbol=${encodeURIComponent(perp.market)}`)).json()) as { asks?: Resting[] };
+  const crossing = (book.asks ?? []).filter((a) => parsePrice(a.limit_price) <= price);
+  const strangers = crossing.filter((a) => a.subaccount_id !== against);
+  if (strangers.length) throw new Error(`${strangers.length} ask(s) at or under ${decimal18(price)} are not #${against}'s (${strangers.map((a) => `#${a.subaccount_id}`).join(', ')}): the buy could fill against them`);
+  const depth = crossing.reduce((sum, a) => sum + BigInt(a.desired_amount) - BigInt(a.filled_amount), 0n) * 10n ** 18n;
+  console.log(`#${PERP_ACCOUNT} is short ${decimal18(amount)} cNGN; #${against}'s asks at or under ${decimal18(price)}: ${decimal18(depth)} cNGN`);
+  if (depth < amount) throw new Error(`#${against} has no resting ask for the whole ${decimal18(amount)} cNGN at that price: place the sell first`);
+  // TM_FeeTooHigh bounds the fee per unit filled: price x (taker + 5 bps headroom), rounded up, as mm-bot signs it.
+  const worstFee = (price * (perp.takerFeeBps + 5n) + 9_999n) / 10_000n || 1n;
+  const data = encodeAbiParameters(
+    [{ type: 'tuple', components: [
+      { name: 'asset', type: 'address' }, { name: 'subId', type: 'uint256' }, { name: 'limitPrice', type: 'int256' },
+      { name: 'desiredAmount', type: 'int256' }, { name: 'worstFee', type: 'uint256' }, { name: 'recipientId', type: 'uint256' },
+      { name: 'isBid', type: 'bool' }] }],
+    [{ asset: perp.asset, subId: perp.subId, limitPrice: price, desiredAmount: amount, worstFee, recipientId: PERP_ACCOUNT, isBid: true }],
+  );
+  const nonce = BigInt(Date.now()) * 1000n;
+  const expiry = BigInt(Math.floor(Date.now() / 1000) + 600);
+  if (!execute) {
+    console.log(`dry run: would buy ${decimal18(amount)} cNGN of ${perp.market} at ${decimal18(price)} from #${PERP_ACCOUNT} (worstFee ${worstFee}/unit)`);
+    return;
+  }
+  const signature = await signAction(PERP_ACCOUNT, nonce, perp.module, data, expiry);
+  const orderId = `manual:perp-close-${PERP_ACCOUNT}-${nonce}`;
+  const response = await fetch(`${MARKETS}/v1/orders`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      order_id: orderId, owner_address: owner.address, signer_address: owner.address,
+      subaccount_id: PERP_ACCOUNT.toString(), recipient_id: PERP_ACCOUNT.toString(), nonce: nonce.toString(),
+      asset_address: perp.asset, sub_id: perp.subId.toString(), filled_amount: '0', worst_fee: worstFee.toString(),
+      expiry: Number(expiry), side: 'buy', desired_amount: (amount / 10n ** 18n).toString(), limit_price: decimal18(price),
+      action_json: { subaccount_id: PERP_ACCOUNT.toString(), nonce: nonce.toString(), module: perp.module, data, expiry: expiry.toString(), owner: owner.address, signer: owner.address },
+      signature,
+    }),
+  });
+  console.log(`order ${orderId} -> ${response.status} ${(await response.text()).slice(0, 300)}`);
+  if (!response.ok) throw new Error('order refused');
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 6_000));
+    const now = await ledger(PERP_ACCOUNT, perp.asset);
+    if (now === 0n) {
+      console.log(`ok: #${PERP_ACCOUNT} holds no perp position`);
+      return;
+    }
+  }
+  throw new Error(`#${PERP_ACCOUNT} still holds ${await ledger(PERP_ACCOUNT, perp.asset)} after 4 min: check the order`);
+}
+
+async function perpWithdraw() {
+  const perp = await perpListing();
+  const position = await ledger(PERP_ACCOUNT, perp.asset);
+  if (position !== 0n) throw new Error(`#${PERP_ACCOUNT} still holds ${position} of the perp: close it first`);
+  const resting = await restingOrders(perp.market);
+  if (resting.length) throw new Error(`${resting.length} ${perp.market} order(s) still resting: perp-cancel first`);
+  await withdrawOne(perp.cash, USDC, 6, PERP_ACCOUNT);
+}
+
+const phases: Record<string, () => Promise<void>> = { status, cancel, withdraw, deposit, 'deposit-cngn': depositCngn,
+  'perp-cancel': perpCancel, 'perp-close': perpClose, 'perp-withdraw': perpWithdraw, 'engine-account': engineAccount,
+};
 const run = phases[phase];
 if (!run) throw new Error(`unknown phase ${phase}`);
 void run();
