@@ -185,6 +185,20 @@ def confirm_on_chain(rpc_url: str, tx_hash: str) -> None:
   raise SystemExit(f"timed out waiting for {tx_hash}")
 
 
+def gates_after_mining(read_gates, poll_sec=None):
+  """The gates re-read before the next action, given the minute a lagging node needs to show the last one.
+
+  Read once at `latest`, a node a block behind the one that mined the previous action reports its
+  postcondition as not yet true (a custody gate that expects the cap just raised reads it as 0) and the
+  batch stops half done. Re-read until every gate passes or the wait runs out; the last reading is
+  returned either way, so a gate that is really failing still fails, a minute later.
+  """
+  last = []
+  await_postcondition(lambda: last.append(read_gates()) or all(g.ok for g in last[-1]),
+                      poll_sec=POSTCONDITION_POLL_SEC if poll_sec is None else poll_sec)
+  return last[-1] if last else read_gates()
+
+
 POSTCONDITION_TRIES = 12
 POSTCONDITION_POLL_SEC = 5
 
@@ -319,6 +333,29 @@ def self_test() -> int:
           assert "await_postcondition(" in later, \
             f"{script.name}:{n + 1}: reads a postcondition after mining without await_postcondition: {later.strip()}"
 
+  # And the gates re-read before the next action, in any proposer that confirms transactions: the read
+  # that follows a mined action from the top of the loop, which the per-call-site check above cannot see
+  # (propose_perp_enable_batch read its custody gate once, at latest, until 2026-10-13).
+  for script in sorted(ops.glob("*.py")):
+    if script.name == Path(__file__).name:
+      continue
+    src = script.read_text()
+    if "confirm_on_chain(rpc_url" not in src:
+      continue
+    lines = src.splitlines()
+    for n, line in enumerate(lines):
+      if "if i > 0" not in line:
+        continue
+      window = "\n".join(lines[n:n + 3])
+      assert "gates_after_mining(" in window, f"{script.name}:{n + 1}: gates re-read before action i without gates_after_mining: {line.strip()}"
+
+  # gates_after_mining waits out a stale reading and returns the last one
+  class G:
+    def __init__(self, ok):
+      self.ok = ok
+  readings = iter([[G(False)], [G(False)], [G(True)]])
+  assert gates_after_mining(lambda: next(readings), poll_sec=0)[0].ok, "a gate that catches up must pass"
+  assert not gates_after_mining(lambda: [G(False)], poll_sec=0)[0].ok, "a gate that never passes must still fail"
   print(f"self-test ok: all {len(SELECTORS)} selectors match their signatures and are all in use")
   return 0
 
