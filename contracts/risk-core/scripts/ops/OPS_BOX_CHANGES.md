@@ -5,6 +5,49 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-13 16:43–17:05 UTC: forward publisher on `main`; #24's perp closed; MM key grant applied and revoked
+
+- **`/home/ec2-user/exchange-future` moved to `95270de`** (main, after #207–#209), `pnpm --filter perp-feeds`
+  rebuilt, `numo-future-feeds` restarted at 16:44. Unit and `/etc/numo/future-feeds.env` byte-identical to
+  the repo's. Why: #207's pinned reads (the VM sweep and close-out read after their own transactions).
+- **The MM key grant, applied and revoked from `main`.** `terraform apply -var ops_box_mm_key_grant=true`
+  (1 add, 1 change) at ~16:51; revoked by a plain apply from `main` (0 add, 1 change, 1 destroy) at ~17:04.
+  After the revoke the box's role lists no `numo-mm-key-ssm-read-one-off`, and three reads of
+  `/numo/exchange/mm_private_key` from the box were each refused with an explicit deny. The first
+  `--execute` after the grant was itself refused the read (IAM propagation, seconds after the apply);
+  nothing was sent, and the retry two dry runs later went through.
+- **#24's perp short closed against #27.** `perp-close 0.0007322 --against=27 --execute`: #24 bought
+  2,502 cNGN-PERP at 0.0007322 from #27's reduce-only ask of 2,521 (tx `0xe7f9a486…3e0d`, 16:53:28). Both
+  accounts read 0 perp after; the perp's total position under the SRM reads 0; the venue cancelled #27's
+  remaining 19 and the book is empty. #27 is left at −0.012338 USDC cash (its fee and P&L).
+- **#24 withdrawn.** `perp-withdraw --execute`: 5.297749 USDC to the MM wallet `0x3448…B47B`; #24 holds
+  0.000001.
+- **Why.** Perp open interest to 0 (the perp is close-only, no market maker), which frees #23's cash
+  to fund the engine keeper.
+- **The engine keeper's key, 17:00.** A fresh key generated straight into SSM `/numo/keeper/engine_keeper_key`
+  (SecureString, `alias/aws/ssm`), never printed or written outside a 0600 temp file deleted in the same
+  step; EOA `0x753fCC2342F180e1B9B0BfFFEb21f4E00741f83b`. The box reads it under its existing
+  `/numo/keeper/*` grant and derives that address. Nothing installed yet.
+- **Its funding account, #33.** 0.003 ETH sent to the EOA (by hand); then, from the box with that key,
+  `SubAccounts.createAccount(0x753f…f83b, MarginEngine)` (tx `0x48cdd972…96aa`, block 52561572): #33, owned by
+  the EOA directly (not Matching), manager the engine.
+- **The perp keeper's cash floor to 0, ~17:34.** `/etc/numo/perp-keeper.env` backed up to
+  `perp-keeper.env.bak-20261013`, `MIN_KEEPER_CASH_USD=0` added after `MIN_KEEPER_ETH`, `numo-perp-keeper`
+  restarted: active, first pass ok, not dry run (its build reads the variable). Why: its $5,000 moves to the
+  engine keeper next, and with perp OI 0 and the perp close-only it has nothing to liquidate; without this it
+  alerts on low cash. Restore the default (1000) with its funding when the perp reopens. Template updated.
+- **#23's cash to #33.** From the box: the perp keeper's key `CashAsset.withdraw(23, 5000 USDC, 0x753f…f83b)`
+  (tx `0x40adb7e9…61f0`, block 52561837); the engine keeper's key `USDC.approve(CashAsset, 5000)` (block
+  52561848) and `CashAsset.deposit(33, 5000)` (tx `0x6eab5e82…5b82`, block 52561849). After: #33 holds
+  5,000 cash and nothing else; #23 holds 0.0000023 (interest); the EOA 0 USDC, 0.002997 ETH.
+- **`numo-engine-keeper` installed, DRY_RUN, ~17:39.** In `/home/ec2-user/exchange-future` (`95270de`):
+  `pnpm --filter perp-keeper` built; `/etc/numo/engine-keeper.env` and
+  `/etc/systemd/system/numo-engine-keeper.service` written from this branch's `engine-keeper.env` and
+  `numo-engine-keeper.service`; enabled and started. /health on 127.0.0.1:9465: passes ok, `dryRun: true`,
+  manager the engine, account 33, EOA `0x753f…f83b`, nothing liquidatable. The enable batch's `keeper` gate
+  against that health and the chain: FAIL "keeper is in DRY_RUN", and PASS with only `dryRun` false (#33
+  5,000.00 cash, 0.0030 ETH). Undo: `systemctl disable --now numo-engine-keeper`.
+
 ## 2026-10-13 11:26–11:50 UTC: MarginEngine setup batch landed
 
 Run from the box over SSM through `run-with-ssm-mark.sh`. `propose_margin_engine_batch.py`, its six
