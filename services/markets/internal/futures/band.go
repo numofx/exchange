@@ -65,13 +65,20 @@ func (b Band) Allows(price *big.Int) bool {
 	return new(big.Int).Mul(diff, one18).Cmp(new(big.Int).Mul(b.Index, b.Width)) <= 0
 }
 
-// Low and High are the band's edges, 18dp cNGN per USDC. Informational: Allows is the test.
+// Low and High are the band's edges, 18dp cNGN per USDC: the last prices Allows admits, index -/+
+// floor(index x width / 1e18). Not floor(index x (1 -/+ width)): when index x width is not a whole
+// number of wei that puts Low a wei below what the chain accepts. Informational: Allows is the test.
 func (b Band) Low() *big.Int {
-	return new(big.Int).Div(new(big.Int).Mul(b.Index, new(big.Int).Sub(one18, b.Width)), one18)
+	return new(big.Int).Sub(b.Index, b.maxDiff())
 }
 
 func (b Band) High() *big.Int {
-	return new(big.Int).Div(new(big.Int).Mul(b.Index, new(big.Int).Add(one18, b.Width)), one18)
+	return new(big.Int).Add(b.Index, b.maxDiff())
+}
+
+// maxDiff is the largest |price - index| FutureAsset admits: diff x 1e18 <= index x width.
+func (b Band) maxDiff() *big.Int {
+	return new(big.Int).Div(new(big.Int).Mul(b.Index, b.Width), one18)
 }
 
 // Contract is FutureAsset.futureContracts(subId).
