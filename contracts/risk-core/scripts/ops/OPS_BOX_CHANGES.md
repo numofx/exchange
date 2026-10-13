@@ -5,6 +5,27 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-13 19:00–19:01 UTC: MarginEngine enable batch landed; USDC-cNGN-30NOV26 open
+
+Run from the box over SSM: `run-with-ssm-mark.sh python3 scripts/ops/propose_margin_engine_batch.py enable --propose`
+from `/home/ec2-user/exchange-pager` (`292e5236`; the proposer and artifacts are identical at main `2cf7cfd5`), with
+`PAGER_STATE_FILE=/var/lib/numo/perp-pager-state.json`. Nothing on the box changed. Launched without waiting for the
+outside review (decided 2026-10-13). Before it: the real-fills fork test 7/7 at `2cf7cfd5`, and a dry run with all 11
+gates passing (custody, feeds, marks, reserve none, escrow, sm, pager watching the engine, keeper live, fills, rfq,
+parity: 62 settings).
+
+- **Landed** (both status 1, from the vault `0x1dcA…F435`):
+
+  | # | Action | MPCVault | Tx | Block |
+  |---|---|---|---|---|
+  | 1 | `future.setTotalPositionCap(engine, 30e18)` | `4e5a6877…` | `0x2fe14fdb…203e` | 52564343 |
+  | 2 | `tradeModule.setDatedFutureAsset(future, true)` | `5c96145c…` | `0xd49982bd…f675` | 52564362 |
+
+- **Not proposed:** action 0, the perp's cap under the engine (#210): it still reads 0, deferred to the perp's cutover.
+- **Between the two,** every gate re-read and passed but custody (expected: the cap was open).
+- **After.** `/v1/markets` lists USDC-cNGN-30NOV26 with `fill_band_enforced` (1,229.02–1,502.14 cNGN per USDC); the
+  futures market maker #32 rests three bids and three asks of 1 contract inside it.
+
 ## 2026-10-13 ~19:49 UTC: numo-engine-keeper out of DRY_RUN
 
 - **What.** `/etc/numo/engine-keeper.env` replaced by main's `engine-keeper.env` (#216, `DRY_RUN=false`; the script
