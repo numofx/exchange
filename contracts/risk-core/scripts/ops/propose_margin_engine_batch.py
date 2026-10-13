@@ -90,6 +90,7 @@ from propose_cngn_spot_batch import (  # noqa: E402  one implementation of the M
   CONFIRM_POLL_SEC,
   CONFIRM_TIMEOUT_SEC,
   EXPECTED_VAULT,
+  await_postcondition,
   confirm_on_chain,
   load_env_file,
   propose,
@@ -784,8 +785,8 @@ def main() -> int:
     if not tx_hash:
       raise SystemExit(f"action {i} not approved within the timeout")
     confirm_on_chain(rpc_url, tx_hash)
-    if not landed(chain, args.batch, d, i, vault):
-      raise SystemExit(f"action {i} mined but its postcondition does not hold: stop and investigate")
+    if not await_postcondition(lambda: landed(chain, args.batch, d, i, vault)):
+      raise SystemExit(f"action {i} mined but its postcondition does not read back after 60s: stop and investigate")
   print(f"\n{args.batch}: done." + (" The future is open: markets-service can list it." if args.batch == "enable" else ""))
   if args.batch == "setup":
     return setup_parity(chain, d, vault)
@@ -793,8 +794,11 @@ def main() -> int:
 
 
 def setup_parity(chain: Chain, d: dict, vault: str) -> int:
-  """After the vault accepts: re-read everything the deployer could have changed while it owned the contracts."""
-  gate = gate_parity(chain, d, vault)
+  """After the vault accepts: re-read everything the deployer could have changed while it owned the contracts.
+  Run straight after the last action mines, so given the same minute to read back as each action."""
+  gates = []
+  await_postcondition(lambda: gates.append(gate_parity(chain, d, vault)) or gates[-1].ok)
+  gate = gates[-1] if gates else gate_parity(chain, d, vault)
   report([gate])
   if not gate.ok:
     print("\nPARITY BROKEN after the setup batch: a setting differs from the deploy. Do not enable; investigate.")
