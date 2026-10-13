@@ -45,7 +45,9 @@ type Metadata struct {
 	ExpiryTimestamp    int64    `json:"expiry_timestamp,omitempty"`
 	LastTradeTimestamp int64    `json:"last_trade_timestamp,omitempty"`
 	TickSize           string   `json:"tick_size"`
-	MinSize            string   `json:"min_size"`
+	// MinSize is the smallest order, and a whole number of AmountStep: today one step, since the venue
+	// takes every desired_amount in whole steps (the API's amount normalization).
+	MinSize string `json:"min_size"`
 	// TakerFeeBps and MakerFeeBps are THE fee schedule for this market, in basis points of the
 	// quote notional. Everything downstream reads them from here: the matcher charges them, the
 	// funding check reserves them, and /v1/markets serves them so the UI never carries its own
@@ -208,3 +210,10 @@ func (m Metadata) servable() bool {
 func assetAndSubIDKey(assetAddress, subID string) string {
 	return assetAddress + "|" + subID
 }
+
+// AmountStep is the step every market's desired_amount is taken in, in the market's own units (whole
+// cNGN on spot and the perp, whole contracts on the future): the one source for the API's amount
+// normalization and for what /v1/markets says. A listing's min_size used to say 0.001 (the future) and
+// 0.000001 (spot, the perp) while intake refused anything but whole steps; on 2026-10-13 the futures
+// market maker sized to the listing and had its 1.5-contract rung refused.
+const AmountStep = "1"
