@@ -27,7 +27,10 @@ the only place the box's real state is written down. Newest first.
 - **The engine keeper's key, 17:00.** A fresh key generated straight into SSM `/numo/keeper/engine_keeper_key`
   (SecureString, `alias/aws/ssm`), never printed or written outside a 0600 temp file deleted in the same
   step; EOA `0x753fCC2342F180e1B9B0BfFFEb21f4E00741f83b`. The box reads it under its existing
-  `/numo/keeper/*` grant and derives that address. Nothing installed yet; no account, no funds.
+  `/numo/keeper/*` grant and derives that address. Nothing installed yet.
+- **Its funding account, #33.** 0.003 ETH sent to the EOA (by hand); then, from the box with that key,
+  `SubAccounts.createAccount(0x753f…f83b, MarginEngine)` (tx `0x48cdd972…96aa`, block 52561572): #33, owned by
+  the EOA directly (not Matching), manager the engine. Empty.
 
 ## 2026-10-13 11:26–11:50 UTC: MarginEngine setup batch landed
 
