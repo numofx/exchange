@@ -328,7 +328,7 @@ The engine is **24,142 of 24,576 bytes**; StandardManager had 1,174 bytes of hea
 | Depeg | threshold 0.99, factor 2 | copied |
 | Futures IM / MM | 25% / 15% | deploy script |
 | Futures OI cap | 30 contracts (15 a side, $15k) | sized so the SecurityModule's $3,250 covers a 25% step (~$2,947 with the perp) **at today's open interest**. Coverage is checked at enable (the proposer's `sm` gate) and watched afterwards by the pager's `sm-coverage`, which counts the perp and the future together |
-| Perp OI cap on the engine | the SRM's (50M cNGN) | deploy script |
+| Perp OI cap on the engine | 0 at enable (**decided** 2026-10-13); the SRM's 50M is in the enable artifact, deferred to the perp's cutover | deploy script; propose_margin_engine_batch DEFERRED |
 | cNGN escrow cap on the engine | 100M (**decided**) | spot and perp collateral (50M) plus futures (50M) |
 | Pool reserve | 30% of one side at the cap, ~6.1M cNGN | a 25% move paid in cash, plus one 5% mark |
 | Marks | 1h pull interval; 5% move limit; 10% → 1% band over 14 days; 2h forward heartbeat | deploy script |

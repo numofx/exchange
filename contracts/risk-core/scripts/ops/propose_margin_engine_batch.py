@@ -4,7 +4,8 @@
   setup   MARGIN_ENGINE_VAULT_ACTIONS.json: accept the four contracts the deployer nominated (engine, viewer,
           future, forward feed), wire the engine into the perp stack's cash, cNGN escrow (with its cap), perp
           and auction, and grant it the SRM's guardian. Opens nothing.
-  enable  MARGIN_ENGINE_ENABLE_VAULT_ACTIONS.json: the perp's cap under the engine, the future's cap, then the
+  enable  MARGIN_ENGINE_ENABLE_VAULT_ACTIONS.json: the perp's cap under the engine (DEFERRED: not proposed, see
+          below), the future's cap, then the
           future on the perp TradeModule. The only actions that open the engine. Proposed only while every gate
           below passes, re-read before each action. Making the live SRM close-only is not here: it is set to
           the live open interest at the cutover, once markets-service refuses orders that would increase it.
@@ -252,6 +253,18 @@ class Gate:
 
 def owned(d: dict) -> list[str]:
   return [d["manager"], d["viewer"], d["future"], d["forwardFeed"]]
+
+
+# Actions in a batch file that are checked against the deployment like the rest but not proposed, and why.
+# The perp's cap under the engine stays 0 at enable (decided 2026-10-13): the perp is close-only
+# (CNGN_PERP_CLOSE_ONLY) with no market maker, and markets-service still margins the perp against the SRM
+# (CNGN_PERP_SRM_ADDRESS), so an engine account must not open a perp position before the perp's own
+# cutover moves it. That cutover opens it; until then the batch ends by confirming the cap still reads 0.
+DEFERRED = {"enable": {0: "the perp's cap under the engine stays 0 until the perp's own cutover"}}
+
+
+def to_propose(batch: str, count: int) -> list[int]:
+  return [i for i in range(count) if i not in DEFERRED.get(batch, {})]
 
 
 def expected_actions(batch: str, d: dict) -> list[tuple[str, str]]:
@@ -715,6 +728,12 @@ def self_test() -> int:
   # The engine keeper's floor is a full side of the future's IM at the cap, from the deployed artifact.
   deployed = json.loads((ROOT / "deployments" / "8453" / f"{NAME}.json").read_text())
   assert abs(engine_keeper_min_cash(deployed) - 3_750) < 1e-6, engine_keeper_min_cash(deployed)
+  # The enable batch proposes the future's cap and its registration, never the perp's cap (deferred).
+  assert to_propose("enable", 3) == [1, 2], to_propose("enable", 3)
+  assert to_propose("setup", 10) == list(range(10)), "setup defers nothing"
+  assert expected_actions("enable", deployed)[0][1].startswith(selector("setTotalPositionCap")) and \
+    expected_actions("enable", deployed)[0][0].lower() == deployed["perp"].lower(), "action 0 is the perp's cap"
+
 
   print("self-test ok: selectors match their `cast sig` values; a wrong target, calldata, value, digest, "
         "count or order is refused; reserve, escrow and coverage gates sized")
@@ -774,7 +793,10 @@ def main() -> int:
   done = [landed(chain, args.batch, d, i, vault) for i in range(len(actions))]
   print()
   for i, a in enumerate(actions):
-    print(f"  {i}  {'landed ' if done[i] else 'pending'}  {a['to']}  {a['digest']}  {a['description']}")
+    state = "deferred" if i in DEFERRED.get(args.batch, {}) else ("landed  " if done[i] else "pending ")
+    print(f"  {i}  {state}  {a['to']}  {a['digest']}  {a['description']}")
+  for i, why in DEFERRED.get(args.batch, {}).items():
+    print(f"     action {i} is not proposed: {why}")
   if all(done) and args.batch == "setup":
     # the vault owns everything now: re-read what the deployer could have changed while it did
     current.append(gate_parity(chain, d, vault))
@@ -797,14 +819,18 @@ def main() -> int:
   token, vault_uuid = os.environ.get("MPCVAULT_TOKEN", ""), os.environ.get("MPCVAULT_VAULT", "")
   if not token or not vault_uuid:
     raise SystemExit("MPCVAULT_TOKEN and MPCVAULT_VAULT are required (run via run-with-ssm-mark.sh on the ops box)")
+  proposing = to_propose(args.batch, len(actions))
   for i, a in enumerate(actions):
+    if i not in proposing:
+      print(f"  [{i}] deferred, not proposed: {DEFERRED[args.batch][i]}")
+      continue
     if landed(chain, args.batch, d, i, vault):
       print(f"  [{i}] already landed, skipped: {a['description']}")
       continue
     # Re-read before each: an approval can take a while, and a feed, keeper or pager that died in the
     # meantime must stop the rest. Between the two enable actions the cap is raised, so custody is
     # expected to fail there on "market is not closed"; every other gate must still hold.
-    if i > 0:
+    if i > proposing[0]:
       again = gates_after_mining(lambda: [g for g in gates() if not (args.batch == "enable" and g.name == "custody")])
       if not report(again):
         raise SystemExit(f"a gate failed before action {i}: stop and investigate")
@@ -820,6 +846,11 @@ def main() -> int:
     if not await_postcondition(lambda: landed(chain, args.batch, d, i, vault)):
       raise SystemExit(f"action {i} mined but its postcondition does not read back after 60s: stop and investigate")
   print(f"\n{args.batch}: done." + (" The future is open: markets-service can list it." if args.batch == "enable" else ""))
+  if args.batch == "enable":
+    perp_cap = chain.word(d["perp"], selector("totalPositionCap") + word_address(d["manager"]))
+    if perp_cap != 0:
+      raise SystemExit(f"the perp's cap under the engine reads {perp_cap}, not 0: it was to stay closed. Investigate.")
+    print("  the perp's cap under the engine still reads 0: deferred to the perp's cutover")
   if args.batch == "setup":
     return setup_parity(chain, d, vault)
   return 0
