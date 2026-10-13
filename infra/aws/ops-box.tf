@@ -77,11 +77,40 @@ import {
 # that the read is refused afterwards. A grant added anywhere else stays denied.
 data "aws_iam_policy_document" "ops_box_ssm_deny_outside_paths" {
   statement {
-    sid           = "DenyParameterReadsOutsideTheGrantedPaths"
-    effect        = "Deny"
-    actions       = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"]
-    not_resources = [for path in values(local.ops_box_ssm_paths) : "${local.ssm_arn_prefix}/numo/${path}/*"]
+    sid     = "DenyParameterReadsOutsideTheGrantedPaths"
+    effect  = "Deny"
+    actions = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"]
+    not_resources = concat(
+      [for path in values(local.ops_box_ssm_paths) : "${local.ssm_arn_prefix}/numo/${path}/*"],
+      var.ops_box_mm_key_grant ? [local.mm_key_arn] : [],
+    )
   }
+}
+
+# A one-off read of the market maker's key on the box (opening the futures market maker's account under
+# the MarginEngine through migrate-spot-mm.ts engine-account, via run-with-ssm-mm.sh). One parameter,
+# not /numo/exchange/ (which also holds the database URL): allowed here and excluded from the Deny
+# above, both only while var.ops_box_mm_key_grant is true. It defaults false, and stays false on main:
+# apply with -var ops_box_mm_key_grant=true, do the work, apply from main again, and confirm from the box
+# that the read is refused.
+locals {
+  mm_key_arn = "${local.ssm_arn_prefix}/numo/exchange/mm_private_key"
+}
+
+data "aws_iam_policy_document" "ops_box_mm_key_read" {
+  count = var.ops_box_mm_key_grant ? 1 : 0
+  statement {
+    sid       = "ReadMMKeyOneOff"
+    actions   = ["ssm:GetParameter"]
+    resources = [local.mm_key_arn]
+  }
+}
+
+resource "aws_iam_role_policy" "ops_box_mm_key_read" {
+  count  = var.ops_box_mm_key_grant ? 1 : 0
+  name   = "numo-mm-key-ssm-read-one-off"
+  role   = data.aws_iam_role.ops_box.id
+  policy = data.aws_iam_policy_document.ops_box_mm_key_read[0].json
 }
 
 resource "aws_iam_role_policy" "ops_box_ssm_deny_outside_paths" {
