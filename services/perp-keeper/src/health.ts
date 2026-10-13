@@ -22,6 +22,9 @@ export type StackHealth = {
   /** PerpAsset totalPosition for the SRM against its cap: both count |long| + |short|. */
   totalPosition: bigint;
   totalPositionCap: bigint;
+  /** FutureAsset totalPosition under MANAGER against its cap (0 and 0 when no FUTURE is configured). */
+  futureTotalPosition: bigint;
+  futureTotalPositionCap: bigint;
 };
 
 export type HealthRules = {
@@ -96,6 +99,12 @@ export function assessHealth(health: StackHealth, rules: HealthRules): HealthAle
     alerts.push({
       key: 'oi-cap',
       message: `perp total position ${fmt(health.totalPosition)} is ${(health.totalPosition * 10_000n) / health.totalPositionCap}bps of its cap`,
+    });
+  }
+  if (health.futureTotalPositionCap > 0n && health.futureTotalPosition * 10_000n >= health.futureTotalPositionCap * rules.capWarnBps) {
+    alerts.push({
+      key: 'future-oi-cap',
+      message: `future total position ${fmt(health.futureTotalPosition)} is ${(health.futureTotalPosition * 10_000n) / health.futureTotalPositionCap}bps of its cap`,
     });
   }
   return alerts;

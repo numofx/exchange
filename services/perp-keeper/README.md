@@ -1,8 +1,14 @@
 # perp-keeper
 
-Liquidation keeper for `USDCcNGN-PERP`. Every 15 seconds it:
+Liquidation keeper for one manager's accounts: `MANAGER` is the perp SRM (`numo-perp-keeper`, which still
+reads it as `SRM`) or the MarginEngine (`numo-engine-keeper`, the cNGN future's accounts). Nothing else is
+manager-specific: DutchAuction settles an account through its manager before an auction starts and before
+every bid (`settlePerpsWithIndex`, which on the engine also realises every future's VM), and reads its margin
+through the manager. The engine's VM pool (`POOL_ACCOUNT`) is never a candidate. Every 15 seconds it:
 
-1. **Finds every account** under the perp SRM from `AccountCreated` / `AccountManagerChanged` logs.
+1. **Finds every account** under `MANAGER` from `AccountCreated` / `AccountManagerChanged` logs, up to
+   `SCAN_CONFIRMATIONS` (3) blocks behind the head: a load-balanced RPC's lagging node returns no logs, not
+   an error, for blocks it has not imported, and a scan up to the head would skip them for good.
 2. **Reads each one's margin and auction** through DutchAuction, and decides (`src/decide.ts`):
    - below maintenance margin, no auction → `startAuction`
    - recovered → `terminateAuction`
@@ -18,7 +24,11 @@ Liquidation keeper for `USDCcNGN-PERP`. Every 15 seconds it:
    account below maintenance margin, and open interest at 80% of the cap.
 
 Every transaction is simulated first, and sent with 50% gas headroom: auction calls settle interest
-and funding against the block timestamp, so an estimate from one block can fall short in the next.
+and funding against the block timestamp, so an estimate from one block can fall short in the next. After
+any transaction of its own, every read, simulation and estimate is made at an explicit block no older than
+the one it landed in (`src/pinned-read.ts`): a lagging node answers a call at `latest` with the state
+before it (a bid simulated against a bid account whose funding it has not seen, the next bid sized from
+cash already spent).
 
 ## Bid accounts
 
@@ -113,6 +123,8 @@ through `CashAsset.deposit`). Its cash bounds the largest auction it can take in
 ```bash
 pnpm test                               # every decision branch and health alarm
 BASE_RPC_URL=... ./scripts/e2e.sh       # the real stack on an anvil fork: deploy, crash, liquidate
+BASE_RPC_URL=... ./scripts/e2e-engine.sh  # the live MarginEngine on a fork: an engine account under
+                                          # maintenance auctioned and bought into from the engine
 ```
 
 The fork test is what found three bugs no unit test could: a start that ran out of gas one block after

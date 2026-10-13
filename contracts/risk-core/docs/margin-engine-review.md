@@ -372,7 +372,18 @@ own model, in place of the DFXM-era one:
 
 The requirement is met once #35 is merged and the bot runs it: an instance with
 `MM_MARKET_SYMBOL=USDC-cNGN-<DDMONYY>`, `MM_ANCHOR_SOURCE_TYPE=future_index_carry` and an account under the engine,
-quoting both sides. Nothing on chain enforces this; it is a step in the enable procedure.
+quoting both sides. Nothing on chain enforces this; it is a step in the enable procedure. (Met 2026-10-13: account #32,
+market-maker 8242a9d1574b, three bids and three asks inside the band.)
+
+**A liquidation keeper for the engine is an enable requirement, and a gate.** The perp keeper watches accounts under the
+perp SRM only, so until another runs, an engine account under maintenance is never auctioned. `numo-engine-keeper` is
+services/perp-keeper with `MANAGER` the engine: DutchAuction settles each account through the engine before an auction
+and every bid (its `settlePerpsWithIndex` realises the future's VM), so the keeper needs nothing engine-specific beyond
+the address. The enable batch's `keeper` gate refuses unless it is live and out of DRY_RUN, reports the engine as its
+manager, and funds bids from its own account under the engine holding no future or perp and the IM for one full side
+of the future at the cap (cap / 2 × contract size × imReq: 3,750 USDC at launch). On a fork of Base, against the live
+engine, it auctions an engine account the raised futures margin put under maintenance and buys into it from the engine
+(`services/perp-keeper/scripts/e2e-engine.sh`).
 
 The fork tests include:
 - **margin parity on live contracts:** the same spot and perp portfolio under the SRM and under the engine has

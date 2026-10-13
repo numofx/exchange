@@ -3,11 +3,9 @@
  * script (test/e2e/DeployPerpStackForE2E.s.sol), accepted by the vault, traded on, crashed, and then
  * liquidated by `runOnce` — the same function the service loops on.
  *
- *   anvil --fork-url $BASE_RPC_URL --chain-id 31337 --port 8600 &
- *   (cd ../../contracts/risk-core && FEED_SIGNER=0x413EC43faa999e8BAd0A1Bd71E3D09B056de2913 \
- *     forge script test/e2e/DeployPerpStackForE2E.s.sol --sig "runE2E()" --rpc-url http://127.0.0.1:8600 \
- *     --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 --broadcast)
- *   KEEPER_E2E_RPC_URL=http://127.0.0.1:8600 pnpm test
+ *   BASE_RPC_URL=... scripts/e2e.sh
+ *
+ * (the fork, the deploy with FEED_SIGNER and PERP_GUARDIAN, and this file; the deploy needs both env vars)
  *
  * The feed signer above is keccak256("numo.perp-keeper.e2e.feed-signer"). Skipped without the env.
  */
