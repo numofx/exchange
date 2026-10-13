@@ -48,7 +48,7 @@ func DefaultRegistry(cfg config.Config) *Registry {
 			// since the 2026-09-10 cutover -- and paid to the module's feeRecipient.
 			TakerFeeBps:        25,
 			MakerFeeBps:        0,
-			MinSize:            "0.000001",
+			MinSize:            AmountStep,
 			ContractMultiplier: "1",
 			QuotePrecision:     18,
 			PricingModel:       PricingModelLinear,
@@ -88,7 +88,7 @@ func DefaultRegistry(cfg config.Config) *Registry {
 			TickSize:               "0.000000000000000001",
 			TakerFeeBps:            25,
 			MakerFeeBps:            0,
-			MinSize:                "0.000001",
+			MinSize:                AmountStep,
 			ContractMultiplier:     "1",
 			QuotePrecision:         18,
 			PricingModel:           PricingModelLinear,
@@ -147,7 +147,7 @@ func futureMetadata(cfg config.Config) Metadata {
 		// taker's signed worstFee must be at least 2.5e18.
 		TakerFeeBps:          25,
 		MakerFeeBps:          0,
-		MinSize:              "0.001",
+		MinSize:              AmountStep,
 		ContractMultiplier:   FutureContractSizeUSDC,
 		QuotePrecision:       18,
 		PricingModel:         PricingModelLinear,

@@ -262,7 +262,7 @@ func normalizeAmountToAtomicUnits(field string, instrument instruments.Metadata,
 }
 
 func amountAtomicStep(instrument instruments.Metadata) string {
-	return "1"
+	return instruments.AmountStep
 }
 
 func compareIntegerStrings(a string, b string) (int, error) {
