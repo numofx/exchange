@@ -410,9 +410,9 @@ variable "forward_signer_kms_enabled" {
     SSM so the private key never reaches the box the index signer lives on.
 
     Creating the key authorises nothing: its address must be added as the forward feed's signer
-    (the deploy script's FORWARD_SIGNER). Defaults false because nothing it signs for is deployed.
-    Once it is a feed's signer, flip the default to true, as for the executor and rebalance keys:
-    a plan that resolves it to false would propose deleting a live signer.
+    (the deploy script's FORWARD_SIGNER). Created 2026-10-13 (alias/numo-exchange-forward-signer,
+    address 0xd65FBC1D6ee445DF9A1393a93356C1c4CaC43650) and defaulted true, as for the executor and
+    rebalance keys: a plan that resolves it to false would propose deleting the forward signer.
   EOT
   type        = bool
   default     = true
