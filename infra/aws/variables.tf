@@ -415,5 +415,5 @@ variable "forward_signer_kms_enabled" {
     a plan that resolves it to false would propose deleting a live signer.
   EOT
   type        = bool
-  default     = false
+  default     = true
 }
