@@ -4,7 +4,8 @@
   setup   MARGIN_ENGINE_VAULT_ACTIONS.json: accept the four contracts the deployer nominated (engine, viewer,
           future, forward feed), wire the engine into the perp stack's cash, cNGN escrow (with its cap), perp
           and auction, and grant it the SRM's guardian. Opens nothing.
-  enable  MARGIN_ENGINE_ENABLE_VAULT_ACTIONS.json: the perp's cap under the engine, the future's cap, then the
+  enable  MARGIN_ENGINE_ENABLE_VAULT_ACTIONS.json: the perp's cap under the engine (DEFERRED: not proposed, see
+          below), the future's cap, then the
           future on the perp TradeModule. The only actions that open the engine. Proposed only while every gate
           below passes, re-read before each action. Making the live SRM close-only is not here: it is set to
           the live open interest at the cutover, once markets-service refuses orders that would increase it.
@@ -32,14 +33,21 @@ Enable gates (all read live, all required):
             closed (its perp and futures caps are 0, the future is not on the TradeModule)
   feeds     the index answers and is <= 600s old
   marks     the future has been marked within FORWARD_MARK_LATE (2h): the keeper is publishing
-  reserve   the VM pool holds its cNGN reserve: 30% of one side's notional at the cap being opened, in
-            cNGN at the index (check_perp_pager.future_reserve_target_cngn). Seed it first: a cNGN
-            deposit into the pool account, which is not a vault action
+  reserve   the VM pool holds its cNGN reserve: FUTURE_RESERVE_MOVE of one side's notional at the cap being
+            opened, in cNGN at the index (check_perp_pager.future_reserve_target_cngn). 0 since 2026-10-13:
+            no seed (winners are paid in USDC once the pool holds no cNGN; the pager pages a pool deficit
+            that outlasts a mark and its sweep). Refuses only if the index is unreadable
   escrow    the escrow cap still has a reserve's worth of headroom after the seed, so a top-up fits
   sm        the SecurityModule's cash covers a 25% step across the perp's open interest now (under the
             live SRM, until the cutover) and the future's one side at the cap being opened
             (check_perp_pager.sm_required_usd)
-  pager     check_perp_pager.py ran OK within 3 minutes, with a provider and a dead-man's switch
+  pager     check_perp_pager.py ran OK within 3 minutes, with a provider and a dead-man's switch, and its last run
+            read the future under this engine (state futureManager): an older pager copy reads none
+  keeper    numo-engine-keeper (ENGINE_KEEPER_HEALTH_URL, default 127.0.0.1:9465): its /health says a pass
+            completed OK recently, not in DRY_RUN, manager the engine; its funding account is the keeper
+            EOA's, under the engine, holds no future or perp, and the IM for one full side of the future at
+            the cap (cap / 2 x contract size x imReq: 3,750 USDC at launch); its EOA has gas. Without it an
+            engine account under maintenance is never auctioned (the perp keeper watches the SRM only)
   fills     markets-service refuses futures orders priced outside the band FutureAsset enforces on fills, so an
             out-of-band order is rejected before it matches instead of reverting at settlement. GET
             {MARKETS_URL}/v1/markets must list the future (asset_address, sub_id) with fill_band_enforced: true and
@@ -48,8 +56,8 @@ Enable gates (all read live, all required):
 
 pool-withdraw  engine.withdrawFromPool(asset, amount, recipient): take cNGN or cash out of the VM pool, e.g. to
           rebalance it (the USDC losers paid in, out to buy cNGN). withdrawFromPool has no risk check, so the
-          gate is here: a cNGN withdrawal must leave the pool at or above its reserve target (30% of one side at
-          the cap, check_perp_pager.future_reserve_target_cngn), a cash one must leave its cash at or above 0.
+          gate is here: a cNGN withdrawal must leave the pool at or above its reserve target
+          (check_perp_pager.future_reserve_target_cngn, 0 at launch), a cash one must leave its cash at or above 0.
 
 It NEVER signs, executes or broadcasts. Without --propose it prints the gates and the sheet. With
 --propose each action goes to the MPCVault app for a human to approve, one at a time, from the vault.
@@ -92,12 +100,13 @@ from propose_cngn_spot_batch import (  # noqa: E402  one implementation of the M
   EXPECTED_VAULT,
   await_postcondition,
   confirm_on_chain,
+  gates_after_mining,
   load_env_file,
   propose,
   request_tx_hash,
   rpc,
 )
-from propose_perp_enable_batch import gate_pager, http_json  # noqa: E402
+from propose_perp_enable_batch import gate_pager, http_json, keeper_gate  # noqa: E402
 from resolve_cngn_action6 import keccak  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -246,6 +255,18 @@ class Gate:
 
 def owned(d: dict) -> list[str]:
   return [d["manager"], d["viewer"], d["future"], d["forwardFeed"]]
+
+
+# Actions in a batch file that are checked against the deployment like the rest but not proposed, and why.
+# The perp's cap under the engine stays 0 at enable (decided 2026-10-13): the perp is close-only
+# (CNGN_PERP_CLOSE_ONLY) with no market maker, and markets-service still margins the perp against the SRM
+# (CNGN_PERP_SRM_ADDRESS), so an engine account must not open a perp position before the perp's own
+# cutover moves it. That cutover opens it; until then the batch ends by confirming the cap still reads 0.
+DEFERRED = {"enable": {0: "the perp's cap under the engine stays 0 until the perp's own cutover"}}
+
+
+def to_propose(batch: str, count: int) -> list[int]:
+  return [i for i in range(count) if i not in DEFERRED.get(batch, {})]
 
 
 def expected_actions(batch: str, d: dict) -> list[tuple[str, str]]:
@@ -464,16 +485,18 @@ def gate_fills(chain: Chain, d: dict, markets_url: str) -> Gate:
   return fills_gate(listing, low, high)
 
 
-def reserve_gate(pool_cngn: float, target: float) -> Gate:
-  if target <= 0:
-    return Gate("reserve", False, "reserve target is zero (index unreadable?)")
+def reserve_gate(pool_cngn: float, target: float | None) -> Gate:
+  if target is None:
+    return Gate("reserve", False, "reserve target unreadable (index?)")
+  if target == 0:
+    return Gate("reserve", True, f"no reserve (FUTURE_RESERVE_MOVE 0): pool holds {pool_cngn:,.0f} cNGN; winners paid in USDC once it has none")
   if pool_cngn < target:
     return Gate("reserve", False, f"VM pool holds {pool_cngn:,.0f} cNGN, under its {target:,.0f} reserve: seed the pool account before opening")
   return Gate("reserve", True, f"VM pool holds {pool_cngn:,.0f} cNGN (reserve {target:,.0f})")
 
 
-def escrow_gate(used: float, cap: float, target: float) -> Gate:
-  headroom = cap - used
+def escrow_gate(used: float, cap: float, target: float | None) -> Gate:
+  headroom, target = cap - used, target or 0.0
   if headroom < target:
     return Gate("escrow", False, f"escrow cap {cap:,.0f} cNGN, {used:,.0f} used: {headroom:,.0f} left, under one reserve ({target:,.0f}); a top-up would revert")
   return Gate("escrow", True, f"escrow cap {cap:,.0f} cNGN, {used:,.0f} used, {headroom:,.0f} left")
@@ -485,6 +508,27 @@ def sm_gate(sm_cash: float, books: dict[str, tuple[float, float]]) -> Gate:
   if sm_cash < required:
     return Gate("sm", False, f"SecurityModule ${sm_cash:,.0f} is under the ${required:,.0f} a 25% step costs across {parts}: fund it, or open a lower cap")
   return Gate("sm", True, f"SecurityModule ${sm_cash:,.0f} covers ${required:,.0f} across {parts}")
+
+
+ENGINE_KEEPER_HEALTH_URL = "http://127.0.0.1:9465/health"  # numo-engine-keeper's HEALTH_PORT on the ops box
+ENGINE_KEEPER_MIN_ETH = 0.002
+
+
+def engine_keeper_min_cash(d: dict) -> float:
+  """What the engine's keeper must hold, USDC: the IM to take over one full side of the future at the cap
+  being opened (a bid that inherits it must carry it under the engine): cap / 2 contracts x contract size x
+  imReq. 15 x 1,000 x 25% = 3,750 at launch."""
+  one_side = int(d["futureOICap"]) / 2 / 1e18
+  return one_side * (int(d["contractSize"]) / 1e18) * (int(d["futureIMReq"]) / 1e18)
+
+
+def gate_engine_keeper(chain: Chain, d: dict) -> Gate:
+  """A live liquidation keeper for the engine (numo-engine-keeper): without one an engine account under
+  maintenance is never auctioned. Its funding account under the engine holds no future or perp, and the
+  IM for a full side of the future."""
+  return keeper_gate(chain.url, d["manager"], "MarginEngine", d["cash"], [(d["future"], int(d["subId"])), (d["perp"], 0)],
+                     os.environ.get("ENGINE_KEEPER_HEALTH_URL", ENGINE_KEEPER_HEALTH_URL),
+                     engine_keeper_min_cash(d), ENGINE_KEEPER_MIN_ETH)
 
 
 def gate_enable(chain: Chain, d: dict, stack: dict, vault: str) -> list[Gate]:
@@ -533,7 +577,9 @@ def gate_enable(chain: Chain, d: dict, stack: dict, vault: str) -> list[Gate]:
   except Exception as exc:  # noqa: BLE001
     gates.append(Gate("sm", False, f"SecurityModule coverage unreadable: {str(exc)[:80]}"))
 
-  gates.append(gate_pager(Path(os.environ.get("PAGER_STATE_FILE", Path.home() / ".numo-perp-pager.json"))))
+  gates.append(gate_pager(Path(os.environ.get("PAGER_STATE_FILE", Path.home() / ".numo-perp-pager.json")),
+                          future_manager=d["manager"]))
+  gates.append(gate_engine_keeper(chain, d))
   gates.append(gate_fills(chain, d, os.environ.get("MARKETS_URL", "https://api.numofx.com")))
   gates.append(gate_rfq(chain, d))
   gates.append(gate_parity(chain, d, vault))
@@ -584,7 +630,10 @@ def gate_pool_withdraw(chain: Chain, d: dict, kind: str, amount: int, recipient:
     size = chain.word(d["future"], selector("contractSize")) / 1e18
     m = word_address(d["manager"])
     cap = chain.word(d["future"], selector("totalPositionCap") + m) / 1e18
-    floor18 = int(future_reserve_target_cngn(cap, size, spot) * 1e18)
+    target = future_reserve_target_cngn(cap, size, spot)
+    if target is None:
+      return gates + [Gate("withdraw", False, "the index is unreadable, so the pool's cNGN floor cannot be read")]
+    floor18 = int(target * 1e18)
   else:
     floor18 = 0
   gates.append(withdraw_gate(held18, amount18, floor18, kind))
@@ -637,10 +686,12 @@ def self_test() -> int:
   # The digest convention: keccak(to || keccak(data)), checked on a known action.
   assert digest(a(1), selector("acceptOwnership")) == "0x" + keccak(bytes.fromhex(a(1)[2:]) + keccak(bytes.fromhex("79ba5097"))).hex()
 
-  # Gates: the reserve, the escrow headroom after it, and coverage across both books.
-  target = future_reserve_target_cngn(30, 1_000, 1 / 1_363.7)
+  # Gates: the reserve, the escrow headroom after it, and coverage across both books. At launch there is no
+  # reserve: an empty pool passes, an unreadable target refuses; a nonzero target is still enforced.
+  assert future_reserve_target_cngn(30, 1_000, 1 / 1_363.7) == 0.0 and reserve_gate(0, 0.0).ok
+  assert not reserve_gate(1, None).ok and escrow_gate(0, 50_000_000, None).ok
+  target = 30 / 2 * 1_000 * 0.30 * 1_363.7
   assert not reserve_gate(0, target).ok and not reserve_gate(target - 1, target).ok and reserve_gate(target, target).ok
-  assert not reserve_gate(1, 0).ok
   assert escrow_gate(target, 50_000_000, target).ok
   assert not escrow_gate(50_000_000 - target + 1, 50_000_000, target).ok
   # a full cNGN-margined book (~20.5M) beside the reserve: a 30M cap has under a reserve left, 50M has plenty
@@ -684,6 +735,16 @@ def self_test() -> int:
     os.environ["PAGER_STATE_FILE"] = str(Path(tmp) / "none.json")
     assert not gate_pager(Path(os.environ["PAGER_STATE_FILE"])).ok
     os.environ.pop("PAGER_STATE_FILE")
+  # The engine keeper's floor is a full side of the future's IM at the cap, from the deployed artifact.
+  deployed = json.loads((ROOT / "deployments" / "8453" / f"{NAME}.json").read_text())
+  assert abs(engine_keeper_min_cash(deployed) - 3_750) < 1e-6, engine_keeper_min_cash(deployed)
+  # The enable batch proposes the future's cap and its registration, never the perp's cap (deferred).
+  assert to_propose("enable", 3) == [1, 2], to_propose("enable", 3)
+  assert to_propose("setup", 10) == list(range(10)), "setup defers nothing"
+  assert expected_actions("enable", deployed)[0][1].startswith(selector("setTotalPositionCap")) and \
+    expected_actions("enable", deployed)[0][0].lower() == deployed["perp"].lower(), "action 0 is the perp's cap"
+
+
   print("self-test ok: selectors match their `cast sig` values; a wrong target, calldata, value, digest, "
         "count or order is refused; reserve, escrow and coverage gates sized")
   return 0
@@ -742,7 +803,10 @@ def main() -> int:
   done = [landed(chain, args.batch, d, i, vault) for i in range(len(actions))]
   print()
   for i, a in enumerate(actions):
-    print(f"  {i}  {'landed ' if done[i] else 'pending'}  {a['to']}  {a['digest']}  {a['description']}")
+    state = "deferred" if i in DEFERRED.get(args.batch, {}) else ("landed  " if done[i] else "pending ")
+    print(f"  {i}  {state}  {a['to']}  {a['digest']}  {a['description']}")
+  for i, why in DEFERRED.get(args.batch, {}).items():
+    print(f"     action {i} is not proposed: {why}")
   if all(done) and args.batch == "setup":
     # the vault owns everything now: re-read what the deployer could have changed while it did
     current.append(gate_parity(chain, d, vault))
@@ -765,15 +829,19 @@ def main() -> int:
   token, vault_uuid = os.environ.get("MPCVAULT_TOKEN", ""), os.environ.get("MPCVAULT_VAULT", "")
   if not token or not vault_uuid:
     raise SystemExit("MPCVAULT_TOKEN and MPCVAULT_VAULT are required (run via run-with-ssm-mark.sh on the ops box)")
+  proposing = to_propose(args.batch, len(actions))
   for i, a in enumerate(actions):
+    if i not in proposing:
+      print(f"  [{i}] deferred, not proposed: {DEFERRED[args.batch][i]}")
+      continue
     if landed(chain, args.batch, d, i, vault):
       print(f"  [{i}] already landed, skipped: {a['description']}")
       continue
     # Re-read before each: an approval can take a while, and a feed, keeper or pager that died in the
     # meantime must stop the rest. Between the two enable actions the cap is raised, so custody is
     # expected to fail there on "market is not closed"; every other gate must still hold.
-    if i > 0:
-      again = [g for g in gates() if not (args.batch == "enable" and g.name == "custody")]
+    if i > proposing[0]:
+      again = gates_after_mining(lambda: [g for g in gates() if not (args.batch == "enable" and g.name == "custody")])
       if not report(again):
         raise SystemExit(f"a gate failed before action {i}: stop and investigate")
     uuid = propose(token, vault_uuid, vault, a)
@@ -788,6 +856,11 @@ def main() -> int:
     if not await_postcondition(lambda: landed(chain, args.batch, d, i, vault)):
       raise SystemExit(f"action {i} mined but its postcondition does not read back after 60s: stop and investigate")
   print(f"\n{args.batch}: done." + (" The future is open: markets-service can list it." if args.batch == "enable" else ""))
+  if args.batch == "enable":
+    perp_cap = chain.word(d["perp"], selector("totalPositionCap") + word_address(d["manager"]))
+    if perp_cap != 0:
+      raise SystemExit(f"the perp's cap under the engine reads {perp_cap}, not 0: it was to stay closed. Investigate.")
+    print("  the perp's cap under the engine still reads 0: deferred to the perp's cutover")
   if args.batch == "setup":
     return setup_parity(chain, d, vault)
   return 0

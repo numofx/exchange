@@ -69,12 +69,18 @@ func perpLedger(instrument instruments.Metadata, fillAmountAtomic, fillAmountCha
 // errReduceOnlyCancelled: a reduce-only leg had nothing to reduce and was cancelled; the match is off.
 var errReduceOnlyCancelled = errors.New("reduce-only order cancelled")
 
+// reduceOnlyLeg: the order carries the flag, or the perp is close-only (CNGN_PERP_CLOSE_ONLY), which
+// holds every perp leg to its position, orders resting from before the switch included.
+func (e *Engine) reduceOnlyLeg(instrument instruments.Metadata, leg orders.Order) bool {
+	return leg.ReduceOnly || (e.perpCloseOnly && instrument.IsPerpetual())
+}
+
 // clampReduceOnly shrinks fillAmount (order units) to what each reduce-only leg's position allows,
 // read from the venue's ledger. A leg with no capacity is cancelled by the venue -- it could only
 // have opened or flipped a position -- and the match is abandoned so the other leg goes back on the
 // book. Spot orders never carry the flag (the API refuses it), so the clamp is perp-only.
 func (e *Engine) clampReduceOnly(ctx context.Context, instrument instruments.Metadata, candidate orders.MatchCandidate, fillAmount string, ledger *orders.PerpFillLedger) (string, error) {
-	if ledger == nil || (!candidate.Taker.ReduceOnly && !candidate.Maker.ReduceOnly) {
+	if ledger == nil || (!e.reduceOnlyLeg(instrument, candidate.Taker) && !e.reduceOnlyLeg(instrument, candidate.Maker)) {
 		return fillAmount, nil
 	}
 	fill, err := parsePositiveInt(fillAmount, "fill_amount_atomic")
@@ -82,7 +88,7 @@ func (e *Engine) clampReduceOnly(ctx context.Context, instrument instruments.Met
 		return "", err
 	}
 	for _, leg := range []orders.Order{candidate.Taker, candidate.Maker} {
-		if !leg.ReduceOnly {
+		if !e.reduceOnlyLeg(instrument, leg) {
 			continue
 		}
 		position, ok, err := e.orders.PerpPosition(ctx, leg.SubaccountID, ledger.AssetAddress)

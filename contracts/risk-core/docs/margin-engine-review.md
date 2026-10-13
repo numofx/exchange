@@ -253,7 +253,7 @@ These are in the PR and tested, but they hold no funds.
    - The exemption is safe because nothing but the engine moves the pool. Leaving it needs the engine's allowance, and
      `FutureAsset` and `PerpAsset` need an allowance for any adjustment, so no position can be pushed in.
    - **`withdrawFromPool` is therefore unchecked:** owner only, and gated in `propose_margin_engine_batch.py
-     pool-withdraw`. A cNGN withdrawal must leave the reserve target; a cash one must leave zero cash.
+     pool-withdraw`. A cNGN withdrawal must leave the reserve target (0 at launch); a cash one must leave zero cash.
 9. **New functions:**
    - `settleAccount(uint)`;
    - `closeOutExpired(uint, uint96)`, which finds the series by subId on each market's future;
@@ -328,9 +328,9 @@ The engine is **24,142 of 24,576 bytes**; StandardManager had 1,174 bytes of hea
 | Depeg | threshold 0.99, factor 2 | copied |
 | Futures IM / MM | 25% / 15% | deploy script |
 | Futures OI cap | 30 contracts (15 a side, $15k) | sized so the SecurityModule's $3,250 covers a 25% step (~$2,947 with the perp) **at today's open interest**. Coverage is checked at enable (the proposer's `sm` gate) and watched afterwards by the pager's `sm-coverage`, which counts the perp and the future together |
-| Perp OI cap on the engine | the SRM's (50M cNGN) | deploy script |
+| Perp OI cap on the engine | 0 at enable (**decided** 2026-10-13); the SRM's 50M is in the enable artifact, deferred to the perp's cutover | deploy script; propose_margin_engine_batch DEFERRED |
 | cNGN escrow cap on the engine | 100M (**decided**) | spot and perp collateral (50M) plus futures (50M) |
-| Pool reserve | 30% of one side at the cap, ~6.1M cNGN | a 25% move paid in cash, plus one 5% mark |
+| Pool reserve | **none at launch** (decided 2026-10-13; was 30% of one side at the cap, ~6.1M cNGN) | launch traders margin in USDC, so a seed would drain to winners and be refilled in USDC within a few marks; it changes neither settlement nor margin. Winners are paid in USDC once the pool holds no cNGN; the pager pages a pool deficit past $250 or outlasting a mark and its sweep (75 min) |
 | Marks | 1h pull interval; 5% move limit; 10% → 1% band over 14 days; 2h forward heartbeat | deploy script |
 | Fixing | 1h window, 15-minute gap limit, fallback after 24h within 2% | deploy script |
 
@@ -372,7 +372,18 @@ own model, in place of the DFXM-era one:
 
 The requirement is met once #35 is merged and the bot runs it: an instance with
 `MM_MARKET_SYMBOL=USDC-cNGN-<DDMONYY>`, `MM_ANCHOR_SOURCE_TYPE=future_index_carry` and an account under the engine,
-quoting both sides. Nothing on chain enforces this; it is a step in the enable procedure.
+quoting both sides. Nothing on chain enforces this; it is a step in the enable procedure. (Met 2026-10-13: account #32,
+market-maker 8242a9d1574b, three bids and three asks inside the band.)
+
+**A liquidation keeper for the engine is an enable requirement, and a gate.** The perp keeper watches accounts under the
+perp SRM only, so until another runs, an engine account under maintenance is never auctioned. `numo-engine-keeper` is
+services/perp-keeper with `MANAGER` the engine: DutchAuction settles each account through the engine before an auction
+and every bid (its `settlePerpsWithIndex` realises the future's VM), so the keeper needs nothing engine-specific beyond
+the address. The enable batch's `keeper` gate refuses unless it is live and out of DRY_RUN, reports the engine as its
+manager, and funds bids from its own account under the engine holding no future or perp and the IM for one full side
+of the future at the cap (cap / 2 × contract size × imReq: 3,750 USDC at launch). On a fork of Base, against the live
+engine, it auctions an engine account the raised futures margin put under maintenance and buys into it from the engine
+(`services/perp-keeper/scripts/e2e-engine.sh`).
 
 The fork tests include:
 - **margin parity on live contracts:** the same spot and perp portfolio under the SRM and under the engine has
@@ -388,15 +399,16 @@ The fork tests include:
 
 The fork rehearsal runs:
 - one account holding spot cNGN, the perp and futures;
-- the enable batch refused until the pool is seeded;
+- the enable batch refused until the pager runs and the future is listed (no reserve: an empty pool passes);
 - marks from the book and from carry, and the band narrowing;
 - the payers-first sweep, and the startup sweep after a kill;
 - the fixing across a keeper restart, close-out, and withdrawal of real cNGN;
 - **a pager drill:**
-  1. The pool is emptied of cNGN; the proposer refuses that, so the vault does it directly.
+  1. The pool is emptied of cNGN; with no reserve the proposer allows it, and the vault does it directly.
   2. It is drained past −$250 by winners settling before the loser.
   3. The real pager pages `future-pool-borrowing` to the stubbed phone.
-  4. The pool is topped up, and the page resolves.
+  4. Its deficit timer backdated past 75 min, the next run pages `future-pool-deficit-stuck`.
+  5. The pool is topped up, and both pages resolve.
 
 **Mutations.** Each change below made a test fail:
 

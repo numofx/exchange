@@ -59,6 +59,7 @@ from propose_cngn_spot_batch import (  # noqa: E402  single implementation of th
   CONFIRM_TIMEOUT_SEC,
   EXPECTED_VAULT,
   confirm_on_chain,
+  gates_after_mining,
   load_env_file,
   propose,
   request_tx_hash,
@@ -206,38 +207,51 @@ def gate_feeds(rpc_url: str, v: Venue) -> Gate:
   return Gate("feeds", True, f"index and 3 diff feeds answer, all <= {FEED_MAX_AGE_SEC}s old")
 
 
-def gate_keeper(rpc_url: str, v: Venue, health_url: str, min_cash: float, min_eth: float) -> Gate:
+def keeper_gate(rpc_url: str, manager: str, manager_name: str, cash_asset: str, positions: list[tuple[str, int]],
+                health_url: str, min_cash: float, min_eth: float) -> Gate:
+  """A live liquidation keeper for `manager`: its /health says a pass completed OK recently, it is not in
+  DRY_RUN, and (when it reports one) its manager is `manager`; its funding account is owned by the keeper
+  EOA, sits under `manager`, holds none of `positions` and at least `min_cash`; its EOA has gas. The perp
+  enable batch checks the perp SRM's keeper, the MarginEngine enable batch the engine's."""
   if not health_url:
-    return Gate("keeper", False, "KEEPER_HEALTH_URL not set")
+    return Gate("keeper", False, "the keeper's health URL is not set")
   try:
     health = http_json(health_url)
   except Exception as exc:  # noqa: BLE001
     return Gate("keeper", False, f"health unreachable: {exc}")
   if health.get("dryRun", True):
     return Gate("keeper", False, "keeper is in DRY_RUN")
+  reported = str(health.get("manager", "")).lower()
+  if reported and reported != manager.lower():
+    return Gate("keeper", False, f"the keeper at {health_url} liquidates {reported}, not the {manager_name} {manager}")
   stale_after = 3 * max(int(health.get("pollIntervalMs", 15_000)) // 1000, 20)
   age = int(time.time()) - int(health.get("lastPassAt", 0))
   if not health.get("lastPassOk") or age > stale_after:
     return Gate("keeper", False, f"last pass ok={health.get('lastPassOk')} {age}s ago (limit {stale_after}s)")
   account = int(health["keeperAccount"])
-  manager = address_at(call(rpc_url, SUB_ACCOUNTS, selector("manager") + word_uint(account)))
-  if manager.lower() != v.srm.lower():
-    return Gate("keeper", False, f"funding account #{account} is not under the perp SRM")
+  under = address_at(call(rpc_url, SUB_ACCOUNTS, selector("manager") + word_uint(account)))
+  if under.lower() != manager.lower():
+    return Gate("keeper", False, f"funding account #{account} is not under the {manager_name}")
   # An account opened through the app or SubAccountCreator is held by Matching: the keeper could not
   # move its cash into a bid account, and every bid would fail.
   owner = address_at(call(rpc_url, SUB_ACCOUNTS, selector("ownerOf") + word_uint(account)))
   if owner.lower() != str(health.get("keeperAddress", "")).lower():
     return Gate("keeper", False, f"funding account #{account} is owned by {owner}, not the keeper EOA {health.get('keeperAddress')}")
-  balance = lambda asset: int_at(call(rpc_url, SUB_ACCOUNTS, selector("getBalance") + word_uint(account) + word_address(asset) + word_uint(0)))  # noqa: E731
-  cash, perp = balance(v.cash) / 1e18, balance(v.perp)
-  if perp != 0:
-    return Gate("keeper", False, f"funding account #{account} holds perp: it can no longer fund bid accounts")
+  balance = lambda asset, sub_id=0: int_at(call(rpc_url, SUB_ACCOUNTS, selector("getBalance") + word_uint(account) + word_address(asset) + word_uint(sub_id)))  # noqa: E731
+  for asset, sub_id in positions:
+    if balance(asset, sub_id) != 0:
+      return Gate("keeper", False, f"funding account #{account} holds {asset} #{sub_id}: it can no longer fund bid accounts")
+  cash = balance(cash_asset) / 1e18
   if cash < min_cash:
     return Gate("keeper", False, f"funding account #{account} holds {cash:,.2f} cash (< {min_cash:,.2f})")
   eth = int(rpc(rpc_url, "eth_getBalance", [health["keeperAddress"], "latest"]), 16) / 1e18
   if eth < min_eth:
     return Gate("keeper", False, f"keeper EOA holds {eth:.4f} ETH (< {min_eth})")
   return Gate("keeper", True, f"live, not dry-run, last pass {age}s ago; account #{account} {cash:,.2f} cash; {eth:.4f} ETH")
+
+
+def gate_keeper(rpc_url: str, v: Venue, health_url: str, min_cash: float, min_eth: float) -> Gate:
+  return keeper_gate(rpc_url, v.srm, "perp SRM", v.cash, [(v.perp, 0)], health_url, min_cash, min_eth)
 
 
 def sm_seed_required(launch_cap: int, index_usd_per_ngn: float, floor: float) -> float:
@@ -289,7 +303,9 @@ def gate_quoter(rpc_url: str, v: Venue, markets_url: str, min_usd: float, owner:
 PAGER_MAX_AGE_SEC = 180
 
 
-def gate_pager(state_file: Path, now: float | None = None) -> Gate:
+def gate_pager(state_file: Path, now: float | None = None, future_manager: str | None = None) -> Gate:
+  """The pager ran OK recently with a provider and a dead-man's switch. With `future_manager` (the MarginEngine
+  enable batch), its last run must also have read that manager's future: an older pager copy reads none."""
   if not state_file.exists():
     return Gate("pager", False, f"no pager state at {state_file}: is numo-perp-pager.timer running?")
   state = json.loads(state_file.read_text())
@@ -302,7 +318,11 @@ def gate_pager(state_file: Path, now: float | None = None) -> Gate:
     return Gate("pager", False, f"PAGER_PROVIDER is {state.get('provider')!r}: nothing can page your phone")
   if not state.get("heartbeatConfigured"):
     return Gate("pager", False, "no dead-man's switch (PAGER_HEARTBEAT_URL): a dead pager would go unnoticed")
-  return Gate("pager", True, f"ran {age}s ago via {state['provider']}, dead-man's switch set")
+  if future_manager and str(state.get("futureManager", "")).lower() != future_manager.lower():
+    return Gate("pager", False, f"the pager's last run read the future under {state.get('futureManager') or 'no manager'}, "
+                f"not {future_manager}: it would not page on the future (an old pager copy, or no artifact?)")
+  watching = f", watching the future under {future_manager}" if future_manager else ""
+  return Gate("pager", True, f"ran {age}s ago via {state['provider']}, dead-man's switch set{watching}")
 
 
 def run_gates(rpc_url: str, v: Venue, args, vault: str) -> list[Gate]:
@@ -361,7 +381,54 @@ def self_test() -> int:
     for broken in ({"lastRunOk": False}, {"provider": ""}, {"heartbeatConfigured": False}):
       state.write_text(json.dumps({**good, **broken}))
       assert not gate_pager(state, now=1_060).ok, broken
-  print("self-test ok: selectors match their `cast sig` values; seed rule sized; pager gate")
+    # With a future manager: refused until the pager's last run read that manager's future.
+    engine = "0xA19E296021c9DF25b90D96C2A0793CC3D0800758"
+    state.write_text(json.dumps(good))
+    assert gate_pager(state, now=1_060).ok and not gate_pager(state, now=1_060, future_manager=engine).ok, "an old pager reads no future"
+    state.write_text(json.dumps({**good, "futureManager": "0x" + "11" * 20}))
+    assert not gate_pager(state, now=1_060, future_manager=engine).ok, "another manager's future"
+    state.write_text(json.dumps({**good, "futureManager": engine.lower()}))
+    assert gate_pager(state, now=1_060, future_manager=engine).ok
+  # keeper_gate, each refusal: the health and the chain stubbed, everything else real.
+  g = globals()
+  saved = {k: g[k] for k in ("http_json", "call", "rpc")}
+  ENGINE, OTHER, EOA, CASH = "0x" + "e9" * 20, "0x" + "de" * 20, "0x" + "ab" * 20, "0x" + "c1" * 20
+  FUT = "0x" + "f0" * 20
+  word = lambda v: format(v % (1 << 256), "064x")  # noqa: E731
+  def run(health=None, under=ENGINE, owner=EOA, cash=5_000, future=0, eth=0.01):
+    h = {"dryRun": False, "manager": ENGINE, "lastPassOk": True, "lastPassAt": int(time.time()), "pollIntervalMs": 15_000,
+         "keeperAccount": "40", "keeperAddress": EOA, **(health or {})}
+    def fake_call(_url, to, data):
+      sel = data[:10]
+      if sel == selector("manager"):
+        return "0x" + "0" * 24 + under[2:]
+      if sel == selector("ownerOf"):
+        return "0x" + "0" * 24 + owner[2:]
+      if sel == selector("getBalance"):
+        return "0x" + word(int(cash * 1e18) if FUT[2:] not in data.lower() else future)
+      raise AssertionError(sel)
+    g["http_json"] = lambda _url: h
+    g["call"] = fake_call
+    g["rpc"] = lambda _url, _m, _p: hex(int(eth * 1e18))
+    try:
+      return keeper_gate("http://rpc", ENGINE, "MarginEngine", CASH, [(FUT, 7)], "http://health", 3_750, 0.002)
+    finally:
+      g.update(saved)
+  assert run().ok, run().detail
+  for name, kwargs, why in [
+    ("dry run", {"health": {"dryRun": True}}, "DRY_RUN"),
+    ("the perp keeper", {"health": {"manager": OTHER}}, "liquidates"),
+    ("stale", {"health": {"lastPassAt": int(time.time()) - 3_600}}, "last pass"),
+    ("funding under the SRM", {"under": OTHER}, "not under the MarginEngine"),
+    ("funding held by Matching", {"owner": OTHER}, "not the keeper EOA"),
+    ("holds the future", {"future": 10**18}, "can no longer fund"),
+    ("short of a side's IM", {"cash": 3_749}, "< 3,750.00"),
+    ("no gas", {"eth": 0.001}, "ETH"),
+  ]:
+    gate = run(**kwargs)
+    assert not gate.ok and why in gate.detail, f"{name}: {gate.detail}"
+
+  print("self-test ok: selectors match their `cast sig` values; seed rule sized; pager gate; keeper gate refuses each way")
   return 0
 
 
@@ -425,7 +492,7 @@ def main() -> int:
   for i, a in enumerate(actions):
     # Gates are re-read before each action: the first can take a while to be approved, and a keeper
     # or feed that died in the meantime must stop the second.
-    if i > 0 and not report(run_gates_after_cap(rpc_url, venue, args, vault)):
+    if i > 0 and not report(gates_after_mining(lambda: run_gates_after_cap(rpc_url, venue, args, vault))):
       raise SystemExit(f"a gate failed before action {i}; the cap is raised but the venue is not open. Stop and investigate.")
     uuid = propose(token, vault_uuid, vault, a)
     print(f"  [{i}] proposed uuid={uuid}\n       {a['description']}\n       digest {a['digest']}\n       -> approve in MPCVault now")

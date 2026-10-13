@@ -15,17 +15,19 @@
 variable "image_market_maker_future" {
   description = "The future market maker's mm-bot image, tagged by git SHA: market-maker #35 (6f1b8058) or later. Empty creates nothing."
   type        = string
-  default     = ""
+  # 2026-10-13: market-maker main 8242a9d1 (#39: sized in whole contracts, so a resting order reads back as
+  # placed; on 135a2f508db5 the ladder was cancelled and re-placed every cycle), built by build-and-push.sh.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:8242a9d1574b"
 }
 
 variable "mm_future_subaccount_id" {
   description = <<-EOT
-    The market maker's account under the MarginEngine, held by Matching, owned by mm_address. Not
-    opened yet: createAndDepositSubAccount(perp cash, amount, MarginEngine) from the MM EOA. The venue
-    refuses a futures order from an account under any other manager.
+    The market maker's account under the MarginEngine, held by Matching, owned by mm_address: #32,
+    opened 2026-10-13 (createAndDepositSubAccount(perp cash, 4,002 USDC, MarginEngine), block 52555670,
+    from #24's cash). The venue refuses a futures order from an account under any other manager.
   EOT
   type        = string
-  default     = ""
+  default     = "32"
 }
 
 variable "desired_count_market_maker_future" {
@@ -91,14 +93,15 @@ resource "aws_ecs_task_definition" "market_maker_future" {
       { name = "MM_USDCCNGN_SPOT_EXTERNAL_ANCHOR_ENABLED", value = "false" },
 
       # Launch size, against the 30-contract OI cap (15 a side). Sizes and inventory are contracts of
-      # 1,000 USDC; notional is USDC. Three rungs of 1, 1.5 and 2.25 contracts a side (4.75, under the
-      # 5,000 USDC side cap), 30 bps out and 20 bps further each; inventory bounded at +/- 10 contracts,
-      # two thirds of a side. At 25% IM a contract adds 250 USDC of IM: +/- 10 is 2,500, and a full
-      # side of resting quotes at MM_FUTURE_IM_USAGE 0.8 needs ~1,500 of surplus on top, so the
-      # account wants ~4,000 USDC.
+      # 1,000 USDC; notional is USDC. Three rungs of 1 contract a side (3, under the 5,000 USDC side
+      # cap), 30 bps out and 20 bps further each; inventory bounded at +/- 10 contracts, two thirds of a
+      # side. Whole contracts: the venue's amount step is 1 on every market (api amountAtomicStep), and
+      # a 1.5x ladder's 1.5-contract rung was refused on 2026-10-13. At 25% IM a contract adds 250 USDC
+      # of IM: +/- 10 is 2,500, and a side of resting quotes at MM_FUTURE_IM_USAGE 0.8 needs ~940 of
+      # surplus on top; the account (#32) holds 4,002 USDC.
       { name = "MM_ORDER_SIZE", value = "1" },
       { name = "MM_QUOTE_LEVELS", value = "3" },
-      { name = "MM_LEVEL_SIZE_MULT", value = "1.5" },
+      { name = "MM_LEVEL_SIZE_MULT", value = "1" },
       { name = "MM_HALF_SPREAD_BPS", value = "30" },
       { name = "MM_LEVEL_SPREAD_STEP_BPS", value = "20" },
       { name = "MM_MAX_LONG_INVENTORY", value = "10" },

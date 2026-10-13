@@ -8,11 +8,13 @@ import {
   type Abi,
   type Address,
   type Hex,
+  type Transport,
 } from 'viem';
 import { privateKeyToAccount, type LocalAccount } from 'viem/accounts';
 import { base } from 'viem/chains';
 
 import type { Config } from './config.js';
+import { readAtOrAfter } from './pinned-read.js';
 
 const feedAbi = parseAbi([
   'function getSpot() view returns (uint256, uint256)',
@@ -69,10 +71,10 @@ export function serialized(): <T>(task: () => Promise<T>) => Promise<T> {
  * @param signer The feed signer. Omitted, it is FEED_SIGNER_KEY; the forward publisher passes a KMS
  *   account instead, so its key never enters the process.
  */
-export function createChain(config: ChainConfig, signer?: LocalAccount): ContractChain {
+export function createChain(config: ChainConfig, signer?: LocalAccount, transportOverride?: Transport): ContractChain {
   if (!signer && !config.FEED_SIGNER_KEY) throw new Error('createChain needs a signer or FEED_SIGNER_KEY');
   const submitOneAtATime = serialized();
-  const transport = http(config.RPC_URL);
+  const transport = transportOverride ?? http(config.RPC_URL);
   // Base in production; any other id (a local anvil, a fork) gets a minimal definition so the
   // relayer's transactions are signed for the chain actually behind RPC_URL.
   const chain =
@@ -93,6 +95,30 @@ export function createChain(config: ChainConfig, signer?: LocalAccount): Contrac
   const relayer = privateKeyToAccount(config.RELAYER_KEY as Hex, { nonceManager });
   const wallet = createWalletClient({ account: relayer, chain, transport });
 
+  // The highest block a transaction of this process has landed in. The RPC is load-balanced: the node
+  // that returned a receipt is not always the one that answers next, and one behind it reads the state
+  // before the transaction (the VM sweep straight after a mark, pullMark's estimate straight after
+  // submitData). Every read and every estimate is at an explicit block no older than this: a node that
+  // has the block answers with it, one that has not refuses it and is retried (readAtOrAfter).
+  let landed = 0n;
+  const noteLanded = (block: bigint) => {
+    if (block > landed) landed = block;
+  };
+  /** The block to read at: the head, or the last landed block if the answering node is behind it. */
+  const readBlock = async (): Promise<bigint | undefined> => {
+    if (landed === 0n) return undefined;
+    const head = await publicClient.getBlockNumber({ cacheTime: 0 });
+    return head > landed ? head : landed;
+  };
+  const pinned = async <T>(read: (at: { blockNumber?: bigint }) => Promise<T>): Promise<T> => readAtOrAfter(await readBlock(), read);
+  /** Gas for a relayer transaction, estimated at the read block, with a fifth on top. */
+  const gasFor = async (request: { address: Address; abi: Abi; functionName: string; args: readonly unknown[] }) => {
+    const estimate = await pinned((at) =>
+      publicClient.estimateContractGas({ account: relayer, ...request, ...at } as never),
+    );
+    return (estimate * 6n) / 5n;
+  };
+
   return {
     signer: signer ?? privateKeyToAccount(config.FEED_SIGNER_KEY as Hex),
     relayer,
@@ -103,7 +129,7 @@ export function createChain(config: ChainConfig, signer?: LocalAccount): Contrac
     },
     async readIndex(feed) {
       try {
-        const [price] = await publicClient.readContract({ address: feed, abi: feedAbi, functionName: 'getSpot' });
+        const [price] = await pinned((at) => publicClient.readContract({ address: feed, abi: feedAbi, functionName: 'getSpot', ...at }));
         return price;
       } catch {
         return null;
@@ -111,9 +137,10 @@ export function createChain(config: ChainConfig, signer?: LocalAccount): Contrac
     },
     async readDiffFeed(feed) {
       try {
+        const at = await readBlock();
         const [[result], details] = await Promise.all([
-          publicClient.readContract({ address: feed, abi: feedAbi, functionName: 'getResult' }),
-          publicClient.readContract({ address: feed, abi: feedAbi, functionName: 'spotDiffDetails' }),
+          readAtOrAfter(at, (b) => publicClient.readContract({ address: feed, abi: feedAbi, functionName: 'getResult', ...b })),
+          readAtOrAfter(at, (b) => publicClient.readContract({ address: feed, abi: feedAbi, functionName: 'spotDiffDetails', ...b })),
         ]);
         return { result, updatedAt: details[2] };
       } catch {
@@ -121,18 +148,22 @@ export function createChain(config: ChainConfig, signer?: LocalAccount): Contrac
       }
     },
     read<T>(address: Address, abi: Abi, functionName: string, args: readonly unknown[] = []) {
-      return publicClient.readContract({ address, abi, functionName, args } as never) as Promise<T>;
+      return pinned((at) => publicClient.readContract({ address, abi, functionName, args, ...at } as never) as Promise<T>);
     },
     write(address, abi, functionName, args = []) {
       return submitOneAtATime(async () => {
-        const hash = await wallet.writeContract({ account: relayer, chain, address, abi, functionName, args } as never);
+        const gas = await gasFor({ address, abi, functionName, args });
+        const hash = await wallet.writeContract({ account: relayer, chain, address, abi, functionName, args, gas } as never);
         const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
         if (receipt.status !== 'success') throw new Error(`${functionName} reverted: ${hash}`);
+        noteLanded(receipt.blockNumber);
         return hash;
       });
     },
     submit(managerData) {
       return submitOneAtATime(async () => {
+        const request = { address: config.DATA_SUBMITTER, abi: submitterAbi as Abi, functionName: 'submitData', args: [managerData] };
+        const gas = await gasFor(request);
         const hash = await wallet.writeContract({
           account: relayer,
           chain,
@@ -140,9 +171,11 @@ export function createChain(config: ChainConfig, signer?: LocalAccount): Contrac
           abi: submitterAbi,
           functionName: 'submitData',
           args: [managerData],
+          gas,
         });
         const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
         if (receipt.status !== 'success') throw new Error(`submitData reverted: ${hash}`);
+        noteLanded(receipt.blockNumber);
         return hash;
       });
     },

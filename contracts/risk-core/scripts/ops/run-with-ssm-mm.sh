@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# Runs the spot market-maker migration (scripts/local-venue/migrate-spot-mm.ts) on the ops box with the
-# MM's key read from SSM into the process environment, never onto disk. The box role is granted that
-# one parameter by infra/aws/ops-box.tf (ops_box_mm_key_read), to be removed after the migration.
+# Runs scripts/local-venue/migrate-spot-mm.ts (the spot migration's phases, and engine-account: the
+# futures market maker's MarginEngine account) on the ops box with the MM's key read from SSM into the
+# process environment, never onto disk. The box may read that one parameter only while infra/aws is
+# applied with -var ops_box_mm_key_grant=true (ops-box.tf), removed by the next apply from main.
 #
 # Usage, from the exchange checkout on the box:
 #   contracts/risk-core/scripts/ops/run-with-ssm-mm.sh status
 #   contracts/risk-core/scripts/ops/run-with-ssm-mm.sh cancel --execute
 #   contracts/risk-core/scripts/ops/run-with-ssm-mm.sh withdraw --execute
 #   contracts/risk-core/scripts/ops/run-with-ssm-mm.sh deposit --execute
+#   contracts/risk-core/scripts/ops/run-with-ssm-mm.sh engine-account 4000000000 --execute
 set -euo pipefail
 REGION="${AWS_REGION:-us-east-1}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
