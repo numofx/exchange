@@ -5,6 +5,37 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-13 13:05 UTC: numo-future-feeds installed and started (the cNGN future's forward publisher)
+
+New on the box; nothing existing was changed. numo-perp-feeds, numo-perp-keeper and the exchange-perp
+checkout they run from (`af584bc`) are untouched.
+
+- **What.**
+  - `/home/ec2-user/exchange-future`: a new clone of numofx/exchange at `main` `ac79698` (#193), owned
+    by ec2-user; `pnpm install --frozen-lockfile --filter perp-feeds...`, then `@numo/kms-signer` and
+    `perp-feeds` built. Its own checkout, so building it could not replace the dist the perp services
+    load.
+  - `/etc/numo/future-feeds.env`: `contracts/risk-core/scripts/ops/future-feeds.env` at `ac79698`,
+    byte for byte (`cmp`). No secret.
+  - `/etc/systemd/system/numo-future-feeds.service`: the repo's unit at `ac79698`, byte for byte;
+    `systemctl enable --now`.
+  - Not on the box, but for it: SSM `/numo/feeds/forward_relayer_key` (SecureString, alias/aws/ssm,
+    created 13:00 UTC with `--no-overwrite`), relayer `0xE5b8541dC2558f3db65aF88A2374e464AE4ae6de`,
+    funded with 0.005 ETH. The signer is the KMS key `alias/numo-exchange-forward-signer`
+    (`0xd65F…3650`, 2026-10-13, #185/#186).
+- **Why.** The future sat at the deploy's initial mark; the enable batch's `marks` gate needs it marked
+  within 2 h, and the futures market maker is not to start before marks are landing.
+- **Checked first.** Locally and then on the box with the box's own role, `DRY_RUN=true`: KMS signer
+  `0xd65F…3650`, relayer from SSM, mark 1387.01 from carry (index 1365.8, CARRY 0.118), unclamped,
+  nothing sent. The dry run on the box sent one real `forward-mark-late` alert (last mark 7442 s old),
+  which is the alert path working.
+- **Landed.** The first mark at 13:06:11 UTC: tx `0xd9baae1b61a30aeb988ba86d5da61e1e17359eccd81de9619f4894e01fd779c4`
+  (block 52553712, status 1, from the relayer). `futureContracts(1796047200)` reads markPrice
+  1387.013149315333732004 (was 1386.044666769033003345) and lastMarkTime 1791896771. Two
+  transactions cost the relayer ~0.0000013 ETH.
+- **Not done.** The relayer is not in the signer-balance alert (it watches one address and each needs
+  its own heartbeat); `forward-mark-late` pages within 2 h if it runs dry.
+
 ## 2026-10-13 11:26–11:50 UTC: MarginEngine setup batch landed
 
 Run from the box over SSM through `run-with-ssm-mark.sh`. `propose_margin_engine_batch.py`, its six
