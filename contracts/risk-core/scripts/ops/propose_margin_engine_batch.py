@@ -92,6 +92,7 @@ from propose_cngn_spot_batch import (  # noqa: E402  one implementation of the M
   EXPECTED_VAULT,
   await_postcondition,
   confirm_on_chain,
+  gates_after_mining,
   load_env_file,
   propose,
   request_tx_hash,
@@ -773,7 +774,7 @@ def main() -> int:
     # meantime must stop the rest. Between the two enable actions the cap is raised, so custody is
     # expected to fail there on "market is not closed"; every other gate must still hold.
     if i > 0:
-      again = [g for g in gates() if not (args.batch == "enable" and g.name == "custody")]
+      again = gates_after_mining(lambda: [g for g in gates() if not (args.batch == "enable" and g.name == "custody")])
       if not report(again):
         raise SystemExit(f"a gate failed before action {i}: stop and investigate")
     uuid = propose(token, vault_uuid, vault, a)
