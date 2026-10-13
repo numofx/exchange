@@ -82,6 +82,9 @@ type perpMarketState struct {
 	// IndexLag is the index-lag gate's view (nil without the gate): the publisher's latest spot
 	// sample against the on-chain index, and whether new perp orders are being refused on it.
 	IndexLag *indexLagPresentation `json:"index_lag,omitempty"`
+	// CloseOnly: CNGN_PERP_CLOSE_ONLY is set. Orders that reduce a position are taken; any other perp
+	// order is refused.
+	CloseOnly bool `json:"close_only"`
 	// enabledOnChain is the enable action's half of TradingEnabled (module allowed, cap above
 	// zero), kept apart so a pause re-read over a cached state can recompute the whole.
 	enabledOnChain bool

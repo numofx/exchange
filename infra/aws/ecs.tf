@@ -84,6 +84,8 @@ locals {
     { name = "CNGN_FUTURE_ASSET_ADDRESS", value = var.cngn_future_asset_address },
     { name = "CNGN_FUTURE_EXPIRY", value = var.cngn_future_expiry },
     { name = "CNGN_FUTURE_MANAGER_ADDRESS", value = var.cngn_future_manager_address },
+    # The perp close-only, here so the api (intake) and the matcher (fills) cannot disagree on it.
+    { name = "CNGN_PERP_CLOSE_ONLY", value = tostring(var.cngn_perp_close_only) },
   ]
 
   log_options = { for k, g in aws_cloudwatch_log_group.tasks : k => {

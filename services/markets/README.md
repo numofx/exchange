@@ -128,6 +128,11 @@ Set them on the API **and** the matcher, and set `PERP_TRADE_MODULE_ADDRESS` on 
   the gate as `perp.trading_enabled` and the cap as `perp.position_cap`. The enable is a separate,
   final vault action (`risk-core/scripts/ops/propose_perp_enable_batch.py`), gated on live feeds, a
   live keeper, a seeded SecurityModule and a two-sided quote.
+- **Perp close-only (`CNGN_PERP_CLOSE_ONLY=true`).** The whole perp, whatever the manager: every perp order
+  is taken as reduce-only (refused at intake unless it reduces the account's position, as `reduce_only`
+  is), and the matcher holds every perp leg to its position at each fill, so an order resting from before
+  the switch cannot open one either. `/v1/markets` shows `perp.close_only`. For a perp with no market maker
+  to exit against. Exits stay open.
 - **Close-only manager (MarginEngine cutover).** `CNGN_PERP_CLOSE_ONLY_MANAGER` names a manager being
   wound down, the old perp SRM once MarginEngine takes over. A perp fill is crossed for an account under
   it only if it reduces that account's position (no opening, no flipping); its IM is the chain's to check.

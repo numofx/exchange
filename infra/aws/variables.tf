@@ -223,6 +223,16 @@ variable "cngn_perp_collateral_address" {
 # the listing shows trading_open false and orders rest. All three or none (markets-service refuses a
 # partial set at boot, and the set needs the perp stack above); "" for all three switches it off.
 # Takes effect only on an image with the futures listing (exchange #183); older images ignore it.
+# The perp close-only (markets-service CNGN_PERP_CLOSE_ONLY): every perp order is taken as reduce-only
+# and the matcher holds every perp fill, resting orders included, to reducing each account's position.
+# On since 2026-10-13, when the perp's market maker (#24) was stopped to fund the future's: no one
+# should open a perp position with no maker to exit against. Exits stay open. Turn it off when the perp
+# has a maker again.
+variable "cngn_perp_close_only" {
+  type    = bool
+  default = true
+}
+
 variable "cngn_future_asset_address" {
   type    = string
   default = "0xDCFa4Ee0772647aBd24E8592596b5fe4F001Bc19" # FutureAsset
