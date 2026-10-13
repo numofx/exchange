@@ -41,7 +41,8 @@ Enable gates (all read live, all required):
   sm        the SecurityModule's cash covers a 25% step across the perp's open interest now (under the
             live SRM, until the cutover) and the future's one side at the cap being opened
             (check_perp_pager.sm_required_usd)
-  pager     check_perp_pager.py ran OK within 3 minutes, with a provider and a dead-man's switch
+  pager     check_perp_pager.py ran OK within 3 minutes, with a provider and a dead-man's switch, and its last run
+            read the future under this engine (state futureManager): an older pager copy reads none
   keeper    numo-engine-keeper (ENGINE_KEEPER_HEALTH_URL, default 127.0.0.1:9465): its /health says a pass
             completed OK recently, not in DRY_RUN, manager the engine; its funding account is the keeper
             EOA's, under the engine, holds no future or perp, and the IM for one full side of the future at
@@ -576,7 +577,8 @@ def gate_enable(chain: Chain, d: dict, stack: dict, vault: str) -> list[Gate]:
   except Exception as exc:  # noqa: BLE001
     gates.append(Gate("sm", False, f"SecurityModule coverage unreadable: {str(exc)[:80]}"))
 
-  gates.append(gate_pager(Path(os.environ.get("PAGER_STATE_FILE", Path.home() / ".numo-perp-pager.json"))))
+  gates.append(gate_pager(Path(os.environ.get("PAGER_STATE_FILE", Path.home() / ".numo-perp-pager.json")),
+                          future_manager=d["manager"]))
   gates.append(gate_engine_keeper(chain, d))
   gates.append(gate_fills(chain, d, os.environ.get("MARKETS_URL", "https://api.numofx.com")))
   gates.append(gate_rfq(chain, d))
