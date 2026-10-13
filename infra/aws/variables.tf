@@ -62,9 +62,9 @@ variable "acm_certificate_arn" {
 variable "image_markets" {
   description = "ECR image URI for the Go binary (serves both api and matcher modes)."
   type        = string
-  # 2026-10-13: the cNGN future listed with its fill band enforced (#183) and its margin pre-checked;
-  # the close-only manager (#180), off unless CNGN_PERP_CLOSE_ONLY_MANAGER is set.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:dbfc65a44064"
+  # 2026-10-13: the perp close-only switch (CNGN_PERP_CLOSE_ONLY, #199, on via cngn_perp_close_only) and
+  # the futures band's exact low edge (#192), on top of the cNGN future listing (#183).
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:60e0e0b24f76"
 }
 
 variable "image_execution" {
