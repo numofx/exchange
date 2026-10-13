@@ -12,7 +12,7 @@ const envSchema = z.object({
   CHAIN_ID: z.coerce.number().int().positive().default(8453),
   /** EOA that owns KEEPER_ACCOUNT and pays gas. From SSM /numo/keeper/keeper_key. */
   KEEPER_KEY: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
-  /** Subaccount under the perp SRM, funded with the stack's cash, that bids. */
+  /** Subaccount under MANAGER, owned by the keeper EOA, funded with the stack's cash, that bids. */
   KEEPER_ACCOUNT: z.coerce.bigint(),
   ALERT_WEBHOOK_URL: z.string().url().optional().or(z.literal('')),
   /** Prepended to every alert, e.g. "[REHEARSAL] " (scripts/local-venue/rehearse-mainnet.sh). */
@@ -25,14 +25,32 @@ const envSchema = z.object({
 
   // From risk-core/deployments/8453/CNGN_PERP_STACK.json (and core.json for subAccounts).
   SUB_ACCOUNTS: address,
-  SRM: address,
+  /**
+   * The manager whose accounts this keeper liquidates: the perp SRM (numo-perp-keeper) or the
+   * MarginEngine (numo-engine-keeper). The auction settles each account through it before an auction
+   * starts and before every bid (DutchAuction calls settlePerpsWithIndex, which on the engine also
+   * realises every future's VM), so nothing here is manager-specific beyond the address. SRM is the
+   * perp keeper's original name for it and is still read.
+   */
+  MANAGER: address.optional(),
+  SRM: address.optional(),
   AUCTION: address,
   CASH: address,
   PERP: address,
+  /** The cNGN future, under the MarginEngine: its cap is watched in /health alongside the perp's. */
+  FUTURE: address.optional(),
   SECURITY_MODULE_ACCOUNT: z.coerce.bigint(),
+  /** The MarginEngine's VM pool (MARGIN_ENGINE.json poolAccount): never auctioned, never a candidate. */
+  POOL_ACCOUNT: z.coerce.bigint().optional(),
   /** Block the stack was deployed at: account discovery scans logs from here. */
   START_BLOCK: z.coerce.bigint(),
   LOG_CHUNK_BLOCKS: z.coerce.bigint().default(10_000n),
+  /**
+   * Account discovery scans logs only this many blocks behind the head it read. The RPC is load-balanced:
+   * the head comes from one node and the logs from another, and a node behind returns no logs, not an
+   * error, for blocks it has not imported, so a scan up to the head can skip an AccountCreated for good.
+   */
+  SCAN_CONFIRMATIONS: z.coerce.bigint().nonnegative().default(3n),
 
   POLL_INTERVAL_MS: z.coerce.number().int().positive().default(15_000),
   /**
@@ -82,8 +100,13 @@ const envSchema = z.object({
   OI_CAP_WARN_BPS: z.coerce.bigint().default(8_000n),
 });
 
-export type Config = z.infer<typeof envSchema>;
+type Parsed = z.infer<typeof envSchema>;
+export type Config = Omit<Parsed, 'MANAGER' | 'SRM'> & { MANAGER: Parsed['SUB_ACCOUNTS'] };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  return envSchema.parse(env);
+  const { SRM, MANAGER, ...rest } = envSchema.parse(env);
+  if (MANAGER && SRM && MANAGER !== SRM) throw new Error(`MANAGER ${MANAGER} and SRM ${SRM} disagree: set one`);
+  const manager = MANAGER ?? SRM;
+  if (!manager) throw new Error('MANAGER (or SRM) is required: the manager whose accounts this keeper liquidates');
+  return { ...rest, MANAGER: manager };
 }

@@ -9,6 +9,7 @@ import {
   parseAbiItem,
   type Address,
   type Hex,
+  type Transport,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { base } from 'viem/chains';
@@ -16,6 +17,7 @@ import { base } from 'viem/chains';
 import type { Config } from './config.js';
 import type { AccountView } from './decide.js';
 import type { StackHealth } from './health.js';
+import { readAtOrAfter } from './pinned-read.js';
 
 export const auctionAbi = parseAbi([
   'function startAuction(uint256 accountId, uint256 scenarioId)',
@@ -159,8 +161,8 @@ export type AuctionCall =
   | { functionName: 'terminateAuction'; args: readonly [bigint] }
   | { functionName: 'bid'; args: readonly [bigint, bigint, bigint, bigint, bigint] };
 
-export function createKeeperChain(config: Config) {
-  const transport = http(config.RPC_URL);
+export function createKeeperChain(config: Config, transportOverride?: Transport) {
+  const transport = transportOverride ?? http(config.RPC_URL);
   const chain =
     config.CHAIN_ID === base.id
       ? base
@@ -174,8 +176,28 @@ export function createKeeperChain(config: Config) {
   const keeper = privateKeyToAccount(config.KEEPER_KEY as Hex);
   const wallet = createWalletClient({ account: keeper, chain, transport });
 
+  // The highest block a keeper transaction has landed in. The RPC is load-balanced, and a node behind the
+  // one that returned the receipt answers a call at "latest" with the state before it: the bid simulated
+  // against a bid account whose funding it has not seen, the next bid sized from cash already spent. Every
+  // read, simulation and estimate is made at an explicit block no older than this; a node without the block
+  // refuses it and is retried (readAtOrAfter), rather than answering stale.
+  let landed = 0n;
+  const noteLanded = (block: bigint) => {
+    if (block > landed) landed = block;
+  };
+  const readBlock = async (): Promise<bigint | undefined> => {
+    if (landed === 0n) return undefined;
+    const head = await client.getBlockNumber({ cacheTime: 0 });
+    return head > landed ? head : landed;
+  };
+  const pinned = async <T>(run: (at: { blockNumber?: bigint }) => Promise<T>): Promise<T> => readAtOrAfter(await readBlock(), run);
+  const read = (<T>(args: object) => pinned((at) => client.readContract({ ...args, ...at } as never) as Promise<T>)) as typeof client.readContract;
+  const pinnedEstimate = ((args: object) => pinned((at) => client.estimateContractGas({ ...args, ...at } as never))) as typeof client.estimateContractGas;
+  const simulate = ((args: object) => pinned((at) => client.simulateContract({ ...args, ...at } as never))) as typeof client.simulateContract;
+  const ethBalance = (address: Address) => pinned((at) => client.getBalance({ address, ...at }));
+
   const accounts = new Set<bigint>();
-  /** Accounts the keeper itself owns under the SRM: its funding account and every bid account. */
+  /** Accounts the keeper itself owns under MANAGER: its funding account and every bid account. */
   const ownAccounts = new Set<bigint>([config.KEEPER_ACCOUNT]);
   // Bid accounts that were created but never bid from (funding or the bid itself failed): still
   // cash-only, so still valid bidders. Reused before creating another.
@@ -185,15 +207,16 @@ export function createKeeperChain(config: Config) {
   async function send(request: Parameters<typeof wallet.writeContract>[0]) {
     // Every keeper transaction touches the perp cash (bid-account funding moves it directly), so
     // every one carries the same headroom as the auction calls.
-    const estimate = await client.estimateContractGas(request as never);
+    const estimate = await pinnedEstimate(request as never);
     const hash = await wallet.writeContract({ ...request, gas: withGasHeadroom(estimate) } as never);
     const receipt = await client.waitForTransactionReceipt({ hash, timeout: 60_000 });
     if (receipt.status !== 'success') throw new Error(`transaction reverted on chain: ${hash}`);
+    noteLanded(receipt.blockNumber);
     return receipt;
   }
 
   async function balance(accountId: bigint, asset: Address): Promise<bigint> {
-    return client.readContract({
+    return read({
       address: config.SUB_ACCOUNTS,
       abi: subAccountsAbi,
       functionName: 'getBalance',
@@ -214,11 +237,11 @@ export function createKeeperChain(config: Config) {
     if (config.CNGN_ESCROW === undefined) return null;
     const cngn = await balance(accountId, config.CNGN_ESCROW);
     if (cngn <= 0n) return null;
-    const [indexPrice] = await client.readContract({ address: config.PERP, abi: perpAbi, functionName: 'getIndexPrice' });
+    const [indexPrice] = await read({ address: config.PERP, abi: perpAbi, functionName: 'getIndexPrice' });
     return { cngn, indexPrice };
   }
 
-  /** A fresh cash-only account under the SRM, owned by the keeper, to bid from. */
+  /** A fresh cash-only account under MANAGER, owned by the keeper, to bid from. */
   async function createAccount(): Promise<bigint> {
     const created = await send({
       account: keeper,
@@ -226,7 +249,7 @@ export function createKeeperChain(config: Config) {
       address: config.SUB_ACCOUNTS,
       abi: subAccountsAbi,
       functionName: 'createAccount',
-      args: [keeper.address, config.SRM],
+      args: [keeper.address, config.MANAGER],
     });
     const log = created.logs
       .map((entry) => {
@@ -250,24 +273,24 @@ export function createKeeperChain(config: Config) {
      * Scans incrementally, so each poll reads only the blocks since the last one.
      */
     async discoverAccounts(): Promise<bigint[]> {
-      const head = await client.getBlockNumber();
+      const head = (await client.getBlockNumber({ cacheTime: 0 })) - config.SCAN_CONFIRMATIONS;
       while (scannedTo < head) {
         const from = scannedTo + 1n;
         const to = from + config.LOG_CHUNK_BLOCKS - 1n < head ? from + config.LOG_CHUNK_BLOCKS - 1n : head;
         const [created, movedIn, movedOut] = await Promise.all([
-          client.getLogs({ address: config.SUB_ACCOUNTS, event: accountCreated, args: { manager: config.SRM }, fromBlock: from, toBlock: to }),
-          client.getLogs({ address: config.SUB_ACCOUNTS, event: managerChanged, args: { newManager: config.SRM }, fromBlock: from, toBlock: to }),
-          client.getLogs({ address: config.SUB_ACCOUNTS, event: managerChanged, args: { oldManager: config.SRM }, fromBlock: from, toBlock: to }),
+          client.getLogs({ address: config.SUB_ACCOUNTS, event: accountCreated, args: { manager: config.MANAGER }, fromBlock: from, toBlock: to }),
+          client.getLogs({ address: config.SUB_ACCOUNTS, event: managerChanged, args: { newManager: config.MANAGER }, fromBlock: from, toBlock: to }),
+          client.getLogs({ address: config.SUB_ACCOUNTS, event: managerChanged, args: { oldManager: config.MANAGER }, fromBlock: from, toBlock: to }),
         ]);
         for (const log of [...created, ...movedIn]) accounts.add(log.args.accountId!);
         for (const log of movedOut) accounts.delete(log.args.accountId!);
         for (const log of created) if (log.args.owner === keeper.address) ownAccounts.add(log.args.accountId!);
         scannedTo = to;
       }
-      // The security module's account and the keeper's own are never the keeper's to liquidate; its
-      // own are watched in readHealth instead.
+      // The security module's account, the engine's VM pool and the keeper's own are never the keeper's to
+      // liquidate; its own are watched in readHealth instead.
       return [...accounts]
-        .filter((id) => id !== config.SECURITY_MODULE_ACCOUNT && !ownAccounts.has(id))
+        .filter((id) => id !== config.SECURITY_MODULE_ACCOUNT && id !== config.POOL_ACCOUNT && !ownAccounts.has(id))
         .sort((a, b) => (a < b ? -1 : 1));
     },
 
@@ -313,27 +336,27 @@ export function createKeeperChain(config: Config) {
      */
     async assertFundingAccount(): Promise<void> {
       const [owner, manager] = await Promise.all([
-        client.readContract({ address: config.SUB_ACCOUNTS, abi: subAccountsAbi, functionName: 'ownerOf', args: [config.KEEPER_ACCOUNT] }),
-        client.readContract({ address: config.SUB_ACCOUNTS, abi: subAccountsAbi, functionName: 'manager', args: [config.KEEPER_ACCOUNT] }),
+        read({ address: config.SUB_ACCOUNTS, abi: subAccountsAbi, functionName: 'ownerOf', args: [config.KEEPER_ACCOUNT] }),
+        read({ address: config.SUB_ACCOUNTS, abi: subAccountsAbi, functionName: 'manager', args: [config.KEEPER_ACCOUNT] }),
       ]);
       if (owner.toLowerCase() !== keeper.address.toLowerCase()) {
         throw new Error(`KEEPER_ACCOUNT #${config.KEEPER_ACCOUNT} is owned by ${owner}, not the keeper ${keeper.address}: it cannot fund bids`);
       }
-      if (manager.toLowerCase() !== config.SRM.toLowerCase()) {
-        throw new Error(`KEEPER_ACCOUNT #${config.KEEPER_ACCOUNT} is under ${manager}, not the perp SRM ${config.SRM}`);
+      if (manager.toLowerCase() !== config.MANAGER.toLowerCase()) {
+        throw new Error(`KEEPER_ACCOUNT #${config.KEEPER_ACCOUNT} is under ${manager}, not MANAGER ${config.MANAGER}`);
       }
     },
 
 
     /** Everything decide() needs about one account. Throws if margin cannot be read (stale feeds). */
     async readAccount(accountId: bigint): Promise<AccountView> {
-      const [mm, bm, mtm] = await client.readContract({
+      const [mm, bm, mtm] = await read({
         address: config.AUCTION,
         abi: auctionAbi,
         functionName: 'getMarginAndMarkToMarket',
         args: [accountId, 0n],
       });
-      const auction = await client.readContract({
+      const auction = await read({
         address: config.AUCTION,
         abi: auctionAbi,
         functionName: 'getAuction',
@@ -353,11 +376,11 @@ export function createKeeperChain(config: Config) {
       if (!auction.ongoing) return view;
 
       const [status, bidPrice, maxProportion] = await Promise.all([
-        client.readContract({ address: config.AUCTION, abi: auctionAbi, functionName: 'getAuctionStatus', args: [accountId] }),
-        optional(() => client.readContract({ address: config.AUCTION, abi: auctionAbi, functionName: 'getCurrentBidPrice', args: [accountId] })),
+        read({ address: config.AUCTION, abi: auctionAbi, functionName: 'getAuctionStatus', args: [accountId] }),
+        optional(() => read({ address: config.AUCTION, abi: auctionAbi, functionName: 'getCurrentBidPrice', args: [accountId] })),
         auction.insolvent
           ? Promise.resolve(null)
-          : optional(() => client.readContract({ address: config.AUCTION, abi: auctionAbi, functionName: 'getMaxProportion', args: [accountId, 0n] })),
+          : optional(() => read({ address: config.AUCTION, abi: auctionAbi, functionName: 'getMaxProportion', args: [accountId, 0n] })),
       ]);
       return { ...view, canTerminate: status[0], bidPrice, maxProportion };
     },
@@ -371,7 +394,7 @@ export function createKeeperChain(config: Config) {
      * finish or terminate its auction first. Run until both lists are empty.
      */
     async settleFrozenPositions(dryRun: boolean): Promise<{ settled: bigint[]; underLiquidation: bigint[] }> {
-      const disabled = await client.readContract({ address: config.PERP, abi: perpAbi, functionName: 'isDisabled' });
+      const disabled = await read({ address: config.PERP, abi: perpAbi, functionName: 'isDisabled' });
       if (!disabled) throw new Error('the perp is not disabled: --settle-frozen only runs after the vault freezes it');
       const settled: bigint[] = [];
       const underLiquidation: bigint[] = [];
@@ -379,14 +402,14 @@ export function createKeeperChain(config: Config) {
       const candidates = [...new Set([...(await this.discoverAccounts()), ...ownAccounts])];
       for (const accountId of candidates) {
         if ((await balance(accountId, config.PERP)) === 0n) continue;
-        const auction = await client.readContract({ address: config.AUCTION, abi: auctionAbi, functionName: 'getAuction', args: [accountId] });
+        const auction = await read({ address: config.AUCTION, abi: auctionAbi, functionName: 'getAuction', args: [accountId] });
         if (auction.ongoing) {
           underLiquidation.push(accountId);
           continue;
         }
         settled.push(accountId);
         if (dryRun) continue;
-        await send({ account: keeper, chain, address: config.SRM, abi: settleAbi, functionName: 'settlePerpsWithIndex', args: [accountId] });
+        await send({ account: keeper, chain, address: config.MANAGER, abi: settleAbi, functionName: 'settlePerpsWithIndex', args: [accountId] });
       }
       return { settled, underLiquidation };
     },
@@ -415,7 +438,7 @@ export function createKeeperChain(config: Config) {
         Promise.all(
           own.map((id) =>
             optional(() =>
-              client.readContract({ address: config.AUCTION, abi: auctionAbi, functionName: 'getMarginAndMarkToMarket', args: [id, 0n] }),
+              read({ address: config.AUCTION, abi: auctionAbi, functionName: 'getMarginAndMarkToMarket', args: [id, 0n] }),
             ),
           ),
         ),
@@ -424,16 +447,23 @@ export function createKeeperChain(config: Config) {
         const margins = ownMargins[i];
         return margins !== null && margins !== undefined && margins[0] < 0n;
       });
+      const future = config.FUTURE;
+      const [futureTotalPosition, futureTotalPositionCap] = future
+        ? await Promise.all([
+            read({ address: future, abi: perpAbi, functionName: 'totalPosition', args: [config.MANAGER] }),
+            read({ address: future, abi: perpAbi, functionName: 'totalPositionCap', args: [config.MANAGER] }),
+          ])
+        : [0n, 0n];
       const [securityModuleCash, totalInsolventMM, cashExchangeRate, temporaryWithdrawFeeEnabled, keeperCash, keeperEthWei, totalPosition, totalPositionCap, keeperCngn] =
         await Promise.all([
           balance(config.SECURITY_MODULE_ACCOUNT, config.CASH),
-          client.readContract({ address: config.AUCTION, abi: auctionAbi, functionName: 'totalInsolventMM' }),
-          client.readContract({ address: config.CASH, abi: cashAbi, functionName: 'getCashToStableExchangeRate' }),
-          client.readContract({ address: config.CASH, abi: cashAbi, functionName: 'temporaryWithdrawFeeEnabled' }),
+          read({ address: config.AUCTION, abi: auctionAbi, functionName: 'totalInsolventMM' }),
+          read({ address: config.CASH, abi: cashAbi, functionName: 'getCashToStableExchangeRate' }),
+          read({ address: config.CASH, abi: cashAbi, functionName: 'temporaryWithdrawFeeEnabled' }),
           balance(config.KEEPER_ACCOUNT, config.CASH),
-          client.getBalance({ address: keeper.address }),
-          client.readContract({ address: config.PERP, abi: perpAbi, functionName: 'totalPosition', args: [config.SRM] }),
-          client.readContract({ address: config.PERP, abi: perpAbi, functionName: 'totalPositionCap', args: [config.SRM] }),
+          ethBalance(keeper.address),
+          read({ address: config.PERP, abi: perpAbi, functionName: 'totalPosition', args: [config.MANAGER] }),
+          read({ address: config.PERP, abi: perpAbi, functionName: 'totalPositionCap', args: [config.MANAGER] }),
           this.keeperCngn(),
         ]);
       return {
@@ -448,6 +478,8 @@ export function createKeeperChain(config: Config) {
         keeperAccountsUnderMargin,
         totalPosition,
         totalPositionCap,
+        futureTotalPosition,
+        futureTotalPositionCap,
       };
     },
 
@@ -462,15 +494,16 @@ export function createKeeperChain(config: Config) {
         abi: auctionAbi,
         ...(call as { functionName: 'bid'; args: readonly [bigint, bigint, bigint, bigint, bigint] }),
       };
-      const { request } = await client.simulateContract(params);
+      const { request } = await simulate(params);
       if (dryRun) return { sent: null };
       // Auction calls settle interest and funding first, which depend on the block's timestamp, so
       // gas estimated against one block can fall short in the next. A liquidation that runs out of
       // gas is the failure a keeper exists to prevent: send with headroom.
-      const estimate = await client.estimateContractGas(params);
+      const estimate = await pinnedEstimate(params);
       const hash = await wallet.writeContract({ ...request, gas: withGasHeadroom(estimate) });
       const receipt = await client.waitForTransactionReceipt({ hash, timeout: 60_000 });
       if (receipt.status !== 'success') throw new Error(`${call.functionName} reverted on chain: ${hash}`);
+      noteLanded(receipt.blockNumber);
       return { sent: hash };
     },
   };
