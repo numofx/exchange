@@ -24,6 +24,10 @@ the only place the box's real state is written down. Newest first.
   0.000001.
 - **Why.** Perp open interest to 0 (the perp is close-only, no market maker), which frees #23's cash
   to fund the engine keeper.
+- **The engine keeper's key, 17:00.** A fresh key generated straight into SSM `/numo/keeper/engine_keeper_key`
+  (SecureString, `alias/aws/ssm`), never printed or written outside a 0600 temp file deleted in the same
+  step; EOA `0x753fCC2342F180e1B9B0BfFFEb21f4E00741f83b`. The box reads it under its existing
+  `/numo/keeper/*` grant and derives that address. Nothing installed yet; no account, no funds.
 
 ## 2026-10-13 11:26–11:50 UTC: MarginEngine setup batch landed
 
