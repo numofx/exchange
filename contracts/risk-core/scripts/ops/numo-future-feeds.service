@@ -3,8 +3,11 @@
 # fixing window it records index samples, after expiry it fixes the settlement price (or alerts that
 # the vault's bounded fallback is needed), and once settled it closes out every account still holding.
 #
-# NOT YET INSTALLED. Nothing it marks is deployed. Install with the deploy, and record it in
-# OPS_BOX_CHANGES.md the same day.
+# Installed 2026-10-13 for USDC-cNGN-30NOV26 (MARGIN_ENGINE.json); see OPS_BOX_CHANGES.md.
+#
+# Its own checkout, /home/ec2-user/exchange-future, not exchange-perp: numo-perp-feeds and
+# numo-perp-keeper run from exchange-perp's dist, and building this there would replace the code they
+# pick up on their next restart. Each checkout is moved on its own, when its service is.
 #
 # Its own unit, signer and relayer, apart from numo-perp-feeds: the forward key must not be the index
 # key (the index band is what bounds a bad forward), and one failing must not stop the other.
@@ -15,7 +18,8 @@
 #   - /numo/feeds/forward_relayer_key holds a funded relayer, watched by check_signer_balance.py;
 #   - /etc/numo/future-feeds.env holds the addresses from the deploy artifact (future-feeds.env).
 #
-# Install: (cd /home/ec2-user/exchange-perp && pnpm install --filter perp-feeds... && pnpm --filter @numo/kms-signer build && pnpm --filter perp-feeds build)
+# Install: git clone https://github.com/numofx/exchange /home/ec2-user/exchange-future && git -C ... checkout <sha>
+#          (cd /home/ec2-user/exchange-future && pnpm install --filter perp-feeds... && pnpm --filter @numo/kms-signer build && pnpm --filter perp-feeds build)
 #          cp contracts/risk-core/scripts/ops/numo-future-feeds.service /etc/systemd/system/
 #          systemctl daemon-reload && systemctl enable --now numo-future-feeds
 [Unit]
@@ -26,9 +30,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=ec2-user
-WorkingDirectory=/home/ec2-user/exchange-perp/services/perp-feeds
+WorkingDirectory=/home/ec2-user/exchange-future/services/perp-feeds
 EnvironmentFile=/etc/numo/future-feeds.env
-ExecStart=/home/ec2-user/exchange-perp/contracts/risk-core/scripts/ops/run-with-ssm-forward.sh /usr/bin/node dist/forward-main.js
+ExecStart=/home/ec2-user/exchange-future/contracts/risk-core/scripts/ops/run-with-ssm-forward.sh /usr/bin/node dist/forward-main.js
 Environment=AWS_REGION=us-east-1
 Restart=always
 RestartSec=5
