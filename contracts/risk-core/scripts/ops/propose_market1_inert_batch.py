@@ -47,6 +47,7 @@ from propose_cngn_spot_batch import (  # noqa: E402  single implementation of th
   CONFIRM_POLL_SEC,
   CONFIRM_TIMEOUT_SEC,
   EXPECTED_VAULT,
+  await_postcondition,
   confirm_on_chain,
   load_env_file,
   propose,
@@ -245,8 +246,8 @@ def main() -> int:
       raise SystemExit(f"action {i} was not approved within the timeout; re-run with --start-at {i}")
     confirm_on_chain(rpc_url, tx_hash)
 
-    if not action_landed(rpc_url, a):
-      raise SystemExit(f"action {i} confirmed but its postcondition still does not read true. Stop.")
+    if not await_postcondition(lambda: action_landed(rpc_url, a)):
+      raise SystemExit(f"action {i} confirmed but its postcondition does not read back after 60s. Stop.")
     print(f"       postcondition verified on chain")
 
   print()
