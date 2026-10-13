@@ -99,6 +99,32 @@ parity: 62 settings).
   against that health and the chain: FAIL "keeper is in DRY_RUN", and PASS with only `dryRun` false (#33
   5,000.00 cash, 0.0030 ETH). Undo: `systemctl disable --now numo-engine-keeper`.
 
+## 2026-10-13 13:56–14:45 UTC: perp maker stopped; #24's cash moved to the futures maker's engine account #32
+
+Signed on the box with the MM key from SSM, through `run-with-ssm-mm.sh` and `scripts/local-venue/migrate-spot-mm.ts`
+in `/home/ec2-user/exchange-future` (moved to `04397223` (#196), then `98e9c9ae` (#197); `pnpm install
+--filter @numo/local-venue` there). The operator's plan, with #27's owner's sell for #24's short still to come.
+
+- **Perp maker stopped.** `desired_count_market_maker_perp = 0` in the operator-local `counts.auto.tfvars`
+  (comment says why), applied with the grant below; task `5a90356b…` STOPPED 13:57:37 UTC
+  (`wait-for-rollout.sh`). mm-bot does not cancel on SIGTERM; `perp-cancel` found its 20 orders, which had
+  expired (300 s) by the execute run. The perp book has been empty since; spot (#26) untouched.
+- **MM-key grant, one parameter, temporary.** Applied from `main` with `-var ops_box_mm_key_grant=true`
+  (#196): `numo-mm-key-ssm-read-one-off` (ssm:GetParameter on `/numo/exchange/mm_private_key` only) and that
+  ARN excluded from the explicit Deny. **Removed ~14:44 UTC** by an apply from `main` (0 add, 1 change,
+  1 destroy); from the box the read is refused (`AccessDeniedException … explicit deny`), `/numo/feeds/*`
+  still reads. Re-add the same way, briefly, for #24's close.
+- **Withdrawal.** `perp-withdraw 4002000000` (#197: refused if under \$4 of IM surplus would remain):
+  tx `0xa2556f5b4f70656bdd844e468b08d89318d3ae496b8a7b059832fa6dc12d9048`, block 52555595, 4,002 USDC to the MM
+  wallet `0x3448…B47B`. #24 keeps \$5.30 of cash and its -2,502 cNGN short (IM surplus \$4.69, MM \$4.94).
+- **Engine account.** `engine-account 4002000000`: approve `0xc8b8e879f95c7ee6f826ee9549512f594cb7bb9f75c4e6650fbaf38274b61faa`
+  (block 52555669), `createAndDepositSubAccount(perp cash, 4,002 USDC, MarginEngine)`
+  `0x9c8d73a1660474baa75ab647465be1ca877f1cd366e563bee054acf8adfe04ea` (block 52555670): **#32**, under
+  `0xA19E…0758`, the MM's in Matching, 4,002 cash and IM surplus. The script's own read-back saw `0x0` from a
+  node a block behind and exited non-zero; read from the chain directly the account is right. Fixed in #198.
+- **Still open.** #24's short closes against #27 (`perp-close <price> --against=27`), then `perp-withdraw`
+  takes the last \$5.30. Perp close-only (#199) before the futures maker starts (#200).
+
 ## 2026-10-13 13:05 UTC: numo-future-feeds installed and started (the cNGN future's forward publisher)
 
 New on the box; nothing existing was changed. numo-perp-feeds, numo-perp-keeper and the exchange-perp
