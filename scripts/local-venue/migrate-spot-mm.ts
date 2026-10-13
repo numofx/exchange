@@ -21,8 +21,11 @@
  *   perp-close <price> --against=<id>  buy back the perp maker's short on #MM_PERP_SUBACCOUNT_ID (24) at
  *              <price> USDC per cNGN, crossing the operator's resting sell on account <id>; refuses unless
  *              that account's asks cover the whole size and no one else's ask is at or under the price.
- *   perp-withdraw  the perp maker's whole cash to the MM wallet (WithdrawalModule), once it holds no
- *              perp position and has no resting orders.
+ *   perp-withdraw [usdc units] [--min-im-surplus=<usd>]  the perp maker's cash to the MM wallet
+ *              (WithdrawalModule). With no amount: all of it, once it holds no perp position. With an amount:
+ *              that much while a position is still open, refused unless the SRM's IM surplus left behind
+ *              is at least --min-im-surplus (default $4). Either way, refused while any of the MM's perp
+ *              orders rest: stop market-maker-perp and perp-cancel first, or it quotes from what is left.
  *   engine-account <usdc units>  open the futures market maker's account under the MarginEngine:
  *              SubAccountCreator.createAndDepositSubAccount with that much USDC into the future's cash
  *              (the perp's), manager the engine, both read from the future's listing; prints the id to
@@ -169,13 +172,15 @@ async function cancel() {
 }
 
 /** A signed WithdrawalModule action for `amount` (token decimals) of `escrow`, submitted to the venue. */
-async function withdrawOne(escrow: Address, token: Address, decimals: number, account = SPOT_ACCOUNT) {
+async function withdrawOne(escrow: Address, token: Address, decimals: number, account = SPOT_ACCOUNT, units?: bigint) {
   const held = await ledger(account, escrow);
   if (held <= 0n) {
     console.log(`${escrow}: nothing to withdraw`);
     return;
   }
-  const amount = held / 10n ** BigInt(18 - decimals); // ledger 18dp -> token decimals
+  const all = held / 10n ** BigInt(18 - decimals); // ledger 18dp -> token decimals
+  if (units !== undefined && units > all) throw new Error(`#${account} holds ${all} token units, under the ${units} asked for`);
+  const amount = units ?? all;
   const data = encodeAbiParameters([{ type: 'address' }, { type: 'uint256' }], [escrow, amount]);
   const expiry = BigInt(Math.floor(Date.now() / 1000) + 600);
   const nonce = BigInt(Date.now());
@@ -353,6 +358,7 @@ async function perpListing() {
     module: getAddress(m.trade_module_address as string),
     cash: getAddress(m.quote_asset_address as string),
     takerFeeBps: BigInt(m.taker_fee_bps as number),
+    manager: getAddress((m.perp as Record<string, unknown>).margin_manager_address as string),
   };
 }
 
@@ -465,11 +471,27 @@ async function perpClose() {
 
 async function perpWithdraw() {
   const perp = await perpListing();
-  const position = await ledger(PERP_ACCOUNT, perp.asset);
-  if (position !== 0n) throw new Error(`#${PERP_ACCOUNT} still holds ${position} of the perp: close it first`);
   const resting = await restingOrders(perp.market);
-  if (resting.length) throw new Error(`${resting.length} ${perp.market} order(s) still resting: perp-cancel first`);
-  await withdrawOne(perp.cash, USDC, 6, PERP_ACCOUNT);
+  if (resting.length) throw new Error(`${resting.length} ${perp.market} order(s) still resting: stop market-maker-perp and perp-cancel first`);
+  const position = await ledger(PERP_ACCOUNT, perp.asset);
+  const raw = flags.find((f) => /^[0-9]+$/.test(f));
+  if (raw === undefined) {
+    if (position !== 0n) throw new Error(`#${PERP_ACCOUNT} still holds ${position} of the perp: close it first, or withdraw an amount`);
+    await withdrawOne(perp.cash, USDC, 6, PERP_ACCOUNT);
+    return;
+  }
+  // A partial withdrawal with the position open: cash leaves 1:1 against the SRM's IM surplus, so what
+  // is left is the surplus now less the amount (6dp -> 18dp).
+  const units = BigInt(raw);
+  const minSurplusUsd = flags.find((f) => f.startsWith('--min-im-surplus='))?.slice('--min-im-surplus='.length) ?? '4';
+  if (!/^[0-9]+(\.[0-9]{1,6})?$/.test(minSurplusUsd)) throw new Error(`--min-im-surplus=${minSurplusUsd} is not a USD amount`);
+  const [whole, frac = ''] = minSurplusUsd.split('.');
+  const minSurplus = (BigInt(whole) * 10n ** 6n + BigInt(frac.padEnd(6, '0'))) * 10n ** 12n;
+  const surplus = await client.readContract({ address: perp.manager, abi, functionName: 'getMargin', args: [PERP_ACCOUNT, true] });
+  const left = surplus - units * 10n ** 12n;
+  console.log(`#${PERP_ACCOUNT}: perp position ${position}, IM surplus ${surplus} (18dp); withdrawing ${units} USDC units leaves ${left}, floor ${minSurplus}`);
+  if (left < minSurplus) throw new Error(`withdrawing ${units} would leave an IM surplus of ${left} (18dp), under the ${minSurplus} floor`);
+  await withdrawOne(perp.cash, USDC, 6, PERP_ACCOUNT, units);
 }
 
 const phases: Record<string, () => Promise<void>> = { status, cancel, withdraw, deposit, 'deposit-cngn': depositCngn,
