@@ -1,0 +1,72 @@
+[
+  {
+    "description": "acceptOwnership() [margin engine]",
+    "to": "0xA19E296021c9DF25b90D96C2A0793CC3D0800758",
+    "value": "0",
+    "data": "0x79ba5097",
+    "digest": "0xb9e5320bd0d812892084a2ea07e1dae8de7727ad85660fbab62e71554559632b"
+  },
+  {
+    "description": "acceptOwnership() [margin engine]",
+    "to": "0x6176c4a0E310f3ceA78f23E97Ee526Cf59CF18a4",
+    "value": "0",
+    "data": "0x79ba5097",
+    "digest": "0x2a5ae6f03d4988f3e4dbb630aa9c449437b74fdd8bfa65db8dab8337946b1fa0"
+  },
+  {
+    "description": "acceptOwnership() [margin engine]",
+    "to": "0xDCFa4Ee0772647aBd24E8592596b5fe4F001Bc19",
+    "value": "0",
+    "data": "0x79ba5097",
+    "digest": "0x60db07f093a015fa23a2d0f9ea53b7be8164857aa471cd95be8de36f77a0b70b"
+  },
+  {
+    "description": "acceptOwnership() [margin engine]",
+    "to": "0xbB34Ee2435f050b6B7e46D6C3F8247EA77d6ffA6",
+    "value": "0",
+    "data": "0x79ba5097",
+    "digest": "0xe3a0e3669f5271f7a0f11fd3ef7f9e1d0394469d489dcdc8ac808cf9a11a2181"
+  },
+  {
+    "description": "cash.setWhitelistManager(engine, true) [margin, PnL and VM shortfalls in the perp cash]",
+    "to": "0xA74E49b4Ed7cb176bc02ef4D8a1A3240C9aD4272",
+    "value": "0",
+    "data": "0xe64cc9da000000000000000000000000a19e296021c9df25b90d96c2a0793cc3d08007580000000000000000000000000000000000000000000000000000000000000001",
+    "digest": "0x43ff86aa2bc524f551f779712865bc3f78349c92e40354fe33aa1062f3109f51"
+  },
+  {
+    "description": "escrow.setWhitelistManager(engine, true) [spot cNGN, collateral, futures VM]",
+    "to": "0x37c976bb5d4887a714ef19AF6B83e34fe2f37c98",
+    "value": "0",
+    "data": "0xe64cc9da000000000000000000000000a19e296021c9df25b90d96c2a0793cc3d08007580000000000000000000000000000000000000000000000000000000000000001",
+    "digest": "0xa2770020036e0f5f34b17b913805f748330fa7d767e21adf68b4be6cb7c5ed4f"
+  },
+  {
+    "description": "escrow.setTotalPositionCap(engine, 100000000000000000000000000) [cNGN under the engine]",
+    "to": "0x37c976bb5d4887a714ef19AF6B83e34fe2f37c98",
+    "value": "0",
+    "data": "0x40a557bd000000000000000000000000a19e296021c9df25b90d96c2a0793cc3d080075800000000000000000000000000000000000000000052b7d2dcc80cd2e4000000",
+    "digest": "0x1a1584f053666f91dd016676d976279ec48258da621f3a66cde682b7b38ff26c"
+  },
+  {
+    "description": "perp.setWhitelistManager(engine, true) [the perp under the engine, cap still 0]",
+    "to": "0xC74EfC8B4808803dBCF439E76Fde076d56625b8E",
+    "value": "0",
+    "data": "0xe64cc9da000000000000000000000000a19e296021c9df25b90d96c2a0793cc3d08007580000000000000000000000000000000000000000000000000000000000000001",
+    "digest": "0x1989cbc6316c6d5a8346a768d89b40ff7575d137c83f93aae31959353338cbed"
+  },
+  {
+    "description": "auction.setWhitelistManager(engine, true) [liquidation and the SecurityModule]",
+    "to": "0xd07176B006cE8246e930d37b8bc44B1154f8c4cE",
+    "value": "0",
+    "data": "0xe64cc9da000000000000000000000000a19e296021c9df25b90d96c2a0793cc3d08007580000000000000000000000000000000000000000000000000000000000000001",
+    "digest": "0x38ee8525c9cd0edd7329d71552edb15f9168f31c78cad7d2bb68204441136969"
+  },
+  {
+    "description": "engine.setGuardian(0xDb7137Fc6e3437Bd6D8923A94b0af746Ea463C31) [the SRM's guardian: pause/unpause]",
+    "to": "0xA19E296021c9DF25b90D96C2A0793CC3D0800758",
+    "value": "0",
+    "data": "0x8a0dac4a000000000000000000000000db7137fc6e3437bd6d8923a94b0af746ea463c31",
+    "digest": "0xbcaeae0a625c796d43525643b7d4b7e747ae008bad3b2ed54d7b86615d9a5bfc"
+  }
+]
