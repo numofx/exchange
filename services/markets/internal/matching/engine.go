@@ -25,8 +25,10 @@ type Engine struct {
 	backoff  *matchBackoff
 	funding  fundingChecker
 	margin   marginChecker
-	perpGate *perpTradingGate
-	future   *futures.Reader
+	// perpCloseOnly (CNGN_PERP_CLOSE_ONLY): every perp leg is held to reducing its position.
+	perpCloseOnly bool
+	perpGate      *perpTradingGate
+	future        *futures.Reader
 	// marginRefusals holds back, and in time cancels, futures orders whose own account cannot carry a fill.
 	marginRefusals *futureMarginRefusals
 	alerts         *settlementAlerter
@@ -43,6 +45,7 @@ func NewEngine(cfg config.Config, pool *pgxpool.Pool) *Engine {
 		backoff:        newMatchBackoff(),
 		funding:        newFundingChecker(cfg),
 		margin:         newMarginChecker(cfg),
+		perpCloseOnly:  cfg.CNGNPerpCloseOnly,
 		perpGate:       newPerpTradingGate(cfg),
 		future:         newFutureReader(cfg),
 		marginRefusals: newFutureMarginRefusals(),
