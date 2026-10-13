@@ -40,6 +40,13 @@ the only place the box's real state is written down. Newest first.
   (tx `0x40adb7e9…61f0`, block 52561837); the engine keeper's key `USDC.approve(CashAsset, 5000)` (block
   52561848) and `CashAsset.deposit(33, 5000)` (tx `0x6eab5e82…5b82`, block 52561849). After: #33 holds
   5,000 cash and nothing else; #23 holds 0.0000023 (interest); the EOA 0 USDC, 0.002997 ETH.
+- **`numo-engine-keeper` installed, DRY_RUN, ~17:39.** In `/home/ec2-user/exchange-future` (`95270de`):
+  `pnpm --filter perp-keeper` built; `/etc/numo/engine-keeper.env` and
+  `/etc/systemd/system/numo-engine-keeper.service` written from this branch's `engine-keeper.env` and
+  `numo-engine-keeper.service`; enabled and started. /health on 127.0.0.1:9465: passes ok, `dryRun: true`,
+  manager the engine, account 33, EOA `0x753f…f83b`, nothing liquidatable. The enable batch's `keeper` gate
+  against that health and the chain: FAIL "keeper is in DRY_RUN", and PASS with only `dryRun` false (#33
+  5,000.00 cash, 0.0030 ETH). Undo: `systemctl disable --now numo-engine-keeper`.
 
 ## 2026-10-13 11:26–11:50 UTC: MarginEngine setup batch landed
 
