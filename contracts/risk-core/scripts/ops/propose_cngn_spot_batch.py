@@ -185,6 +185,30 @@ def confirm_on_chain(rpc_url: str, tx_hash: str) -> None:
   raise SystemExit(f"timed out waiting for {tx_hash}")
 
 
+POSTCONDITION_TRIES = 12
+POSTCONDITION_POLL_SEC = 5
+
+
+def await_postcondition(holds, tries: int = POSTCONDITION_TRIES, poll_sec: float = POSTCONDITION_POLL_SEC) -> bool:
+  """Whether a mined action's post-state reads back within about a minute.
+
+  The receipt and the eth_call reading the state can be answered by different nodes behind the RPC, one
+  a block behind the other: read at `latest` straight after the receipt, a landed action can still read
+  as not landed (2026-10-03, cNGN collateral action 3; 2026-10-13, MarginEngine setup action 0, which
+  stopped the batch). Every proposer that reads a postcondition after confirm_on_chain reads it through
+  this. A read that raises counts as not yet.
+  """
+  for attempt in range(tries):
+    try:
+      if holds():
+        return True
+    except Exception:
+      pass
+    if attempt < tries - 1:
+      time.sleep(poll_sec)
+  return False
+
+
 def propose(token: str, vault_uuid: str, vault_addr: str, action: dict) -> str:
   created = http_post(MPCVAULT_BASE + "createSigningRequest", token, {
     "vaultUuid": vault_uuid,
@@ -263,6 +287,37 @@ def self_test() -> int:
   used = {m for m in SELECTORS.values() if m in body[start:end]}
   missing = set(SELECTORS.values()) - used
   assert not missing, f"selectors declared but not used in action_landed: {sorted(missing)}"
+
+  # await_postcondition: a stale read that catches up passes, one that never does fails after every try,
+  # and a read that raises is retried rather than ending the wait
+  reads = iter([False, False, True])
+  assert await_postcondition(lambda: next(reads), poll_sec=0), "a read that catches up must pass"
+  calls = []
+  assert not await_postcondition(lambda: calls.append(1) or False, tries=4, poll_sec=0), "a stale read must fail"
+  assert len(calls) == 4, f"tried {len(calls)} times, not 4"
+  flaky = iter([RuntimeError("rpc"), True])
+  def flaky_read():
+    v = next(flaky)
+    if isinstance(v, Exception):
+      raise v
+    return v
+  assert await_postcondition(flaky_read, poll_sec=0), "a read that raises once must be retried"
+
+  # Every proposer that reads a postcondition after confirm_on_chain reads it through await_postcondition:
+  # a single read at `latest` straight after the receipt is how the MarginEngine setup batch stopped.
+  # Checked per call site: every read in the lines after each confirm_on_chain, not anywhere in the file.
+  ops = Path(__file__).resolve().parent
+  for script in sorted(ops.glob("*.py")):
+    if script.name == Path(__file__).name:
+      continue
+    lines = script.read_text().splitlines()
+    for n, line in enumerate(lines):
+      if "confirm_on_chain(rpc_url" not in line or line.lstrip().startswith("def "):
+        continue
+      for later in lines[n + 1:n + 8]:
+        if "landed(" in later:
+          assert "await_postcondition(" in later, \
+            f"{script.name}:{n + 1}: reads a postcondition after mining without await_postcondition: {later.strip()}"
 
   print(f"self-test ok: all {len(SELECTORS)} selectors match their signatures and are all in use")
   return 0
