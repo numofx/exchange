@@ -15,17 +15,18 @@
 variable "image_market_maker_future" {
   description = "The future market maker's mm-bot image, tagged by git SHA: market-maker #35 (6f1b8058) or later. Empty creates nothing."
   type        = string
-  default     = ""
+  # 2026-10-13: market-maker main df66d7b9 (#35 the futures model, #36 the chain's band edges).
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:df66d7b952ac"
 }
 
 variable "mm_future_subaccount_id" {
   description = <<-EOT
-    The market maker's account under the MarginEngine, held by Matching, owned by mm_address. Not
-    opened yet: createAndDepositSubAccount(perp cash, amount, MarginEngine) from the MM EOA. The venue
-    refuses a futures order from an account under any other manager.
+    The market maker's account under the MarginEngine, held by Matching, owned by mm_address: #32,
+    opened 2026-10-13 (createAndDepositSubAccount(perp cash, 4,002 USDC, MarginEngine), block 52555670,
+    from #24's cash). The venue refuses a futures order from an account under any other manager.
   EOT
   type        = string
-  default     = ""
+  default     = "32"
 }
 
 variable "desired_count_market_maker_future" {
