@@ -15,6 +15,8 @@ Env (or ~/.numo-feeds.env):
   SIGNER_ADDRESS      feed-signer EOA (default: the live 0xC9F1... wallet)
   BURN_ETH_PER_DAY    daily gas burn (default 0.0012 ETH, measured 2026-09-09)
   WARN_RUNWAY_DAYS    alert when runway drops below this many days (default 7)
+  SIGNER_LABEL        what the address is, in the alert (default FEED-SIGNER)
+  SIGNER_IMPACT       what running dry stops, in the alert (default: the feed goes stale, trading freezes)
 
 Run every few hours via systemd timer (see numo-signer-balance-alert.timer).
 """
@@ -85,20 +87,22 @@ def main() -> int:
   signer = os.environ.get("SIGNER_ADDRESS", DEFAULT_SIGNER)
   burn = float(os.environ.get("BURN_ETH_PER_DAY", DEFAULT_BURN_PER_DAY))
   warn_days = float(os.environ.get("WARN_RUNWAY_DAYS", DEFAULT_WARN_DAYS))
+  label = os.environ.get("SIGNER_LABEL", "FEED-SIGNER")
+  impact = os.environ.get("SIGNER_IMPACT", "the feed will go stale and freeze trading")
 
   try:
     balance_eth = int(rpc(url, "eth_getBalance", [signer, "latest"]), 16) / 1e18
   except Exception as exc:
-    alert(webhook, f"NUMO FEED-SIGNER BALANCE CHECK FAILED\n{signer}: {exc}")
+    alert(webhook, f"NUMO {label} BALANCE CHECK FAILED\n{signer}: {exc}")
     return 2
 
   runway = balance_eth / burn if burn > 0 else float("inf")
   if runway < warn_days:
     alert(
       webhook,
-      "NUMO FEED-SIGNER LOW GAS\n"
+      f"NUMO {label} LOW GAS\n"
       f"{signer} has {balance_eth:.6f} ETH (~{runway:.1f} days at {burn} ETH/day).\n"
-      f"Below the {warn_days:.0f}-day warn threshold — top it up or the feed will go stale and freeze trading.",
+      f"Below the {warn_days:.0f}-day warn threshold — top it up or {impact}.",
     )
     return 1
 
