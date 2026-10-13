@@ -731,9 +731,13 @@ def check_and_page(stack_path: Path, state: dict) -> int:
     one_side_now = read_one_side_usd(url, stack)
     books = {"perp": (one_side_now, im)}
     future = future_artifact()
+    # Which manager's future this run read, for the MarginEngine enable gate: a pager that does not read
+    # the engine's future (an old copy, a missing artifact, a failed read) must not pass it.
+    state.pop("futureManager", None)
     if future is not None:
       f = read_future(url, future)
       books["future"] = (f["one_side_usd"], f["im"])
+      state["futureManager"] = future["manager"]
       override = os.environ.get("FUTURE_POOL_RESERVE_CNGN", "").strip()
       reserve = float(override) if override else f["reserve_target_cngn"]
       negative_for = pool_negative_for(state, f["open"], f["pool_cash_usd"], time.time())
