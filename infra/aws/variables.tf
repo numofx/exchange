@@ -215,6 +215,29 @@ variable "cngn_perp_collateral_address" {
   default = "0x37c976bb5d4887a714ef19AF6B83e34fe2f37c98"
 }
 
+# The cNGN future (USDC-cNGN-30NOV26), a FutureAsset series under the MarginEngine, deployed closed on
+# 2026-10-13 and handed to the vault the same day (risk-core deployments/8453/MARGIN_ENGINE.json).
+# markets-service and the matcher both read these: the api lists the series and refuses orders outside
+# its fill band, the matcher crosses it only once the enable batch has opened it on chain. Until then
+# the listing shows trading_open false and orders rest. All three or none (markets-service refuses a
+# partial set at boot, and the set needs the perp stack above); "" for all three switches it off.
+# Takes effect only on an image with the futures listing (exchange #183); older images ignore it.
+variable "cngn_future_asset_address" {
+  type    = string
+  default = "0xDCFa4Ee0772647aBd24E8592596b5fe4F001Bc19" # FutureAsset
+}
+
+variable "cngn_future_expiry" {
+  description = "The series' expiry (its subId), unix seconds. 1796047200 = 2026-11-30 14:00 UTC."
+  type        = string
+  default     = "1796047200"
+}
+
+variable "cngn_future_manager_address" {
+  type    = string
+  default = "0xA19E296021c9DF25b90D96C2A0793CC3D0800758" # MarginEngine
+}
+
 # The index-lag gate (markets-service api/index_lag.go). The publisher reports every spot sample to
 # the api; with the gate on, a new perp order is refused while that sample is more than
 # index_lag_max_bps from the on-chain index, or while no fresh sample exists. On in production since
