@@ -5,6 +5,43 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-13 11:26–11:50 UTC: MarginEngine setup batch landed
+
+Run from the box over SSM through `run-with-ssm-mark.sh`. `propose_margin_engine_batch.py`, its six
+imports and the artifacts it reads were copied from `main` into `/tmp/me-setup` (first run `5ee56d2`,
+the resumed run `34b8bb7`), deleted after the run, so nothing on the box changed.
+
+- **What.** `MARGIN_ENGINE_VAULT_ACTIONS.json`, ten actions from the vault `0x1dcA…F435`: accept the
+  engine, viewer, future and forward feed the deployer nominated; whitelist the engine on the perp cash,
+  the cNGN escrow (cap 100M), the perp and the auction; set the engine's guardian to the SRM's
+  `0xDb71…3C31`. Opens nothing.
+- **Why.** The MarginEngine stack deployed closed on 2026-10-13 (#187); this hands it to the vault and
+  wires it into the perp stack, ahead of the enable batch.
+- **The first run stopped after action 0.** `acceptOwnership()` on the engine mined in block 52550709 and
+  the engine was the vault's from that block, but the proposer read `owner()` at `latest` from a node a
+  block behind and stopped on "postcondition does not hold". Fixed in #188 (every post-mining read retries
+  through `await_postcondition`); the resumed run skipped action 0 as landed.
+- **Landed** (all status 1, all from the vault):
+
+  | # | Action | Tx | Block |
+  |---|---|---|---|
+  | 0 | engine `acceptOwnership()` | `0x840c5951…7601` | 52550709 |
+  | 1 | viewer `acceptOwnership()` | `0x64b23715…c971` | 52551289 |
+  | 2 | future `acceptOwnership()` | `0x17173dc7…52b5` | 52551374 |
+  | 3 | forward feed `acceptOwnership()` | `0xf2bf9cd2…3d2a` | 52551383 |
+  | 4 | `cash.setWhitelistManager(engine, true)` | `0xc72fb4b7…5233` | 52551389 |
+  | 5 | `escrow.setWhitelistManager(engine, true)` | `0x750d670c…fa08` | 52551394 |
+  | 6 | `escrow.setTotalPositionCap(engine, 100M)` | `0x2a819fb4…f08a` | 52551410 |
+  | 7 | `perp.setWhitelistManager(engine, true)` | `0xd4f4b4d7…992f` | 52551417 |
+  | 8 | `auction.setWhitelistManager(engine, true)` | `0xbdd63727…c7c2` | 52551430 |
+  | 9 | `engine.setGuardian(0xDb71…3C31)` | `0x6e9c673d…ee26` | 52551437 |
+
+  The proposer's post-setup parity passed: all 62 settings as deployed, the deployer holds nothing.
+- **Read back independently.** From a laptop on a different RPC: the four contracts owned by the vault
+  with no pending owner; cash, escrow, perp and auction take the engine; escrow cap 100M; guardian set;
+  still closed (perp and future caps under the engine 0, the future not on the TradeModule); deployer
+  `0x67DB…F737` nonce still 38; the SRM's perp cap untouched at 50M.
+
 ## 2026-10-12 20:15 UTC: RfqModule retired on Matching
 
 Run from the box over SSM through `run-with-ssm-mark.sh`. `propose_retire_rfq_module.py`, its
