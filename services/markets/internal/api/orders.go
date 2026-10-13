@@ -556,6 +556,19 @@ func validateActionJSON(raw json.RawMessage, ownerAddress string, signerAddress 
 	return nil
 }
 
+// perpCloseOnlyOrder takes every perp order as reduce-only while CNGN_PERP_CLOSE_ONLY is set: the
+// reduce-only checks then refuse one that would open or add to a position, and the flag is stored so
+// the matcher holds its fills to the position. Any other market, or the switch off, is untouched.
+func (s *Server) perpCloseOnlyOrder(params orders.CreateOrderParams) orders.CreateOrderParams {
+	if !s.cfg.CNGNPerpCloseOnly {
+		return params
+	}
+	if instrument, ok := s.instruments.ByAssetAndSubID(strings.ToLower(params.AssetAddress), params.SubID); ok && instrument.IsPerpetual() {
+		params.ReduceOnly = true
+	}
+	return params
+}
+
 // admitReduceOnly decides whether a reduce-only order may rest at all. The flag is perp-only (a spot
 // holding is not a position the venue tracks). The account's position is read from the chain and
 // written to the venue's ledger (seeded, or refreshed when no fill is in flight), and the order must
