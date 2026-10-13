@@ -5,6 +5,18 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-13 ~19:49 UTC: numo-engine-keeper out of DRY_RUN
+
+- **What.** `/etc/numo/engine-keeper.env` replaced by main's `engine-keeper.env` (#216, `DRY_RUN=false`; the script
+  refused unless the two differed only in comments and that line), old one kept as `engine-keeper.env.bak-20261013`;
+  `numo-engine-keeper` restarted. The file on the box is byte-identical to main's (sha256 `591d04f1…`).
+- **Why.** The MarginEngine enable batch's `keeper` gate requires a live engine keeper. It had run in DRY_RUN since
+  17:39 with every pass OK and nothing liquidatable.
+- **After.** Active; /health: passes OK, `dryRun: false`, manager the engine, account 33, EOA `0x753f…f83b`, no
+  liquidatable or insolvent accounts, no auctions. The enable batch's `keeper` gate against that health and the chain:
+  PASS ("live, not dry-run; account #33 5,000.00 cash; 0.0030 ETH").
+- **Undo.** `cp /etc/numo/engine-keeper.env.bak-20261013 /etc/numo/engine-keeper.env && systemctl restart numo-engine-keeper`.
+
 ## 2026-10-13 ~19:20 UTC: the pager moved to its own checkout at `main`
 
 - **What.** New checkout `/home/ec2-user/exchange-pager` at `292e5236` (main, after #212–#214), cloned from
