@@ -5,6 +5,24 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-13 ~19:20 UTC: the pager moved to its own checkout at `main`
+
+- **What.** New checkout `/home/ec2-user/exchange-pager` at `292e5236` (main, after #212–#214), cloned from
+  exchange-future with origin set to GitHub. `/etc/systemd/system/numo-perp-pager.service` replaced by #214's
+  (backup `numo-perp-pager.service.bak-20261013`), `systemctl daemon-reload`. `/etc/numo/perp-pager.env`, the state
+  file `/var/lib/numo/perp-pager-state.json` and the timer unchanged. `exchange-perp` (`af584bc`, the live perp
+  keeper's) untouched.
+- **Why.** The pager ran from exchange-perp at `af584bc`, which predates the MarginEngine: no artifact, no futures
+  code, so it would page on nothing under the engine. #213's enable gate refused it on exactly that ("read the
+  future under no manager").
+- **How it was checked.** A preflight run of the new code against a copy of the live state, with no provider, webhook
+  or heartbeat (could not page, post or ping): read the future under the engine; the only failed page was its own
+  deliberate `pager-unwatched`. (The first two attempts stopped there on my check's own bugs, a pass condition that
+  required an OK run and a regex that kept the colon; nothing was swapped.) The first real run after the swap: OK, via
+  pushover, dead-man's switch set, `futureManager` the engine, nothing active. The deployed unit is byte-identical to
+  the checkout's; the engine enable batch's `pager` gate now passes against the live state.
+- **Undo.** Copy the `.bak-20261013` unit back, `systemctl daemon-reload`.
+
 ## 2026-10-13 16:43–17:05 UTC: forward publisher on `main`; #24's perp closed; MM key grant applied and revoked
 
 - **`/home/ec2-user/exchange-future` moved to `95270de`** (main, after #207–#209), `pnpm --filter perp-feeds`
