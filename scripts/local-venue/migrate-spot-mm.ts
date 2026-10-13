@@ -16,6 +16,10 @@
  *              to set as MM_SUBACCOUNT_ID / MM_RECIPIENT_ID
  *   deposit-cngn <id>  escrow.deposit of the wallet's whole cNGN into an existing unified account
  *              (the second half of `deposit` when its first half landed and the second did not)
+ *   engine-account <usdc units>  open the futures market maker's account under the MarginEngine:
+ *              SubAccountCreator.createAndDepositSubAccount with that much USDC into the future's cash
+ *              (the perp's), manager the engine, both read from the future's listing; prints the id to
+ *              set as mm_future_subaccount_id. Not idempotent: each --execute opens a new account.
  *
  * Everything here is what the app does for a user, with the MM's key instead of a wallet prompt.
  */
@@ -52,12 +56,14 @@ const abi = parseAbi([
   'function deposit(uint256 recipientAccount, uint256 amount)',
   'function subAccountToOwner(uint256) view returns (address)',
   'event DepositedSubAccount(uint256 indexed accountId, address indexed owner)',
+  'function whitelistedManager(address) view returns (bool)',
+  'function getMargin(uint256 accountId, bool isInitial) view returns (int256)',
 ]);
 
 const client = createPublicClient({ chain: base, transport: http(RPC) });
 const [phase, ...flags] = process.argv.slice(2);
 const execute = flags.includes('--execute');
-if (!phase) throw new Error('usage: migrate-spot-mm.ts <status|cancel|withdraw|deposit> [--execute]');
+if (!phase) throw new Error('usage: migrate-spot-mm.ts <status|cancel|withdraw|deposit|deposit-cngn|engine-account> [--execute]');
 if (!KEY) throw new Error('MM_OWNER_PRIVATE_KEY is not in the environment (run through the SSM wrapper on the box)');
 // The relayer's lesson (perp-feeds): a load-balanced RPC can hand out a mined nonce again; viem's
 // nonce manager never reissues one at or below the last it sent.
@@ -273,7 +279,61 @@ async function depositCngn() {
   console.log(`ok: #${id} now holds ${held} (18dp) in ${stack.escrow}`);
 }
 
-const phases: Record<string, () => Promise<void>> = { status, cancel, withdraw, deposit, 'deposit-cngn': depositCngn };
+/** The future as the venue lists it: its cash and its manager (the MarginEngine), never typed in by hand. */
+async function futureStack(): Promise<{ cash: Address; engine: Address; symbol: string }> {
+  const markets = (await (await fetch(`${MARKETS}/v1/markets`)).json()) as Record<string, unknown>[];
+  const futures = markets.filter((m) => m.future && m.contract_type === 'future');
+  if (futures.length !== 1) throw new Error(`the venue lists ${futures.length} MarginEngine futures, expected 1`);
+  const f = futures[0];
+  return { cash: getAddress(f.quote_asset_address as string), engine: getAddress(f.margin_manager_address as string), symbol: String(f.market) };
+}
+
+async function engineAccount() {
+  const units = BigInt(flags.find((f) => /^[0-9]+$/.test(f)) ?? '0');
+  if (units === 0n) throw new Error('engine-account needs the USDC amount in units (6dp), e.g. 4000000000 for 4,000');
+  const { cash, engine, symbol } = await futureStack();
+  const takes = await client.readContract({ address: cash, abi, functionName: 'whitelistedManager', args: [engine] });
+  if (!takes) throw new Error(`${cash} does not take ${engine} as a manager: the setup batch has not landed`);
+  const usdc = await client.readContract({ address: USDC, abi, functionName: 'balanceOf', args: [owner.address] });
+  const eth = await client.getBalance({ address: owner.address });
+  console.log(`${symbol}: cash ${cash}, engine ${engine}; ${owner.address} holds ${usdc} USDC units and ${eth} wei`);
+  if (usdc < units) throw new Error(`the wallet holds ${usdc} USDC units, under the ${units} to deposit`);
+  if (!execute) {
+    console.log(`dry run: would approve ${SUBACCOUNT_CREATOR} for ${units} and createAndDepositSubAccount(${cash}, ${units}, ${engine})`);
+    return;
+  }
+  const send = async (address: Address, functionName: 'approve' | 'createAndDepositSubAccount', args: readonly unknown[]) => {
+    const hash = await wallet.writeContract({ address, abi, functionName, args } as never);
+    const receipt = await client.waitForTransactionReceipt({ hash });
+    if (receipt.status !== 'success') throw new Error(`${functionName} reverted (${hash})`);
+    console.log(`  ${functionName} ${hash} block ${receipt.blockNumber}`);
+    return receipt;
+  };
+  await send(USDC, 'approve', [SUBACCOUNT_CREATOR, units]);
+  const receipt = await send(SUBACCOUNT_CREATOR, 'createAndDepositSubAccount', [cash, units, engine]);
+  const event = receipt.logs
+    .filter((log) => log.address.toLowerCase() === MATCHING.toLowerCase())
+    .map((log) => {
+      try {
+        return decodeEventLog({ abi, data: log.data, topics: log.topics });
+      } catch {
+        return null;
+      }
+    })
+    .find((decoded) => decoded?.eventName === 'DepositedSubAccount');
+  if (event?.eventName !== 'DepositedSubAccount') throw new Error('no DepositedSubAccount event');
+  const id = event.args.accountId;
+  const mgr = await client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'manager', args: [id] });
+  const custodian = await client.readContract({ address: MATCHING, abi, functionName: 'subAccountToOwner', args: [id] });
+  const held = await ledger(id, cash);
+  const im = await client.readContract({ address: engine, abi, functionName: 'getMargin', args: [id, true] });
+  if (mgr.toLowerCase() !== engine.toLowerCase()) throw new Error(`#${id} is under ${mgr}, not the engine`);
+  if (custodian.toLowerCase() !== owner.address.toLowerCase()) throw new Error(`#${id} is not the MM's in Matching (owner ${custodian})`);
+  console.log(`ok: #${id} under ${engine}, the MM's in Matching, cash ${held} (18dp), IM surplus ${im} (18dp)`);
+  console.log(`set mm_future_subaccount_id = "${id}" (infra/aws/market-maker-future.tf) before starting the future market maker`);
+}
+
+const phases: Record<string, () => Promise<void>> = { status, cancel, withdraw, deposit, 'deposit-cngn': depositCngn, 'engine-account': engineAccount };
 const run = phases[phase];
 if (!run) throw new Error(`unknown phase ${phase}`);
 void run();
