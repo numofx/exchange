@@ -62,8 +62,9 @@ variable "acm_certificate_arn" {
 variable "image_markets" {
   description = "ECR image URI for the Go binary (serves both api and matcher modes)."
   type        = string
-  # 2026-10-08: cNGN-USDC / cNGN-PERP identifiers, unknown symbols refused (exchange #133).
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:fc7ef5ccc6e3"
+  # 2026-10-13: the cNGN future listed with its fill band enforced (#183) and its margin pre-checked;
+  # the close-only manager (#180), off unless CNGN_PERP_CLOSE_ONLY_MANAGER is set.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:dbfc65a44064"
 }
 
 variable "image_execution" {
