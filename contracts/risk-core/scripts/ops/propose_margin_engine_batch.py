@@ -40,6 +40,11 @@ Enable gates (all read live, all required):
             live SRM, until the cutover) and the future's one side at the cap being opened
             (check_perp_pager.sm_required_usd)
   pager     check_perp_pager.py ran OK within 3 minutes, with a provider and a dead-man's switch
+  keeper    numo-engine-keeper (ENGINE_KEEPER_HEALTH_URL, default 127.0.0.1:9465): its /health says a pass
+            completed OK recently, not in DRY_RUN, manager the engine; its funding account is the keeper
+            EOA's, under the engine, holds no future or perp, and the IM for one full side of the future at
+            the cap (cap / 2 x contract size x imReq: 3,750 USDC at launch); its EOA has gas. Without it an
+            engine account under maintenance is never auctioned (the perp keeper watches the SRM only)
   fills     markets-service refuses futures orders priced outside the band FutureAsset enforces on fills, so an
             out-of-band order is rejected before it matches instead of reverting at settlement. GET
             {MARKETS_URL}/v1/markets must list the future (asset_address, sub_id) with fill_band_enforced: true and
@@ -98,7 +103,7 @@ from propose_cngn_spot_batch import (  # noqa: E402  one implementation of the M
   request_tx_hash,
   rpc,
 )
-from propose_perp_enable_batch import gate_pager, http_json  # noqa: E402
+from propose_perp_enable_batch import gate_pager, http_json, keeper_gate  # noqa: E402
 from resolve_cngn_action6 import keccak  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -488,6 +493,27 @@ def sm_gate(sm_cash: float, books: dict[str, tuple[float, float]]) -> Gate:
   return Gate("sm", True, f"SecurityModule ${sm_cash:,.0f} covers ${required:,.0f} across {parts}")
 
 
+ENGINE_KEEPER_HEALTH_URL = "http://127.0.0.1:9465/health"  # numo-engine-keeper's HEALTH_PORT on the ops box
+ENGINE_KEEPER_MIN_ETH = 0.002
+
+
+def engine_keeper_min_cash(d: dict) -> float:
+  """What the engine's keeper must hold, USDC: the IM to take over one full side of the future at the cap
+  being opened (a bid that inherits it must carry it under the engine): cap / 2 contracts x contract size x
+  imReq. 15 x 1,000 x 25% = 3,750 at launch."""
+  one_side = int(d["futureOICap"]) / 2 / 1e18
+  return one_side * (int(d["contractSize"]) / 1e18) * (int(d["futureIMReq"]) / 1e18)
+
+
+def gate_engine_keeper(chain: Chain, d: dict) -> Gate:
+  """A live liquidation keeper for the engine (numo-engine-keeper): without one an engine account under
+  maintenance is never auctioned. Its funding account under the engine holds no future or perp, and the
+  IM for a full side of the future."""
+  return keeper_gate(chain.url, d["manager"], "MarginEngine", d["cash"], [(d["future"], int(d["subId"])), (d["perp"], 0)],
+                     os.environ.get("ENGINE_KEEPER_HEALTH_URL", ENGINE_KEEPER_HEALTH_URL),
+                     engine_keeper_min_cash(d), ENGINE_KEEPER_MIN_ETH)
+
+
 def gate_enable(chain: Chain, d: dict, stack: dict, vault: str) -> list[Gate]:
   gates: list[Gate] = []
   m = word_address(d["manager"])
@@ -535,6 +561,7 @@ def gate_enable(chain: Chain, d: dict, stack: dict, vault: str) -> list[Gate]:
     gates.append(Gate("sm", False, f"SecurityModule coverage unreadable: {str(exc)[:80]}"))
 
   gates.append(gate_pager(Path(os.environ.get("PAGER_STATE_FILE", Path.home() / ".numo-perp-pager.json"))))
+  gates.append(gate_engine_keeper(chain, d))
   gates.append(gate_fills(chain, d, os.environ.get("MARKETS_URL", "https://api.numofx.com")))
   gates.append(gate_rfq(chain, d))
   gates.append(gate_parity(chain, d, vault))
@@ -685,6 +712,10 @@ def self_test() -> int:
     os.environ["PAGER_STATE_FILE"] = str(Path(tmp) / "none.json")
     assert not gate_pager(Path(os.environ["PAGER_STATE_FILE"])).ok
     os.environ.pop("PAGER_STATE_FILE")
+  # The engine keeper's floor is a full side of the future's IM at the cap, from the deployed artifact.
+  deployed = json.loads((ROOT / "deployments" / "8453" / f"{NAME}.json").read_text())
+  assert abs(engine_keeper_min_cash(deployed) - 3_750) < 1e-6, engine_keeper_min_cash(deployed)
+
   print("self-test ok: selectors match their `cast sig` values; a wrong target, calldata, value, digest, "
         "count or order is refused; reserve, escrow and coverage gates sized")
   return 0
