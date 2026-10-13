@@ -99,8 +99,11 @@ async function perpStack(): Promise<PerpStack> {
   };
 }
 
-async function ledger(account: bigint, asset: Address) {
-  return client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'getBalance', args: [account, asset, 0n] });
+// A read straight after a transaction is pinned to the block it landed in: at `latest`, a node behind the
+// one that returned the receipt answers with the state before it (2026-10-13: #32 read as under 0x0 one
+// block after it was opened under the engine).
+async function ledger(account: bigint, asset: Address, blockNumber?: bigint) {
+  return client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'getBalance', args: [account, asset, 0n], blockNumber });
 }
 
 /** The venue's signed authentication frame (wsauth, order-history statement): what GET /v1/orders needs. */
@@ -204,7 +207,8 @@ async function withdrawOne(escrow: Address, token: Address, decimals: number, ac
     },
     message: { subaccountId: account, nonce, module: WITHDRAWAL_MODULE, data, expiry, owner: owner.address, signer: owner.address },
   });
-  const before = await client.readContract({ address: token, abi, functionName: 'balanceOf', args: [owner.address] });
+  const head = await client.getBlockNumber();
+  const before = await client.readContract({ address: token, abi, functionName: 'balanceOf', args: [owner.address], blockNumber: head });
   const response = await fetch(`${MARKETS}/v1/withdrawals`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -216,8 +220,11 @@ async function withdrawOne(escrow: Address, token: Address, decimals: number, ac
   const body = await response.text();
   console.log(`withdraw ${escrow} -> ${response.status} ${body.slice(0, 200)}`);
   if (!response.ok) throw new Error('withdrawal refused');
-  const after = await client.readContract({ address: token, abi, functionName: 'balanceOf', args: [owner.address] });
-  if (after - before !== amount) throw new Error(`wallet received ${after - before}, expected ${amount}`);
+  const landed = BigInt((JSON.parse(body) as { block_number?: string }).block_number ?? '0');
+  if (landed === 0n) throw new Error('the venue did not report the block the withdrawal landed in');
+  await client.waitForTransactionReceipt({ hash: (JSON.parse(body) as { tx_hash: Hex }).tx_hash });
+  const after = await client.readContract({ address: token, abi, functionName: 'balanceOf', args: [owner.address], blockNumber: landed });
+  if (after - before !== amount) throw new Error(`wallet received ${after - before} between blocks ${head} and ${landed}, expected ${amount}`);
   console.log(`ok: ${amount} token units landed in ${owner.address}`);
 }
 
@@ -287,8 +294,8 @@ async function depositCngn() {
     return receipt;
   };
   await send(CNGN, 'approve', [stack.escrow, cngn]);
-  await send(stack.escrow, 'deposit', [id, cngn]);
-  const held = await ledger(id, stack.escrow);
+  const deposited = await send(stack.escrow, 'deposit', [id, cngn]);
+  const held = await ledger(id, stack.escrow, deposited.blockNumber);
   console.log(`ok: #${id} now holds ${held} (18dp) in ${stack.escrow}`);
 }
 
@@ -336,10 +343,11 @@ async function engineAccount() {
     .find((decoded) => decoded?.eventName === 'DepositedSubAccount');
   if (event?.eventName !== 'DepositedSubAccount') throw new Error('no DepositedSubAccount event');
   const id = event.args.accountId;
-  const mgr = await client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'manager', args: [id] });
-  const custodian = await client.readContract({ address: MATCHING, abi, functionName: 'subAccountToOwner', args: [id] });
-  const held = await ledger(id, cash);
-  const im = await client.readContract({ address: engine, abi, functionName: 'getMargin', args: [id, true] });
+  const at = receipt.blockNumber;
+  const mgr = await client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'manager', args: [id], blockNumber: at });
+  const custodian = await client.readContract({ address: MATCHING, abi, functionName: 'subAccountToOwner', args: [id], blockNumber: at });
+  const held = await ledger(id, cash, at);
+  const im = await client.readContract({ address: engine, abi, functionName: 'getMargin', args: [id, true], blockNumber: at });
   if (mgr.toLowerCase() !== engine.toLowerCase()) throw new Error(`#${id} is under ${mgr}, not the engine`);
   if (custodian.toLowerCase() !== owner.address.toLowerCase()) throw new Error(`#${id} is not the MM's in Matching (owner ${custodian})`);
   console.log(`ok: #${id} under ${engine}, the MM's in Matching, cash ${held} (18dp), IM surplus ${im} (18dp)`);
