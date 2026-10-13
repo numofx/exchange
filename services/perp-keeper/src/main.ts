@@ -23,7 +23,7 @@ async function main() {
     throw new Error(`RPC_URL is chain ${rpcChainId} but CHAIN_ID is ${config.CHAIN_ID}: refusing to start`);
   }
 
-  console.log(`[keeper] eoa=${chain.keeper.address} account=${config.KEEPER_ACCOUNT} dryRun=${config.DRY_RUN}`);
+  console.log(`[keeper] manager=${config.MANAGER} eoa=${chain.keeper.address} account=${config.KEEPER_ACCOUNT} dryRun=${config.DRY_RUN}`);
 
   // What /health reports. A pass that throws is recorded as failed, so a keeper looping on an
   // error reads as unhealthy rather than merely alive.
@@ -68,6 +68,8 @@ async function main() {
           ...health,
           dryRun: config.DRY_RUN,
           keeperAccount: config.KEEPER_ACCOUNT.toString(),
+          // Which keeper this is: the perp SRM's or the MarginEngine's. The enable gates check it.
+          manager: config.MANAGER,
           keeperAddress: chain.keeper.address,
           maxBidUsd: config.MAX_BID_USD?.toString() ?? null,
           pollIntervalMs: config.POLL_INTERVAL_MS,

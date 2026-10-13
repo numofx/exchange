@@ -125,3 +125,23 @@ func TestCloseOnlyManagerIsValidated(t *testing.T) {
 		t.Fatal("a close-only manager without a perp stack must be refused")
 	}
 }
+
+func TestPerpCloseOnlyNeedsAPerpStack(t *testing.T) {
+	whole := Config{
+		CNGNPerpAssetAddress:       "0x3333333333333333333333333333333333333333",
+		CNGNPerpTradeModuleAddress: "0x2222222222222222222222222222222222222222",
+		CNGNPerpCashAddress:        "0x4444444444444444444444444444444444444444",
+		CNGNPerpSRMAddress:         "0x5555555555555555555555555555555555555555",
+		CNGNPerpCloseOnly:          true,
+	}
+	if err := whole.validatePerpStack(); err != nil {
+		t.Fatalf("close-only on a configured perp must be accepted: %v", err)
+	}
+	if err := (Config{CNGNPerpCloseOnly: true}).validatePerpStack(); err == nil {
+		t.Fatal("close-only without a perp stack must be refused")
+	}
+	t.Setenv("CNGN_PERP_CLOSE_ONLY", "true")
+	if !getenvBool("CNGN_PERP_CLOSE_ONLY", false) {
+		t.Fatal("CNGN_PERP_CLOSE_ONLY=true does not read as true")
+	}
+}

@@ -107,6 +107,11 @@ type Config struct {
 	// cutover): the matcher crosses a perp order from an account under it only if the fill reduces
 	// that account's position. Unset, nothing is close-only and no account's manager is read.
 	CNGNPerpCloseOnlyManager string
+	// CNGNPerpCloseOnly makes the whole perp close-only: every perp order is taken as reduce-only (the
+	// API refuses one that would open, add to or flip a position) and the matcher holds every perp leg,
+	// resting ones included, to what reduces its account's position. For a perp with no market maker to
+	// exit against. Exits stay open; nothing new can be opened.
+	CNGNPerpCloseOnly bool
 	// CNGNPerpCollateralAddress is the perp stack's own cNGN escrow (risk-core
 	// CNGN_PERP_COLLATERAL.json `escrow`), once the vault has whitelisted it as a base asset on the
 	// perp SRM. Optional: unset, the perp is margined in its cash only and /v1/positions reports no
@@ -201,6 +206,7 @@ func Load() (Config, error) {
 		CNGNPerpCashAddress:          strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_CASH_ADDRESS"))),
 		CNGNPerpSRMAddress:           strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_SRM_ADDRESS"))),
 		CNGNPerpCloseOnlyManager:     strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_CLOSE_ONLY_MANAGER"))),
+		CNGNPerpCloseOnly:            getenvBool("CNGN_PERP_CLOSE_ONLY", false),
 		CNGNPerpCollateralAddress:    strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_COLLATERAL_ADDRESS"))),
 		CNGNFutureAssetAddress:       strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_FUTURE_ASSET_ADDRESS"))),
 		CNGNFutureManagerAddress:     strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_FUTURE_MANAGER_ADDRESS"))),
@@ -420,6 +426,9 @@ func (c Config) validatePerpStack() error {
 		if strings.EqualFold(closeOnly, c.CNGNPerpSRMAddress) {
 			return errors.New("CNGN_PERP_CLOSE_ONLY_MANAGER is CNGN_PERP_SRM_ADDRESS: the manager accounts open under cannot be close-only")
 		}
+	}
+	if c.CNGNPerpCloseOnly && len(set) == 0 {
+		return errors.New("CNGN_PERP_CLOSE_ONLY is set without a perp stack")
 	}
 	return nil
 }
