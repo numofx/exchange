@@ -64,6 +64,9 @@ type marketPresentation struct {
 	DisplayLabel       string `json:"display_label,omitempty"`
 	TickSize           string `json:"tick_size,omitempty"`
 	MinSize            string `json:"min_size,omitempty"`
+	// AmountStep is the step desired_amount is taken in (what intake enforces); sizes must be whole
+	// multiples of it.
+	AmountStep string `json:"amount_step"`
 	// Served without omitempty on purpose: a zero fee is a fact about the market, and a client
 	// that cannot tell "no fee" from "field absent" will invent its own number.
 	TakerFeeBps        int    `json:"taker_fee_bps"`
@@ -366,6 +369,11 @@ func (s *Server) handleMarkets(w http.ResponseWriter, r *http.Request) {
 					shown := *state
 					lag := s.indexLag.presentation(raw.index)
 					shown.IndexLag = &lag
+					state = &shown
+				}
+				if s.cfg.CNGNPerpCloseOnly {
+					shown := *state
+					shown.CloseOnly = true
 					state = &shown
 				}
 				presentation.Perp = state
@@ -678,6 +686,7 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	params = s.perpCloseOnlyOrder(params)
 	if params.ReduceOnly {
 		if status, msg := s.admitReduceOnly(r.Context(), params); msg != "" {
 			slog.Info("order_submit_rejected_reduce_only", "order_id", params.OrderID, "subaccount_id", params.SubaccountID, "error", msg)
@@ -1171,6 +1180,7 @@ func presentMarket(market instruments.Metadata) marketPresentation {
 		DisplayLabel:         market.DisplayLabel,
 		TickSize:             market.TickSize,
 		MinSize:              market.MinSize,
+		AmountStep:           amountAtomicStep(market),
 		TakerFeeBps:          market.TakerFeeBps,
 		MakerFeeBps:          market.MakerFeeBps,
 		ContractMultiplier:   market.ContractMultiplier,

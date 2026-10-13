@@ -274,6 +274,8 @@ describe('assessHealth', () => {
     keeperAccountsUnderMargin: [],
     totalPosition: 0n,
     totalPositionCap: 50_000_000n * E18,
+    futureTotalPosition: 0n,
+    futureTotalPositionCap: 0n,
   };
   const healthRules = { minSecurityModuleCash: 1_000n * E18, minKeeperCash: 1_000n * E18, minKeeperEthWei: E18 / 100n, capWarnBps: 8_000n, maxCngnInventory: 10_000_000n * E18 };
 

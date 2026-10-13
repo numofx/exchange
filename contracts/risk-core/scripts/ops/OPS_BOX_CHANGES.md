@@ -5,6 +5,100 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-13 19:00–19:01 UTC: MarginEngine enable batch landed; USDC-cNGN-30NOV26 open
+
+Run from the box over SSM: `run-with-ssm-mark.sh python3 scripts/ops/propose_margin_engine_batch.py enable --propose`
+from `/home/ec2-user/exchange-pager` (`292e5236`; the proposer and artifacts are identical at main `2cf7cfd5`), with
+`PAGER_STATE_FILE=/var/lib/numo/perp-pager-state.json`. Nothing on the box changed. Launched without waiting for the
+outside review (decided 2026-10-13). Before it: the real-fills fork test 7/7 at `2cf7cfd5`, and a dry run with all 11
+gates passing (custody, feeds, marks, reserve none, escrow, sm, pager watching the engine, keeper live, fills, rfq,
+parity: 62 settings).
+
+- **Landed** (both status 1, from the vault `0x1dcA…F435`):
+
+  | # | Action | MPCVault | Tx | Block |
+  |---|---|---|---|---|
+  | 1 | `future.setTotalPositionCap(engine, 30e18)` | `4e5a6877…` | `0x2fe14fdb…203e` | 52564343 |
+  | 2 | `tradeModule.setDatedFutureAsset(future, true)` | `5c96145c…` | `0xd49982bd…f675` | 52564362 |
+
+- **Not proposed:** action 0, the perp's cap under the engine (#210): it still reads 0, deferred to the perp's cutover.
+- **Between the two,** every gate re-read and passed but custody (expected: the cap was open).
+- **After.** `/v1/markets` lists USDC-cNGN-30NOV26 with `fill_band_enforced` (1,229.02–1,502.14 cNGN per USDC); the
+  futures market maker #32 rests three bids and three asks of 1 contract inside it.
+
+## 2026-10-13 18:48 UTC: numo-engine-keeper out of DRY_RUN
+
+- **What.** `/etc/numo/engine-keeper.env` replaced by main's `engine-keeper.env` (#216, `DRY_RUN=false`; the script
+  refused unless the two differed only in comments and that line), old one kept as `engine-keeper.env.bak-20261013`;
+  `numo-engine-keeper` restarted. The file on the box is byte-identical to main's (sha256 `591d04f1…`).
+- **Why.** The MarginEngine enable batch's `keeper` gate requires a live engine keeper. It had run in DRY_RUN since
+  17:39 with every pass OK and nothing liquidatable.
+- **After.** Active; /health: passes OK, `dryRun: false`, manager the engine, account 33, EOA `0x753f…f83b`, no
+  liquidatable or insolvent accounts, no auctions. The enable batch's `keeper` gate against that health and the chain:
+  PASS ("live, not dry-run; account #33 5,000.00 cash; 0.0030 ETH").
+- **Undo.** `cp /etc/numo/engine-keeper.env.bak-20261013 /etc/numo/engine-keeper.env && systemctl restart numo-engine-keeper`.
+
+## 2026-10-13 18:37–18:38 UTC: the pager moved to its own checkout at `main`
+
+- **What.** New checkout `/home/ec2-user/exchange-pager` at `292e5236` (main, after #212–#214), cloned from
+  exchange-future with origin set to GitHub. `/etc/systemd/system/numo-perp-pager.service` replaced by #214's
+  (backup `numo-perp-pager.service.bak-20261013`), `systemctl daemon-reload`. `/etc/numo/perp-pager.env`, the state
+  file `/var/lib/numo/perp-pager-state.json` and the timer unchanged. `exchange-perp` (`af584bc`, the live perp
+  keeper's) untouched.
+- **Why.** The pager ran from exchange-perp at `af584bc`, which predates the MarginEngine: no artifact, no futures
+  code, so it would page on nothing under the engine. #213's enable gate refused it on exactly that ("read the
+  future under no manager").
+- **How it was checked.** A preflight run of the new code against a copy of the live state, with no provider, webhook
+  or heartbeat (could not page, post or ping): read the future under the engine; the only failed page was its own
+  deliberate `pager-unwatched`. (The first two attempts stopped there on my check's own bugs, a pass condition that
+  required an OK run and a regex that kept the colon; nothing was swapped.) The first real run after the swap: OK, via
+  pushover, dead-man's switch set, `futureManager` the engine, nothing active. The deployed unit is byte-identical to
+  the checkout's; the engine enable batch's `pager` gate now passes against the live state.
+- **Undo.** Copy the `.bak-20261013` unit back, `systemctl daemon-reload`.
+
+## 2026-10-13 16:43–17:05 UTC: forward publisher on `main`; #24's perp closed; MM key grant applied and revoked
+
+- **`/home/ec2-user/exchange-future` moved to `95270de`** (main, after #207–#209), `pnpm --filter perp-feeds`
+  rebuilt, `numo-future-feeds` restarted at 16:44. Unit and `/etc/numo/future-feeds.env` byte-identical to
+  the repo's. Why: #207's pinned reads (the VM sweep and close-out read after their own transactions).
+- **The MM key grant, applied and revoked from `main`.** `terraform apply -var ops_box_mm_key_grant=true`
+  (1 add, 1 change) at ~16:51; revoked by a plain apply from `main` (0 add, 1 change, 1 destroy) at ~17:04.
+  After the revoke the box's role lists no `numo-mm-key-ssm-read-one-off`, and three reads of
+  `/numo/exchange/mm_private_key` from the box were each refused with an explicit deny. The first
+  `--execute` after the grant was itself refused the read (IAM propagation, seconds after the apply);
+  nothing was sent, and the retry two dry runs later went through.
+- **#24's perp short closed against #27.** `perp-close 0.0007322 --against=27 --execute`: #24 bought
+  2,502 cNGN-PERP at 0.0007322 from #27's reduce-only ask of 2,521 (tx `0xe7f9a486…3e0d`, 16:53:28). Both
+  accounts read 0 perp after; the perp's total position under the SRM reads 0; the venue cancelled #27's
+  remaining 19 and the book is empty. #27 is left at −0.012338 USDC cash (its fee and P&L).
+- **#24 withdrawn.** `perp-withdraw --execute`: 5.297749 USDC to the MM wallet `0x3448…B47B`; #24 holds
+  0.000001.
+- **Why.** Perp open interest to 0 (the perp is close-only, no market maker), which frees #23's cash
+  to fund the engine keeper.
+- **The engine keeper's key, 17:00.** A fresh key generated straight into SSM `/numo/keeper/engine_keeper_key`
+  (SecureString, `alias/aws/ssm`), never printed or written outside a 0600 temp file deleted in the same
+  step; EOA `0x753fCC2342F180e1B9B0BfFFEb21f4E00741f83b`. The box reads it under its existing
+  `/numo/keeper/*` grant and derives that address. Nothing installed yet.
+- **Its funding account, #33.** 0.003 ETH sent to the EOA (by hand); then, from the box with that key,
+  `SubAccounts.createAccount(0x753f…f83b, MarginEngine)` (tx `0x48cdd972…96aa`, block 52561572): #33, owned by
+  the EOA directly (not Matching), manager the engine.
+- **The perp keeper's cash floor to 0, ~17:34.** `/etc/numo/perp-keeper.env` backed up to
+  `perp-keeper.env.bak-20261013`, `MIN_KEEPER_CASH_USD=0` added after `MIN_KEEPER_ETH`, `numo-perp-keeper`
+  restarted: active, first pass ok, not dry run (its build reads the variable). Why: its $5,000 moves to the
+  engine keeper next, and with perp OI 0 and the perp close-only it has nothing to liquidate; without this it
+  alerts on low cash. Restore the default (1000) with its funding when the perp reopens. Template updated.
+- **#23's cash to #33.** From the box: the perp keeper's key `CashAsset.withdraw(23, 5000 USDC, 0x753f…f83b)`
+  (tx `0x40adb7e9…61f0`, block 52561837); the engine keeper's key `USDC.approve(CashAsset, 5000)` (block
+  52561848) and `CashAsset.deposit(33, 5000)` (tx `0x6eab5e82…5b82`, block 52561849). After: #33 holds
+  5,000 cash and nothing else; #23 holds 0.0000023 (interest); the EOA 0 USDC, 0.002997 ETH.
+- **`numo-engine-keeper` installed, DRY_RUN, ~17:39.** In `/home/ec2-user/exchange-future` (`95270de`):
+  `pnpm --filter perp-keeper` built; `/etc/numo/engine-keeper.env` and
+  `/etc/systemd/system/numo-engine-keeper.service` written from this branch's `engine-keeper.env` and
+  `numo-engine-keeper.service`; enabled and started. /health on 127.0.0.1:9465: passes ok, `dryRun: true`,
+  manager the engine, account 33, EOA `0x753f…f83b`, nothing liquidatable. The enable batch's `keeper` gate
+  against that health and the chain: FAIL "keeper is in DRY_RUN", and PASS with only `dryRun` false (#33
+  5,000.00 cash, 0.0030 ETH). Undo: `systemctl disable --now numo-engine-keeper`.
+
 ## 2026-10-13 13:56–14:45 UTC: perp maker stopped; #24's cash moved to the futures maker's engine account #32
 
 Signed on the box with the MM key from SSM, through `run-with-ssm-mm.sh` and `scripts/local-venue/migrate-spot-mm.ts`
@@ -30,6 +124,37 @@ in `/home/ec2-user/exchange-future` (moved to `04397223` (#196), then `98e9c9ae`
   node a block behind and exited non-zero; read from the chain directly the account is right. Fixed in #198.
 - **Still open.** #24's short closes against #27 (`perp-close <price> --against=27`), then `perp-withdraw`
   takes the last \$5.30. Perp close-only (#199) before the futures maker starts (#200).
+
+## 2026-10-13 13:05 UTC: numo-future-feeds installed and started (the cNGN future's forward publisher)
+
+New on the box; nothing existing was changed. numo-perp-feeds, numo-perp-keeper and the exchange-perp
+checkout they run from (`af584bc`) are untouched.
+
+- **What.**
+  - `/home/ec2-user/exchange-future`: a new clone of numofx/exchange at `main` `ac79698` (#193), owned
+    by ec2-user; `pnpm install --frozen-lockfile --filter perp-feeds...`, then `@numo/kms-signer` and
+    `perp-feeds` built. Its own checkout, so building it could not replace the dist the perp services
+    load.
+  - `/etc/numo/future-feeds.env`: `contracts/risk-core/scripts/ops/future-feeds.env` at `ac79698`,
+    byte for byte (`cmp`). No secret.
+  - `/etc/systemd/system/numo-future-feeds.service`: the repo's unit at `ac79698`, byte for byte;
+    `systemctl enable --now`.
+  - Not on the box, but for it: SSM `/numo/feeds/forward_relayer_key` (SecureString, alias/aws/ssm,
+    created 13:00 UTC with `--no-overwrite`), relayer `0xE5b8541dC2558f3db65aF88A2374e464AE4ae6de`,
+    funded with 0.005 ETH. The signer is the KMS key `alias/numo-exchange-forward-signer`
+    (`0xd65F…3650`, 2026-10-13, #185/#186).
+- **Why.** The future sat at the deploy's initial mark; the enable batch's `marks` gate needs it marked
+  within 2 h, and the futures market maker is not to start before marks are landing.
+- **Checked first.** Locally and then on the box with the box's own role, `DRY_RUN=true`: KMS signer
+  `0xd65F…3650`, relayer from SSM, mark 1387.01 from carry (index 1365.8, CARRY 0.118), unclamped,
+  nothing sent. The dry run on the box sent one real `forward-mark-late` alert (last mark 7442 s old),
+  which is the alert path working.
+- **Landed.** The first mark at 13:06:11 UTC: tx `0xd9baae1b61a30aeb988ba86d5da61e1e17359eccd81de9619f4894e01fd779c4`
+  (block 52553712, status 1, from the relayer). `futureContracts(1796047200)` reads markPrice
+  1387.013149315333732004 (was 1386.044666769033003345) and lastMarkTime 1791896771. Two
+  transactions cost the relayer ~0.0000013 ETH.
+- **Not done.** The relayer is not in the signer-balance alert (it watches one address and each needs
+  its own heartbeat); `forward-mark-late` pages within 2 h if it runs dry.
 
 ## 2026-10-13 11:26–11:50 UTC: MarginEngine setup batch landed
 
