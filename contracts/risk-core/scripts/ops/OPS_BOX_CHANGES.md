@@ -30,7 +30,16 @@ the only place the box's real state is written down. Newest first.
   `/numo/keeper/*` grant and derives that address. Nothing installed yet.
 - **Its funding account, #33.** 0.003 ETH sent to the EOA (by hand); then, from the box with that key,
   `SubAccounts.createAccount(0x753f…f83b, MarginEngine)` (tx `0x48cdd972…96aa`, block 52561572): #33, owned by
-  the EOA directly (not Matching), manager the engine. Empty.
+  the EOA directly (not Matching), manager the engine.
+- **The perp keeper's cash floor to 0, ~17:34.** `/etc/numo/perp-keeper.env` backed up to
+  `perp-keeper.env.bak-20261013`, `MIN_KEEPER_CASH_USD=0` added after `MIN_KEEPER_ETH`, `numo-perp-keeper`
+  restarted: active, first pass ok, not dry run (its build reads the variable). Why: its $5,000 moves to the
+  engine keeper next, and with perp OI 0 and the perp close-only it has nothing to liquidate; without this it
+  alerts on low cash. Restore the default (1000) with its funding when the perp reopens. Template updated.
+- **#23's cash to #33.** From the box: the perp keeper's key `CashAsset.withdraw(23, 5000 USDC, 0x753f…f83b)`
+  (tx `0x40adb7e9…61f0`, block 52561837); the engine keeper's key `USDC.approve(CashAsset, 5000)` (block
+  52561848) and `CashAsset.deposit(33, 5000)` (tx `0x6eab5e82…5b82`, block 52561849). After: #33 holds
+  5,000 cash and nothing else; #23 holds 0.0000023 (interest); the EOA 0 USDC, 0.002997 ETH.
 
 ## 2026-10-13 11:26–11:50 UTC: MarginEngine setup batch landed
 
