@@ -344,7 +344,7 @@ def self_test() -> int:
       continue
     lines = src.splitlines()
     for n, line in enumerate(lines):
-      if "if i > 0" not in line:
+      if "if i > " not in line:
         continue
       window = "\n".join(lines[n:n + 3])
       assert "gates_after_mining(" in window, f"{script.name}:{n + 1}: gates re-read before action i without gates_after_mining: {line.strip()}"
