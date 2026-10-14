@@ -8,6 +8,11 @@
  *
  * Usage (from services/perp-feeds): anvil --fork-url <Base RPC> --port 8549 --chain-id 31337, then
  *   pnpm tsx scripts/fork-pool-deficit.ts
+ *
+ * LOAD=<n> instead runs the mark-under-load check: n USDC-only shorts against one long, the winner settles, and one
+ * full tick at the production cap (SETTLE_PER_TICK=10) is timed. Run anvil with --block-time 2 (Base's) for it:
+ * forward-main publishes the mark before the deficit cover in each loop, so that tick's length is the most a due
+ * mark can wait beyond FORWARD_TICK_MS.
  */
 import assert from 'node:assert/strict';
 
@@ -110,6 +115,11 @@ const poolStart = { cash: await bal(POOL, CASH), cngn: await bal(POOL, ESCROW) }
 console.log(`pool #${POOL} at the fork: ${formatUnits(poolStart.cash, 18)} USDC, ${formatUnits(poolStart.cngn, 18)} cNGN`);
 
 const mark0 = (await read<{ markPrice: bigint }>(FUTURE, abi.future, 'futureContracts', [SUB_ID])).markPrice;
+const LOAD = Number(process.env.LOAD ?? 0);
+if (LOAD > 0) {
+  await markUnderLoad(LOAD);
+  process.exit(0);
+}
 const long = await open('0x00000000000000000000000000000000000b0b01');
 const shortUsdcA = await open('0x00000000000000000000000000000000000b0b02');
 const shortUsdcB = await open('0x00000000000000000000000000000000000b0b03');
@@ -182,4 +192,47 @@ for (let b = head - 12n; b <= head; b++) {
     const r = await pub.getTransactionReceipt({ hash: tx.hash });
     console.log(`  keeper settlement ${tx.hash.slice(0, 10)}: gas ${r.gasUsed}`);
   }
+}
+
+/** n USDC-only shorts of one contract against one long of n; the long settles; one production tick is timed. */
+async function markUnderLoad(n: number) {
+  const user = (i: number) => `0x00000000000000000000000000000000000c${(0x1000 + i).toString(16)}` as Address;
+  const long = await open(user(0));
+  await deposit(user(0), long, USDC, CASH, BigInt(n) * 500n * 10n ** 6n);
+  const shorts: bigint[] = [];
+  for (let i = 1; i <= n; i++) {
+    const acc = await open(user(i));
+    await deposit(user(i), acc, USDC, CASH, 1_000n * 10n ** 6n);
+    await send(OPERATOR, SUBACCOUNTS, abi.sa, 'submitTransfer', [
+      { fromAcc: acc, toAcc: long, asset: FUTURE, subId: SUB_ID, amount: ONE, assetData: toHex(mark0, { size: 32 }) },
+      '0x',
+    ]);
+    shorts.push(acc);
+  }
+  await test.increaseTime({ seconds: 60 });
+  await test.mine({ blocks: 1 });
+  await send(VAULT, FUTURE, abi.future, 'setMark', [SUB_ID, (await pub.getBlock()).timestamp, (mark0 * 101n) / 100n]);
+  await send(OPERATOR, ENGINE, abi.engine, 'settleAccount', [long]);
+  console.log(`load: ${n} USDC-only losers, pool ${formatUnits(await bal(POOL, CASH), 18)} USDC after the winner settled`);
+  const config = loadForwardConfig({
+    RPC_URL: RPC,
+    CHAIN_ID: '31337',
+    RELAYER_KEY,
+    FORWARD_SIGNER_KEY: keccak256(toHex('numo.fork-pool-deficit.forward')),
+    DATA_SUBMITTER: '0xe0C06DD245f1e8C8bC516c66C66e64648987F912',
+    INDEX_FEED: '0xFaC420d160C7c219A72DC676971670980bAC20a5',
+    FORWARD_FEED: '0xbB34Ee2435f050b6B7e46D6C3F8247EA77d6ffA6',
+    FUTURE_ASSET: FUTURE,
+    FUTURE_SUB_ID: String(SUB_ID),
+    FUTURE_MANAGER: ENGINE,
+    CARRY: '118000000000000000',
+  });
+  const keeper = new ExpiryKeeper(config, createChain(config, privateKeyToAccount(config.FORWARD_SIGNER_KEY as Hex)), async (key) => {
+    console.log(`  alert ${key}`);
+  });
+  const started = Date.now();
+  const outcome = await keeper.coverPoolDeficit();
+  const seconds = (Date.now() - started) / 1000;
+  console.log(`load: one tick settled ${outcome.settled} (cap ${config.SETTLE_PER_TICK}) in ${seconds.toFixed(1)}s, net $${formatUnits(outcome.netUsd ?? 0n, 18)}`);
+  console.log(`load: a mark due just after the publisher ran waits FORWARD_TICK_MS (${config.FORWARD_TICK_MS / 1000}s) + ${seconds.toFixed(1)}s; minMarkInterval 3600s, FORWARD_MARK_LATE_MS ${config.FORWARD_MARK_LATE_MS / 1000}s`);
 }
