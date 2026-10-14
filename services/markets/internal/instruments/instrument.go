@@ -1,6 +1,7 @@
 package instruments
 
 import (
+	"math/big"
 	"strings"
 	"time"
 )
@@ -52,27 +53,30 @@ type Metadata struct {
 	// quote notional. Everything downstream reads them from here: the matcher charges them, the
 	// funding check reserves them, and /v1/markets serves them so the UI never carries its own
 	// copy. A fee that lives in two repos disagrees the first time one of them changes.
-	TakerFeeBps        int           `json:"taker_fee_bps"`
-	MakerFeeBps        int           `json:"maker_fee_bps"`
-	ContractMultiplier string        `json:"contract_multiplier"`
-	QuotePrecision     int           `json:"quote_precision"`
-	PricingModel       string        `json:"pricing_model,omitempty"`
-	PriceSemantics     string        `json:"price_semantics,omitempty"`
-	DisplayPriceKind   string        `json:"display_price_kind,omitempty"`
-	DisplaySemantics   string        `json:"display_semantics,omitempty"`
-	DisplayLabel       string        `json:"display_label,omitempty"`
-	DisplayName        string        `json:"display_name,omitempty"`
-	SettlementNote     string        `json:"settlement_note,omitempty"`
-	OrderEntrySpec     string        `json:"order_entry_spec,omitempty"`
-	UIPriceUnit        string        `json:"ui_price_unit,omitempty"`
-	UISizeUnit         string        `json:"ui_size_unit,omitempty"`
-	UISideMeaning      string        `json:"ui_side_meaning,omitempty"`
-	EnginePriceUnit    string        `json:"engine_price_unit,omitempty"`
-	EngineAmountUnit   string        `json:"engine_amount_unit,omitempty"`
-	EngineSidePolicy   string        `json:"engine_side_policy,omitempty"`
-	UIPriceToEngine    string        `json:"ui_price_to_engine,omitempty"`
-	UISizeToEngine     string        `json:"ui_size_to_engine,omitempty"`
-	FundingInterval    time.Duration `json:"-"`
+	TakerFeeBps        int    `json:"taker_fee_bps"`
+	MakerFeeBps        int    `json:"maker_fee_bps"`
+	ContractMultiplier string `json:"contract_multiplier"`
+	// AmountScale, when set, is the signed on-chain amount of one unit of desired_amount, and the
+	// only one intake takes. Empty leaves it to each order, as spot and the perp always have.
+	AmountScale      string        `json:"amount_scale,omitempty"`
+	QuotePrecision   int           `json:"quote_precision"`
+	PricingModel     string        `json:"pricing_model,omitempty"`
+	PriceSemantics   string        `json:"price_semantics,omitempty"`
+	DisplayPriceKind string        `json:"display_price_kind,omitempty"`
+	DisplaySemantics string        `json:"display_semantics,omitempty"`
+	DisplayLabel     string        `json:"display_label,omitempty"`
+	DisplayName      string        `json:"display_name,omitempty"`
+	SettlementNote   string        `json:"settlement_note,omitempty"`
+	OrderEntrySpec   string        `json:"order_entry_spec,omitempty"`
+	UIPriceUnit      string        `json:"ui_price_unit,omitempty"`
+	UISizeUnit       string        `json:"ui_size_unit,omitempty"`
+	UISideMeaning    string        `json:"ui_side_meaning,omitempty"`
+	EnginePriceUnit  string        `json:"engine_price_unit,omitempty"`
+	EngineAmountUnit string        `json:"engine_amount_unit,omitempty"`
+	EngineSidePolicy string        `json:"engine_side_policy,omitempty"`
+	UIPriceToEngine  string        `json:"ui_price_to_engine,omitempty"`
+	UISizeToEngine   string        `json:"ui_size_to_engine,omitempty"`
+	FundingInterval  time.Duration `json:"-"`
 	// Where this market settles. Per market because the perp runs on its own stack: its orders name
 	// its own TradeModule, which settles in its own CashAsset, margined by its own SRM. Spot's are
 	// the process-wide TRADE_MODULE_ADDRESS / QUOTE_ASSET_ADDRESS, exactly as before.
@@ -202,6 +206,15 @@ func (r *Registry) Identifiers() []string {
 	return out
 }
 
+// FixedAmountScale is AmountScale as an integer, and whether the market fixes one.
+func (m Metadata) FixedAmountScale() (*big.Int, bool) {
+	scale, ok := new(big.Int).SetString(strings.TrimSpace(m.AmountScale), 10)
+	if !ok || scale.Sign() <= 0 {
+		return nil, false
+	}
+	return scale, true
+}
+
 // servable reports whether the market can answer a request: enabled, with an asset to read.
 func (m Metadata) servable() bool {
 	return m.Enabled && m.AssetAddress != ""
@@ -212,7 +225,7 @@ func assetAndSubIDKey(assetAddress, subID string) string {
 }
 
 // AmountStep is the step every market's desired_amount is taken in, in the market's own units (whole
-// cNGN on spot and the perp, whole contracts on the future): the one source for the API's amount
+// cNGN on spot and the perp, whole USDC of notional on the future): the one source for the API's amount
 // normalization and for what /v1/markets says. A listing's min_size used to say 0.001 (the future) and
 // 0.000001 (spot, the perp) while intake refused anything but whole steps; on 2026-10-13 the futures
 // market maker sized to the listing and had its 1.5-contract rung refused.

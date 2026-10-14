@@ -3,6 +3,7 @@ package matching
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"strings"
@@ -19,66 +20,109 @@ type tradeActionData struct {
 	IsBid         bool
 }
 
+// CancelReasonUnmatchable is the cancel reason for an order whose signed action can never settle
+// against the order it crossed: a unit or market the signature disagrees with.
+const CancelReasonUnmatchable = "unmatchable_signed_order"
+
+// unmatchableError is a pair that can never settle as signed, whatever the book does: it depends only
+// on the two orders' signatures and the fill, so a retry repeats it and holds the top of the book. legs
+// names the orders at fault ("taker", "maker"), which the venue cancels.
+type unmatchableError struct {
+	legs []string
+	err  error
+}
+
+func (u *unmatchableError) Error() string { return u.err.Error() }
+func (u *unmatchableError) Unwrap() error { return u.err }
+
+func unmatchable(err error, legs ...string) error {
+	if err == nil {
+		return nil
+	}
+	var already *unmatchableError
+	if errors.As(err, &already) {
+		return err
+	}
+	return &unmatchableError{legs: legs, err: err}
+}
+
+// unmatchableLegs is the legs to cancel for an error from computeExecutionUnits, or nil when the
+// error is not one a retry cannot fix.
+func unmatchableLegs(err error) []string {
+	var u *unmatchableError
+	if errors.As(err, &u) {
+		return u.legs
+	}
+	return nil
+}
+
 type executionUnits struct {
 	FillPrice  string
 	FillAmount string
 }
 
+// computeExecutionUnits turns a fill in order units into the signed units the chain settles. Every
+// error it returns is unmatchable: it follows from the two signatures and the fill amount alone.
 func computeExecutionUnits(instrument instruments.Metadata, candidate orders.MatchCandidate, fillPriceTicks string, fillAmountAtomic string) (executionUnits, error) {
 	takerAction, err := parseTradeAction(candidate.Taker)
 	if err != nil {
-		return executionUnits{}, fmt.Errorf("parse taker signed action: %w", err)
+		return executionUnits{}, unmatchable(fmt.Errorf("parse taker signed action: %w", err), "taker")
 	}
 	makerAction, err := parseTradeAction(candidate.Maker)
 	if err != nil {
-		return executionUnits{}, fmt.Errorf("parse maker signed action: %w", err)
+		return executionUnits{}, unmatchable(fmt.Errorf("parse maker signed action: %w", err), "maker")
 	}
 
 	if err := validateActionMarket("taker", candidate.Taker, takerAction); err != nil {
-		return executionUnits{}, err
+		return executionUnits{}, unmatchable(err, "taker")
 	}
 	if err := validateActionMarket("maker", candidate.Maker, makerAction); err != nil {
-		return executionUnits{}, err
+		return executionUnits{}, unmatchable(err, "maker")
 	}
 
 	takerLimitTicks, err := parsePositiveInt(candidate.Taker.LimitPriceTicks, "taker limit_price_ticks")
 	if err != nil {
-		return executionUnits{}, err
+		return executionUnits{}, unmatchable(err, "taker")
 	}
 	makerLimitTicks, err := parsePositiveInt(candidate.Maker.LimitPriceTicks, "maker limit_price_ticks")
 	if err != nil {
-		return executionUnits{}, err
+		return executionUnits{}, unmatchable(err, "maker")
 	}
 	fillPriceTickInt, err := parsePositiveInt(fillPriceTicks, "fill_price_ticks")
 	if err != nil {
-		return executionUnits{}, err
+		return executionUnits{}, unmatchable(err, "taker", "maker")
 	}
 	takerDesiredAtomic, err := parsePositiveInt(candidate.Taker.DesiredAmount, "taker desired_amount")
 	if err != nil {
-		return executionUnits{}, err
+		return executionUnits{}, unmatchable(err, "taker")
 	}
 	makerDesiredAtomic, err := parsePositiveInt(candidate.Maker.DesiredAmount, "maker desired_amount")
 	if err != nil {
-		return executionUnits{}, err
+		return executionUnits{}, unmatchable(err, "maker")
 	}
 	fillAmountAtomicInt, err := parsePositiveInt(fillAmountAtomic, "fill_amount_atomic")
 	if err != nil {
-		return executionUnits{}, err
+		return executionUnits{}, unmatchable(err, "taker", "maker")
 	}
 
 	priceScale, err := inferSharedScale(
 		"price",
 		takerLimitTicks, takerAction.LimitPrice,
 		makerLimitTicks, makerAction.LimitPrice,
+		nil,
 	)
 	if err != nil {
 		return executionUnits{}, err
 	}
 
+	// A market that fixes its unit (spot, the future) knows which leg is off it; otherwise (the perp)
+	// the incoming order of a pair at two different scales is cancelled.
+	fixedAmountScale, _ := instrument.FixedAmountScale()
 	amountScale, err := inferSharedScale(
 		"amount",
 		takerDesiredAtomic, takerAction.DesiredAmount,
 		makerDesiredAtomic, makerAction.DesiredAmount,
+		fixedAmountScale,
 	)
 	if err != nil {
 		return executionUnits{}, err
@@ -89,30 +133,26 @@ func computeExecutionUnits(instrument instruments.Metadata, candidate orders.Mat
 
 	takerRemaining, err := scaledRemaining(candidate.Taker, amountScale)
 	if err != nil {
-		return executionUnits{}, err
+		return executionUnits{}, unmatchable(err, "taker")
 	}
 	makerRemaining, err := scaledRemaining(candidate.Maker, amountScale)
 	if err != nil {
-		return executionUnits{}, err
+		return executionUnits{}, unmatchable(err, "maker")
 	}
 
 	if fillAmount.Cmp(takerRemaining) > 0 {
-		return executionUnits{}, fmt.Errorf("fill_amount exceeds taker remaining desired amount")
+		return executionUnits{}, unmatchable(fmt.Errorf("fill_amount exceeds taker remaining desired amount"), "taker")
 	}
 	if fillAmount.Cmp(makerRemaining) > 0 {
-		return executionUnits{}, fmt.Errorf("fill_amount exceeds maker remaining desired amount")
+		return executionUnits{}, unmatchable(fmt.Errorf("fill_amount exceeds maker remaining desired amount"), "maker")
 	}
 
 	if err := validatePriceScaleAlignment(candidate.Taker, takerAction, fillPrice, "taker"); err != nil {
-		return executionUnits{}, err
+		return executionUnits{}, unmatchable(err, "taker")
 	}
 	if err := validatePriceScaleAlignment(candidate.Maker, makerAction, fillPrice, "maker"); err != nil {
-		return executionUnits{}, err
+		return executionUnits{}, unmatchable(err, "maker")
 	}
-
-	// On-chain signed order units are authoritative. Spot order entry is translated
-	// before persistence, so this path remains consistent by deriving units directly from signatures.
-	_ = instrument
 
 	return executionUnits{FillPrice: fillPrice.String(), FillAmount: fillAmount.String()}, nil
 }
@@ -130,27 +170,46 @@ func validatePriceScaleAlignment(order orders.Order, action tradeActionData, fil
 	return nil
 }
 
-func inferSharedScale(label string, leftBase *big.Int, leftSigned *big.Int, rightBase *big.Int, rightSigned *big.Int) (*big.Int, error) {
-	if leftBase.Sign() <= 0 || rightBase.Sign() <= 0 {
-		return nil, fmt.Errorf("%s base value must be positive", label)
+// inferSharedScale is the one scale both legs are signed at (signed value per unit). With fixed set,
+// a leg at any other scale is the leg at fault; without it, the taker of legs that disagree is.
+func inferSharedScale(label string, leftBase *big.Int, leftSigned *big.Int, rightBase *big.Int, rightSigned *big.Int, fixed *big.Int) (*big.Int, error) {
+	legScale := func(role string, base, signed *big.Int) (*big.Int, error) {
+		if base.Sign() <= 0 {
+			return nil, unmatchable(fmt.Errorf("%s base value must be positive", label), role)
+		}
+		if signed.Sign() <= 0 {
+			return nil, unmatchable(fmt.Errorf("%s signed value must be positive", label), role)
+		}
+		scale, rem := new(big.Int).QuoRem(signed, base, new(big.Int))
+		if rem.Sign() != 0 {
+			return nil, unmatchable(fmt.Errorf("%s scale mismatch for %s signed order", label, role), role)
+		}
+		return scale, nil
 	}
-	if leftSigned.Sign() <= 0 || rightSigned.Sign() <= 0 {
-		return nil, fmt.Errorf("%s signed value must be positive", label)
+	leftScale, err := legScale("taker", leftBase, leftSigned)
+	if err != nil {
+		return nil, err
 	}
-
-	leftScale, leftRem := new(big.Int).QuoRem(leftSigned, leftBase, new(big.Int))
-	if leftRem.Sign() != 0 {
-		return nil, fmt.Errorf("%s scale mismatch for taker signed order", label)
+	rightScale, err := legScale("maker", rightBase, rightSigned)
+	if err != nil {
+		return nil, err
 	}
-	rightScale, rightRem := new(big.Int).QuoRem(rightSigned, rightBase, new(big.Int))
-	if rightRem.Sign() != 0 {
-		return nil, fmt.Errorf("%s scale mismatch for maker signed order", label)
+	if fixed != nil {
+		var off []string
+		if leftScale.Cmp(fixed) != 0 {
+			off = append(off, "taker")
+		}
+		if rightScale.Cmp(fixed) != 0 {
+			off = append(off, "maker")
+		}
+		if len(off) > 0 {
+			return nil, unmatchable(fmt.Errorf("%s scale is not the market's %s for the %s signed order", label, fixed, strings.Join(off, " and ")), off...)
+		}
 	}
 	if leftScale.Cmp(rightScale) != 0 {
-		return nil, fmt.Errorf("%s scale mismatch between taker and maker signed orders", label)
-	}
-	if leftScale.Sign() <= 0 {
-		return nil, fmt.Errorf("%s scale must be positive", label)
+		// No fixed unit to say which is right (the perp). The resting order was matchable until this one
+		// arrived, so the incoming order goes: cancelling both would let anyone wipe a quote for free.
+		return nil, unmatchable(fmt.Errorf("%s scale mismatch between taker and maker signed orders", label), "taker")
 	}
 	return leftScale, nil
 }

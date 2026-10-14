@@ -358,6 +358,15 @@ func validateActionDataInvariants(raw json.RawMessage, side orders.Side, assetAd
 		return fmt.Errorf("action_json.data.limitPrice is not aligned with normalized limit_price")
 	}
 	amountScale, amountRem := new(big.Int).QuoRem(action.DesiredAmount, desiredAtomicInt, new(big.Int))
+	if fixed, ok := instrument.FixedAmountScale(); ok {
+		// The matcher crosses two orders only at one shared scale, and cancels a resting order off it
+		// when it crosses: a market that fixes its scale refuses any other at intake.
+		if amountRem.Sign() != 0 || amountScale.Cmp(fixed) != 0 {
+			return fmt.Errorf("action_json.data.desiredAmount must be desired_amount x %s on %s (one unit is %s)",
+				fixed.String(), instrument.Symbol, instrument.EngineAmountUnit)
+		}
+		return nil
+	}
 	if amountRem.Sign() == 0 && amountScale.Sign() > 0 {
 		return nil
 	}
