@@ -5,6 +5,59 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-14 15:50 UTC: numo-future-feeds and the pager on `386b5d9` (#220: settle losers only while the VM pool's net is below zero)
+
+Both moved together, so the keeper and the pager judge the same net (pool #31's USDC cash plus its cNGN at the
+engine's spot feed, within $1) from the first tick.
+
+- **What.**
+  - `/home/ec2-user/exchange-future`: `95270de4` -> `386b5d98` (detached, clean). `pnpm install --frozen-lockfile
+    --filter perp-feeds...` (no lockfile change), `@numo/kms-signer` and `perp-feeds` built (`tsc` only; no forge on
+    the box). `dist/expiry-keeper.js` has `coverPoolDeficit`.
+  - `/etc/numo/future-feeds.env`: replaced by the repo's at `386b5d9`, byte for byte (`cmp`; sha256 `9d117935…`).
+    The only difference from the previous file, which was the repo's at `95270de4` byte for byte, is two lines:
+    `FUTURE_MANAGER=0xA19E296021c9DF25b90D96C2A0793CC3D0800758` (required by the new config: the pool, its cash, the
+    cNGN escrow and the spot feed are read through it) and `SETTLE_PER_TICK=10`. Old file kept as
+    `future-feeds.env.bak-20261014`. Unit unchanged (byte-identical to the checkout's).
+  - `/home/ec2-user/exchange-pager`: `292e5236` -> `386b5d98` (detached, clean). Only `check_perp_pager.py` differs
+    in between; `numo-perp-pager.service`, its timer and `/etc/numo/perp-pager.env` unchanged.
+  - `systemctl restart numo-future-feeds` at 15:50:34, and one pager run by hand (`systemctl start
+    numo-perp-pager.service`) right after; the timer carries on every minute.
+- **Why.** The hourly VM sweep settled every holder after each mark (~1,100 settlements a position over a series).
+  Settlement on touch, liquidation's own settle, close-out and margin views' pending VM keep everything correct;
+  what is left is timing, a winner paid from the pool before its losers pay in. #220 settles losers only while the
+  pool's net is below zero, at most 10 a tick, and alerts `future-pool-deficit-stranded` once per episode if none is
+  left. The pager's `future-pool-borrowing` and `future-pool-deficit-stuck` now judge the same net.
+- **Checked.** Before: both checkouts clean, the env and both units byte-identical to the repo at their commits.
+  After: `numo-future-feeds` active, 0 restarts, `[forward] signer 0xd65F…3650 (KMS), relayer 0xE5b8…e6de`, no
+  `pool-deficit-error` (the engine reads work; with nothing owed the cover logs nothing). Pager: `ok: 0 active`, and
+  its future line now reads `$0.00 cash, net $0.00`. The first mark under the new build landed on schedule at 16:12:47
+  (`0x54992d11…`, book-mid, block 52602510; the three before it at 13:11:57, 14:12:12 and 15:12:25), 0 restarts. Before merge: the full `rehearse-future-fork.ts` passed, and on a
+  2 s-block Base fork one capped tick (10 settlements) took 48.8 s, so a due mark waits at most ~1 min 50 s.
+- **Undo.** `cp /etc/numo/future-feeds.env.bak-20261014 /etc/numo/future-feeds.env`; in exchange-future
+  `git checkout --detach 95270de4` and rebuild `perp-feeds`; `systemctl restart numo-future-feeds`; in exchange-pager
+  `git checkout --detach 292e5236`.
+
+## 2026-10-14 10:50–11:55 UTC: spot market maker moved from #26 (perp SRM) to #34 (MarginEngine)
+
+- **MM-key grant, applied and revoked.** `terraform apply -var ops_box_mm_key_grant=true` from `main` (`66da52d`,
+  #219) at ~10:50 (1 add, 1 change); revoked by the apply that restarted the bot at ~11:52 (the grant's policy
+  destroyed, the Deny's exception removed).
+- **`/home/ec2-user/exchange-perp/scripts/local-venue/dist`** replaced by `ops/migrate-spot-mm-dist` at `e96ecc0`
+  (`git fetch origin ops/migrate-spot-mm-dist && git checkout FETCH_HEAD -- scripts/local-venue/dist`, as
+  ec2-user): the `migrate-spot-mm` bundle built off-box from `66da52d` (its `BUILD` says so). The previous bundle
+  (`53e3d478a5a4`, 2026-10-04) predated `engine-account` and read #26's balances from the wrong escrows. Nothing else
+  in exchange-perp changed; the perp keeper and feeds that run from it were not restarted.
+- **Run through `run-with-ssm-mm.sh`** with the spot bot stopped (`desired_count_market_maker = 0` at 10:58):
+  `withdraw` from #26 (379.658991 USDC, 381,450.280616 cNGN to the MM wallet; blocks 52594214/16), `engine-account
+  379658991` (#34 under the engine, block 52594423; the first attempt's create was refused at gas estimation
+  against a node behind the approve, so nothing was opened), `deposit-cngn 34`. Each phase's own post-check failed
+  with "Unknown block" (the RPC lagging its receipt); every result was confirmed on chain instead.
+- **After.** #34 holds 379.658991 USDC and 381,450.280616 cNGN; `mm_subaccount_id = "34"` in the operator-local
+  tfvars; market-maker-spot td :35 quoting 8 levels a side from #34 since 11:55, execution td :31 with canary accounts
+  "34,24". Not on the box: the venue's `SPOT_MARGIN_MANAGER_ADDRESS` / `DEPOSIT_MANAGER_ADDRESS` moved to the engine
+  at ~12:15 with the trading-app deploy of `43b9368`.
+
 ## 2026-10-13 19:00–19:01 UTC: MarginEngine enable batch landed; USDC-cNGN-30NOV26 open
 
 Run from the box over SSM: `run-with-ssm-mark.sh python3 scripts/ops/propose_margin_engine_batch.py enable --propose`
