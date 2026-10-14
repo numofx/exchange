@@ -207,6 +207,12 @@ variable "cngn_perp_srm_address" {
   default = "0xDE0423D0a1E15536265C9513d2e0c10DAb5835D4" # StandardManager (perp SRM)
 }
 
+variable "deposit_manager_address" {
+  description = "DEPOSIT_MANAGER_ADDRESS: the manager /v1/deposits opens accounts under. Empty keeps the perp SRM; the MarginEngine cutover sets the engine, with spot_margin_manager_address."
+  type        = string
+  default     = ""
+}
+
 # The perp's cNGN collateral escrow (risk-core CNGN_PERP_COLLATERAL.json `escrow`). Set it only
 # once the vault batch that whitelists it on the perp SRM has executed: markets-service then lists
 # it under the perp's collateral_assets and reads each account's cNGN, and accepts withdrawals

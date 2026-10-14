@@ -9,13 +9,16 @@
  * Phases, each idempotent and a dry run unless --execute is given:
  *   status     the MM's spot account, its balances and resting orders, and the perp stack's addresses
  *   cancel     cancel every resting order of the MM (the bot must be stopped first)
- *   withdraw   sign a WithdrawalModule action for the whole wrapped-USDC and spot-cNGN balances and
- *              submit each to the venue, which pays the tokens to the MM wallet
+ *   withdraw   sign a WithdrawalModule action for the spot account's whole USDC and cNGN balances and
+ *              submit each to the venue, which pays the tokens to the MM wallet. The escrows follow the
+ *              account's manager: the 2026-09-10 stack's under its retired SRM, the perp stack's cash and
+ *              cNGN escrow under the perp SRM (the spot maker's #26, moving to the MarginEngine).
+ *              Refused while any of the MM's spot orders rest: stop the bot and let them expire first.
  *   deposit    open the unified account: SubAccountCreator.createAndDepositSubAccount with the USDC
  *              into the perp cash under the perp SRM, then escrow.deposit of the cNGN; prints the id
  *              to set as MM_SUBACCOUNT_ID / MM_RECIPIENT_ID
- *   deposit-cngn <id>  escrow.deposit of the wallet's whole cNGN into an existing unified account
- *              (the second half of `deposit` when its first half landed and the second did not)
+ *   deposit-cngn <id>  escrow.deposit of the wallet's whole cNGN into an existing account of the MM's
+ *              under the perp SRM or the MarginEngine (the second half of `deposit` or `engine-account`)
  *   perp-cancel  cancel the perp maker's resting cNGN-PERP orders (stop market-maker-perp first: it does
  *              not cancel on shutdown). Spot orders, the other bot's, are not touched.
  *   perp-close <price> --against=<id>  buy back the perp maker's short on #MM_PERP_SUBACCOUNT_ID (24) at
@@ -29,7 +32,8 @@
  *   engine-account <usdc units>  open the futures market maker's account under the MarginEngine:
  *              SubAccountCreator.createAndDepositSubAccount with that much USDC into the future's cash
  *              (the perp's), manager the engine, both read from the future's listing; prints the id to
- *              set as mm_future_subaccount_id. Not idempotent: each --execute opens a new account.
+ *              set as mm_future_subaccount_id, or as mm_subaccount_id for the spot maker. Not
+ *              idempotent: each --execute opens a new account.
  *
  * Everything here is what the app does for a user, with the MM's key instead of a wallet prompt.
  */
@@ -137,17 +141,34 @@ async function restingOrders(market = SPOT_SYMBOL) {
   return resting;
 }
 
+/**
+ * The USDC and cNGN escrows an account of the spot maker holds, by its manager: the 2026-09-10 stack's
+ * under that stack's SRM, the perp stack's (also the MarginEngine's) under the perp SRM or the engine.
+ */
+async function spotEscrows(account: bigint): Promise<{ manager: Address; usdc: Address; cngn: Address }> {
+  const manager = await client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'manager', args: [account] });
+  if (manager.toLowerCase() === LEGACY.srm.toLowerCase()) {
+    return { manager, usdc: LEGACY.wrappedUsdc, cngn: LEGACY.cngnEscrow };
+  }
+  const stack = await perpStack();
+  const engine = (await futureStack()).engine;
+  if (manager.toLowerCase() !== stack.srm.toLowerCase() && manager.toLowerCase() !== engine.toLowerCase()) {
+    throw new Error(`#${account} is under ${manager}: neither the retired spot SRM, the perp SRM nor the MarginEngine`);
+  }
+  return { manager, usdc: stack.cash, cngn: stack.escrow };
+}
+
 async function status() {
-  const mgr = await client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'manager', args: [SPOT_ACCOUNT] });
   const custodian = await client.readContract({ address: MATCHING, abi, functionName: 'subAccountToOwner', args: [SPOT_ACCOUNT] });
   const stack = await perpStack();
+  const escrows = await spotEscrows(SPOT_ACCOUNT);
   const out = {
     mmWallet: owner.address,
     spotAccount: SPOT_ACCOUNT.toString(),
-    spotAccountManager: mgr,
+    spotAccountManager: escrows.manager,
     spotAccountOwnerInMatching: custodian,
-    spotWrappedUsdc: (await ledger(SPOT_ACCOUNT, LEGACY.wrappedUsdc)).toString(),
-    spotCngn: (await ledger(SPOT_ACCOUNT, LEGACY.cngnEscrow)).toString(),
+    spotUsdc: (await ledger(SPOT_ACCOUNT, escrows.usdc)).toString(),
+    spotCngn: (await ledger(SPOT_ACCOUNT, escrows.cngn)).toString(),
     walletUsdc: (await client.readContract({ address: USDC, abi, functionName: 'balanceOf', args: [owner.address] })).toString(),
     walletCngn: (await client.readContract({ address: CNGN, abi, functionName: 'balanceOf', args: [owner.address] })).toString(),
     restingSpotOrders: (await restingOrders()).length,
@@ -229,8 +250,14 @@ async function withdrawOne(escrow: Address, token: Address, decimals: number, ac
 }
 
 async function withdraw() {
-  await withdrawOne(LEGACY.wrappedUsdc, USDC, 6);
-  await withdrawOne(LEGACY.cngnEscrow, CNGN, 6);
+  const resting = await restingOrders();
+  if (resting.length > 0) {
+    throw new Error(`${resting.length} ${SPOT_SYMBOL} order(s) of the MM still rest: stop market-maker-spot (desired_count_market_maker = 0) and let them expire (60 s), then withdraw`);
+  }
+  const escrows = await spotEscrows(SPOT_ACCOUNT);
+  console.log(`#${SPOT_ACCOUNT} is under ${escrows.manager}: withdrawing ${escrows.usdc} (USDC) and ${escrows.cngn} (cNGN)`);
+  await withdrawOne(escrows.usdc, USDC, 6);
+  await withdrawOne(escrows.cngn, CNGN, 6);
 }
 
 async function deposit() {
@@ -277,7 +304,13 @@ async function depositCngn() {
   if (id === 0n) throw new Error('deposit-cngn needs the unified account id');
   const stack = await perpStack();
   const mgr = await client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'manager', args: [id] });
-  if (mgr.toLowerCase() !== stack.srm.toLowerCase()) throw new Error(`account #${id} is under ${mgr}, not the perp SRM`);
+  const engine = (await futureStack()).engine;
+  if (mgr.toLowerCase() !== stack.srm.toLowerCase() && mgr.toLowerCase() !== engine.toLowerCase()) {
+    throw new Error(`account #${id} is under ${mgr}, neither the perp SRM nor the MarginEngine`);
+  }
+  // The perp's cNGN escrow is the spot asset and the engine's cNGN collateral alike; it must take the manager.
+  const takes = await client.readContract({ address: stack.escrow, abi, functionName: 'whitelistedManager', args: [mgr] });
+  if (!takes) throw new Error(`${stack.escrow} does not take ${mgr} as a manager`);
   const custodian = await client.readContract({ address: MATCHING, abi, functionName: 'subAccountToOwner', args: [id] });
   if (custodian.toLowerCase() !== owner.address.toLowerCase()) throw new Error(`account #${id} is not the MM's in Matching (owner ${custodian})`);
   const cngn = await client.readContract({ address: CNGN, abi, functionName: 'balanceOf', args: [owner.address] });
@@ -351,7 +384,7 @@ async function engineAccount() {
   if (mgr.toLowerCase() !== engine.toLowerCase()) throw new Error(`#${id} is under ${mgr}, not the engine`);
   if (custodian.toLowerCase() !== owner.address.toLowerCase()) throw new Error(`#${id} is not the MM's in Matching (owner ${custodian})`);
   console.log(`ok: #${id} under ${engine}, the MM's in Matching, cash ${held} (18dp), IM surplus ${im} (18dp)`);
-  console.log(`set mm_future_subaccount_id = "${id}" (infra/aws/market-maker-future.tf) before starting the future market maker`);
+  console.log(`set mm_future_subaccount_id = "${id}" for the future maker, or mm_subaccount_id = "${id}" for the spot maker (counts.auto.tfvars), before starting it`);
 }
 
 /** The perp as the venue lists it: never typed in by hand. */
