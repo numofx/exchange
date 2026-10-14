@@ -63,11 +63,15 @@ locals {
     var.deposit_cngn_min_amount == "" ? "" : "${var.cngn_perp_collateral_address}:cNGN:${var.deposit_cngn_min_amount}",
   ]))
 
+  # The manager a deposit opens an account under: the perp SRM until the MarginEngine cutover, then the
+  # engine, which spot and the future share (the perp winds down on the SRM and opens no new accounts).
+  deposit_manager_address = var.deposit_manager_address == "" ? var.cngn_perp_srm_address : var.deposit_manager_address
+
   markets_deposit_env = var.deposits_enabled ? [
     { name = "DEPOSITS_ENABLED", value = "true" },
     { name = "DEPOSIT_MODULE_ADDRESS", value = var.deposit_module_address },
     { name = "DEPOSIT_ASSET_ADDRESSES", value = var.cngn_perp_cash_address },
-    { name = "DEPOSIT_MANAGER_ADDRESS", value = var.cngn_perp_srm_address },
+    { name = "DEPOSIT_MANAGER_ADDRESS", value = local.deposit_manager_address },
     { name = "DEPOSIT_MIN_AMOUNT", value = var.deposit_min_amount },
     { name = "DEPOSIT_ASSETS", value = local.deposit_assets },
     { name = "DEPOSITS_PER_OWNER_PER_MINUTE", value = tostring(var.deposits_per_owner_per_minute) },
@@ -81,7 +85,7 @@ locals {
     { name = "DEPOSITS_ENABLED", value = "true" },
     { name = "DEPOSIT_MODULE_ADDRESS", value = var.deposit_module_address },
     { name = "DEPOSIT_ASSET_ADDRESSES", value = var.cngn_perp_cash_address },
-    { name = "DEPOSIT_MANAGER_ADDRESS", value = var.cngn_perp_srm_address },
+    { name = "DEPOSIT_MANAGER_ADDRESS", value = local.deposit_manager_address },
     { name = "DEPOSIT_MIN_AMOUNT", value = var.deposit_min_amount },
     { name = "DEPOSIT_ASSETS", value = local.deposit_assets },
     { name = "DEPOSIT_MAX_GAS_ETH_PER_HOUR", value = var.deposit_max_gas_eth_per_hour },
