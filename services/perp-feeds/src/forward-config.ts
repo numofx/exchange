@@ -35,6 +35,11 @@ const envSchema = z
     FORWARD_FEED: address,
     FUTURE_ASSET: address,
     FUTURE_SUB_ID: uint,
+    /**
+     * The future's MarginEngine. The pool's deficit is read through it (its pool account, cash, the
+     * market's cNGN escrow and spot feed), so nothing else about the pool is configured.
+     */
+    FUTURE_MANAGER: address,
     /** Annual NGN-over-USD carry, 18dp: the forward without a book is index * (1 + CARRY * tau). */
     CARRY: uint,
     MARKETS_SERVICE_URL: z.string().url().default('https://api.numofx.com'),
@@ -63,6 +68,11 @@ const envSchema = z
     FIXING_SAMPLE_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
     /** Close-outs per tick after settlement. */
     CLOSE_OUT_BATCH: z.coerce.number().int().positive().default(20),
+    /**
+     * Losers settled per tick while the VM pool's net is below zero (expiry-keeper.ts
+     * coverPoolDeficit). Bounds how long one tick runs, and the relayer's gas if the net is misread.
+     */
+    SETTLE_PER_TICK: z.coerce.number().int().positive().default(10),
 
     TIMESTAMP_SAFETY_SEC: z.coerce.number().int().nonnegative().default(15),
     DEADLINE_SEC: z.coerce.number().int().positive().default(60),

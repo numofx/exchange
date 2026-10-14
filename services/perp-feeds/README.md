@@ -123,7 +123,23 @@ deploy script refuses one key for both). The signer is a **KMS key** (`FORWARD_S
 is refused on Base mainnet. The relayer is its own too (`/numo/feeds/forward_relayer_key`): one
 relayer shared by two processes races for nonces.
 
-**Expiry** (`src/expiry-keeper.ts`, the same process, every tick after the publisher), with nothing
+**The VM pool** (`src/expiry-keeper.ts` `coverPoolDeficit`, every tick after the publisher). Nothing
+is settled on a schedule: MarginEngine settles an account's VM before every trade, transfer,
+withdrawal and liquidation, close-out settles it at expiry, and margin counts pending VM meanwhile.
+What lazy settlement leaves is timing: a winner who trades or withdraws is paid from the VM pool at
+once (#31 under the engine, read from `FUTURE_MANAGER`), in cNGN while it holds some and borrowed USDC
+after, before its losers have paid in. So each tick reads the pool's **net** (USDC cash plus cNGN at
+the engine's spot feed, as the pager does) and, while it is below zero, settles losers, those whose
+settlement brings in the most USDC first (owed less the cNGN they hold, since settlement takes cNGN
+first), until it is back at or above zero, at most `SETTLE_PER_TICK` (10) a tick. Winners are left to
+settle themselves. If the net stays below zero with no loser left (the naira fell after everyone
+paid), it alerts `future-pool-deficit-stranded` once per episode: only a top-up of the pool account
+fixes that. A net within $1 of zero counts as covered (settlement's rounding, and the cash rate on a
+USDC debt the pool's cNGN covers), in both the keeper and the pager. It reads only the configured series (`FUTURE_SUB_ID`); a second series needs its own
+unit. The pager pages the same net: `future-pool-borrowing` past $250, `future-pool-deficit-stuck` after
+75 min at any size.
+
+**Expiry** (`src/expiry-keeper.ts`, the same process, every tick after the pool), with nothing
 but permissionless calls, each reading its state back from the chain first so a restart resumes:
 
 1. in the contract's `fixingWindow` (1 h) it records an index sample every `FIXING_SAMPLE_INTERVAL_MS`

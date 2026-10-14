@@ -35,8 +35,9 @@ Enable gates (all read live, all required):
   marks     the future has been marked within FORWARD_MARK_LATE (2h): the keeper is publishing
   reserve   the VM pool holds its cNGN reserve: FUTURE_RESERVE_MOVE of one side's notional at the cap being
             opened, in cNGN at the index (check_perp_pager.future_reserve_target_cngn). 0 since 2026-10-13:
-            no seed (winners are paid in USDC once the pool holds no cNGN; the pager pages a pool deficit
-            that outlasts a mark and its sweep). Refuses only if the index is unreadable
+            no seed (winners are paid in USDC once the pool holds no cNGN; numo-future-feeds settles losers
+            while the pool's net is below zero, and the pager pages one that lasts). Refuses only if the
+            index is unreadable
   escrow    the escrow cap still has a reserve's worth of headroom after the seed, so a top-up fits
   sm        the SecurityModule's cash covers a 25% step across the perp's open interest now (under the
             live SRM, until the cutover) and the future's one side at the cap being opened
