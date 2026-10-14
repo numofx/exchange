@@ -127,6 +127,8 @@ describe('forward publisher against real contracts on anvil', { skip: !RPC }, ()
       INDEX_FEED: at.index,
       FORWARD_FEED: at.forward,
       FUTURE_ASSET: at.future,
+      // no engine here: the deficit cover is not exercised
+      FUTURE_MANAGER: '0x00000000000000000000000000000000000000E9',
       FUTURE_SUB_ID: String(expiry),
       CARRY: String(CARRY),
       TIMESTAMP_SAFETY_SEC: '1',
