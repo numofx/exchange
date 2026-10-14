@@ -72,20 +72,23 @@ type marketPresentation struct {
 	TakerFeeBps        int    `json:"taker_fee_bps"`
 	MakerFeeBps        int    `json:"maker_fee_bps"`
 	ContractMultiplier string `json:"contract_multiplier,omitempty"`
-	SettlementNote     string `json:"settlement_note,omitempty"`
-	PricingModel       string `json:"pricing_model,omitempty"`
-	DisplayPriceKind   string `json:"display_price_kind,omitempty"`
-	AssetAddress       string `json:"asset_address,omitempty"`
-	SubID              string `json:"sub_id,omitempty"`
-	OrderEntrySpec     string `json:"order_entry_spec,omitempty"`
-	UIPriceUnit        string `json:"ui_price_unit,omitempty"`
-	UISizeUnit         string `json:"ui_size_unit,omitempty"`
-	UISideMeaning      string `json:"ui_side_meaning,omitempty"`
-	EnginePriceUnit    string `json:"engine_price_unit,omitempty"`
-	EngineAmountUnit   string `json:"engine_amount_unit,omitempty"`
-	EngineSidePolicy   string `json:"engine_side_policy,omitempty"`
-	UIPriceToEngine    string `json:"ui_price_to_engine,omitempty"`
-	UISizeToEngine     string `json:"ui_size_to_engine,omitempty"`
+	// AmountScale is the signed on-chain amount of one unit of desired_amount, where the market fixes
+	// one (the future: 1e15, a unit being 1 USDC of notional); intake refuses any other.
+	AmountScale      string `json:"amount_scale,omitempty"`
+	SettlementNote   string `json:"settlement_note,omitempty"`
+	PricingModel     string `json:"pricing_model,omitempty"`
+	DisplayPriceKind string `json:"display_price_kind,omitempty"`
+	AssetAddress     string `json:"asset_address,omitempty"`
+	SubID            string `json:"sub_id,omitempty"`
+	OrderEntrySpec   string `json:"order_entry_spec,omitempty"`
+	UIPriceUnit      string `json:"ui_price_unit,omitempty"`
+	UISizeUnit       string `json:"ui_size_unit,omitempty"`
+	UISideMeaning    string `json:"ui_side_meaning,omitempty"`
+	EnginePriceUnit  string `json:"engine_price_unit,omitempty"`
+	EngineAmountUnit string `json:"engine_amount_unit,omitempty"`
+	EngineSidePolicy string `json:"engine_side_policy,omitempty"`
+	UIPriceToEngine  string `json:"ui_price_to_engine,omitempty"`
+	UISizeToEngine   string `json:"ui_size_to_engine,omitempty"`
 	// What an order for this market is signed for and settles in, so a client resolves the stack
 	// from the venue rather than from its own configuration: the TradeModule, its quote asset, and
 	// the manager the market's accounts live under (absent for a spot market on its own stack).
@@ -1184,6 +1187,7 @@ func presentMarket(market instruments.Metadata) marketPresentation {
 		TakerFeeBps:          market.TakerFeeBps,
 		MakerFeeBps:          market.MakerFeeBps,
 		ContractMultiplier:   market.ContractMultiplier,
+		AmountScale:          market.AmountScale,
 		SettlementNote:       market.SettlementNote,
 		PricingModel:         market.PricingModel,
 		DisplayPriceKind:     market.DisplayPriceKind,
