@@ -130,6 +130,8 @@ describe('expiry keeper against a real FutureAsset on anvil', { skip: !RPC }, ()
       INDEX_FEED: at.index,
       FORWARD_FEED: at.index,
       FUTURE_ASSET: at.future,
+      // no engine here: the deficit cover is not exercised
+      FUTURE_MANAGER: '0x00000000000000000000000000000000000000E9',
       FUTURE_SUB_ID: String(expiry),
       CARRY: '0',
       FIXING_SAMPLE_INTERVAL_MS: '8000',

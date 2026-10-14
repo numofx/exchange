@@ -5,7 +5,7 @@ import { keccak256, toHex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 import { loadForwardConfig } from './forward-config.js';
-import { obtainSigner, sweep } from './forward-main.js';
+import { coverDeficit, obtainSigner } from './forward-main.js';
 
 const config = loadForwardConfig({
   RPC_URL: 'http://127.0.0.1:8545',
@@ -15,6 +15,7 @@ const config = loadForwardConfig({
   INDEX_FEED: '0x00000000000000000000000000000000000000A1',
   FORWARD_FEED: '0x00000000000000000000000000000000000000A4',
   FUTURE_ASSET: '0x00000000000000000000000000000000000000F0',
+  FUTURE_MANAGER: '0x00000000000000000000000000000000000000E9',
   FUTURE_SUB_ID: '1796047200',
   CARRY: '0',
 });
@@ -49,10 +50,10 @@ describe('forward signer at startup', () => {
   });
 });
 
-describe('VM sweep', () => {
-  it('alerts a sweep that throws, and does not take the loop down with it', async () => {
+describe('VM pool deficit cover', () => {
+  it('alerts a pass that throws, and does not take the loop down with it', async () => {
     const alerts: string[] = [];
-    await sweep({ sweep: async () => Promise.reject(new Error('rpc down')) }, async (key) => void alerts.push(key));
-    assert.deepEqual(alerts, ['sweep-error']);
+    await coverDeficit({ coverPoolDeficit: async () => Promise.reject(new Error('rpc down')) }, async (key) => void alerts.push(key));
+    assert.deepEqual(alerts, ['pool-deficit-error']);
   });
 });

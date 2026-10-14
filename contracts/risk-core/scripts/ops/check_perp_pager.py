@@ -35,12 +35,14 @@ while it does not exist) liquidates through the same auction and SecurityModule,
                      pool's reserve target: a full reserve top-up would no longer fit, and the
                      deposit would revert. Slack from 75% used. Raise the cap (vault) or ask traders
                      to margin in USDC.
-  future-pool-borrowing  the pool's USDC cash is below -FUTURE_POOL_BORROW_PAGE_USD: winners were paid
-                     in borrowed cash before losers paid in. Slack at any negative balance.
-  future-pool-deficit-stuck  the pool's USDC cash has stayed below zero for FUTURE_POOL_DEFICIT_STUCK_SEC
-                     (one hourly mark and its sweep, 75 min), at any size. With no reserve a deficit
-                     between a winner and its loser settling is expected; one that outlasts the next
-                     mark's sweep means a loser is not being settled.
+  future-pool-borrowing  the pool's net (USDC cash plus cNGN at the index, the engine's spot feed) is below
+                     -FUTURE_POOL_BORROW_PAGE_USD: winners were paid before losers paid in. Slack at any
+                     negative net. cNGN held against a USDC debt counts, so a pool that is short in cash
+                     but covered in cNGN is not a condition; a naira fall that uncovers it is.
+  future-pool-deficit-stuck  the pool's net has stayed below zero for FUTURE_POOL_DEFICIT_STUCK_SEC (75 min),
+                     at any size. numo-future-feeds settles losers every minute while the net is below
+                     zero (up to 10 a tick, and alerts future-pool-deficit-stranded if none are left), so
+                     a deficit that lasts this long means it is not working or cannot: top the pool up.
 
 Pager (one of; secrets from SSM via run-with-ssm-pager.sh):
   PAGER_PROVIDER=pushover     PUSHOVER_TOKEN, PUSHOVER_USER. Emergency priority: repeats every 60s
@@ -156,12 +158,16 @@ SEL_FUTURE_MARGIN_REQUIREMENTS = "0x84033e5e"  # futureMarginRequirements(uint25
 # marks, and the reserve changes neither settlement (which never reverts) nor anyone's margin. Without it
 # a winner settling before its loser is paid in borrowed cash for that window; future-pool-borrowing and
 # future-pool-deficit-stuck watch that instead. The earlier sizing, for raising it again: 0.30 (a full side
-# paying in USDC through a 25% move, plus one 5% mark a winner can draw between sweeps).
+# paying in USDC through a 25% move, plus one 5% mark a winner can draw before its losers settle).
 FUTURE_RESERVE_MOVE = 0.0
 FUTURE_RESERVE_PAGE_FRACTION = 0.25
 FUTURE_RESERVE_WARN_FRACTION = 0.5
 FUTURE_POOL_BORROW_PAGE_USD = 250.0
 FUTURE_POOL_DEFICIT_STUCK_SEC = 75 * 60
+# A net within $1 of zero is covered: settlement's rounding, and the cash rate on a USDC debt the pool's cNGN
+# covers, are not worth a page. The interest on a $5,000 debt at 10% crosses $1 within a day, about when a
+# top-up is worth doing. numo-future-feeds uses the same tolerance (POOL_NET_TOLERANCE).
+FUTURE_POOL_DUST_USD = 1.0
 FUTURE_ESCROW_WARN_USED = 0.75
 FUTURE_WARN_REPEAT_SEC = 6 * 3600
 
@@ -312,11 +318,16 @@ def sm_combined_warning(books: dict[str, tuple[float, float]], sm_cash_usd: floa
           f"would cost (page at {SM_COVERAGE_PAGE_X:.1f}x): fund it.")
 
 
-def future_pool_conditions(pool_cngn: float, pool_cash_usd: float, reserve_cngn: float | None,
+def pool_net_usd(pool_cngn: float, pool_cash_usd: float, spot_usd_per_cngn: float) -> float:
+  """The future's VM pool as numo-future-feeds judges it: its USDC cash plus its cNGN at the engine's spot feed."""
+  return pool_cash_usd + pool_cngn * spot_usd_per_cngn
+
+
+def future_pool_conditions(pool_cngn: float, pool_net: float, reserve_cngn: float | None,
                            open_: bool, negative_for_sec: float = 0) -> tuple[list[Condition], list[str]]:
   """(pages, Slack warnings) for the future's VM pool. Nothing before the market opens. reserve_cngn None
-  is an unreadable target; 0 is no reserve (FUTURE_RESERVE_MOVE 0). negative_for_sec: how long the pool's
-  cash has been below zero without a break."""
+  is an unreadable target; 0 is no reserve (FUTURE_RESERVE_MOVE 0). pool_net: pool_net_usd. negative_for_sec:
+  how long the net has been below zero without a break."""
   if not open_:
     return [], []
   pages: list[Condition] = []
@@ -330,22 +341,24 @@ def future_pool_conditions(pool_cngn: float, pool_cash_usd: float, reserve_cngn:
                              f"{reserve_cngn:,.0f} reserve: winners are being paid in USDC, not cNGN. Top it up from the pool's USDC."))
     elif held < FUTURE_RESERVE_WARN_FRACTION:
       warnings.append(f"cNGN future VM pool at {held * 100:.0f}% of its {reserve_cngn:,.0f} cNGN reserve: top it up this week.")
-  if pool_cash_usd < -FUTURE_POOL_BORROW_PAGE_USD:
-    pages.append(Condition("future-pool-borrowing", f"cNGN future VM pool is ${-pool_cash_usd:,.0f} below zero in USDC cash: winners were "
-                           "paid in borrowed cash before losers paid in. Check the keeper's VM sweep, and top the pool up."))
-  elif pool_cash_usd < 0:
-    warnings.append(f"cNGN future VM pool is ${-pool_cash_usd:,.2f} below zero in USDC cash (page past ${FUTURE_POOL_BORROW_PAGE_USD:,.0f}).")
-  if pool_cash_usd < 0 and negative_for_sec >= FUTURE_POOL_DEFICIT_STUCK_SEC:
-    pages.append(Condition("future-pool-deficit-stuck", f"cNGN future VM pool has been ${-pool_cash_usd:,.2f} below zero in USDC cash for "
-                           f"{negative_for_sec / 60:,.0f} min, past a mark and its sweep: a loser is not being settled. Check "
-                           "numo-future-feeds' sweep and settle the payers (settleAccount)."))
+  if pool_net >= -FUTURE_POOL_DUST_USD:
+    return pages, warnings
+  if pool_net < -FUTURE_POOL_BORROW_PAGE_USD:
+    pages.append(Condition("future-pool-borrowing", f"cNGN future VM pool is ${-pool_net:,.0f} below zero, net (USDC plus cNGN at the "
+                           "index): winners were paid before losers paid in. Check numo-future-feeds' deficit cover, and top the pool up."))
+  else:
+    warnings.append(f"cNGN future VM pool is ${-pool_net:,.2f} below zero, net of its cNGN (page past ${FUTURE_POOL_BORROW_PAGE_USD:,.0f}).")
+  if negative_for_sec >= FUTURE_POOL_DEFICIT_STUCK_SEC:
+    pages.append(Condition("future-pool-deficit-stuck", f"cNGN future VM pool has been ${-pool_net:,.2f} below zero, net of its cNGN, for "
+                           f"{negative_for_sec / 60:,.0f} min: numo-future-feeds settles losers every minute while it is, so it is "
+                           "not working or has no loser left (future-pool-deficit-stranded): top up the pool account."))
   return pages, warnings
 
 
-def pool_negative_for(state: dict, open_: bool, pool_cash_usd: float, now: float) -> float:
-  """Seconds the future pool's cash has been below zero without a break, kept across runs in `state`
+def pool_negative_for(state: dict, open_: bool, pool_net: float, now: float) -> float:
+  """Seconds the future pool's net has been below zero without a break, kept across runs in `state`
   (futurePoolNegativeSince): any run that reads it at or above zero, or the market closed, restarts it."""
-  if open_ and pool_cash_usd < 0:
+  if open_ and pool_net < -FUTURE_POOL_DUST_USD:
     return now - state.setdefault("futurePoolNegativeSince", now)
   state.pop("futurePoolNegativeSince", None)
   return 0.0
@@ -405,6 +418,8 @@ def read_future(url: str, future: dict) -> dict:
     "escrow_cap_cngn": escrow_cap,
     "pool_cngn": account_balance(url, pool, future["cngnEscrow"]) / 1e18,
     "pool_cash_usd": account_balance(url, pool, future["cash"]) / 1e18,
+    # the index feed is the engine's spot feed for the market (getMarketFeeds), the one settlement converts at
+    "spot": spot,
   }
 
 
@@ -740,8 +755,9 @@ def check_and_page(stack_path: Path, state: dict) -> int:
       state["futureManager"] = future["manager"]
       override = os.environ.get("FUTURE_POOL_RESERVE_CNGN", "").strip()
       reserve = float(override) if override else f["reserve_target_cngn"]
-      negative_for = pool_negative_for(state, f["open"], f["pool_cash_usd"], time.time())
-      future_pages, warnings = future_pool_conditions(f["pool_cngn"], f["pool_cash_usd"], reserve, f["open"], negative_for)
+      net = pool_net_usd(f["pool_cngn"], f["pool_cash_usd"], f["spot"])
+      negative_for = pool_negative_for(state, f["open"], net, time.time())
+      future_pages, warnings = future_pool_conditions(f["pool_cngn"], net, reserve, f["open"], negative_for)
       escrow_pages, escrow_warnings = future_escrow_conditions(f["escrow_used_cngn"], f["escrow_cap_cngn"], reserve or None, f["open"])
       future_pages += escrow_pages
       warnings += escrow_warnings
@@ -751,7 +767,7 @@ def check_and_page(stack_path: Path, state: dict) -> int:
         state["futureWarnedAt"] = time.time()
       print(f"future: one side ${f['one_side_usd']:,.0f} at IM {f['im'] * 100:.0f}%, {'open' if f['open'] else 'closed'}; "
             f"pool {f['pool_cngn']:,.0f} cNGN (reserve {'unreadable' if reserve is None else f'{reserve:,.0f}'}{' set' if override else ' at the cap'}), "
-            f"${f['pool_cash_usd']:,.2f} cash{f' (below zero {negative_for / 60:,.0f} min)' if negative_for else ''}; "
+            f"${f['pool_cash_usd']:,.2f} cash, net ${net:,.2f}{f' (below zero {negative_for / 60:,.0f} min)' if negative_for else ''}; "
             f"escrow {f['escrow_used_cngn']:,.0f} of {f['escrow_cap_cngn']:,.0f} cNGN")
     else:
       print("future: not deployed (no artifact)")
@@ -877,7 +893,7 @@ def self_test() -> int:
   assert [p.key for p in pages] == ["future-pool-reserve"] and warns == []
   assert "not watched" in future_pool_conditions(0, 0, None, open_=True)[1][0]
   assert future_pool_conditions(0, 0, 0, open_=True) == ([], []), "no reserve: an empty pool is not a condition"
-  # A deficit is expected between a winner and its loser settling; one that outlasts a mark and its sweep
+  # A deficit is expected between a winner and its loser settling; one that outlasts the keeper's cover
   # (75 min) pages at any size, and not while closed.
   assert future_pool_conditions(0, -5, 0, open_=True, negative_for_sec=74 * 60)[0] == []
   pages, warns = future_pool_conditions(0, -5, 0, open_=True, negative_for_sec=75 * 60)
@@ -886,6 +902,15 @@ def self_test() -> int:
     ["future-pool-borrowing", "future-pool-deficit-stuck"]
   assert future_pool_conditions(0, 0, 0, open_=True, negative_for_sec=999_999)[0] == [], "only while below zero"
   assert future_pool_conditions(0, -5, 0, open_=False, negative_for_sec=999_999) == ([], [])
+  # The net counts the pool's cNGN at the index: -$7 in cash covered by 10,000 cNGN at 0.0007 is no deficit,
+  # and the same cNGN after the naira falls 30% (0.00049) leaves $2.10 uncovered.
+  assert abs(pool_net_usd(10_000, -7, 0.0007)) < 1e-9
+  # within $1 is covered: no warning, no page, no timer
+  assert future_pool_conditions(0, -1.0, 0, open_=True, negative_for_sec=999_999) == ([], [])
+  assert pool_negative_for({}, True, -1.0, 1_000) == 0
+  assert future_pool_conditions(10_000, pool_net_usd(10_000, -7, 0.0007), 0, open_=True) == ([], [])
+  assert abs(pool_net_usd(10_000, -7, 0.00049) + 2.1) < 1e-9
+  assert "$2.10 below zero, net" in future_pool_conditions(10_000, pool_net_usd(10_000, -7, 0.00049), 0, open_=True)[1][0]
   # The timer across runs: starts at the first negative read, grows, and restarts on any read at or above
   # zero (or the market closed), so two separate short deficits never add up to a page.
   st: dict = {}

@@ -12,7 +12,8 @@
  *   - three traders open positions on the live perp cash and cNGN escrow, and a treasury funds the pool;
  *   - the real keeper (dist/forward-main.js) runs as its own process against the fork, reading a stub
  *     markets-service book and posting alerts to a stub webhook;
- *   - the keeper's own sweep realises VM after each mark (the harness never settles an account);
+ *   - nothing is settled on a schedule: VM stays pending through the marks, and the keeper settles losers only
+ *     while the VM pool's net is below zero;
  *   - the pager runs once against the fork with the future open, and must count it;
  *   - the clock is walked through marks (no book, a deep book, a dust book), the band's narrowing, the
  *     fixing window (with the keeper killed and restarted inside it), settlement and close-out.
@@ -559,6 +560,7 @@ async function main() {
         INDEX_FEED: INDEX,
         FORWARD_FEED: FORWARD_FEED,
         FUTURE_ASSET: FUTURE,
+        FUTURE_MANAGER: MANAGER,
         FUTURE_SUB_ID: SUB_ID.toString(),
         CARRY: CARRY.toString(),
         MARKETS_SERVICE_URL: `http://127.0.0.1:${BOOK_PORT}`,
@@ -630,12 +632,13 @@ async function main() {
   const afterMarks = await advanceToMark(3_601n, '3h, 500 USDC dust at +3% -> ignored, carry', carryNow, 0.0005);
   book = null;
 
-  // Nobody settles by hand: the keeper's sweep after each mark must have realised every account's VM.
-  await waitFor('the sweep to realise every account', async () => {
-    for (const a of all) if ((await read<bigint>(FUTURE, abi.future, 'getPendingVM', [a, SUB_ID])) !== 0n) return undefined;
-    return true;
-  });
-  log(`sweep: ${keeperLines.filter((line) => line.startsWith('[sweep] settled account')).length} settlements after 3 marks, no VM left pending`);
+  // Nothing settles on a schedule: with the pool seeded its net never went below zero, so after 3 marks every
+  // account's VM is still pending and the keeper has settled nobody.
+  for (const a of all) assert.notEqual(await read<bigint>(FUTURE, abi.future, 'getPendingVM', [a, SUB_ID]), 0n, `account ${a}'s VM is pending`);
+  assert.equal(keeperLines.filter((line) => line.startsWith('[pool] settled loser')).length, 0, 'the keeper settled nobody');
+  // Each settles when something touches it; here, by hand, the payer first.
+  for (const a of [bob, alice, carol]) await send(operator, MANAGER, abi.manager, 'settleAccount', [a]);
+  log('after 3 marks every account\'s VM was still pending and the keeper had settled nobody; settled by hand, payer first');
   const aliceVm = (await cngnOf(alice)) - cngnStart.get(alice)!;
   assert.equal(aliceVm, 2n * 1_000n * (afterMarks.markPrice - mark0), 'alice: 2 contracts of VM, in cNGN');
   assert.equal((await cngnOf(bob)) - cngnStart.get(bob)!, -3n * 1_000n * (afterMarks.markPrice - mark0), 'bob: 3, in cNGN');
@@ -688,15 +691,17 @@ async function main() {
   await waitFor('the late-mark alert at the webhook', async () => alerts.some((a) => a.text.includes('last mark')));
   log(`late-mark alert reached the webhook: "${alerts.find((a) => a.text.includes('last mark'))!.text}"`);
 
-  // Stopped straight after a mark, before (or during) its sweep: the restarted keeper must sweep on startup.
+  // Stopped and restarted: VM left pending stays pending (close-out realises it at expiry), and with the pool's
+  // net at or above zero the restarted keeper settles nobody.
   await stopKeeper();
   const pendingAtStop = (await Promise.all(all.map((a) => read<bigint>(FUTURE, abi.future, 'getPendingVM', [a, SUB_ID])))).filter((v) => v !== 0n).length;
+  const settledBefore = keeperLines.filter((line) => line.startsWith('[pool] settled loser')).length;
   startKeeper();
-  await waitFor('the startup sweep', async () => {
-    for (const a of all) if ((await read<bigint>(FUTURE, abi.future, 'getPendingVM', [a, SUB_ID])) !== 0n) return undefined;
-    return true;
-  });
-  log(`keeper stopped with ${pendingAtStop} of 3 accounts' VM unrealised; restarted, its startup sweep left none`);
+  await waitFor('the keeper to restart', async () => keeperLines.filter((line) => line.includes('[forward] signer')).length >= 2);
+  // a few of its 1.5s ticks, each checking the pool's net
+  await new Promise((resolve) => setTimeout(resolve, 5_000));
+  assert.equal(keeperLines.filter((line) => line.startsWith('[pool] settled loser')).length, settledBefore, 'the restarted keeper settled nobody');
+  log(`keeper restarted with ${pendingAtStop} of 3 accounts' VM pending: left for close-out, nobody settled`);
   await advanceToMark(LAST_TRADE - 20n * 60n - (await head()), 'E-1h20m, band at its floor', carryNow, 0.0005);
 
   // ---- last trade, the fixing window ---------------------------------------------------------
@@ -819,17 +824,18 @@ async function main() {
   };
   const drilled = await runPager(pageEnv);
   writeFileSync(join(OUT, 'pager-drill.log'), `${drilled.stdout}\n${drilled.stderr}`);
-  const borrowingPage = pages.find((p) => p.includes('below zero in USDC cash'));
+  const borrowingPage = pages.find((p) => p.includes('below zero, net (USDC plus cNGN'));
   assert.ok(borrowingPage, `the future-pool-borrowing page reached the phone; pages: ${JSON.stringify(pages)}`);
   log(`pager paged: "${borrowingPage}"`);
-  // The deficit outlasts a mark and its sweep: the pager's own timer says so after 75 min. Backdate where it
+  // The deficit outlasts the keeper's cover (stopped here, and blind to the drill's second series): the pager's own
+  // timer says so after 75 min. Backdate where it
   // started rather than wait; the next run must page at any size.
   const pagerState = JSON.parse(readFileSync(join(OUT, 'pager-state.json'), 'utf8'));
   assert.ok(pagerState.futurePoolNegativeSince, 'the pager started its deficit timer on the negative read');
   pagerState.futurePoolNegativeSince -= 76 * 60;
   writeFileSync(join(OUT, 'pager-state.json'), JSON.stringify(pagerState));
   await runPager(pageEnv);
-  const stuckPage = pages.find((p) => p.includes('past a mark and its sweep'));
+  const stuckPage = pages.find((p) => p.includes('settles losers every minute'));
   assert.ok(stuckPage, `the future-pool-deficit-stuck page reached the phone; pages: ${JSON.stringify(pages)}`);
   log(`pager paged: "${stuckPage}"`);
   // bob pays in (in cNGN, which he holds), and the treasury tops the pool's cash back up: the page resolves
