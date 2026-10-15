@@ -31,10 +31,10 @@ func TestFinalizeMatchMovesTheLedgerAndCancelsAFlattenedReduceOnlyRemainder(t *t
 	})
 
 	// Seeded from a chain read; the counterparty is seeded flat so both legs move.
-	if got, err := repo.SyncPerpPosition(ctx, closer, perp, long); err != nil || got.Cmp(long) != 0 {
+	if got, err := repo.SyncPerpPosition(ctx, closer, perp, "0", long); err != nil || got.Cmp(long) != 0 {
 		t.Fatalf("seed closer: %v %v", got, err)
 	}
-	if _, err := repo.SyncPerpPosition(ctx, counterparty, perp, big.NewInt(0)); err != nil {
+	if _, err := repo.SyncPerpPosition(ctx, counterparty, perp, "0", big.NewInt(0)); err != nil {
 		t.Fatalf("seed counterparty: %v", err)
 	}
 
@@ -54,7 +54,7 @@ insert into active_orders (
 	}
 
 	// With the taker's order in flight, a stale chain read must not overwrite the ledger.
-	if got, err := repo.SyncPerpPosition(ctx, closer, perp, big.NewInt(0)); err != nil || got.Cmp(long) != 0 {
+	if got, err := repo.SyncPerpPosition(ctx, closer, perp, "0", big.NewInt(0)); err != nil || got.Cmp(long) != 0 {
 		t.Fatalf("ledger overwritten while an order was matching: %v %v", got, err)
 	}
 
@@ -64,7 +64,7 @@ insert into active_orders (
 	}
 
 	for account, want := range map[string]*big.Int{closer: big.NewInt(0), counterparty: long} {
-		got, ok, err := repo.PerpPosition(ctx, account, perp)
+		got, ok, err := repo.PerpPosition(ctx, account, perp, "0")
 		if err != nil || !ok || got.Cmp(want) != 0 {
 			t.Fatalf("ledger of %s = %v (ok %v, err %v), want %s", account, got, ok, err, want)
 		}
@@ -83,7 +83,7 @@ insert into active_orders (
 	}
 
 	// Flat and idle: the next chain read is believed again.
-	if got, err := repo.SyncPerpPosition(ctx, closer, perp, big.NewInt(-7)); err != nil || got.Cmp(big.NewInt(-7)) != 0 {
+	if got, err := repo.SyncPerpPosition(ctx, closer, perp, "0", big.NewInt(-7)); err != nil || got.Cmp(big.NewInt(-7)) != 0 {
 		t.Fatalf("resync when idle: %v %v", got, err)
 	}
 }
@@ -156,10 +156,10 @@ insert into active_orders (
 	if _, err := pool.Exec(ctx, insertOrder, suffix+"-m", "0xp"+suffix, liquidated, "2", SideSell, perp, expiry); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.SyncPerpPosition(ctx, filled, perp, big.NewInt(0)); err != nil {
+	if _, err := repo.SyncPerpPosition(ctx, filled, perp, "0", big.NewInt(0)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.SyncPerpPosition(ctx, liquidated, perp, big.NewInt(-1_387_000)); err != nil {
+	if _, err := repo.SyncPerpPosition(ctx, liquidated, perp, "0", big.NewInt(-1_387_000)); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.FinalizeMatchWithPrice(ctx, suffix+"-t", suffix+"-m", "0.00074", "10", FillSettlement{TxHash: fillTx, Perp: &PerpFillLedger{AssetAddress: perp, ChainAmount: big.NewInt(10), AmountScale: big.NewInt(1)}}); err != nil {
@@ -180,7 +180,7 @@ insert into active_orders (
 		t.Fatalf("applied %d skipped %d", applied, skipped)
 	}
 	for account, want := range map[string]int64{filled: 10, liquidated: -900_000} {
-		got, ok, err := repo.PerpPosition(ctx, account, perp)
+		got, ok, err := repo.PerpPosition(ctx, account, perp, "0")
 		if err != nil || !ok || got.Cmp(big.NewInt(want)) != 0 {
 			t.Fatalf("ledger of %s = %v (%v, %v), want %d", account, got, ok, err, want)
 		}
@@ -194,7 +194,7 @@ insert into active_orders (
 	if _, _, err := repo.ApplyChainAdjustments(ctx, perp, []ChainPositionAdjustment{{SubaccountID: liquidated, PostBalance: big.NewInt(0), TxHash: "0xliq2", BlockNumber: 106}}, 106); err != nil {
 		t.Fatal(err)
 	}
-	if got, _, _ := repo.PerpPosition(ctx, liquidated, perp); got.Sign() != 0 {
+	if got, _, _ := repo.PerpPosition(ctx, liquidated, perp, "0"); got.Sign() != 0 {
 		t.Fatalf("after a full liquidation the ledger must be flat: %s", got)
 	}
 }
