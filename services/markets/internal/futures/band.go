@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +33,9 @@ const (
 	sigAdjustmentsPaused  = "0xac06ba05" // adjustmentsPaused()
 	sigSubAccounts        = "0x779e5012" // subAccounts()
 	sigManager            = "0x52981457" // SubAccounts.manager(uint256)
+
+	// topicMarkSet is keccak256("MarkSet(uint96,uint64,uint256,uint256,int256,bool)"), subId indexed.
+	topicMarkSet = "0x6dbaf5fed8698ad9e3d7d7cf26095248bcf21849fa5eeae1452f16d39a7192a9"
 
 	// errDataTooOld is the index feed's revert when its last update is older than its heartbeat. Every
 	// path that reads the index reverts with it, so fills do too: the band is unknowable, not wide.
@@ -206,6 +210,81 @@ func (r *Reader) Contract(ctx context.Context) (Contract, error) {
 	return contract, nil
 }
 
+// MarkAt is the series' mark (18dp, cNGN per USDC) as the chain held it at the end of a block, read
+// past the cache.
+func (r *Reader) MarkAt(ctx context.Context, block uint64) (*big.Int, error) {
+	raw, err := r.callAt(ctx, r.future, sigFutureContracts+uintWord(big.NewInt(r.expiry)), "0x"+strconv.FormatUint(block, 16))
+	if err != nil {
+		return nil, err
+	}
+	mark, err := word(raw, 5)
+	if err != nil {
+		return nil, fmt.Errorf("futureContracts: %w", err)
+	}
+	return mark, nil
+}
+
+// MarkAtFill is the mark a fill settled by a transaction was valued at. A mark only changes in its
+// own transaction (pullMark, setMark), so it is the mark at the end of the fill's block unless a
+// MarkSet for the series comes later in that block: then it is the first such MarkSet's old mark.
+func (r *Reader) MarkAtFill(ctx context.Context, txHash string) (*big.Int, error) {
+	var receipt struct {
+		BlockNumber      string `json:"blockNumber"`
+		TransactionIndex string `json:"transactionIndex"`
+	}
+	if err := r.rpc(ctx, "eth_getTransactionReceipt", []any{txHash}, &receipt); err != nil {
+		return nil, err
+	}
+	block, err := parseQuantity(receipt.BlockNumber)
+	if err != nil {
+		return nil, fmt.Errorf("receipt %s blockNumber: %w", txHash, err)
+	}
+	fillIndex, err := parseQuantity(receipt.TransactionIndex)
+	if err != nil {
+		return nil, fmt.Errorf("receipt %s transactionIndex: %w", txHash, err)
+	}
+	tag := "0x" + strconv.FormatUint(block, 16)
+	var logs []struct {
+		Data             string `json:"data"`
+		TransactionIndex string `json:"transactionIndex"`
+		LogIndex         string `json:"logIndex"`
+	}
+	filter := map[string]any{
+		"address":   r.future,
+		"fromBlock": tag,
+		"toBlock":   tag,
+		"topics":    []any{topicMarkSet, "0x" + uintWord(big.NewInt(r.expiry))},
+	}
+	if err := r.rpc(ctx, "eth_getLogs", []any{filter}, &logs); err != nil {
+		return nil, err
+	}
+	var first *big.Int
+	firstIndex, firstLog := uint64(0), uint64(0)
+	for _, entry := range logs {
+		index, err := parseQuantity(entry.TransactionIndex)
+		if err != nil {
+			return nil, fmt.Errorf("MarkSet transactionIndex: %w", err)
+		}
+		logIndex, err := parseQuantity(entry.LogIndex)
+		if err != nil {
+			return nil, fmt.Errorf("MarkSet logIndex: %w", err)
+		}
+		if index <= fillIndex || (first != nil && (index > firstIndex || (index == firstIndex && logIndex > firstLog))) {
+			continue
+		}
+		// MarkSet's data: markTime, oldMarkPrice, newMarkPrice, cumulativeVMPerContract, fromFeed.
+		old, err := word(entry.Data, 1)
+		if err != nil {
+			return nil, fmt.Errorf("MarkSet data: %w", err)
+		}
+		first, firstIndex, firstLog = old, index, logIndex
+	}
+	if first != nil {
+		return first, nil
+	}
+	return r.MarkAt(ctx, block)
+}
+
 // ContractSize is FutureAsset.contractSize(), 18dp USDC per contract.
 func (r *Reader) ContractSize(ctx context.Context) (*big.Int, error) {
 	r.mu.Lock()
@@ -372,13 +451,18 @@ func (r *Reader) boolCall(ctx context.Context, to, data string) (bool, error) {
 	return value.Sign() != 0, nil
 }
 
-// call is one eth_call. A revert carrying BLF_DataTooOld is ErrIndexStale.
+// call is one eth_call at the latest block. A revert carrying BLF_DataTooOld is ErrIndexStale.
 func (r *Reader) call(ctx context.Context, to, data string) (string, error) {
+	return r.callAt(ctx, to, data, "latest")
+}
+
+// callAt is one eth_call at a block tag ("latest" or a hex number).
+func (r *Reader) callAt(ctx context.Context, to, data, block string) (string, error) {
 	body, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0",
 		"id":      1,
 		"method":  "eth_call",
-		"params":  []any{map[string]string{"to": to, "data": data}, "latest"},
+		"params":  []any{map[string]string{"to": to, "data": data}, block},
 	})
 	if err != nil {
 		return "", err
@@ -419,6 +503,48 @@ func (r *Reader) call(ctx context.Context, to, data string) (string, error) {
 		return "", fmt.Errorf("eth_call %s: empty result", data[:10])
 	}
 	return result, nil
+}
+
+// rpc is one JSON-RPC call whose result decodes into out. A null result is an error: every caller
+// asks for something that exists once its transaction is mined.
+func (r *Reader) rpc(ctx context.Context, method string, params []any, out any) error {
+	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.rpcURL, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("content-type", "application/json")
+	resp, err := r.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("rpc status %d", resp.StatusCode)
+	}
+	var payload struct {
+		Result json.RawMessage `json:"result"`
+		Error  *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return err
+	}
+	if payload.Error != nil {
+		return fmt.Errorf("%s: %s", method, payload.Error.Message)
+	}
+	if len(payload.Result) == 0 || string(payload.Result) == "null" {
+		return fmt.Errorf("%s: no result", method)
+	}
+	return json.Unmarshal(payload.Result, out)
+}
+
+func parseQuantity(hexed string) (uint64, error) {
+	return strconv.ParseUint(strings.TrimPrefix(strings.TrimSpace(hexed), "0x"), 16, 64)
 }
 
 func word(raw string, index int) (*big.Int, error) {

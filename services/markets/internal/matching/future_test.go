@@ -49,9 +49,20 @@ func (c *futureChain) serve(t *testing.T) *httptest.Server {
 	word := func(v *big.Int) string { return fmt.Sprintf("%064x", v) }
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
+			Method string            `json:"method"`
 			Params []json.RawMessage `json:"params"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
+		// The settled fill's transaction, and a block with no mark set in it.
+		switch req.Method {
+		case "eth_getTransactionReceipt":
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1,
+				"result": map[string]string{"blockNumber": "0x31f6e9d", "transactionIndex": "0x3"}})
+			return
+		case "eth_getLogs":
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "result": []any{}})
+			return
+		}
 		var call struct{ To, Data string }
 		_ = json.Unmarshal(req.Params[0], &call)
 		to, sel := strings.ToLower(call.To), call.Data[:10]
@@ -246,6 +257,14 @@ insert into active_orders (
 	}
 	if got := request.OrderData.TakerFee; got != "2500000000000000000" {
 		t.Fatalf("taker fee %s, expected 2.5e18 for one contract of 1,000 USDC at 25 bps", got)
+	}
+	// The fill is recorded with the mark it settled against: the series' mark in its block, 1,400.
+	var mark *string
+	if err := pool.QueryRow(ctx, "select mark_price from trade_fills where taker_order_id = $1", bid).Scan(&mark); err != nil {
+		t.Fatal(err)
+	}
+	if mark == nil || *mark != "1400" {
+		t.Fatalf("mark_price %v, expected the block's mark 1400", mark)
 	}
 }
 

@@ -27,6 +27,8 @@ type OwnerFill struct {
 	TakerFee *string
 	// TxHash is the settling transaction; nil when it was not recorded.
 	TxHash *string
+	// MarkPrice is the future's mark the fill settled against; nil off the future or when not recorded.
+	MarkPrice *string
 }
 
 // FillCursor is the last row of the previous page. A trade can appear twice for one owner — once as
@@ -46,18 +48,18 @@ func (r *Repository) ListFillsByOwner(ctx context.Context, owner string, before 
 	// One branch per side rather than a join on (taker or maker), so each can use its order-id index.
 	const query = `
 select trade_id, asset_address, sub_id, price, size, aggressor_side, taker_order_id, maker_order_id, created_at,
-       order_id, side, liquidity, taker_fee, tx_hash
+       order_id, side, liquidity, taker_fee, tx_hash, mark_price
 from (
   select tf.trade_id, tf.asset_address, tf.sub_id, tf.price, tf.size, tf.aggressor_side, tf.taker_order_id,
          tf.maker_order_id, tf.created_at, o.order_id, o.side, 'taker'::text as liquidity,
-         tf.taker_fee, tf.tx_hash
+         tf.taker_fee, tf.tx_hash, tf.mark_price
   from active_orders o
   join trade_fills tf on tf.taker_order_id = o.order_id
   where o.owner_address = $1
   union all
   select tf.trade_id, tf.asset_address, tf.sub_id, tf.price, tf.size, tf.aggressor_side, tf.taker_order_id,
          tf.maker_order_id, tf.created_at, o.order_id, o.side, 'maker'::text as liquidity,
-         tf.taker_fee, tf.tx_hash
+         tf.taker_fee, tf.tx_hash, tf.mark_price
   from active_orders o
   join trade_fills tf on tf.maker_order_id = o.order_id
   where o.owner_address = $1
@@ -99,6 +101,7 @@ limit $4
 			&fill.Liquidity,
 			&fill.TakerFee,
 			&fill.TxHash,
+			&fill.MarkPrice,
 		); err != nil {
 			return nil, mapPGError(err)
 		}
@@ -118,6 +121,9 @@ type FillSettlement struct {
 	TakerFee string
 	// TxHash is the transaction that settled the fill, when the executor reported one.
 	TxHash string
+	// MarkPrice is the future's mark at the fill's block, cNGN per USDC: what the fill's variation
+	// margin was settled against. Empty for spot and the perp, or when it could not be read.
+	MarkPrice string
 	// Perp moves the venue's position ledger (perp_positions) with the fill; nil for spot.
 	Perp *PerpFillLedger
 }
