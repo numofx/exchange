@@ -32,6 +32,9 @@ type Engine struct {
 	// marginRefusals holds back, and in time cancels, futures orders whose own account cannot carry a fill.
 	marginRefusals *futureMarginRefusals
 	alerts         *settlementAlerter
+	// parks counts the accounts each order has been parked against; cancelAlerts watches venue cancels.
+	parks        *parkTracker
+	cancelAlerts *venueCancelAlerter
 }
 
 const reconciliationTimeout = 5 * time.Second
@@ -50,6 +53,8 @@ func NewEngine(cfg config.Config, pool *pgxpool.Pool) *Engine {
 		future:         newFutureReader(cfg),
 		marginRefusals: newFutureMarginRefusals(),
 		alerts:         newSettlementAlerter(cfg.AlertWebhookURL),
+		parks:          newParkTracker(),
+		cancelAlerts:   newVenueCancelAlerter(cfg.AlertWebhookURL),
 	}
 }
 
@@ -224,6 +229,13 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 		}
 		settledLedger = ledger
 	}
+	if legs := unmatchableLegs(err); legs != nil {
+		// No retry can settle this pair as signed: cancel the order at fault, so it leaves the book
+		// instead of being released to cross the same way again. The other leg is released by the
+		// deferred ReleaseMatch and trades on.
+		e.cancelForVenue(ctx, instrument, *candidate, legs, CancelReasonUnmatchable, err)
+		return
+	}
 	if err != nil {
 		e.noteMatchFailure(instrument.Symbol, *candidate, "invariant_failed", settlementRevert{})
 		slog.Error(
@@ -370,8 +382,15 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 			return
 		}
 
-		e.noteMatchFailure(instrument.Symbol, *candidate, "executor_error", classifySettlementRevert(err))
+		revert := classifySettlementRevert(err)
+		e.noteMatchFailure(instrument.Symbol, *candidate, "executor_error", revert)
 		e.alerts.Failed(instrument.Symbol, "executor_error", candidate.Taker.OrderID, candidate.Maker.OrderID, err)
+		if revert.Class == revertPermanentForPair && e.parks != nil {
+			// The order parked against parkCancelAfter accounts is the one at fault (venue_cancels.go).
+			if due := e.parks.record(*candidate); len(due) > 0 {
+				e.cancelForVenue(ctx, instrument, *candidate, due, CancelReasonRepeatedPermanentRevert, err)
+			}
+		}
 		slog.Error("submit match", "market", instrument.Symbol, "taker_order_id", candidate.Taker.OrderID, "maker_order_id", candidate.Maker.OrderID, "error", err)
 		_ = e.orders.ReleaseMatchAfterFailure(reconcileCtx, candidate.Taker.OrderID, candidate.Maker.OrderID)
 		return
@@ -445,8 +464,9 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 // unsettleable cross cannot spin at the poll rate until one side expires.
 //
 // A revert that can never succeed for the pair as signed parks it instead: retrying only repeats the
-// revert, so the pair is skipped until either order changes (#50). Nothing is cancelled — both orders
-// stay on the book and can still trade with anyone else.
+// revert, so the pair is skipped until either order changes (#50). Nothing is cancelled here — both
+// orders stay on the book and can still trade with anyone else — but an order parked against
+// parkCancelAfter accounts is cancelled by the caller (venue_cancels.go).
 func (e *Engine) noteMatchFailure(market string, candidate orders.MatchCandidate, reason string, revert settlementRevert) {
 	if revert.Class == revertPermanentForPair {
 		attempts := e.backoff.park(candidate.Taker, candidate.Maker)

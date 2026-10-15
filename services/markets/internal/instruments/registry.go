@@ -25,6 +25,18 @@ const (
 	// at 18dp, checked against the chain when the matcher starts. It is the future's fee notional.
 	FutureContractSizeUSDC = "1000"
 
+	// FutureAmountScale is the future's unit: one USDC of notional, 0.001 of a contract, signed as 1e15
+	// of the FutureAsset's 1e18-per-contract amount. Sizes are whole USDC, so the smallest order is
+	// 1 USDC. It was one whole contract (1,000 USDC) until 2026-10-14, a minimum nobody chose: the
+	// whole-unit step every market shares is a cNGN on spot and the perp.
+	FutureAmountScale = "1000000000000000"
+
+	// SpotAmountScale is spot's unit: one whole cNGN, signed as 1e18 of the escrow's 18dp amount, what
+	// the app and the market maker sign. Fixed since 2026-10-14 so the matcher can tell which order of a
+	// pair is off it; before, intake took any whole scale and two orders at different ones could not
+	// trade. The perp, close-only and winding down, keeps taking any.
+	SpotAmountScale = "1000000000000000000"
+
 	// The UI contract is the engine's own orientation: cNGN is the base, priced in USDC per cNGN,
 	// sized in cNGN, and a UI buy is an engine buy. ui_intent translates to the engine order as the
 	// identity; the specs exist so an intent signed for one market cannot be replayed on the other.
@@ -50,6 +62,7 @@ func DefaultRegistry(cfg config.Config) *Registry {
 			MakerFeeBps:        0,
 			MinSize:            AmountStep,
 			ContractMultiplier: "1",
+			AmountScale:        SpotAmountScale,
 			QuotePrecision:     18,
 			PricingModel:       PricingModelLinear,
 			PriceSemantics:     PricingModelLinear,
@@ -143,12 +156,13 @@ func futureMetadata(cfg config.Config) Metadata {
 		ExpiryTimestamp:  cfg.CNGNFutureExpiry,
 		TickSize:         "0.000000000000000001",
 		// 25 bps taker, 0 maker, of the notional: contracts x FutureContractSizeUSDC, charged in the
-		// perp's USDC cash and paid to the TradeModule's feeRecipient. 2.5 USDC a contract, so a
-		// taker's signed worstFee must be at least 2.5e18.
+		// perp's USDC cash and paid to the TradeModule's feeRecipient. 2.5 USDC a contract (0.0025 a
+		// unit); worstFee is per contract on chain, so a taker's must still be at least 2.5e18.
 		TakerFeeBps:          25,
 		MakerFeeBps:          0,
 		MinSize:              AmountStep,
 		ContractMultiplier:   FutureContractSizeUSDC,
+		AmountScale:          FutureAmountScale,
 		QuotePrecision:       18,
 		PricingModel:         PricingModelLinear,
 		PriceSemantics:       PricingModelLinear,
@@ -156,15 +170,15 @@ func futureMetadata(cfg config.Config) Metadata {
 		DisplaySemantics:     DisplayPriceDirect,
 		DisplayLabel:         "cNGN per USDC",
 		DisplayName:          FutureSymbol(cfg.CNGNFutureExpiry),
-		SettlementNote:       "Cash-settled cNGN future on Base, under the MarginEngine. One contract is 1,000 USDC; variation margin accrues in cNGN at each mark, Δmark x contract size, and the series settles at a TWAP of the index over its fixing window. A fill carries its price and moves no quote leg; the chain refuses one outside the index band (fill_band_low to fill_band_high), and so does the venue.",
+		SettlementNote:       "Cash-settled cNGN future on Base, under the MarginEngine. One contract is 1,000 USDC, and orders are sized in whole USDC of notional (desired_amount 1 = 0.001 contract, signed as 1e15); variation margin accrues in cNGN at each mark, Δmark x contract size, and the series settles at a TWAP of the index over its fixing window. A fill carries its price and moves no quote leg; the chain refuses one outside the index band (fill_band_low to fill_band_high), and so does the venue.",
 		UIPriceUnit:          "cNGN per USDC",
-		UISizeUnit:           "contracts of 1,000 USDC",
+		UISizeUnit:           "USDC of notional (1,000 a contract)",
 		UISideMeaning:        "BUY (long) gains when cNGN weakens against USD (more cNGN per USDC); SELL (short) gains when it strengthens.",
 		EnginePriceUnit:      "cNGN per USDC",
-		EngineAmountUnit:     "contracts",
+		EngineAmountUnit:     "USDC of notional",
 		EngineSidePolicy:     "same_as_ui",
 		UIPriceToEngine:      "engine_price = ui_price",
-		UISizeToEngine:       "engine_amount = ui_size",
+		UISizeToEngine:       "engine_amount = ui_size (signed as ui_size x 1e15: ui_size / 1000 contracts)",
 		TradeModuleAddress:   strings.ToLower(strings.TrimSpace(cfg.CNGNPerpTradeModuleAddress)),
 		QuoteAssetAddress:    strings.ToLower(strings.TrimSpace(cfg.CNGNPerpCashAddress)),
 		MarginManagerAddress: strings.ToLower(strings.TrimSpace(cfg.CNGNFutureManagerAddress)),
