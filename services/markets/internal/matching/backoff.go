@@ -100,7 +100,8 @@ func (b *matchBackoff) shouldSkip(taker orders.Order, maker orders.Order) bool {
 }
 
 // park stops retrying a pair whose settlement can never succeed as signed, until either order
-// changes. It never cancels anything: both orders stay on the book and can still trade with others.
+// changes. It cancels nothing itself: both orders stay on the book and can still trade with others
+// (an order parked against parkCancelAfter accounts is cancelled by parkTracker's caller).
 func (b *matchBackoff) park(taker orders.Order, maker orders.Order) (attempts int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

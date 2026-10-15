@@ -177,7 +177,7 @@ func TestEngineTickAlertsWhenASettlementFailsAndWhenItRecovers(t *testing.T) {
 			"subaccount_id": subaccount,
 			"nonce":         nonce,
 			"module":        "0x0AAE65AaA66Fe7f54486cDbD007956d3De611990",
-			"data":          tradeDataHex(asset, "0", ticks+"000000000000000000", "1000000000000000", isBid),
+			"data":          tradeDataHex(asset, "0", ticks+"000000000000000000", "1000000000000000000", isBid),
 			"expiry":        fmt.Sprint(time.Now().Add(time.Hour).Unix()),
 			"owner":         owner,
 			"signer":        owner,
