@@ -92,21 +92,22 @@ resource "aws_ecs_task_definition" "market_maker_future" {
       { name = "MM_CARRY_RATE_APR", value = var.mm_future_carry_rate_apr },
       { name = "MM_USDCCNGN_SPOT_EXTERNAL_ANCHOR_ENABLED", value = "false" },
 
-      # Launch size, against the 30-contract OI cap (15 a side). Sizes and inventory are contracts of
-      # 1,000 USDC; notional is USDC. Three rungs of 1 contract a side (3, under the 5,000 USDC side
-      # cap), 30 bps out and 20 bps further each; inventory bounded at +/- 10 contracts, two thirds of a
-      # side. Whole contracts: the venue's amount step is 1 on every market (api amountAtomicStep), and
-      # a 1.5x ladder's 1.5-contract rung was refused on 2026-10-13. At 25% IM a contract adds 250 USDC
-      # of IM: +/- 10 is 2,500, and a side of resting quotes at MM_FUTURE_IM_USAGE 0.8 needs ~940 of
-      # surplus on top; the account (#32) holds 4,002 USDC.
+      # Ten rungs of 1 contract (1,000 USDC) a side since 2026-10-15, against the 30-contract OI cap
+      # (15 a side). Sizes and inventory are contracts; notional is USDC. 20 bps out and 10 bps further
+      # each, so the outer rung is 110 bps out; 10,000 USDC a side resting. Inventory stays bounded at
+      # +/- 10 contracts, two thirds of a side, so the most the bot can hold is unchanged: only the
+      # depth it offers is. Whole contracts: the bot quotes the engine future in whole contracts
+      # (market-maker #39/#40) though the venue's unit is 1 USDC. At 25% IM a contract adds 250 USDC of
+      # IM: +/- 10 is 2,500; ten resting rungs need 2,500 of surplus, inside MM_FUTURE_IM_USAGE 0.8 of
+      # the account's (#32) 4,002 USDC, and the bot trims rungs itself when the surplus falls short.
       { name = "MM_ORDER_SIZE", value = "1" },
-      { name = "MM_QUOTE_LEVELS", value = "3" },
+      { name = "MM_QUOTE_LEVELS", value = "10" },
       { name = "MM_LEVEL_SIZE_MULT", value = "1" },
-      { name = "MM_HALF_SPREAD_BPS", value = "30" },
-      { name = "MM_LEVEL_SPREAD_STEP_BPS", value = "20" },
+      { name = "MM_HALF_SPREAD_BPS", value = "20" },
+      { name = "MM_LEVEL_SPREAD_STEP_BPS", value = "10" },
       { name = "MM_MAX_LONG_INVENTORY", value = "10" },
       { name = "MM_MAX_SHORT_INVENTORY", value = "-10" },
-      { name = "MM_MAX_NOTIONAL_PER_SIDE", value = "5000" },
+      { name = "MM_MAX_NOTIONAL_PER_SIDE", value = "10000" },
       { name = "MM_INVENTORY_SKEW_BPS", value = "25" },
       { name = "MM_INVENTORY_SKEW_FULL_AT", value = "10" },
 
@@ -117,7 +118,8 @@ resource "aws_ecs_task_definition" "market_maker_future" {
       { name = "MM_FUTURE_BAND_BUFFER_BPS", value = "10" },
       { name = "MM_FUTURE_CUTOFF_BEFORE_FIX_SECONDS", value = "3600" },
 
-      # 6 resting quotes replaced before expiry: 300 s keeps that well inside the cancel cap. No order
+      # 20 resting quotes replaced before expiry: 300 s keeps that inside the cancel cap, as the perp's
+      # 10-level ladder ran. No order
       # is signed to expire after the cutoff whatever this says.
       { name = "MM_ORDER_EXPIRY_SECONDS", value = "300" },
       { name = "MM_MAX_ANCHOR_DEVIATION_BPS", value = "150" },
