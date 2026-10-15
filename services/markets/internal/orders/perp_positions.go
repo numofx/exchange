@@ -10,8 +10,9 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// The perp_positions ledger is the venue's own view of each account's perp position, in chain units
-// (18dp, signed; the engine buyer gains). It is seeded from the chain when an account first submits a
+// The perp_positions ledger is the venue's own view of each account's position in a perp or a future
+// series, in chain units (18dp, signed; the engine buyer gains), keyed by asset and sub id (0 for the
+// perp, the expiry for a future series). It is seeded from the chain when an account first submits a
 // reduce-only order and moved by every fill the venue finalizes, inside the fill's own transaction,
 // so a reduce-only order is always clamped against a position that already counts the fills a few
 // milliseconds old -- the ones a poll of the chain has not seen yet.
@@ -31,8 +32,10 @@ const (
 
 // PerpFillLedger tells FinalizeMatchWithPrice how the fill moves the two accounts' positions.
 type PerpFillLedger struct {
-	// AssetAddress is the perp asset the positions are in.
+	// AssetAddress is the asset the positions are in: the perp, or the FutureAsset.
 	AssetAddress string
+	// SubID is the series: "0" for the perp, the expiry for a future.
+	SubID string
 	// ChainAmount is the fill in chain units (18dp), unsigned; the buyer gains it, the seller loses it.
 	ChainAmount *big.Int
 	// AmountScale is chain units per order unit; a position below it cannot be reduced by any order.
@@ -43,7 +46,7 @@ type PerpFillLedger struct {
 // position. A row is refreshed only when the account has no order in flight on that asset: a fill
 // being finalized moves the ledger in its own transaction, and the chain read may predate it. With an
 // order in flight the ledger is the fresher of the two and is kept.
-func (r *Repository) SyncPerpPosition(ctx context.Context, subaccountID, assetAddress string, chainPosition *big.Int) (*big.Int, error) {
+func (r *Repository) SyncPerpPosition(ctx context.Context, subaccountID, assetAddress, subID string, chainPosition *big.Int) (*big.Int, error) {
 	assetAddress = strings.ToLower(strings.TrimSpace(assetAddress))
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -52,12 +55,12 @@ func (r *Repository) SyncPerpPosition(ctx context.Context, subaccountID, assetAd
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	var current string
-	err = tx.QueryRow(ctx, `select position::text from perp_positions where subaccount_id = $1 and asset_address = $2 for update`,
-		subaccountID, assetAddress).Scan(&current)
+	err = tx.QueryRow(ctx, `select position::text from perp_positions where subaccount_id = $1 and asset_address = $2 and sub_id = $3::numeric for update`,
+		subaccountID, assetAddress, subID).Scan(&current)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
-		if _, err := tx.Exec(ctx, `insert into perp_positions (subaccount_id, asset_address, position) values ($1, $2, $3::numeric)`,
-			subaccountID, assetAddress, chainPosition.String()); err != nil {
+		if _, err := tx.Exec(ctx, `insert into perp_positions (subaccount_id, asset_address, sub_id, position) values ($1, $2, $3::numeric, $4::numeric)`,
+			subaccountID, assetAddress, subID, chainPosition.String()); err != nil {
 			return nil, mapPGError(err)
 		}
 		current = chainPosition.String()
@@ -65,13 +68,13 @@ func (r *Repository) SyncPerpPosition(ctx context.Context, subaccountID, assetAd
 		return nil, mapPGError(err)
 	default:
 		var inFlight int
-		if err := tx.QueryRow(ctx, `select count(*) from active_orders where subaccount_id = $1 and asset_address = $2 and status = 'matching'`,
-			subaccountID, assetAddress).Scan(&inFlight); err != nil {
+		if err := tx.QueryRow(ctx, `select count(*) from active_orders where subaccount_id = $1 and asset_address = $2 and sub_id = $3::numeric and status = 'matching'`,
+			subaccountID, assetAddress, subID).Scan(&inFlight); err != nil {
 			return nil, mapPGError(err)
 		}
 		if inFlight == 0 && current != chainPosition.String() {
-			if _, err := tx.Exec(ctx, `update perp_positions set position = $3::numeric, updated_at = now() where subaccount_id = $1 and asset_address = $2`,
-				subaccountID, assetAddress, chainPosition.String()); err != nil {
+			if _, err := tx.Exec(ctx, `update perp_positions set position = $4::numeric, updated_at = now() where subaccount_id = $1 and asset_address = $2 and sub_id = $3::numeric`,
+				subaccountID, assetAddress, subID, chainPosition.String()); err != nil {
 				return nil, mapPGError(err)
 			}
 			current = chainPosition.String()
@@ -88,10 +91,10 @@ func (r *Repository) SyncPerpPosition(ctx context.Context, subaccountID, assetAd
 }
 
 // PerpPosition reads the ledger. ok is false when the account was never seeded.
-func (r *Repository) PerpPosition(ctx context.Context, subaccountID, assetAddress string) (position *big.Int, ok bool, err error) {
+func (r *Repository) PerpPosition(ctx context.Context, subaccountID, assetAddress, subID string) (position *big.Int, ok bool, err error) {
 	var current string
-	err = r.pool.QueryRow(ctx, `select position::text from perp_positions where subaccount_id = $1 and asset_address = $2`,
-		subaccountID, strings.ToLower(strings.TrimSpace(assetAddress))).Scan(&current)
+	err = r.pool.QueryRow(ctx, `select position::text from perp_positions where subaccount_id = $1 and asset_address = $2 and sub_id = $3::numeric`,
+		subaccountID, strings.ToLower(strings.TrimSpace(assetAddress)), subID).Scan(&current)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, false, nil
 	}
@@ -135,10 +138,10 @@ func applyPerpLedger(ctx context.Context, tx pgx.Tx, order Order, ledger *PerpFi
 	}
 	var after string
 	err := tx.QueryRow(ctx, `
-update perp_positions set position = position + $3::numeric, updated_at = now()
-where subaccount_id = $1 and asset_address = $2
+update perp_positions set position = position + $4::numeric, updated_at = now()
+where subaccount_id = $1 and asset_address = $2 and sub_id = $3::numeric
 returning position::text`,
-		order.SubaccountID, strings.ToLower(ledger.AssetAddress), delta.String()).Scan(&after)
+		order.SubaccountID, strings.ToLower(ledger.AssetAddress), ledger.Series(), delta.String()).Scan(&after)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
@@ -165,12 +168,20 @@ where order_id = $1 and status = 'active'`,
 
 // SetPerpPosition writes the chain's position over the ledger row, whatever the row said: the
 // match-time resync, when the chain read disagrees with the ledger.
-func (r *Repository) SetPerpPosition(ctx context.Context, subaccountID, assetAddress string, position *big.Int) error {
+func (r *Repository) SetPerpPosition(ctx context.Context, subaccountID, assetAddress, subID string, position *big.Int) error {
 	_, err := r.pool.Exec(ctx, `
-insert into perp_positions (subaccount_id, asset_address, position) values ($1, $2, $3::numeric)
-on conflict (subaccount_id, asset_address) do update set position = excluded.position, updated_at = now()`,
-		subaccountID, strings.ToLower(strings.TrimSpace(assetAddress)), position.String())
+insert into perp_positions (subaccount_id, asset_address, sub_id, position) values ($1, $2, $3::numeric, $4::numeric)
+on conflict (subaccount_id, asset_address, sub_id) do update set position = excluded.position, updated_at = now()`,
+		subaccountID, strings.ToLower(strings.TrimSpace(assetAddress)), subID, position.String())
 	return mapPGError(err)
+}
+
+// Series is the fill's sub id; a ledger that names none is the perp's, 0.
+func (l *PerpFillLedger) Series() string {
+	if strings.TrimSpace(l.SubID) == "" {
+		return "0"
+	}
+	return l.SubID
 }
 
 // ChainPositionAdjustment is one SubAccounts.BalanceAdjusted event for the perp asset.
@@ -204,8 +215,8 @@ func (r *Repository) ApplyChainAdjustments(ctx context.Context, assetAddress str
 			continue
 		}
 		if _, err := tx.Exec(ctx, `
-insert into perp_positions (subaccount_id, asset_address, position) values ($1, $2, $3::numeric)
-on conflict (subaccount_id, asset_address) do update set position = excluded.position, updated_at = now()`,
+insert into perp_positions (subaccount_id, asset_address, sub_id, position) values ($1, $2, 0, $3::numeric)
+on conflict (subaccount_id, asset_address, sub_id) do update set position = excluded.position, updated_at = now()`,
 			adjustment.SubaccountID, assetAddress, adjustment.PostBalance.String()); err != nil {
 			return 0, 0, mapPGError(err)
 		}
