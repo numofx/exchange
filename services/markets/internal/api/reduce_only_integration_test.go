@@ -41,7 +41,7 @@ func TestAdmitReduceOnlySeedsTheLedgerAndRefusesTheWrongSide(t *testing.T) {
 			if status != tc.status || !strings.Contains(msg, tc.want) {
 				t.Fatalf("got %d %q, want %d containing %q", status, msg, tc.status, tc.want)
 			}
-			ledger, ok, err := server.orders.PerpPosition(ctx, subaccount, testPerpAsset)
+			ledger, ok, err := server.orders.PerpPosition(ctx, subaccount, testPerpAsset, "0")
 			if err != nil || !ok || ledger.Cmp(tc.position) != 0 {
 				t.Fatalf("ledger = %v ok %v err %v, want the chain's %s", ledger, ok, err, tc.position)
 			}

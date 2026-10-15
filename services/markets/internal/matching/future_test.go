@@ -33,6 +33,8 @@ type futureChain struct {
 	size                     *big.Int
 	// surplus is engine.getMargin(account, true) by account, USD; an account not in it has plenty.
 	surplus map[string]*big.Int
+	// positions is each account's balance of the series, signed, 18dp; an account not in it is flat.
+	positions map[string]*big.Int
 }
 
 const futureLedger = "0x00000000000000000000000000000000000000ac"
@@ -90,8 +92,16 @@ func (c *futureChain) serve(t *testing.T) *httptest.Server {
 			result = word(new(big.Int).And(surplus, new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))))
 		case to == c.future && sel == "0x779e5012": // subAccounts()
 			result = strings.Repeat("0", 24) + futureLedger[2:]
-		case to == futureLedger && sel == "0x0806e640": // getBalance(uint256,address,uint256): no positions
-			result = word(big.NewInt(0))
+		case to == futureLedger && sel == "0x0806e640": // getBalance(uint256,address,uint256)
+			account := new(big.Int)
+			account.SetString(call.Data[10:74], 16)
+			c.mu.Lock()
+			position, ok := c.positions[account.String()]
+			c.mu.Unlock()
+			if !ok {
+				position = big.NewInt(0)
+			}
+			result = word(new(big.Int).And(position, new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))))
 		default:
 			t.Errorf("unexpected eth_call %s to %s", sel, to)
 			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "error": map[string]any{"message": "unexpected"}})
