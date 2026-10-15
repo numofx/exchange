@@ -85,7 +85,7 @@ insert into active_orders (
 	}
 	chain := positionsOnly{long: new(big.Int).Mul(big.NewInt(5), scale), short: new(big.Int).Mul(big.NewInt(-5), scale)}
 	for sub, pos := range chain {
-		if err := repo.SetPerpPosition(ctx, sub, strings.ToLower(asset), pos); err != nil {
+		if err := repo.SetPerpPosition(ctx, sub, strings.ToLower(asset), "0", pos); err != nil {
 			t.Fatal(err)
 		}
 	}

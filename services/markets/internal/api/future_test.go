@@ -40,6 +40,8 @@ type futureRPC struct {
 	stale     bool
 	lastTrade int64
 	managers  map[string]string
+	// positions maps an account to its balance of the series, signed, 18dp; absent is flat.
+	positions map[string]*big.Int
 }
 
 func newFutureRPC() *futureRPC {
@@ -92,6 +94,21 @@ func (f *futureRPC) server(t *testing.T) *httptest.Server {
 			reply(addr(manager))
 		case to == testFutureTM && sel == "0x761822ef": // isDatedFutureAsset(address)
 			reply(word(big.NewInt(1)))
+		case to == testFutureLedger && sel == "0x0806e640": // getBalance(uint256,address,uint256)
+			account := new(big.Int)
+			account.SetString(call.Data[10:74], 16)
+			if asset := "0x" + call.Data[98:138]; asset != testFuture {
+				t.Errorf("getBalance of %s, want the series' asset", asset)
+			}
+			if series, _ := new(big.Int).SetString(call.Data[138:202], 16); series.Int64() != testFutureExpiry {
+				t.Errorf("getBalance of series %s, want the expiry %d", series, testFutureExpiry)
+			}
+			position, ok := f.positions[account.String()]
+			if !ok {
+				position = big.NewInt(0)
+			}
+			// two's complement: a short is a negative int256
+			reply(word(new(big.Int).And(position, new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1)))))
 		case to == testFuture && sel == "0x745ab570": // totalPositionCap(address)
 			reply(word(new(big.Int).Mul(big.NewInt(30), testWad)))
 		case to == testFutureEngine && sel == "0xac06ba05": // adjustmentsPaused()

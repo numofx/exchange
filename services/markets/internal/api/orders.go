@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/big"
@@ -578,26 +579,26 @@ func (s *Server) perpCloseOnlyOrder(params orders.CreateOrderParams) orders.Crea
 	return params
 }
 
-// admitReduceOnly decides whether a reduce-only order may rest at all. The flag is perp-only (a spot
-// holding is not a position the venue tracks). The account's position is read from the chain and
-// written to the venue's ledger (seeded, or refreshed when no fill is in flight), and the order must
-// sit on the opposite side of a non-zero position: an engine buy reduces a short, a sell a long. The
-// match-time clamp (matching.clampReduceOnly) then holds every fill to the ledger. Returns the HTTP
-// status and message to refuse with, or "" to admit.
+// admitReduceOnly decides whether a reduce-only order may rest at all. The flag is for the perp and
+// the futures (a spot holding is not a position the venue tracks). The account's position in the
+// market's series is read from the chain and written to the venue's ledger (seeded, or refreshed when
+// no fill is in flight), and the order must sit on the opposite side of a non-zero position: an
+// engine buy reduces a short, a sell a long. The match-time clamp (matching.clampReduceOnly) then
+// holds every fill to the ledger. Returns the HTTP status and message to refuse with, or "" to admit.
 func (s *Server) admitReduceOnly(ctx context.Context, params orders.CreateOrderParams) (int, string) {
 	instrument, ok := s.instruments.ByAssetAndSubID(strings.ToLower(params.AssetAddress), params.SubID)
-	if !ok || !instrument.IsPerpetual() {
-		return http.StatusBadRequest, "reduce_only is only accepted on the perpetual: the venue tracks no other position to reduce"
+	if !ok || !(instrument.IsPerpetual() || instrument.IsFuture()) {
+		return http.StatusBadRequest, "reduce_only is only accepted on the perpetual and the futures: the venue tracks no other position to reduce"
 	}
-	if s.perp == nil {
-		return http.StatusServiceUnavailable, "reduce_only needs the account's perp position, which this deployment cannot read"
+	chainPosition, err := s.reduceOnlyChainPosition(ctx, instrument, params.SubaccountID)
+	if errors.Is(err, errPositionReaderMissing) {
+		return http.StatusServiceUnavailable, "reduce_only needs the account's position, which this deployment cannot read"
 	}
-	chainPosition, err := s.perp.rawPosition(ctx, instrument, params.SubaccountID)
 	if err != nil {
 		slog.Warn("order_submit_reduce_only_position_unreadable", "order_id", params.OrderID, "subaccount_id", params.SubaccountID, "error", err)
-		return http.StatusServiceUnavailable, "reduce_only: the account's perp position could not be read; retry shortly"
+		return http.StatusServiceUnavailable, "reduce_only: the account's position could not be read; retry shortly"
 	}
-	position, err := s.orders.SyncPerpPosition(ctx, params.SubaccountID, instrument.AssetAddress, chainPosition)
+	position, err := s.orders.SyncPerpPosition(ctx, params.SubaccountID, instrument.AssetAddress, reduceOnlySeries(instrument), chainPosition)
 	if err != nil {
 		slog.Error("order_submit_reduce_only_ledger", "order_id", params.OrderID, "subaccount_id", params.SubaccountID, "error", err)
 		return http.StatusInternalServerError, "reduce_only: the venue's position ledger could not be updated"
@@ -609,4 +610,34 @@ func (s *Server) admitReduceOnly(ctx context.Context, params orders.CreateOrderP
 		return http.StatusUnprocessableEntity, "reduce_only order refused: it is on the same side as the account's position and would increase it"
 	}
 	return 0, ""
+}
+
+var errPositionReaderMissing = errors.New("no chain reader for this market's positions")
+
+// reduceOnlyChainPosition is the account's signed position in the market, in chain units: the perp's
+// balance, or the future series' (FutureAsset at its expiry) through the futures reader.
+func (s *Server) reduceOnlyChainPosition(ctx context.Context, instrument instruments.Metadata, subaccountID string) (*big.Int, error) {
+	if instrument.IsFuture() {
+		if s.future == nil {
+			return nil, errPositionReaderMissing
+		}
+		account, ok := new(big.Int).SetString(strings.TrimSpace(subaccountID), 10)
+		if !ok {
+			return nil, fmt.Errorf("subaccount %q is not an integer", subaccountID)
+		}
+		return s.future.Position(ctx, account)
+	}
+	if s.perp == nil {
+		return nil, errPositionReaderMissing
+	}
+	return s.perp.rawPosition(ctx, instrument, subaccountID)
+}
+
+// reduceOnlySeries is the sub id the ledger keys a market's positions by: the perp's 0, a future's
+// expiry. It matches matching.ledgerSeries, which moves the same rows on every fill.
+func reduceOnlySeries(instrument instruments.Metadata) string {
+	if instrument.IsFuture() && strings.TrimSpace(instrument.SubID) != "" {
+		return instrument.SubID
+	}
+	return "0"
 }
