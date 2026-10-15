@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"strconv"
 	"strings"
@@ -35,6 +36,11 @@ type presentedFill struct {
 	// recorded fee for a taker. Absent when the fee is not known.
 	Fee    string `json:"fee,omitempty"`
 	TxHash string `json:"tx_hash,omitempty"`
+	// MarkPrice and VMCNGN are the future's only: the mark the fill settled against, cNGN per USDC, and
+	// the variation margin it settled at once, in cNGN to this order's account (negative when paid):
+	// side x USDC notional x (mark - price). Absent off the future and on fills recorded without a mark.
+	MarkPrice string `json:"mark_price,omitempty"`
+	VMCNGN    string `json:"vm_cngn,omitempty"`
 }
 
 type fillsResponse struct {
@@ -147,6 +153,11 @@ func (s *Server) presentFills(items []orders.OwnerFill) []presentedFill {
 		if item.TxHash != nil {
 			txHash = *item.TxHash
 		}
+		markPrice, vm := "", ""
+		if meta.IsFuture() && item.MarkPrice != nil {
+			markPrice = trimDecimalZeros(*item.MarkPrice)
+			vm = fillVMCNGN(meta, item.OrderSide, item.Price, item.Size, *item.MarkPrice)
+		}
 
 		out = append(out, presentedFill{
 			TradeID:      item.TradeID,
@@ -163,9 +174,34 @@ func (s *Server) presentFills(items []orders.OwnerFill) []presentedFill {
 			SpotContract: spotContract,
 			Fee:          fee,
 			TxHash:       txHash,
+			MarkPrice:    markPrice,
+			VMCNGN:       vm,
 		})
 	}
 	return out
+}
+
+// fillVMCNGN is the variation margin a future fill settled at once, in cNGN to the order's account:
+// the gap between the mark and the fill price times the fill's USDC notional, gained by a buy below
+// the mark and a sell above it. The size is in the venue's units, each amount_scale / 1e18 of a
+// contract of contract_multiplier USDC. Empty when any figure does not parse.
+func fillVMCNGN(meta instruments.Metadata, side orders.Side, price, size, mark string) string {
+	p, okP := new(big.Rat).SetString(strings.TrimSpace(price))
+	q, okQ := new(big.Rat).SetString(strings.TrimSpace(size))
+	m, okM := new(big.Rat).SetString(strings.TrimSpace(mark))
+	scale, okS := new(big.Rat).SetString(meta.AmountScale)
+	contract, okC := new(big.Rat).SetString(meta.ContractMultiplier)
+	if !okP || !okQ || !okM || !okS || !okC {
+		return ""
+	}
+	notional := new(big.Rat).Mul(q, scale)
+	notional.Mul(notional, contract)
+	notional.Quo(notional, new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)))
+	vm := new(big.Rat).Mul(notional, new(big.Rat).Sub(m, p))
+	if side == orders.SideSell {
+		vm.Neg(vm)
+	}
+	return trimDecimalZeros(vm.FloatString(18))
 }
 
 // trimDecimalZeros drops a decimal's trailing fractional zeros, so a fee recorded to 18 places reads as

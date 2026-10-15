@@ -429,7 +429,11 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 
 	reconcileCtx, cancel := detachedContext(ctx, reconciliationTimeout)
 	defer cancel()
-	if err := e.orders.FinalizeMatchWithPrice(reconcileCtx, candidate.Taker.OrderID, candidate.Maker.OrderID, logPrice, fillAmount, orders.FillSettlement{TakerFee: takerFee, TxHash: executorResp.TxHash, Perp: settledLedger}); err != nil {
+	settlement := orders.FillSettlement{TakerFee: takerFee, TxHash: executorResp.TxHash, Perp: settledLedger}
+	if instrument.IsFuture() {
+		settlement.MarkPrice = e.futureMarkAt(reconcileCtx, instrument, executorResp.TxHash)
+	}
+	if err := e.orders.FinalizeMatchWithPrice(reconcileCtx, candidate.Taker.OrderID, candidate.Maker.OrderID, logPrice, fillAmount, settlement); err != nil {
 		slog.Error("finalize match", "market", instrument.Symbol, "taker_order_id", candidate.Taker.OrderID, "maker_order_id", candidate.Maker.OrderID, "error", err)
 		e.alerts.NeedsResolution(fmt.Sprintf("Settled on chain (tx %s), but recording it failed: the book and the chain disagree.", executorResp.TxHash), instrument.Symbol, candidate.Taker.OrderID, candidate.Maker.OrderID, err)
 		return

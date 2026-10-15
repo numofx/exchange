@@ -125,3 +125,18 @@ func (e *Engine) feeNotionalPrice(ctx context.Context, instrument instruments.Me
 	}
 	return size.String(), nil
 }
+
+// futureMarkAt is the mark a settled future fill was valued at, read from its transaction, recorded
+// with the fill so its variation margin can be reported. Empty when it cannot be read: the fill is
+// recorded either way, its VM unknown rather than wrong.
+func (e *Engine) futureMarkAt(ctx context.Context, instrument instruments.Metadata, txHash string) string {
+	if e.future == nil || strings.TrimSpace(txHash) == "" {
+		return ""
+	}
+	mark, err := e.future.MarkAtFill(ctx, txHash)
+	if err != nil {
+		slog.Warn("future_fill_mark_unread", "market", instrument.Symbol, "tx_hash", txHash, "error", err.Error())
+		return ""
+	}
+	return futures.Decimal(mark)
+}

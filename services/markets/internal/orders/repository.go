@@ -1101,8 +1101,9 @@ insert into trade_fills (
   taker_order_id,
   maker_order_id,
   taker_fee,
-  tx_hash
-) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+  tx_hash,
+  mark_price
+) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 `
 
 	_, err := tx.Exec(
@@ -1117,6 +1118,7 @@ insert into trade_fills (
 		maker.OrderID,
 		unknownIfEmpty(settlement.TakerFee),
 		unknownIfEmpty(settlement.TxHash),
+		unknownIfEmpty(settlement.MarkPrice),
 	)
 	return mapPGError(err)
 }
