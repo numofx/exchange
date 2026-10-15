@@ -15,9 +15,9 @@
 variable "image_market_maker_future" {
   description = "The future market maker's mm-bot image, tagged by git SHA: market-maker #35 (6f1b8058) or later. Empty creates nothing."
   type        = string
-  # 2026-10-13: market-maker main 8242a9d1 (#39: sized in whole contracts, so a resting order reads back as
-  # placed; on 135a2f508db5 the ladder was cancelled and re-placed every cycle), built by build-and-push.sh.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:8242a9d1574b"
+  # 2026-10-15: market-maker main 91ad6ac7 (#41: sized in the venue's 0.001-contract unit, so MM_ORDER_SIZE
+  # below 1 quotes; an older image floors it to nothing), built by build-and-push.sh.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:91ad6ac7462e"
 }
 
 variable "mm_future_subaccount_id" {
