@@ -1,10 +1,12 @@
 package futures
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -237,5 +239,132 @@ func TestSelectorsMatchTheirSignatures(t *testing.T) {
 		if got := strings.TrimSpace(string(out)); got != sel {
 			t.Errorf("%s: cast sig %s, pinned %s", sig, got, sel)
 		}
+	}
+}
+
+// A fill's mark is read at the fill's own block, past the cache, so the VM recorded with it is the
+// one the chain settled rather than a mark up to stateTTL old.
+func TestMarkAtReadsTheMarkAtTheGivenBlock(t *testing.T) {
+	c := newChain()
+	inner := c.serve(t)
+	defer inner.Close()
+	var tags []string
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Params []json.RawMessage `json:"params"`
+		}
+		_ = json.Unmarshal(body, &req)
+		var tag string
+		_ = json.Unmarshal(req.Params[1], &tag)
+		tags = append(tags, tag)
+		resp, err := http.Post(inner.URL, "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		_, _ = io.Copy(rw, resp.Body)
+	}))
+	defer srv.Close()
+
+	reader := NewReader(srv.URL, c.future, 1798675200, time.Minute, time.Minute)
+	for range 2 {
+		mark, err := reader.MarkAt(context.Background(), 52646406)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mark.Cmp(e18("1400")) != 0 {
+			t.Fatalf("mark %s, want 1400e18", mark)
+		}
+	}
+	if len(tags) != 2 || tags[0] != "0x3235206" || tags[1] != "0x3235206" {
+		t.Fatalf("block tags %v, want two reads at 0x3235206 (52646406), uncached", tags)
+	}
+}
+
+// A block with the fill at transaction index 5: MarkSets at the given indexes, each moving the mark
+// from old to new, and the mark the block ends on.
+func markBlockServer(t *testing.T, future string, marks [][3]string, endMark string) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string            `json:"method"`
+			Params []json.RawMessage `json:"params"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		reply := func(result any) {
+			_ = json.NewEncoder(rw).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "result": result})
+		}
+		switch req.Method {
+		case "eth_getTransactionReceipt":
+			reply(map[string]string{"blockNumber": "0x3235206", "transactionIndex": "0x5"})
+		case "eth_getLogs":
+			var filter struct {
+				Address, FromBlock, ToBlock string
+				Topics                      []string
+			}
+			_ = json.Unmarshal(req.Params[0], &filter)
+			if filter.Address != future || filter.FromBlock != "0x3235206" || filter.ToBlock != "0x3235206" ||
+				len(filter.Topics) != 2 || filter.Topics[0] != topicMarkSet || filter.Topics[1] != "0x"+w(big.NewInt(1798675200)) {
+				t.Errorf("unexpected log filter %+v", filter)
+			}
+			logs := []map[string]string{}
+			for i, m := range marks {
+				logs = append(logs, map[string]string{
+					"transactionIndex": m[0], "logIndex": fmt.Sprintf("0x%x", i),
+					"data": "0x" + w(big.NewInt(1)) + w(e18(m[1])) + w(e18(m[2])) + w(big.NewInt(0)) + b(true),
+				})
+			}
+			reply(logs)
+		case "eth_call":
+			var tag string
+			_ = json.Unmarshal(req.Params[1], &tag)
+			if tag != "0x3235206" {
+				t.Errorf("mark read at %s, want the fill's block", tag)
+			}
+			reply("0x" + b(true) + b(false) + w(big.NewInt(1798675200)) + w(big.NewInt(0)) + w(big.NewInt(0)) + w(e18(endMark)) + w(big.NewInt(0)))
+		default:
+			t.Errorf("unexpected %s", req.Method)
+		}
+	}))
+}
+
+func TestMarkAtFillIsTheMarkTheFillSaw(t *testing.T) {
+	const future = "0x00000000000000000000000000000000000000f0"
+	cases := []struct {
+		name  string
+		marks [][3]string
+		want  string
+	}{
+		{"no mark in the block", nil, "1400"},
+		{"a mark before the fill", [][3]string{{"0x2", "1390", "1400"}}, "1400"},
+		{"a mark after the fill", [][3]string{{"0x9", "1400", "1410"}}, "1400"},
+		{"marks before and after", [][3]string{{"0x2", "1380", "1390"}, {"0x9", "1390", "1400"}}, "1390"},
+		{"two marks after: the first", [][3]string{{"0xa", "1395", "1400"}, {"0x7", "1390", "1395"}}, "1390"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := markBlockServer(t, future, tc.marks, "1400")
+			defer srv.Close()
+			mark, err := NewReader(srv.URL, future, 1798675200, time.Minute, time.Minute).MarkAtFill(context.Background(), "0xabc")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mark.Cmp(e18(tc.want)) != 0 {
+				t.Fatalf("mark %s, want %se18", mark, tc.want)
+			}
+		})
+	}
+}
+
+func TestTopicMarkSetMatchesItsSignature(t *testing.T) {
+	if _, err := exec.LookPath("cast"); err != nil {
+		t.Skip("cast not installed")
+	}
+	out, err := exec.Command("cast", "keccak", "MarkSet(uint96,uint64,uint256,uint256,int256,bool)").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(out)); got != topicMarkSet {
+		t.Fatalf("cast keccak %s, pinned %s", got, topicMarkSet)
 	}
 }
