@@ -193,7 +193,7 @@ func TestEngineTickHoldsAFutureFillOutsideTheBandAndSubmitsItInside(t *testing.T
 			"subaccount_id": subaccount,
 			"nonce":         nonce,
 			"module":        chain.tm,
-			// one contract, at ticks whole cNGN per USDC
+			// one contract (1,000 USDC units), at ticks whole cNGN per USDC
 			"data":   tradeDataHex(asset, cfg.FutureSubID(), ticks+"000000000000000000", "1000000000000000000", isBid),
 			"expiry": fmt.Sprint(time.Now().Add(time.Hour).Unix()),
 			"owner":  owner,
@@ -203,7 +203,7 @@ func TestEngineTickHoldsAFutureFillOutsideTheBandAndSubmitsItInside(t *testing.T
 insert into active_orders (
   order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
   desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at
-) values ($1, $2, $2, $3, $3, $4, $5, $6, $7, '1', '0', $8, $8, '2500000000000000000', $9, $10, '0x01', 'active', now() - $11::interval)`,
+) values ($1, $2, $2, $3, $3, $4, $5, $6, $7, '1000', '0', $8, $8, '2500000000000000000', $9, $10, '0x01', 'active', now() - $11::interval)`,
 			id, strings.ToLower(owner), subaccount, nonce, side, strings.ToLower(asset), cfg.FutureSubID(), ticks,
 			time.Now().Add(time.Hour).Unix(), action, age); err != nil {
 			t.Fatalf("seed %s: %v", id, err)
@@ -301,7 +301,7 @@ func TestEngineTickPassesOverAnUnderMarginedFuturesOrderThenCancelsIt(t *testing
 insert into active_orders (
   order_id, owner_address, signer_address, subaccount_id, recipient_id, nonce, side, asset_address, sub_id,
   desired_amount, filled_amount, limit_price, limit_price_ticks, worst_fee, expiry, action_json, signature, status, created_at
-) values ($1, $2, $2, $3, $3, $4, $5, $6, $7, '1', '0', $8, $8, '2500000000000000000', $9, $10, '0x01', 'active', now() - $11::interval)`,
+) values ($1, $2, $2, $3, $3, $4, $5, $6, $7, '1000', '0', $8, $8, '2500000000000000000', $9, $10, '0x01', 'active', now() - $11::interval)`,
 			orderID, owner, subaccount, nonce, side, strings.ToLower(asset), cfg.FutureSubID(), ticks,
 			time.Now().Add(time.Hour).Unix(), action, age); err != nil {
 			t.Fatalf("seed %s: %v", id, err)
