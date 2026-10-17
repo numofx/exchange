@@ -1,0 +1,28 @@
+# Gas-balance alert for the cNGN future's forward relayer (/numo/feeds/forward_relayer_key,
+# 0xE5b8541dC2558f3db65aF88A2374e464AE4ae6de), which relays each forward mark and calls pullMark for
+# numo-future-feeds. Its own unit and check: check_signer_balance.py watches one address, and the feed
+# signer's unit watches the feed signer. Paired with numo-forward-relayer-balance-alert.timer.
+#
+# BURN_ETH_PER_DAY: the first mark (2026-10-13 13:06 UTC, relay + pullMark) cost ~0.0000013 ETH, so ~24
+# marks a day burn ~0.00003 ETH. 0.0002 is ~6x that, for gas spikes and the fixing samples and
+# close-outs near expiry, and warns at 0.0014 ETH. Re-measure once it has run a week.
+#
+# Before installing: the healthchecks.io check forward-relayer-balance-alert (6 h timeout, 1 h grace,
+# Pushover and email, as signer-balance-alert) and its ping URL at SSM
+# /numo/pager/heartbeats/forward-relayer-balance-alert; then add it to numo-heartbeats.service's
+# HEARTBEAT_EXPECTED (done here, so install that unit with this one).
+[Unit]
+Description=Numo forward-relayer gas balance check
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/home/ec2-user/exchange/contracts/risk-core
+ExecStart=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-heartbeat.sh forward-relayer-balance-alert /home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-ssm.sh /usr/bin/python3 scripts/ops/check_signer_balance.py
+Environment=AWS_REGION=us-east-1
+Environment=SIGNER_ADDRESS=0xE5b8541dC2558f3db65aF88A2374e464AE4ae6de
+Environment=SIGNER_LABEL=FORWARD-RELAYER
+Environment="SIGNER_IMPACT=the cNGN future stops being marked (forward-mark-late pages 2 h after the last mark) and VM goes stale"
+Environment=BURN_ETH_PER_DAY=0.0002
+# LOW priority finding, HIGH priority if the check cannot run, as signer-balance-alert.
+Environment=HEARTBEAT_FINDING_EXIT=1

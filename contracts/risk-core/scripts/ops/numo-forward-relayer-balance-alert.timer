@@ -1,0 +1,12 @@
+# Every 6h, as the feed signer's: at ~0.00003 ETH/day the balance moves by far less than a day's runway
+# between runs.
+[Unit]
+Description=Numo forward-relayer gas balance check every 6h
+
+[Timer]
+OnBootSec=4min
+OnUnitActiveSec=6h
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
