@@ -122,6 +122,7 @@ function invariantCanary(
   borrowers?: Borrowers,
   settled: { unsettled?: Record<string, bigint>; blocksRead?: unknown[] } = {},
   issuer: { paused?: string[]; frozen?: { by: string; address: string }[]; depositModule?: `0x${string}`; reads?: string[] } = {},
+  managers: { other?: `0x${string}`[]; credits?: Record<string, bigint> } = {},
 ) {
   const v = {
     cashHeld: 5_000_000n, // 5 USDC at 6dp
@@ -137,6 +138,7 @@ function invariantCanary(
     rpcUrl: config.rpcUrl,
     chainId: config.chainId,
     manager: MANAGER,
+    otherManagers: managers.other,
     accountIds: [15],
     intervalMs: 60_000,
     announceOnStart: false,
@@ -166,7 +168,8 @@ function invariantCanary(
           case 'totalBorrow': return v.cashBorrow;
           case 'netSettledCash': return v.cashSettled;
           case 'accruedSmFees': return v.cashSmFees;
-          case 'totalPosition': return v.wrapperCredited;
+          case 'totalPosition':
+            return managers.credits ? (managers.credits[String(a.args?.[0]).toLowerCase()] ?? 0n) : v.wrapperCredited;
           case 'subAccounts': case 'manager': case 'getMarginAndMarkToMarket': return healthyInvariantRead(a);
           case 'paused':
             issuer.reads?.push(`${a.address} paused`);
@@ -793,4 +796,73 @@ test('a frozen deposit module pages when deposits are on, and is not read when t
   assert.match(on.invariant_failures.join(' '), /FROZEN the venue's deposit module/);
   const off = await invariantCanary({}, [WRAPPER], undefined, {}, { frozen }).check();
   assert.equal(off.ok, true, off.invariant_failures.join('; '));
+});
+
+
+// ---- Since the MarginEngine cutover (2026-10-13) the cNGN wrapper credits two managers ----
+
+const ENGINE = '0xA19E296021c9DF25b90D96C2A0793CC3D0800758' as const;
+const STRANGER = '0x00000000000000000000000000000000000000Ee' as const;
+
+// Base, 2026-10-19: the wrapper held 401,131.96585 cNGN against 5,000 credited to the SRM and 396,131.96585 to the
+// MarginEngine. Counting only the SRM read that as 396,131.96585 cNGN moved without deposit().
+const BACKING = { held: 401_131_965_850n, srm: 5_000n * 10n ** 18n, engine: 396_131_965_850n * 10n ** 12n };
+
+test('wrapper backing is summed across the configured managers (Base, 2026-10-19, real numbers)', async () => {
+  const credits = { [MANAGER.toLowerCase()]: BACKING.srm, [ENGINE.toLowerCase()]: BACKING.engine };
+  const both = await invariantCanary({ wrapperHeld: BACKING.held }, [WRAPPER], undefined, {}, {}, { other: [ENGINE], credits }).check();
+  assert.deepEqual(both.invariant_failures, []);
+  // The same chain with only the SRM configured is the false alarm the canary raised for five days.
+  const srmOnly = await invariantCanary({ wrapperHeld: BACKING.held }, [WRAPPER], undefined, {}, {}, { credits }).check();
+  assert.match(srmOnly.invariant_failures.join(' '), /BACKING MISMATCH.*delta 396131\.96585/);
+});
+
+test('a manager outside the configured set holding a position still breaks wrapper backing', async () => {
+  const credits = { [MANAGER.toLowerCase()]: BACKING.srm, [ENGINE.toLowerCase()]: BACKING.engine - 10n ** 18n, [STRANGER.toLowerCase()]: 10n ** 18n };
+  const snapshot = await invariantCanary({ wrapperHeld: BACKING.held }, [WRAPPER], undefined, {}, {}, { other: [ENGINE], credits }).check();
+  assert.match(snapshot.invariant_failures.join(' '), /BACKING MISMATCH/);
+});
+
+function managedAccountCanary(managerOf: Record<number, string>, other: `0x${string}`[] = [ENGINE]) {
+  const calls: string[] = [];
+  const canary = new SettlementCanary({
+    rpcUrl: config.rpcUrl,
+    chainId: config.chainId,
+    manager: MANAGER,
+    otherManagers: other,
+    accountIds: Object.keys(managerOf).map(Number),
+    intervalMs: 60_000,
+    announceOnStart: false,
+    client: {
+      getLogs: async () => [],
+      readContract: async (a: { address: string; functionName: string; args?: readonly unknown[] }) => {
+        if (a.functionName === 'manager') return managerOf[Number(a.args?.[0])];
+        if (a.functionName === 'getMargin' || a.functionName === 'getMarginAndMarkToMarket') {
+          calls.push(`${a.functionName}(${String(a.args?.[0])}) on ${a.address}`);
+        }
+        if (a.functionName === 'getMargin') return 0n;
+        return healthyInvariantRead(a);
+      },
+    } as never,
+  });
+  return { canary, calls };
+}
+
+test('an account under the MarginEngine is probed through the MarginEngine, not the SRM', async () => {
+  const { canary, calls } = managedAccountCanary({ 32: ENGINE, 26: MANAGER });
+  const snapshot = await canary.check();
+  assert.deepEqual(snapshot.config_failures, []);
+  assert.ok(calls.includes(`getMargin(32) on ${ENGINE}`), calls.join('; '));
+  assert.ok(calls.includes(`getMarginAndMarkToMarket(32) on ${ENGINE}`), calls.join('; '));
+  assert.ok(calls.includes(`getMargin(26) on ${MANAGER}`), calls.join('; '));
+  assert.ok(!calls.some((c) => c.startsWith('getMargin(32)') && c.endsWith(MANAGER)), 'account 32 was probed on the SRM');
+});
+
+test('an account under a manager outside the configured set is still a configuration failure', async () => {
+  const { canary } = managedAccountCanary({ 32: STRANGER });
+  const snapshot = await canary.check();
+  assert.match(snapshot.config_failures.join(' '), /subaccount 32 is under manager .* the canary is not watching it/);
+  // and without the MarginEngine configured, an engine account is not watched either
+  const unlisted = await managedAccountCanary({ 32: ENGINE }, []).canary.check();
+  assert.match(unlisted.config_failures.join(' '), /subaccount 32 is under manager/);
 });
