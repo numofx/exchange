@@ -139,6 +139,12 @@ KEEPER_GAS_FLOOR_ETH = 0.002  # ~100 liquidation cycles at 3M gas and Base gas p
 DEFAULT_MATCHER_HEALTH_URL = "https://api.numofx.com/v1/health"
 MATCHER_DEAD_SEC = 60
 MATCHER_INDEXER_LAG_SEC = 120
+# A deploy replaces the matcher stop-before-start (one task; exchange #235 is the overlap fix), so every deploy
+# leaves ~70s with no heartbeat. infra/aws/with-matcher-mute.sh writes /numo/pager/mute_matcher_dead_until (unix
+# seconds) while it runs and deletes it after; run-with-ssm-pager.sh exports it as PAGER_MUTE_MATCHER_DEAD_UNTIL.
+# A mute keeps a NEW matcher-dead from paging. It never hides one already paging, and one set more than
+# MATCHER_MUTE_MAX_SEC ahead is ignored, so a typo or a crashed deploy cannot silence a dead matcher for long.
+MATCHER_MUTE_MAX_SEC = 900
 BLOCK_SEC = 2
 SEL_GET_BALANCE = "0x0806e640"  # getBalance(uint256,address,uint256) -- `cast sig`, pinned in --self-test
 # Negative cash across the perp: CashAsset.totalBorrow(), the sum of every account's cash below zero
@@ -247,6 +253,30 @@ def matcher_conditions(health: dict | None, head_block: int) -> list[Condition]:
                            f"{' (' + indexer['last_error'][:80] + ')' if indexer.get('last_error') else ''}: the reduce-only ledger "
                            "is stale; the chain read still guards each fill."))
   return out
+
+
+def matcher_mute(until: str | None, now: float) -> tuple[bool, str]:
+  """Whether a deploy has muted matcher-dead now, and a line saying why (empty when no mute is set)."""
+  if not until or not until.strip():
+    return False, ""
+  try:
+    deadline = float(until)
+  except ValueError:
+    return False, f"matcher-dead mute ignored: {until.strip()[:40]!r} is not a unix time"
+  left = deadline - now
+  if left <= 0:
+    return False, ""
+  if left > MATCHER_MUTE_MAX_SEC:
+    return False, f"matcher-dead mute ignored: it runs {left:.0f}s ahead, more than the {MATCHER_MUTE_MAX_SEC}s a deploy may take"
+  return True, f"matcher-dead muted for a deploy for {left:.0f}s more"
+
+
+def unmuted_matcher_conditions(conditions: list[Condition], muted: bool, state: dict) -> list[Condition]:
+  """The matcher conditions to page on. A mute drops a matcher-dead that is not already paging; one that is
+  stays, so a deploy started during an outage cannot resolve it. The indexer lag is never muted."""
+  if not muted or "matcher-dead" in state.get("active", {}):
+    return conditions
+  return [c for c in conditions if c.key != "matcher-dead"]
 
 
 def keeper_healthy(health: dict | None, now: int) -> bool:
@@ -687,6 +717,10 @@ def check_and_page(stack_path: Path, state: dict) -> int:
   health = read_health(os.environ.get("KEEPER_HEALTH_URL"))
   matcher_health = read_health(os.environ.get("MATCHER_HEALTH_URL", DEFAULT_MATCHER_HEALTH_URL))
   matcher = matcher_conditions(matcher_health, number)
+  muted, mute_note = matcher_mute(os.environ.get("PAGER_MUTE_MATCHER_DEAD_UNTIL"), time.time())
+  if mute_note:
+    print(mute_note)
+  matcher = unmuted_matcher_conditions(matcher, muted, state)
   if matcher_health and matcher_health.get("matcher"):
     m = matcher_health["matcher"]
     idx = (m.get("details") or {}).get("indexer") or {}
@@ -850,6 +884,21 @@ def self_test() -> int:
   assert [c.key for c in matcher_conditions({"matcher": {"age_seconds": 4, "details": {"indexer": {"cursor_block": 939}}}}, 1000)] == ["matcher-indexer-lag"]
   assert matcher_conditions({"matcher": {"age_seconds": 4, "details": {"indexer": {"cursor_block": 940}}}}, 1000) == []
   assert [c.key for c in matcher_conditions({"matcher": {"age_seconds": 90, "details": {"indexer": {"cursor_block": 1}}}}, 1000)] == ["matcher-dead", "matcher-indexer-lag"]
+  # A deploy's mute: honoured until it lapses, never past MATCHER_MUTE_MAX_SEC ahead, never on garbage.
+  assert matcher_mute(None, now) == (False, "") and matcher_mute("", now) == (False, "")
+  assert matcher_mute(str(now + 600), now)[0] is True
+  assert matcher_mute(str(now - 1), now) == (False, "")
+  assert matcher_mute(str(now + MATCHER_MUTE_MAX_SEC + 1), now)[0] is False and "ignored" in matcher_mute(str(now + 86400), now)[1]
+  assert matcher_mute("tomorrow", now)[0] is False and "ignored" in matcher_mute("tomorrow", now)[1]
+  dead_and_lagging = matcher_conditions({"matcher": {"age_seconds": 90, "details": {"indexer": {"cursor_block": 1}}}}, 1000)
+  assert [c.key for c in unmuted_matcher_conditions(dead_and_lagging, True, {})] == ["matcher-indexer-lag"]
+  assert unmuted_matcher_conditions(dead_and_lagging, False, {}) == dead_and_lagging
+  paging = {"active": {"matcher-dead": {"since": now - 300, "lastPagedAt": now - 300}}}
+  assert unmuted_matcher_conditions(dead_and_lagging, True, paging) == dead_and_lagging
+  # Through step_state: a muted deploy gap pages nothing, and pages once the mute lapses.
+  quiet: dict = {}
+  assert step_state(quiet, unmuted_matcher_conditions(dead_and_lagging[:1], True, quiet), now) == ([], [])
+  assert [c.key for c in step_state(quiet, unmuted_matcher_conditions(dead_and_lagging[:1], False, quiet), now)[0]] == ["matcher-dead"]
   assert keeper_condition(None, now).key == "keeper-unhealthy"
   # Not armed (never seen healthy, market closed): neither an absent keeper nor the DRY_RUN smoke
   # is a page. Armed, both are.
