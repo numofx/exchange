@@ -62,12 +62,9 @@ variable "acm_certificate_arn" {
 variable "image_markets" {
   description = "ECR image URI for the Go binary (serves both api and matcher modes)."
   type        = string
-  # 2026-10-19: main 45144dff: futures on /v1/positions (#227), the perp's boot guard (#230), unconfirmed
-  # deposits store and serve a fixed message, migration 000023 (#231). Before this, 2026-10-15's three
-  # deploys (5465545b8ea2 #222, 6c58a57e5ec1 #224, f788294616dd #226) were applied with -var and never
-  # written here, so this default still read 60e0e0b24f76 (2026-10-13) and a flag-less apply would have
-  # rolled markets back past all three.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:45144dff2e41"
+  # 2026-10-19: main 891fafb8 (#242: /v1/positions skips the perp for accounts the perp's SRM does not manage,
+  # so futures holders no longer get perp_error), on top of 45144dff (#227, #230, #231; migration 000023).
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:891fafb8713d"
 }
 
 variable "image_execution" {
