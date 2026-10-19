@@ -369,6 +369,27 @@ func (r *perpStateReader) Paused(ctx context.Context, market instruments.Metadat
 
 // account reads the subaccount's cash and margin on the perp's stack. Surpluses are the SRM's own:
 // for an account with no position the initial surplus is its cash.
+// managerOf is the account's manager on SubAccounts, lowercased: the zero address for an account that does not exist.
+func (r *perpStateReader) managerOf(ctx context.Context, subaccountID string) (string, error) {
+	account, err := encodeUint256(subaccountID)
+	if err != nil {
+		return "", err
+	}
+	subAccounts, err := r.chain.subAccountsAddress(ctx)
+	if err != nil {
+		return "", err
+	}
+	raw, err := r.chain.ethCall(ctx, subAccounts, sigManagerOf+account)
+	if err != nil {
+		return "", fmt.Errorf("manager: %w", err)
+	}
+	raw = strings.TrimPrefix(strings.ToLower(raw), "0x")
+	if len(raw) < 64 {
+		return "", fmt.Errorf("manager: short result %q", raw)
+	}
+	return "0x" + raw[24:64], nil
+}
+
 func (r *perpStateReader) account(ctx context.Context, market instruments.Metadata, subaccountID string) (*presentedPerpAccount, error) {
 	account, err := encodeUint256(subaccountID)
 	if err != nil {
@@ -658,14 +679,32 @@ func (s *Server) handlePositions(w http.ResponseWriter, r *http.Request) {
 
 // perpPositions reads the account's position and margin account on every perp. On a failed read it
 // returns the message to report and nothing else: a partial perp section would read as complete.
+//
+// Only an account under the perp's SRM, or under the close-only manager (CNGN_PERP_CLOSE_ONLY_MANAGER),
+// can hold the perp, so any other account has no perp account and is skipped: empty, not an error.
+// Reading it anyway asked the SRM to price an account it does not manage; for one holding a dated
+// future that reverts, so every futures holder got perp_error on every request. The manager is read
+// once; failing to read it is a real failure and is reported like any other perp read.
 func (s *Server) perpPositions(ctx context.Context, subaccountID string) ([]presentedPosition, []presentedPerpAccount, string) {
 	positions := []presentedPosition{}
 	accounts := []presentedPerpAccount{}
 	if s.perp == nil || s.instruments == nil {
 		return positions, accounts, ""
 	}
+	manager := ""
 	for _, market := range s.instruments.Enabled() {
 		if !market.IsPerpetual() {
+			continue
+		}
+		if manager == "" {
+			read, err := s.perp.managerOf(ctx, subaccountID)
+			if err != nil {
+				slog.Error("read account manager", "subaccount_id", subaccountID, "error", err)
+				return nil, nil, "could not read the account's manager from chain"
+			}
+			manager = read
+		}
+		if !s.holdsPerp(manager, market) {
 			continue
 		}
 		position, err := s.perp.position(ctx, market, subaccountID)
@@ -684,4 +723,15 @@ func (s *Server) perpPositions(ctx context.Context, subaccountID string) ([]pres
 		accounts = append(accounts, *account)
 	}
 	return positions, accounts, ""
+}
+
+// holdsPerp reports whether an account under manager can hold the perp market: the perp's own SRM, or
+// the close-only manager its accounts are being moved off.
+func (s *Server) holdsPerp(manager string, market instruments.Metadata) bool {
+	manager = strings.ToLower(strings.TrimSpace(manager))
+	if manager == strings.ToLower(strings.TrimSpace(market.MarginManagerAddress)) {
+		return true
+	}
+	closeOnly := strings.ToLower(strings.TrimSpace(s.cfg.CNGNPerpCloseOnlyManager))
+	return closeOnly != "" && manager == closeOnly
 }
