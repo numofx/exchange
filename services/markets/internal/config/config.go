@@ -112,6 +112,9 @@ type Config struct {
 	// resting ones included, to what reduces its account's position. For a perp with no market maker to
 	// exit against. Exits stay open; nothing new can be opened.
 	CNGNPerpCloseOnly bool
+	// CNGNPerpReopenAck (CNGN_PERP_REOPEN_ACK) must equal PerpReopenAck for a configured perp to boot
+	// without close-only: see validatePerpStack.
+	CNGNPerpReopenAck string
 	// CNGNPerpCollateralAddress is the perp stack's own cNGN escrow (risk-core
 	// CNGN_PERP_COLLATERAL.json `escrow`), once the vault has whitelisted it as a base asset on the
 	// perp SRM. Optional: unset, the perp is margined in its cash only and /v1/positions reports no
@@ -207,6 +210,7 @@ func Load() (Config, error) {
 		CNGNPerpSRMAddress:           strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_SRM_ADDRESS"))),
 		CNGNPerpCloseOnlyManager:     strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_CLOSE_ONLY_MANAGER"))),
 		CNGNPerpCloseOnly:            getenvBool("CNGN_PERP_CLOSE_ONLY", false),
+		CNGNPerpReopenAck:            strings.TrimSpace(os.Getenv("CNGN_PERP_REOPEN_ACK")),
 		CNGNPerpCollateralAddress:    strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_COLLATERAL_ADDRESS"))),
 		CNGNFutureAssetAddress:       strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_FUTURE_ASSET_ADDRESS"))),
 		CNGNFutureManagerAddress:     strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_FUTURE_MANAGER_ADDRESS"))),
@@ -430,8 +434,20 @@ func (c Config) validatePerpStack() error {
 	if c.CNGNPerpCloseOnly && len(set) == 0 {
 		return errors.New("CNGN_PERP_CLOSE_ONLY is set without a perp stack")
 	}
+	if len(set) != 0 && !c.CNGNPerpCloseOnly && c.CNGNPerpReopenAck != PerpReopenAck {
+		return fmt.Errorf("the perp is configured without CNGN_PERP_CLOSE_ONLY=true, and CNGN_PERP_REOPEN_ACK is not %q: "+
+			"the perp may not reopen until numofx/trading-app#131 is fixed (the trading app shows a perp holder as flat "+
+			"whenever /v1/positions cannot read the perp). Set CNGN_PERP_CLOSE_ONLY=true, or, once #131 is merged and "+
+			"deployed, CNGN_PERP_REOPEN_ACK=%s", PerpReopenAck, PerpReopenAck)
+	}
 	return nil
 }
+
+// PerpReopenAck is the CNGN_PERP_REOPEN_ACK value that lets a configured perp boot without close-only.
+// Its name is the issue that blocks reopening, so setting it is a statement that the issue is fixed.
+// The guard is in the service so that every deploy path (AWS, Railway, a laptop) meets it; remove it
+// with the issue.
+const PerpReopenAck = "trading-app-131"
 
 // FutureEnabled reports whether the cNGN future is configured. The asset address is the switch; the
 // rest is required alongside it by validateFutureStack.
