@@ -618,8 +618,13 @@ func uiPriceString(price *big.Int) string {
 	return formatDecimal(new(big.Rat).SetFrac(price, perpE18), perpPriceScale)
 }
 
-// handlePositions serves GET /v1/positions?subaccount_id=N: the account's perp positions, read from
-// chain. Positions are public on chain, so this needs no signature.
+// handlePositions serves GET /v1/positions?subaccount_id=N, read from chain: the account's perp
+// positions and perp margin accounts under "positions" and "accounts", its dated-futures positions
+// under "futures", and its margin under the futures' engine under "futures_account" (absent when the
+// account is not under it). Positions are public on chain, so this needs no signature.
+//
+// A perp read that fails fails the request, as it always has; a futures read that fails leaves its
+// field out (see presentedFuturePosition).
 func (s *Server) handlePositions(w http.ResponseWriter, r *http.Request) {
 	subaccountID := strings.TrimSpace(r.URL.Query().Get("subaccount_id"))
 	if subaccountID == "" {
@@ -632,30 +637,33 @@ func (s *Server) handlePositions(w http.ResponseWriter, r *http.Request) {
 	}
 	positions := []presentedPosition{}
 	accounts := []presentedPerpAccount{}
-	if s.perp == nil || s.instruments == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"positions": positions, "accounts": accounts})
-		return
+	if s.perp != nil && s.instruments != nil {
+		for _, market := range s.instruments.Enabled() {
+			if !market.IsPerpetual() {
+				continue
+			}
+			position, err := s.perp.position(r.Context(), market, subaccountID)
+			if err != nil {
+				slog.Error("read perp position", "market", market.Symbol, "subaccount_id", subaccountID, "error", err)
+				writeJSON(w, http.StatusBadGateway, map[string]string{"error": "could not read positions from chain"})
+				return
+			}
+			if position != nil {
+				positions = append(positions, *position)
+			}
+			account, err := s.perp.account(r.Context(), market, subaccountID)
+			if err != nil {
+				slog.Error("read perp account", "market", market.Symbol, "subaccount_id", subaccountID, "error", err)
+				writeJSON(w, http.StatusBadGateway, map[string]string{"error": "could not read the account from chain"})
+				return
+			}
+			accounts = append(accounts, *account)
+		}
 	}
-	for _, market := range s.instruments.Enabled() {
-		if !market.IsPerpetual() {
-			continue
-		}
-		position, err := s.perp.position(r.Context(), market, subaccountID)
-		if err != nil {
-			slog.Error("read perp position", "market", market.Symbol, "subaccount_id", subaccountID, "error", err)
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "could not read positions from chain"})
-			return
-		}
-		if position != nil {
-			positions = append(positions, *position)
-		}
-		account, err := s.perp.account(r.Context(), market, subaccountID)
-		if err != nil {
-			slog.Error("read perp account", "market", market.Symbol, "subaccount_id", subaccountID, "error", err)
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "could not read the account from chain"})
-			return
-		}
-		accounts = append(accounts, *account)
+	futurePositions, futuresAccount := s.futuresPositions(r.Context(), subaccountID)
+	body := map[string]any{"positions": positions, "accounts": accounts, "futures": futurePositions}
+	if futuresAccount != nil {
+		body["futures_account"] = futuresAccount
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"positions": positions, "accounts": accounts})
+	writeJSON(w, http.StatusOK, body)
 }

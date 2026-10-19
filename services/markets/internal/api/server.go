@@ -46,6 +46,9 @@ type Server struct {
 	perp *perpStateReader
 	// future reads the cNGN future's band and state; nil when no future is listed.
 	future *futures.Reader
+	// futureSeries reads each listed future series for /v1/positions, keyed by futureSeriesKey; the
+	// configured series shares future's reader and its caches.
+	futureSeries map[string]*futures.Reader
 	// indexLag is the index-lag gate; nil without INDEX_STATUS_TOKEN.
 	indexLag *indexLagGate
 }
@@ -243,20 +246,22 @@ func NewServer(cfg config.Config, pool *pgxpool.Pool, registry *instruments.Regi
 
 	signatures := newSignatureChecker(cfg)
 
+	future := newFutureStateReader(cfg)
 	return &Server{
-		cfg:         cfg,
-		pool:        pool,
-		orders:      orders.NewRepository(pool),
-		instruments: registry,
-		custody:     newCustodyChecker(cfg),
-		signatures:  signatures,
-		withdrawals: newWithdrawalService(cfg, signatures),
-		deposits:    newDepositService(cfg, signatures, pool),
-		perp:        newPerpStateReader(cfg),
-		future:      newFutureStateReader(cfg),
-		indexLag:    newIndexLagGate(cfg),
-		hub:         events.NewHub(pool, cfg, slog.Default()),
-		wsAuth:      wsauth.Verifier{Domain: cfg.WSAuthDomain, MaxTTL: cfg.WSAuthMaxTTL},
+		cfg:          cfg,
+		pool:         pool,
+		orders:       orders.NewRepository(pool),
+		instruments:  registry,
+		custody:      newCustodyChecker(cfg),
+		signatures:   signatures,
+		withdrawals:  newWithdrawalService(cfg, signatures),
+		deposits:     newDepositService(cfg, signatures, pool),
+		perp:         newPerpStateReader(cfg),
+		future:       future,
+		futureSeries: newFutureSeriesReaders(cfg, registry, future),
+		indexLag:     newIndexLagGate(cfg),
+		hub:          events.NewHub(pool, cfg, slog.Default()),
+		wsAuth:       wsauth.Verifier{Domain: cfg.WSAuthDomain, MaxTTL: cfg.WSAuthMaxTTL},
 		orderHistoryAuth: wsauth.Verifier{
 			Domain:    cfg.WSAuthDomain,
 			MaxTTL:    orderHistoryAuthMaxTTL,
