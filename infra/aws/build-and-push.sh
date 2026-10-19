@@ -59,4 +59,7 @@ Set the image_markets / image_execution defaults in variables.tf to
 then terraform plan (expect only the task definitions and services for the images that
 changed), apply, and commit variables.tf: the defaults ARE the deployed values, so a
 flag-less apply stays a no-op.
+
+When the markets image changes, apply through ./with-matcher-mute.sh: the matcher is
+replaced stop-before-start (~70s with no heartbeat), which otherwise pages matcher-dead.
 EOF
