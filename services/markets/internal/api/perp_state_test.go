@@ -75,7 +75,19 @@ var (
 	stubCap    int64 = 50_000_000
 	// stubDepositsOpen is the escrow's whitelistedManager(srm): 0 until a test opens deposits.
 	stubDepositsOpen int64
+	// stubManagerOf moves an account (by decimal id) to another manager; "fail" makes the read revert.
+	stubManagerOf = map[string]string{}
+	// stubForbidSRMReads fails the test on any getMargin: for accounts the SRM must not be asked about.
+	stubForbidSRMReads bool
 )
+
+func mustHex(s string) []byte {
+	b, err := hex.DecodeString(strings.TrimPrefix(s, "0x"))
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
 
 func stubPerpRPC(t *testing.T, position *big.Int) *httptest.Server {
 	t.Helper()
@@ -118,6 +130,9 @@ func stubPerpRPC(t *testing.T, position *big.Int) *httptest.Server {
 		case sigUnrealizedCash:
 			result = word(new(big.Int).Neg(e18Int(40)))
 		case sigGetMargin:
+			if stubForbidSRMReads {
+				t.Errorf("getMargin read on the SRM for an account the SRM does not manage")
+			}
 			result = word(e18Int(1_540))
 		case sigAllowedModules:
 			result = word(big.NewInt(1))
@@ -125,6 +140,16 @@ func stubPerpRPC(t *testing.T, position *big.Int) *httptest.Server {
 			result = word(e18Int(stubCap))
 		case sigAdjustmentsPaused:
 			result = word(big.NewInt(stubPaused))
+		case sigManagerOf: // SubAccounts.manager(uint256): the SRM unless a test moves the account
+			manager := testPerpSRM
+			if m, ok := stubManagerOf[new(big.Int).SetBytes(mustHex(call.Data[10:])).String()]; ok {
+				manager = m
+			}
+			if manager == "fail" {
+				_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"boom"}}`))
+				return
+			}
+			result = strings.Repeat("0", 24) + strings.TrimPrefix(strings.ToLower(manager), "0x")
 		default:
 			t.Errorf("unexpected call %s", call.Data[:10])
 		}
