@@ -1,6 +1,6 @@
 import { installGracefulShutdown } from './shutdown.js';
 import { buildApp } from './app.js';
-import { SettlementCanary } from './canary.js';
+import { SettlementCanary, settlementCanaryOptions } from './canary.js';
 import { loadConfig, loadDeploymentAddresses } from './config.js';
 import { loadContractArtifacts } from './contracts.js';
 import { MatchExecutor } from './executor.js';
@@ -72,26 +72,10 @@ const executor = await MatchExecutor.create(config, {
   deposit: config.deposit,
 });
 
-const canary = config.settlementCanary
-  ? new SettlementCanary({
-      rpcUrl: config.rpcUrl,
-      chainId: config.chainId,
-      manager: config.settlementCanary.manager,
-      accountIds: config.settlementCanary.accountIds,
-      intervalMs: config.settlementCanary.intervalMs,
-      alertWebhookUrl: config.settlementCanary.alertWebhookUrl,
-      alertRepeatAfterChecks: config.settlementCanary.alertRepeatAfterChecks,
-      heartbeatUrl: config.settlementCanary.heartbeatUrl,
-      minAccountValue: config.settlementCanary.minAccountValue,
-      expectedNetSettledCash: config.settlementCanary.expectedNetSettledCash,
-      wrapperDeltaExceptions: config.settlementCanary.wrapperDeltaExceptions,
-      feeRecipient: config.settlementCanary.feeRecipient,
-      depositModule: config.deposit?.moduleAddress,
-      log: (level, message, fields) => {
-        process.stdout.write(`${JSON.stringify({ level, msg: message, ...fields })}\n`);
-      },
-    })
-  : undefined;
+const canaryOptions = settlementCanaryOptions(config, (level, message, fields) => {
+  process.stdout.write(`${JSON.stringify({ level, msg: message, ...fields })}\n`);
+});
+const canary = canaryOptions ? new SettlementCanary(canaryOptions) : undefined;
 canary?.start();
 // Reports a deposit pause (executor below its floor, or the hourly gas budget spent) even when nobody is depositing.
 executor.depositGate?.watch(300_000);

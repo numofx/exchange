@@ -61,6 +61,8 @@ const envSchema = z.object({
   // or environment without a risk manager is not forced to invent one.
   SETTLEMENT_CANARY_MANAGER: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
   SETTLEMENT_CANARY_ACCOUNTS: z.string().default(''),
+  // Comma-separated managers besides SETTLEMENT_CANARY_MANAGER (the MarginEngine since 2026-10-13). See CanaryOptions.
+  SETTLEMENT_CANARY_OTHER_MANAGERS: z.string().default(''),
   SETTLEMENT_CANARY_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
   // Off by default, and the default is the considered position rather than caution: a stale
   // oracle is not fixed by replacing this container. Failing the health check would drop the
@@ -125,6 +127,7 @@ export type AppConfig = {
   };
   settlementCanary?: {
     manager: `0x${string}`;
+    otherManagers: `0x${string}`[];
     accountIds: number[];
     intervalMs: number;
     failsHealthcheck: boolean;
@@ -189,6 +192,7 @@ export function loadConfig(): AppConfig {
     settlementCanary: parsed.SETTLEMENT_CANARY_MANAGER
       ? {
           manager: getAddress(parsed.SETTLEMENT_CANARY_MANAGER) as `0x${string}`,
+          otherManagers: parseManagers(parsed.SETTLEMENT_CANARY_OTHER_MANAGERS),
           accountIds: parseAccountIds(parsed.SETTLEMENT_CANARY_ACCOUNTS),
           intervalMs: parsed.SETTLEMENT_CANARY_INTERVAL_MS,
           failsHealthcheck: parsed.SETTLEMENT_CANARY_FAILS_HEALTHCHECK === 'true',
@@ -271,6 +275,19 @@ function parseFeeRecipient(p: {
  * than having no canary at all -- so an empty or malformed list is a startup failure, not
  * a silently empty set.
  */
+function parseManagers(raw: string): `0x${string}`[] {
+  return raw
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .map((part) => {
+      if (!/^0x[0-9a-fA-F]{40}$/.test(part)) {
+        throw new Error(`SETTLEMENT_CANARY_OTHER_MANAGERS: "${part}" is not an address`);
+      }
+      return getAddress(part) as `0x${string}`;
+    });
+}
+
 function parseAccountIds(raw: string): number[] {
   const ids = raw
     .split(',')

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { settlementCanaryOptions } from './canary.js';
 import { loadConfig } from './config.js';
 
 const BASE_ENV = {
@@ -16,6 +17,7 @@ function withEnv<T>(extra: Record<string, string | undefined>, fn: () => T): T {
     ...Object.keys(BASE_ENV),
     'SETTLEMENT_CANARY_MANAGER',
     'SETTLEMENT_CANARY_ACCOUNTS',
+    'SETTLEMENT_CANARY_OTHER_MANAGERS',
     'SETTLEMENT_CANARY_INTERVAL_MS',
     'SETTLEMENT_CANARY_FAILS_HEALTHCHECK',
     'SETTLEMENT_CANARY_FEE_SUBACCOUNT',
@@ -105,4 +107,34 @@ test('no fee recipient config at all is fine', () => {
     loadConfig,
   );
   assert.equal(config.settlementCanary?.feeRecipient, undefined);
+});
+
+test('the other managers are read, checksummed, and empty by default', () => {
+  const none = withEnv({ SETTLEMENT_CANARY_MANAGER: MANAGER, SETTLEMENT_CANARY_ACCOUNTS: '32', SETTLEMENT_CANARY_OTHER_MANAGERS: undefined }, loadConfig);
+  assert.deepEqual(none.settlementCanary?.otherManagers, []);
+  const engine = withEnv(
+    { SETTLEMENT_CANARY_MANAGER: MANAGER, SETTLEMENT_CANARY_ACCOUNTS: '32', SETTLEMENT_CANARY_OTHER_MANAGERS: ' 0xa19e296021c9df25b90d96c2a0793cc3d0800758 ' },
+    loadConfig,
+  );
+  assert.deepEqual(engine.settlementCanary?.otherManagers, ['0xA19E296021c9DF25b90D96C2A0793CC3D0800758']);
+});
+
+test('another manager that is not an address is refused at start-up', () => {
+  assert.throws(
+    () => withEnv({ SETTLEMENT_CANARY_MANAGER: MANAGER, SETTLEMENT_CANARY_ACCOUNTS: '32', SETTLEMENT_CANARY_OTHER_MANAGERS: 'margin-engine' }, loadConfig),
+    /SETTLEMENT_CANARY_OTHER_MANAGERS: "margin-engine" is not an address/,
+  );
+});
+
+// index.ts builds the canary from settlementCanaryOptions: the MarginEngine set in the env must reach the canary.
+test('the other managers reach the canary the service builds', () => {
+  const config = withEnv(
+    { SETTLEMENT_CANARY_MANAGER: MANAGER, SETTLEMENT_CANARY_ACCOUNTS: '32,34', SETTLEMENT_CANARY_OTHER_MANAGERS: '0xA19E296021c9DF25b90D96C2A0793CC3D0800758' },
+    loadConfig,
+  );
+  const options = settlementCanaryOptions(config);
+  assert.equal(options?.manager, MANAGER);
+  assert.deepEqual(options?.otherManagers, ['0xA19E296021c9DF25b90D96C2A0793CC3D0800758']);
+  assert.deepEqual(options?.accountIds, [32, 34]);
+  assert.equal(settlementCanaryOptions(withEnv({ SETTLEMENT_CANARY_MANAGER: undefined }, loadConfig)), undefined);
 });
