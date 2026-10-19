@@ -25,11 +25,12 @@ const schema = z.object({
   ORDERBOOK_URL: z.string().url().default('https://orderbook.hyperfx.finance/mainnet/graphql'),
   COPROCESSOR_URL: z.string().min(1).default('wss://nexus.rpc.polytope.technology'),
   /**
-   * Subaccount the proceeds are deposited into — the spot market maker's. #26, under the perp SRM,
-   * since the 2026-10-04 unified cutover (infra/aws mm_subaccount_id). Checked at runtime against
-   * the spot market's manager, so a retired account is refused rather than deposited into.
+   * Subaccount the proceeds are deposited into — the spot market maker's. #34, under the MarginEngine,
+   * since 2026-10-14 (infra/aws mm_subaccount_id; it was #26 under the perp SRM from the 2026-10-04
+   * unified cutover). Checked at runtime against the spot market's manager, so a retired account is
+   * refused rather than deposited into: that refusal is what kept rebalance-check red until this moved.
    */
-  MM_SUBACCOUNT_ID: z.coerce.bigint().default(26n),
+  MM_SUBACCOUNT_ID: z.coerce.bigint().default(34n),
   /**
    * The venue API. The spot market's escrow, quote asset and manager are read from its
    * /v1/markets, which serves the same Terraform variables the venue and the makers run on.
