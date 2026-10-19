@@ -138,11 +138,15 @@ json.dump(stack, open(sys.argv[3], "w"), indent=2)
 PY
 V="$DIR/venue.json"
 PERP=$(json "$V" perp) CASH=$(json "$V" cash) SRM=$(json "$V" srm)
+# The venue opens perp positions, so its perp is not close-only. markets-service refuses to boot such a
+# perp without the reopen acknowledgement (config.PerpReopenAck, numofx/trading-app#131); that issue is
+# about the trading app, which this anvil venue does not run.
 PERP_MARKETS_ENV="CNGN_PERP_ASSET_ADDRESS=$PERP
 CNGN_PERP_TRADE_MODULE_ADDRESS=$MODULE
 CNGN_PERP_CASH_ADDRESS=$CASH
 CNGN_PERP_SRM_ADDRESS=$SRM
-CNGN_PERP_COLLATERAL_ADDRESS=$CNGN_ESCROW"
+CNGN_PERP_COLLATERAL_ADDRESS=$CNGN_ESCROW
+CNGN_PERP_REOPEN_ACK=trading-app-131"
 PERP_EXEC_ENV="PERP_TRADE_MODULE_ADDRESS=$MODULE"
 if [ "$UNIFIED" = 1 ]; then
   step "unified: spot on the perp stack (asset = cNGN escrow, module = perp TradeModule, quote = perp cash, manager = perp SRM)"
