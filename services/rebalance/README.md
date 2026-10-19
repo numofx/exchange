@@ -23,7 +23,7 @@ pnpm rebalance check --alert       # ...and post to the ops webhook if so
 pnpm rebalance quote 20            # what the live feed prices it at
 pnpm rebalance approve 20 --execute
 pnpm rebalance swap 20 --execute   # UNAVAILABLE until #144 (dead price feed)
-pnpm rebalance deposit --execute   # whole cNGN balance -> subaccount 26
+pnpm rebalance deposit --execute   # whole cNGN balance -> subaccount 34 (MM_SUBACCOUNT_ID)
 pnpm rebalance cancel --execute    # reclaim an unfilled order
 ```
 
