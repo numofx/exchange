@@ -234,9 +234,19 @@ variable "cngn_perp_collateral_address" {
 # On since 2026-10-13, when the perp's market maker (#24) was stopped to fund the future's: no one
 # should open a perp position with no maker to exit against. Exits stay open. Turn it off when the perp
 # has a maker again.
+#
+# Turning it off is blocked until numofx/trading-app#131 is closed: since exchange #227 a perp read
+# failure on /v1/positions is a 200 with the perp keys absent, which the trading app shows as a flat
+# perp. Harmless while no one can hold a perp; wrong for real holders once it reopens. Remove this
+# validation when #131 is merged.
 variable "cngn_perp_close_only" {
   type    = bool
   default = true
+
+  validation {
+    condition     = var.cngn_perp_close_only
+    error_message = "The perp cannot leave close-only until numofx/trading-app#131 is fixed: the trading app would show perp holders as flat whenever /v1/positions cannot read the perp. See the comment on this variable."
+  }
 }
 
 variable "cngn_future_asset_address" {
