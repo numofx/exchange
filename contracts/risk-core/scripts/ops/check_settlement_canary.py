@@ -35,6 +35,10 @@ Env (or ~/.numo-feeds.env):
   RPC_URL            Base mainnet RPC
   ALERT_WEBHOOK_URL  Slack/Discord-compatible webhook (optional; logs only if unset)
   SRM_ADDRESS        StandardManager (default: the live Base deployment)
+  OTHER_MANAGERS     comma-separated managers besides the SRM that hold accounts and wrapper positions
+                     (default: the MarginEngine, live since 2026-10-13). Wrapper backing sums totalPosition
+                     across the SRM and these, and each account is probed through its own manager.
+  CANARY_ACCOUNTS    comma-separated subaccount ids (default: 32,34)
   EXPECTED_NET_SETTLED_CASH  the settled cash no perp position explains (0 for the perp cash
                      ledger). netSettledCash plus every account's unsettled perp PnL and funding
                      must equal it; unset = not checked. See check_settled_cash.
@@ -66,11 +70,13 @@ import sys
 import urllib.request
 from pathlib import Path
 
-# The perp SRM, which both makers' accounts sit under since the 2026-10-04 unified cutover: 26
-# (spot, wrapped cNGN) and 24 (perp position). The retired spot manager was 0x3195Bd7e with
-# account 15, which is now empty and would pass getMargin while proving nothing.
+# The perp SRM: its markets, feeds and cash ledger are still what checks 2 and 3 read. The makers' accounts left
+# it at the MarginEngine cutover (2026-10-13/14): 26 and 24 are empty now and would pass getMargin while proving
+# nothing, as 15 did after the 2026-10-04 cutover. The live ones are under the MarginEngine: 32 (the futures
+# maker) and 34 (the spot maker), probed through it.
 DEFAULT_SRM = "0xDE0423D0a1E15536265C9513d2e0c10DAb5835D4"
-DEFAULT_ACCOUNTS = "26,24"
+DEFAULT_OTHER_MANAGERS = "0xA19E296021c9DF25b90D96C2A0793CC3D0800758"  # MarginEngine
+DEFAULT_ACCOUNTS = "32,34"
 
 # Verified with `cast sig`. A wrong selector here would eth_call into empty space and the
 # node would answer 0x, which this script treats as a failure rather than a pass -- but the
@@ -375,15 +381,16 @@ def wrapper_exceptions() -> dict:
   return out
 
 
-def check_wrapper_backing(url: str, srm: str, failures: list, checked: list) -> None:
+def check_wrapper_backing(url: str, srm: str, failures: list, checked: list, others: list | None = None) -> None:
   """A WrappedERC20Asset's real token balance must equal the position it has credited.
 
   Discovered from AssetWhitelisted logs rather than hardcoded, so a new market is covered
   without editing this file. totalPosition is per-manager and the manager set is not
-  enumerable on chain, so this compares against the manager we were given: another manager
-  holding a position makes the check go RED rather than silently pass, which is the safe
-  direction to fail in.
+  enumerable on chain, so this sums the managers we were given (the SRM and `others`): a
+  manager outside them holding a position makes the check go RED rather than silently pass,
+  which is the safe direction to fail in.
   """
+  managers = [srm, *(others or [])]
   exceptions = wrapper_exceptions()
   logs = rpc(url, "eth_getLogs", [{
     "fromBlock": "0x0", "toBlock": "latest", "address": srm, "topics": [TOPIC_ASSET_WHITELISTED],
@@ -401,7 +408,7 @@ def check_wrapper_backing(url: str, srm: str, failures: list, checked: list) -> 
       continue  # not a wrapper (cash is excluded this way too); nothing to compare
 
     held = to18(uint(url, token, SEL_BALANCE_OF + addr_arg(asset)), decimals)
-    credited = uint(url, asset, SEL_TOTAL_POSITION + addr_arg(srm))
+    credited = sum(uint(url, asset, SEL_TOTAL_POSITION + addr_arg(m)) for m in managers)
     delta = held - credited
     expected = exceptions.get(asset.lower(), 0)
 
@@ -413,7 +420,7 @@ def check_wrapper_backing(url: str, srm: str, failures: list, checked: list) -> 
       )
       failures.append(
         f"wrapper {asset} BACKING MISMATCH: holds {held / 1e18:.6f} of {token} but has "
-        f"credited {credited / 1e18:.6f} (delta {delta / 1e18:+.6f}){note}"
+        f"credited {credited / 1e18:.6f} across {len(managers)} manager(s) (delta {delta / 1e18:+.6f}){note}"
       )
     elif expected:
       checked.append(
@@ -490,7 +497,20 @@ def check_fee_recipient(url: str, failures: list, checked: list) -> None:
   checked.append(f"fee subaccount {account} vault-owned, {grant}, accrued {balance / 1e18:.6f} of {quote}")
 
 
-def check_accounts(url: str, srm: str, accounts: list, problems: list, checked: list) -> None:
+def account_managers(url: str, srm: str, accounts: list) -> dict:
+  """Each account's manager on chain, None where the read failed. Both managers share one SubAccounts."""
+  sub_accounts = "0x" + call(url, srm, SEL_SUB_ACCOUNTS)[26:]
+  out = {}
+  for account_id in accounts:
+    try:
+      out[account_id] = "0x" + call(url, sub_accounts, SEL_MANAGER + f"{account_id:064x}")[26:]
+    except Exception:
+      out[account_id] = None
+  return out
+
+
+def check_accounts(url: str, srm: str, accounts: list, problems: list, checked: list,
+                   others: list | None = None, owners: dict | None = None) -> None:
   """The canary's own configuration, checked against the chain on every run.
 
   getMargin succeeds on an account that was never opened and on one that holds nothing: the
@@ -501,17 +521,22 @@ def check_accounts(url: str, srm: str, accounts: list, problems: list, checked: 
   because the emptied 15 still held 0.0008 of cash and would have passed a non-zero test.
   """
   floor = float(os.environ.get("CANARY_MIN_ACCOUNT_USD", "10"))
-  sub_accounts = "0x" + call(url, srm, SEL_SUB_ACCOUNTS)[26:]
+  managers = [srm, *(others or [])]
+  owners = owners if owners is not None else account_managers(url, srm, accounts)
   for account_id in accounts:
     word = f"{account_id:064x}"
-    manager = "0x" + call(url, sub_accounts, SEL_MANAGER + word)[26:]
+    manager = owners.get(account_id)
+    if manager is None:
+      problems.append(f"subaccount {account_id}'s manager could not be read")
+      continue
     if int(manager, 16) == 0:
       problems.append(f"subaccount {account_id} does not exist -- getMargin on it passes while proving nothing")
       continue
-    if manager.lower() != srm.lower():
-      problems.append(f"subaccount {account_id} is under manager {manager}, not {srm} -- this canary is not watching it")
+    watched = next((m for m in managers if m.lower() == manager.lower()), None)
+    if watched is None:
+      problems.append(f"subaccount {account_id} is under manager {manager}, not {' or '.join(managers)} -- this canary is not watching it")
       continue
-    word2 = call(url, srm, SEL_MARGIN_AND_MTM + word + f"{1:064x}" + f"{0:064x}")[2:][64:128]
+    word2 = call(url, watched, SEL_MARGIN_AND_MTM + word + f"{1:064x}" + f"{0:064x}")[2:][64:128]
     mtm = int(word2, 16)
     if mtm >= 1 << 255:
       mtm -= 1 << 256
@@ -521,7 +546,7 @@ def check_accounts(url: str, srm: str, accounts: list, problems: list, checked: 
         "-- too little held for getMargin on it to prove anything"
       )
     else:
-      checked.append(f"subaccount {account_id} under the SRM, worth ${mtm / 1e18:,.2f}")
+      checked.append(f"subaccount {account_id} under {'the SRM' if watched == srm else watched}, worth ${mtm / 1e18:,.2f}")
 
 
 def alert(webhook: str | None, msg: str) -> None:
@@ -587,6 +612,75 @@ def self_test() -> None:
 
   self_test_borrowers()
   self_test_settled_cash()
+  self_test_managers()
+
+
+def self_test_managers() -> None:
+  """Wrapper backing summed across managers, and each account read through its own manager, on a fake chain."""
+  global call, rpc
+  real_call, real_rpc = call, rpc
+  srm, engine, stranger = "0x" + "a" * 40, "0x" + "e" * 40, "0x" + "f" * 40
+  sub, wrapper, token = "0x" + "5" * 40, "0x" + "b" * 40, "0x" + "d" * 40
+  e = 10**18
+
+  def word(v: int) -> str:
+    return "0x" + format(v % (1 << 256), "064x")
+
+  def addr(a: str) -> str:
+    return "0x" + "0" * 24 + a[2:]
+
+  # Base, 2026-10-19: 401,131.96585 cNGN held, 5,000 credited to the SRM and 396,131.96585 to the MarginEngine.
+  def fake_chain(credits: dict, owner_of: dict, reads: list):
+    def fake(url: str, to: str, data: str, block: str = "latest") -> str:
+      sel, args = data[:10], data[10:]
+      if sel == SEL_SUB_ACCOUNTS:
+        return addr(sub)
+      if to == sub and sel == SEL_MANAGER:
+        return addr(owner_of[int(args[:64], 16)])
+      if to == wrapper and sel == SEL_WRAPPED_ASSET:
+        return addr(token)
+      if to == token and sel == SEL_DECIMALS:
+        return word(6)
+      if to == token and sel == SEL_BALANCE_OF:
+        return word(401_131_965_850)
+      if to == wrapper and sel == SEL_TOTAL_POSITION:
+        return word(credits.get("0x" + args[24:64], 0))
+      if sel == SEL_MARGIN_AND_MTM:
+        reads.append((to, int(args[:64], 16)))
+        return "0x" + format(0, "064x") + format(500 * e, "064x")
+      raise AssertionError(f"unexpected call {to} {sel}")
+    return fake
+
+  credits = {srm: 5_000 * e, engine: 396_131_965_850 * 10**12}
+  try:
+    rpc = lambda url, method, params: [{"data": "0x" + "0" * 24 + wrapper[2:] + "0" * 64}]  # noqa: E731
+    reads: list = []
+    call = fake_chain(credits, {}, reads)
+    failures, checked = [], []
+    check_wrapper_backing("fake", srm, failures, checked, [engine])
+    assert not failures, f"summed across both managers the wrapper is backed: {failures}"
+    failures = []
+    check_wrapper_backing("fake", srm, failures, checked)
+    assert failures and "delta +396131.965850" in failures[0], f"the SRM alone is the five-day false alarm: {failures}"
+    failures = []
+    call = fake_chain({**credits, stranger: e, engine: credits[engine] - e}, {}, reads)
+    check_wrapper_backing("fake", srm, failures, checked, [engine])
+    assert failures, "a manager outside the set holding a position must still break backing"
+
+    reads = []
+    call = fake_chain(credits, {32: engine, 26: srm, 99: stranger}, reads)
+    problems, checked = [], []
+    check_accounts("fake", srm, [32, 26], problems, checked, [engine])
+    assert not problems, f"accounts under configured managers pass: {problems}"
+    assert (engine, 32) in reads and (srm, 26) in reads and (srm, 32) not in reads, f"each read through its own manager: {reads}"
+    problems = []
+    check_accounts("fake", srm, [99], problems, checked, [engine])
+    assert problems and "not watching it" in problems[0], f"a stranger's account is still misconfigured: {problems}"
+    problems = []
+    check_accounts("fake", srm, [32], problems, checked)
+    assert problems and "not watching it" in problems[0], f"without the engine configured, 32 is not watched: {problems}"
+  finally:
+    call, rpc = real_call, real_rpc
 
 
 def self_test_borrowers() -> None:
@@ -710,6 +804,7 @@ def main() -> int:
   url = os.environ.get("RPC_URL", "https://mainnet.base.org")
   webhook = os.environ.get("ALERT_WEBHOOK_URL")
   srm = os.environ.get("SRM_ADDRESS", DEFAULT_SRM)
+  others = [m.strip() for m in os.environ.get("OTHER_MANAGERS", DEFAULT_OTHER_MANAGERS).split(",") if m.strip()]
   accounts = [int(a) for a in os.environ.get("CANARY_ACCOUNTS", DEFAULT_ACCOUNTS).split(",") if a.strip()]
 
   self_test()
@@ -721,16 +816,18 @@ def main() -> int:
   checked: list[str] = []
 
   # 0. the canary's own configuration
+  owners: dict = {}
   try:
-    check_accounts(url, srm, accounts, misconfigured, checked)
+    owners = account_managers(url, srm, accounts)
+    check_accounts(url, srm, accounts, misconfigured, checked, others, owners)
   except Exception as exc:
     misconfigured.append(f"account configuration check FAILED to run: {describe_revert(exc)}")
 
-  # 1. the manager path, per account
+  # 1. the manager path, per account, through the account's own manager: getMargin on any other prices nothing
   for account_id in accounts:
     payload = SEL_GET_MARGIN + f"{account_id:064x}" + f"{1:064x}"
     try:
-      margin = call(url, srm, payload)
+      margin = call(url, owners.get(account_id) or srm, payload)
       value = int(margin, 16)
       if value >= 1 << 255:
         value -= 1 << 256
@@ -772,7 +869,7 @@ def main() -> int:
   except Exception as exc:
     failures.append(f"cash backing check FAILED to run: {describe_revert(exc)}")
   try:
-    check_wrapper_backing(url, srm, solvency, checked)
+    check_wrapper_backing(url, srm, solvency, checked, others)
   except Exception as exc:
     failures.append(f"wrapper backing check FAILED to run: {describe_revert(exc)}")
   try:
