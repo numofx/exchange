@@ -302,12 +302,16 @@ resource "aws_ecs_task_definition" "execution" {
       #
       # The account ids matter. An empty subaccount has no market holding, so the manager
       # reads no spot feed and the check passes while proving nothing -- and getMargin on an id
-      # that was never opened passes too. Since the 2026-10-04 unified cutover both makers sit
-      # under the perp SRM: 26 (spot) holds wrapped cNGN, 24 (perp) holds the perp position,
-      # so between them every feed a settlement reads is exercised. Read from the variables the
-      # makers themselves use, so a repoint cannot leave the canary watching an emptied account.
+      # that was never opened passes too. Since the MarginEngine cutover (2026-10-13/14) the live
+      # makers sit under the engine: the spot maker (mm_subaccount_id, 34) and the futures maker
+      # (mm_future_subaccount_id, 32). The perp maker's 24 was emptied when the perp went close-only,
+      # so it is no longer watched. Read from the variables the makers themselves use, so a repoint
+      # cannot leave the canary watching an emptied account. Each account is probed through its own
+      # manager, and wrapper backing sums the SRM's credit and the engine's (OTHER_MANAGERS): with
+      # the SRM alone, the cNGN escrow read 396,131.97 cNGN short for five days while backed 1:1.
       { name = "SETTLEMENT_CANARY_MANAGER", value = var.cngn_perp_srm_address },
-      { name = "SETTLEMENT_CANARY_ACCOUNTS", value = "${var.mm_subaccount_id},${var.mm_perp_subaccount_id}" },
+      { name = "SETTLEMENT_CANARY_OTHER_MANAGERS", value = var.cngn_future_manager_address },
+      { name = "SETTLEMENT_CANARY_ACCOUNTS", value = "${var.mm_subaccount_id},${var.mm_future_subaccount_id}" },
       { name = "SETTLEMENT_CANARY_INTERVAL_MS", value = "60000" },
       # Re-alert after 30 consecutive failing checks (30 minutes at a 60s interval), so one
       # dropped webhook is not silence for the whole outage.
