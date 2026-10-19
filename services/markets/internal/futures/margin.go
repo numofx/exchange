@@ -20,7 +20,20 @@ const (
 // IMSurplus is engine.getMargin(account, true): the account's initial-margin surplus in USD, 18dp, signed.
 // Not cached: it moves with every fill, deposit and mark.
 func (r *Reader) IMSurplus(ctx context.Context, engine string, account *big.Int) (*big.Int, error) {
-	raw, err := r.call(ctx, engine, sigGetMargin+uintWord(account)+uintWord(big.NewInt(1)))
+	return r.marginSurplus(ctx, engine, account, true)
+}
+
+// MMSurplus is engine.getMargin(account, false): the maintenance-margin surplus, as IMSurplus.
+func (r *Reader) MMSurplus(ctx context.Context, engine string, account *big.Int) (*big.Int, error) {
+	return r.marginSurplus(ctx, engine, account, false)
+}
+
+func (r *Reader) marginSurplus(ctx context.Context, engine string, account *big.Int, initial bool) (*big.Int, error) {
+	flag := big.NewInt(0)
+	if initial {
+		flag = big.NewInt(1)
+	}
+	raw, err := r.call(ctx, engine, sigGetMargin+uintWord(account)+uintWord(flag))
 	if err != nil {
 		return nil, err
 	}
@@ -44,6 +57,22 @@ func (r *Reader) Position(ctx context.Context, account *big.Int) (*big.Int, erro
 	value, err := word(raw, 0)
 	if err != nil {
 		return nil, fmt.Errorf("getBalance: %w", err)
+	}
+	return signed(value), nil
+}
+
+// PendingVM is getPendingVM(account, series): the cNGN of variation margin the series owes the account
+// (negative: the account owes) that the manager has not yet moved into cash, 18dp, signed. It runs from
+// each fill's own price and includes what partial closes realised, so it is not a function of the
+// position and the mark alone. Not cached: it moves with every mark.
+func (r *Reader) PendingVM(ctx context.Context, account *big.Int) (*big.Int, error) {
+	raw, err := r.call(ctx, r.future, sigGetPendingVM+uintWord(account)+uintWord(big.NewInt(r.expiry)))
+	if err != nil {
+		return nil, err
+	}
+	value, err := word(raw, 0)
+	if err != nil {
+		return nil, fmt.Errorf("getPendingVM: %w", err)
 	}
 	return signed(value), nil
 }

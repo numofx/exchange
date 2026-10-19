@@ -231,6 +231,7 @@ func TestSelectorsMatchTheirSignatures(t *testing.T) {
 		"futureContracts(uint256)": sigFutureContracts, "contractSize()": sigContractSize,
 		"isDatedFutureAsset(address)": sigIsDatedFutureAsset, "totalPositionCap(address)": sigTotalPositionCap,
 		"adjustmentsPaused()": sigAdjustmentsPaused, "BLF_DataTooOld()": errDataTooOld,
+		"getPendingVM(uint256,uint256)": sigGetPendingVM, "getMargin(uint256,bool)": sigGetMargin,
 	} {
 		out, err := exec.Command("cast", "sig", sig).Output()
 		if err != nil {
