@@ -20,10 +20,12 @@ export function buildApp(args: {
   withdrawal?: { moduleAddress: `0x${string}`; assetAddresses: readonly `0x${string}`[] };
   /** Submits sponsored deposits. Absent unless DEPOSITS_ENABLED; POST /deposit then answers 503. */
   depositor?: Pick<MatchExecutor, 'deposit'>;
+  /** Where the request log goes; stdout when absent. Tests pass one to read what a failure logged. */
+  logStream?: { write(line: string): void };
 }): FastifyInstance {
   // Fastify 5 destroys every open connection on close() by default -- including one mid-settlement. Off, close()
   // refuses new work (503 on a still-open connection) and waits for in-flight requests: see shutdown.ts.
-  const app = Fastify({ logger: true, forceCloseConnections: false });
+  const app = Fastify({ logger: args.logStream ? { stream: args.logStream } : true, forceCloseConnections: false });
 
   app.get('/healthz', async () => ({
     status: 'ok',
@@ -109,6 +111,22 @@ function sendError(reply: FastifyReply, error: unknown) {
     return reply.code(400).send({ error: 'invalid request', details: error.flatten() });
   }
 
+  reply.log.error({ err: error }, 'request failed');
+  return reply.code(500).send({ error: publicErrorMessage(error) });
+}
+
+/**
+ * The message a 500 carries: the error's own, less what identifies the RPC endpoint. A viem transport error (a dead
+ * endpoint, a 429) prints `URL: <rpc url>` and `Request body: …`, and an Alchemy RPC URL holds its API key; callers
+ * keep this text (markets-service stores it on deposit records that anyone can read), so those lines are dropped and
+ * any other URL is replaced. The full error is logged by sendError. The revert text the matcher classifies on
+ * ("reverted with the following signature: 0x…", "Error: TM_…()", markets-service matching/revert.go) is kept.
+ */
+export function publicErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : 'unknown error';
-  return reply.code(500).send({ error: message });
+  return message
+    .split('\n')
+    .filter((line) => !/^\s*(URL|Request body):/i.test(line))
+    .join('\n')
+    .replace(/[a-z][a-z0-9+.-]*:\/\/[^\s"'`]+/gi, '<url>');
 }
