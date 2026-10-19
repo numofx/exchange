@@ -5,6 +5,52 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-19 18:25–18:28 UTC: alert cleanup: canaries on the MarginEngine, rebalance on #34, feed-alert retired, pager mute
+
+Every red monitor had gone stale at the MarginEngine cutover (2026-10-13/14) rather than found a fault, and one
+green one checked nothing. With that much permanently red, a real alert gets ignored: the ECS canary had logged
+7,471 false backing errors. Repo changes #236, #237, #238, #240 (`4cbb7e77`, and #240 for the unit's accounts). Two
+SSM runs as root: the first at 18:25:39 (stamp `20261019T182539Z`), the canary unit at 18:27:42 (`…T182742Z`).
+
+- **What.**
+  - `/home/ec2-user/exchange-pager`: `386b5d98` -> `4cbb7e77` (detached, clean). Brings #236: the pager honours
+    `/numo/pager/mute_matcher_dead_until` (written by `infra/aws/with-matcher-mute.sh` during a deploy, capped at
+    900s, never hiding a matcher-dead already paging). Unit unchanged.
+  - `/home/ec2-user/exchange/contracts/risk-core/scripts/ops/check_settlement_canary.py` (pinned checkout):
+    `d34f4c73…` (= repo `6246835`) -> `6f0b6e9f…` (= `4cbb7e77`), sha256 checked before the copy. Backup
+    `….bak-pre4cbb7e7-20261019T182539Z`. Sums wrapper backing across the SRM and the MarginEngine (#237), probes
+    each account through its own manager, and skips the compiled-ABI check on live runs (#238: the box has no
+    forge build, so every repo version since `4308573`, 2026-10-12, would have died on `abi_selectors`).
+  - `/etc/systemd/system/numo-settlement-canary.service`: `CANARY_ACCOUNTS` `26,24` -> `32,34`, and
+    `OTHER_MANAGERS=0xA19E…0758` (the MarginEngine) added after `SRM_ADDRESS`; the same as #240. Backup
+    `….service.bak-20261019T182742Z`.
+  - `/home/ec2-user/exchange-rebalance`: `aa2a49ca` -> `4cbb7e77` (detached, clean). `MM_SUBACCOUNT_ID`
+    defaults to 34 (#237); 26 was refused every run since the spot maker moved on 2026-10-14. No install
+    needed (the only lockfile change between the two is for `services/perp-feeds`).
+  - `/etc/systemd/system/numo-heartbeats.service`: `feed-alert` removed from `HEARTBEAT_EXPECTED`, as in the
+    repo's unit. Backup `….service.bak-20261019T182539Z`.
+  - `feed-alert` retired: `systemctl disable --now numo-feed-alert.timer`; `numo-feed-alert.service` and
+    `.timer` moved to `/root/retired-units-20261019T182539Z/` (`numo-feed-alert-ssm.service` was not installed);
+    `daemon-reload`. SSM `/numo/pager/heartbeats/feed-alert` deleted at 18:28:30. The healthchecks.io check
+    was deleted in the dashboard by hand (the key in SSM is read-only: the API refused, HTTP 405).
+    `check_feed_staleness.py` stays: the pager and the batch proposers import it.
+- **Why.** The box canary and the ECS canary read `totalPosition` for the SRM alone; the cNGN escrow's
+  401,131.965850 cNGN is 5,000 under the SRM plus 396,131.965850 under the engine, exactly. They also watched
+  26 and 24, both $0 since the makers moved. rebalance-check refused account 26. feed-alert watched only SRM
+  market feeds, which the live markets no longer use, so it was green while checking nothing; the index it should
+  have watched is paged by the pager's feed-halt, and the canary calls getSpot on it and on the stable feed.
+- **Checked.** One run of each through systemd after the change: settlement-canary `success` ("ok": 32 and 34
+  under the engine, $4,014.03 and $659.74; wrapper backed 1:1, 401,131.965850; cash backing, borrowers, settled
+  cash, feeds); rebalance-check `success` (sub 34, cNGN 41.7%, action none); heartbeats `success` (7 checks, all
+  armed); the pager's next runs `ok: 0 active` on `4cbb7e77`. healthchecks.io afterwards: heartbeats, perp pager,
+  rebalance-check, settlement-canary, settlement-canary-ecs, signer-balance-alert all `up`; feed-alert gone. The
+  ECS canary (execution `a74cec2c6bb5`, applied 18:14:57) reported `ok=true` from its first check.
+- **Undo.** Pager / rebalance: `git checkout --detach 386b5d98` / `aa2a49ca` in each checkout. Canary: move the
+  `.bak-pre4cbb7e7-20261019T182539Z` file back, and `….service.bak-20261019T182742Z` over the unit. Heartbeats:
+  `….service.bak-20261019T182539Z`. feed-alert: move the units back from `/root/retired-units-20261019T182539Z/`,
+  `daemon-reload`, `systemctl enable --now numo-feed-alert.timer`, and recreate its check and SSM URL.
+  `daemon-reload` after any unit change.
+
 ## 2026-10-14 15:50 UTC: numo-future-feeds and the pager on `386b5d9` (#220: settle losers only while the VM pool's net is below zero)
 
 Both moved together, so the keeper and the pager judge the same net (pool #31's USDC cash plus its cNGN at the
