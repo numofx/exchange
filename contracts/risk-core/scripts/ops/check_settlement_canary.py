@@ -561,10 +561,15 @@ def alert(webhook: str | None, msg: str) -> None:
     print(f"webhook delivery failed: {exc}", file=sys.stderr)
 
 
-def self_test() -> None:
+def self_test(compiled_abis: bool = True) -> None:
+  """Every selector matches its signature, and the fake-chain cases hold. main() runs this before every
+  check, with compiled_abis=False: the ops box has no forge build (no out/ and no abi_selectors.py), so
+  the compiled-ABI check, which only says the file is right, runs under --self-test in CI instead. With
+  it on every run, no version of this canary from 2026-10-12 on could run on the box."""
   # every selector and signature this script pins must name a compiled function, not just match `cast sig`
-  from abi_selectors import assert_script
-  assert_script(__file__)
+  if compiled_abis:
+    from abi_selectors import assert_script
+    assert_script(__file__)
   sys.path.insert(0, str(Path(__file__).resolve().parent))
   from resolve_cngn_action6 import keccak
 
@@ -807,7 +812,7 @@ def main() -> int:
   others = [m.strip() for m in os.environ.get("OTHER_MANAGERS", DEFAULT_OTHER_MANAGERS).split(",") if m.strip()]
   accounts = [int(a) for a in os.environ.get("CANARY_ACCOUNTS", DEFAULT_ACCOUNTS).split(",") if a.strip()]
 
-  self_test()
+  self_test(compiled_abis=False)
 
   test_run = "--test" in sys.argv
   failures: list[str] = []      # cannot price -- the venue is halted
