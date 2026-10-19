@@ -1,4 +1,5 @@
 import { createPublicClient, defineChain, http, type PublicClient } from 'viem';
+import type { AppConfig } from './config.js';
 import { TOKEN_CONTROLS_ABI, tokenControlFailures } from './token-controls.js';
 
 /**
@@ -269,6 +270,13 @@ export type CanaryOptions = {
   rpcUrl: string;
   chainId: number;
   manager: `0x${string}`;
+  /**
+   * Managers besides `manager` that hold accounts and wrapper positions: the MarginEngine since the 2026-10-13
+   * cutover. totalPosition is per manager and the manager set is not enumerable on chain, so the set is configured:
+   * wrapper backing is summed across all of them, and an account is probed through whichever of them it sits under.
+   * A manager outside the set still goes RED, so a new one cannot pass silently.
+   */
+  otherManagers?: readonly `0x${string}`[];
   accountIds: number[];
   intervalMs: number;
   /** Slack/Discord-compatible webhook. Without it the canary logs and reaches nobody. */
@@ -403,10 +411,11 @@ export class SettlementCanary {
   async check(): Promise<CanarySnapshot> {
     const failures: CanaryFailure[] = [];
 
+    const owners = await this.accountManagers();
     for (const accountId of this.options.accountIds) {
       try {
         await this.client.readContract({
-          address: this.options.manager,
+          address: owners.get(accountId) ?? this.options.manager,
           abi: GET_MARGIN_ABI,
           functionName: 'getMargin',
           args: [BigInt(accountId), true],
@@ -416,7 +425,7 @@ export class SettlementCanary {
       }
     }
 
-    const config_failures = await this.checkAccounts();
+    const config_failures = await this.checkAccounts(owners);
     const invariant_failures = await this.checkInvariants();
     const ok = failures.length === 0 && invariant_failures.length === 0 && config_failures.length === 0;
     const wasOk = this.snapshotValue.ok;
@@ -470,24 +479,57 @@ export class SettlementCanary {
    * minAccountValue by the manager's own mark-to-market -- a floor, not zero, because the emptied
    * account 15 still held 0.0008 of cash and would have passed a non-zero test.
    */
-  private async checkAccounts(): Promise<string[]> {
+  /** The configured managers: `manager` first, then `otherManagers`. */
+  private managers(): `0x${string}`[] {
+    return [this.options.manager, ...(this.options.otherManagers ?? [])];
+  }
+
+  /**
+   * Each configured account's manager on chain, or null when the read failed (checkAccounts reports that). Read
+   * once per check: the probe goes to the account's own manager, since getMargin on any other prices nothing.
+   */
+  private async accountManagers(): Promise<Map<number, `0x${string}` | null>> {
+    const out = new Map<number, `0x${string}` | null>();
+    const read = <T>(address: `0x${string}`, functionName: string, args: readonly unknown[] = []) =>
+      (this.client.readContract as (a: unknown) => Promise<unknown>)({ address, abi: INVARIANT_ABI, functionName, args }) as Promise<T>;
+    let subAccounts: `0x${string}` | null = null;
+    try {
+      subAccounts = await read<`0x${string}`>(this.options.manager, 'subAccounts');
+    } catch {
+      // checkAccounts reports the failure to read; the probe falls back to the configured manager
+    }
+    for (const accountId of this.options.accountIds) {
+      try {
+        out.set(accountId, subAccounts ? await read<`0x${string}`>(subAccounts, 'manager', [BigInt(accountId)]) : null);
+      } catch {
+        out.set(accountId, null);
+      }
+    }
+    return out;
+  }
+
+  private async checkAccounts(owners: Map<number, `0x${string}` | null>): Promise<string[]> {
     const out: string[] = [];
     const read = <T>(address: `0x${string}`, functionName: string, args: readonly unknown[] = []) =>
       (this.client.readContract as (a: unknown) => Promise<unknown>)({ address, abi: INVARIANT_ABI, functionName, args }) as Promise<T>;
     try {
-      const subAccounts = await read<`0x${string}`>(this.options.manager, 'subAccounts');
       for (const accountId of this.options.accountIds) {
-        const manager = await read<`0x${string}`>(subAccounts, 'manager', [BigInt(accountId)]);
+        const manager = owners.get(accountId);
+        if (manager == null) {
+          out.push(`subaccount ${accountId}'s manager could not be read`);
+          continue;
+        }
         if (BigInt(manager) === 0n) {
           out.push(`subaccount ${accountId} does not exist -- getMargin on it passes while proving nothing`);
           continue;
         }
-        if (manager.toLowerCase() !== this.options.manager.toLowerCase()) {
-          out.push(`subaccount ${accountId} is under manager ${manager}, not ${this.options.manager} -- the canary is not watching it`);
+        const watched = this.managers().find((m) => m.toLowerCase() === manager.toLowerCase());
+        if (!watched) {
+          out.push(`subaccount ${accountId} is under manager ${manager}, not ${this.managers().join(' or ')} -- the canary is not watching it`);
           continue;
         }
         const floor = this.options.minAccountValue ?? 10n * 10n ** 18n;
-        const [, value] = await read<readonly [bigint, bigint]>(this.options.manager, 'getMarginAndMarkToMarket', [BigInt(accountId), true, 0n]);
+        const [, value] = await read<readonly [bigint, bigint]>(watched, 'getMarginAndMarkToMarket', [BigInt(accountId), true, 0n]);
         if (value < floor) {
           out.push(
             `subaccount ${accountId} is worth $${fmt(value)}, under the $${fmt(floor)} floor -- too little held for getMargin on it to prove anything`,
@@ -512,8 +554,8 @@ export class SettlementCanary {
    *
    * Wrappers are discovered from AssetWhitelisted rather than configured, so a new market is
    * covered without a redeploy. totalPosition is per-manager and the manager set is not
-   * enumerable on chain, so this compares against the configured manager: another manager
-   * holding a position makes the check go RED rather than silently pass.
+   * enumerable on chain, so this sums the configured managers (`manager` and `otherManagers`):
+   * a manager outside them holding a position makes the check go RED rather than silently pass.
    */
   /** Wrappers and perps under the manager, from its AssetWhitelisted logs. Once: the whitelist does not churn. */
   private async discoverWhitelist(): Promise<void> {
@@ -596,7 +638,8 @@ export class SettlementCanary {
           continue; // not a wrapper; nothing to compare
         }
         const held = to18(await read<bigint>(token, 'balanceOf', [asset]), decimals);
-        const credited = await read<bigint>(asset, 'totalPosition', [this.options.manager]);
+        let credited = 0n;
+        for (const manager of this.managers()) credited += await read<bigint>(asset, 'totalPosition', [manager]);
         const delta = held - credited;
         const expected = this.options.wrapperDeltaExceptions?.[asset.toLowerCase()] ?? 0n;
 
@@ -607,7 +650,7 @@ export class SettlementCanary {
               : ` — this wrapper is pinned at ${fmt(expected)}; the delta MOVED by ${fmt(delta - expected)}`;
           out.push(
             `wrapper ${asset} BACKING MISMATCH: holds ${fmt(held)} of ${token} but has credited ` +
-              `${fmt(credited)} (delta ${fmt(delta)})${note}`,
+              `${fmt(credited)} across ${this.managers().length} manager(s) (delta ${fmt(delta)})${note}`,
           );
         }
       }
@@ -804,4 +847,30 @@ function describe(error: unknown): string {
     .filter(Boolean)
     .join(' ')
     .slice(0, 300);
+}
+
+/**
+ * The canary's options from the loaded config, or undefined when no canary is configured. index.ts builds the canary
+ * with this, so a setting that config.ts parses but nothing passes on is caught by a test rather than in production.
+ */
+export function settlementCanaryOptions(config: AppConfig, log?: CanaryOptions['log']): CanaryOptions | undefined {
+  const canary = config.settlementCanary;
+  if (!canary) return undefined;
+  return {
+    rpcUrl: config.rpcUrl,
+    chainId: config.chainId,
+    manager: canary.manager,
+    otherManagers: canary.otherManagers,
+    accountIds: canary.accountIds,
+    intervalMs: canary.intervalMs,
+    alertWebhookUrl: canary.alertWebhookUrl,
+    alertRepeatAfterChecks: canary.alertRepeatAfterChecks,
+    heartbeatUrl: canary.heartbeatUrl,
+    minAccountValue: canary.minAccountValue,
+    expectedNetSettledCash: canary.expectedNetSettledCash,
+    wrapperDeltaExceptions: canary.wrapperDeltaExceptions,
+    feeRecipient: canary.feeRecipient,
+    depositModule: config.deposit?.moduleAddress,
+    log,
+  };
 }
