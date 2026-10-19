@@ -24,6 +24,8 @@ const (
 	futureAPIStateTTL = 30 * time.Second
 )
 
+// newFutureStateReader reads the configured series only. /v1/markets, order admission and reduce-only
+// use it for any future, which is right only while one series is listed (exchange #228).
 func newFutureStateReader(cfg config.Config) *futures.Reader {
 	if !cfg.FutureEnabled() {
 		return nil
