@@ -33,20 +33,49 @@ const (
 )
 
 // futureRPC stubs the series, its feed, SubAccounts, the TradeModule and the engine. spot is the feed's
-// USDC per cNGN at 18dp; managers maps an account to its manager (the engine by default).
+// USDC per cNGN at 18dp; managers maps an account to its manager (the engine by default). The fields
+// describe the series at testFutureExpiry; more holds further series on the same FutureAsset.
 type futureRPC struct {
 	mu        sync.Mutex
 	spot      *big.Int
 	stale     bool
 	lastTrade int64
-	managers  map[string]string
+	settled   bool
+	// mark is the series' mark (cNGN per USDC, 18dp), set at lastMark.
+	mark     *big.Int
+	lastMark int64
+	managers map[string]string
 	// positions maps an account to its balance of the series, signed, 18dp; absent is flat.
 	positions map[string]*big.Int
+	// pendingVM maps an account to getPendingVM's answer, 18dp cNGN; absent is zero.
+	pendingVM map[string]*big.Int
+	more      map[int64]*futureSeriesStub
+	// fail names selectors that revert.
+	fail map[string]bool
 }
+
+type futureSeriesStub struct {
+	lastTrade, lastMark int64
+	settled             bool
+	mark                *big.Int
+	positions           map[string]*big.Int
+	pendingVM           map[string]*big.Int
+}
+
+const testFutureLastMark = int64(1792418007)
 
 func newFutureRPC() *futureRPC {
 	// 1/1400 USDC per cNGN: the index is 1e36 / spot = 1400.000000000000000280 cNGN per USDC
-	return &futureRPC{spot: new(big.Int).Div(testWad, big.NewInt(1400)), lastTrade: time.Now().Add(24 * time.Hour).Unix(), managers: map[string]string{}}
+	return &futureRPC{spot: new(big.Int).Div(testWad, big.NewInt(1400)), lastTrade: time.Now().Add(24 * time.Hour).Unix(),
+		mark: new(big.Int).Mul(big.NewInt(1400), testWad), lastMark: testFutureLastMark, managers: map[string]string{}}
+}
+
+// series is the stub's state of the series expiring at expiry; nil for one it does not list.
+func (f *futureRPC) series(expiry int64) *futureSeriesStub {
+	if expiry == testFutureExpiry {
+		return &futureSeriesStub{lastTrade: f.lastTrade, lastMark: f.lastMark, settled: f.settled, mark: f.mark, positions: f.positions, pendingVM: f.pendingVM}
+	}
+	return f.more[expiry]
 }
 
 func (f *futureRPC) server(t *testing.T) *httptest.Server {
@@ -77,9 +106,23 @@ func (f *futureRPC) server(t *testing.T) *httptest.Server {
 			reply(word(f.spot) + word(testWad))
 		case to == testFuture && sel == "0x968564c5": // markIndexBand(uint64)
 			reply(word(new(big.Int).Div(testWad, big.NewInt(10))))
+		case f.fail[sel]:
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1,
+				"error": map[string]any{"code": 3, "message": "execution reverted"}})
 		case to == testFuture && sel == "0xc3c74b34": // futureContracts(uint256)
-			reply(word(big.NewInt(1)) + word(big.NewInt(0)) + word(big.NewInt(testFutureExpiry)) + word(big.NewInt(f.lastTrade)) +
-				word(big.NewInt(0)) + word(new(big.Int).Mul(big.NewInt(1400), testWad)) + word(big.NewInt(0)))
+			expiry, _ := new(big.Int).SetString(call.Data[10:74], 16)
+			series := f.series(expiry.Int64())
+			if series == nil {
+				t.Errorf("futureContracts of unlisted series %s", expiry)
+				reply(strings.Repeat("0", 64*7))
+				return
+			}
+			settled := int64(0)
+			if series.settled {
+				settled = 1
+			}
+			reply(word(big.NewInt(1)) + word(big.NewInt(settled)) + word(expiry) + word(big.NewInt(series.lastTrade)) +
+				word(big.NewInt(series.lastMark)) + word(series.mark) + word(big.NewInt(0)))
 		case to == testFuture && sel == "0x3d7cc610": // contractSize()
 			reply(word(new(big.Int).Mul(big.NewInt(1000), testWad)))
 		case to == testFuture && sel == "0x779e5012": // subAccounts()
@@ -100,24 +143,48 @@ func (f *futureRPC) server(t *testing.T) *httptest.Server {
 			if asset := "0x" + call.Data[98:138]; asset != testFuture {
 				t.Errorf("getBalance of %s, want the series' asset", asset)
 			}
-			if series, _ := new(big.Int).SetString(call.Data[138:202], 16); series.Int64() != testFutureExpiry {
-				t.Errorf("getBalance of series %s, want the expiry %d", series, testFutureExpiry)
+			expiry, _ := new(big.Int).SetString(call.Data[138:202], 16)
+			series := f.series(expiry.Int64())
+			if series == nil {
+				t.Errorf("getBalance of series %s, which is not listed", expiry)
+				reply(word(big.NewInt(0)))
+				return
 			}
-			position, ok := f.positions[account.String()]
-			if !ok {
-				position = big.NewInt(0)
+			reply(int256Word(series.positions[account.String()]))
+		case to == testFuture && sel == "0x22b97c45": // getPendingVM(uint256,uint256)
+			account, _ := new(big.Int).SetString(call.Data[10:74], 16)
+			expiry, _ := new(big.Int).SetString(call.Data[74:138], 16)
+			series := f.series(expiry.Int64())
+			if series == nil {
+				t.Errorf("getPendingVM of series %s, which is not listed", expiry)
+				reply(word(big.NewInt(0)))
+				return
 			}
-			// two's complement: a short is a negative int256
-			reply(word(new(big.Int).And(position, new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1)))))
+			reply(int256Word(series.pendingVM[account.String()]))
 		case to == testFuture && sel == "0x745ab570": // totalPositionCap(address)
 			reply(word(new(big.Int).Mul(big.NewInt(30), testWad)))
 		case to == testFutureEngine && sel == "0xac06ba05": // adjustmentsPaused()
 			reply(word(big.NewInt(0)))
+		case to == testFutureEngine && sel == "0x623bb445": // getMargin(uint256,bool)
+			// 500 USD of initial surplus, 800 of maintenance: the flag picks which.
+			surplus := big.NewInt(800)
+			if call.Data[len(call.Data)-1] == '1' {
+				surplus = big.NewInt(500)
+			}
+			reply(word(new(big.Int).Mul(surplus, testWad)))
 		default:
 			t.Errorf("unexpected eth_call %s to %s", sel, to)
 			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "error": map[string]any{"message": "unexpected"}})
 		}
 	}))
+}
+
+// int256Word is value as a two's-complement word: a short is a negative int256. Nil is zero.
+func int256Word(value *big.Int) string {
+	if value == nil {
+		value = big.NewInt(0)
+	}
+	return fmt.Sprintf("%064x", new(big.Int).And(value, new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))))
 }
 
 func futureConfig(rpc string) config.Config {
@@ -134,7 +201,9 @@ func futureConfig(rpc string) config.Config {
 func futureServer(t *testing.T, rpc string) *Server {
 	t.Helper()
 	cfg := futureConfig(rpc)
-	return &Server{cfg: cfg, instruments: instruments.DefaultRegistry(cfg), future: newFutureStateReader(cfg)}
+	registry := instruments.DefaultRegistry(cfg)
+	future := newFutureStateReader(cfg)
+	return &Server{cfg: cfg, instruments: registry, future: future, futureSeries: newFutureSeriesReaders(cfg, registry, future)}
 }
 
 func futureEntry(t *testing.T, s *Server) map[string]any {

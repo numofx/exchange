@@ -110,7 +110,9 @@ type Config struct {
 	// CNGNPerpCloseOnly makes the whole perp close-only: every perp order is taken as reduce-only (the
 	// API refuses one that would open, add to or flip a position) and the matcher holds every perp leg,
 	// resting ones included, to what reduces its account's position. For a perp with no market maker to
-	// exit against. Exits stay open; nothing new can be opened.
+	// exit against. Exits stay open; nothing new can be opened. Do not turn it off before
+	// numofx/trading-app#131: the trading app reads a /v1/positions perp read failure (a 200 with the perp
+	// keys absent) as a flat perp. Terraform refuses cngn_perp_close_only = false until then.
 	CNGNPerpCloseOnly bool
 	// CNGNPerpCollateralAddress is the perp stack's own cNGN escrow (risk-core
 	// CNGN_PERP_COLLATERAL.json `escrow`), once the vault has whitelisted it as a base asset on the
@@ -120,7 +122,8 @@ type Config struct {
 	// The cNGN future (risk-core MARGIN_ENGINE.json): a FutureAsset series quoted in cNGN per USDC,
 	// traded on the perp's TradeModule and settled in the perp's cash, margined by the MarginEngine.
 	// All three or none, and only beside a perp stack. The series' sub id is its expiry. Unset, no
-	// future is listed.
+	// future is listed. One series only: before listing a second, see exchange #228 (every path but
+	// /v1/positions reads the future through one reader bound to this expiry).
 	CNGNFutureAssetAddress   string
 	CNGNFutureExpiry         int64
 	CNGNFutureManagerAddress string

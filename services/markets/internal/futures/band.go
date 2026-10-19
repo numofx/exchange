@@ -33,6 +33,7 @@ const (
 	sigAdjustmentsPaused  = "0xac06ba05" // adjustmentsPaused()
 	sigSubAccounts        = "0x779e5012" // subAccounts()
 	sigManager            = "0x52981457" // SubAccounts.manager(uint256)
+	sigGetPendingVM       = "0x22b97c45" // getPendingVM(uint256,uint256)
 
 	// topicMarkSet is keccak256("MarkSet(uint96,uint64,uint256,uint256,int256,bool)"), subId indexed.
 	topicMarkSet = "0x6dbaf5fed8698ad9e3d7d7cf26095248bcf21849fa5eeae1452f16d39a7192a9"
@@ -91,7 +92,9 @@ type Contract struct {
 	Settled       bool
 	Expiry        int64
 	LastTradeTime int64
-	MarkPrice     *big.Int
+	// LastMarkTime is when MarkPrice was set: the mark's time, or the settlement's block time.
+	LastMarkTime int64
+	MarkPrice    *big.Int
 }
 
 // Reader reads one series. Band is cached for bandTTL, the series and the trading switches for
@@ -201,6 +204,7 @@ func (r *Reader) Contract(ctx context.Context) (Contract, error) {
 		Settled:       words[1].Sign() != 0,
 		Expiry:        words[2].Int64(),
 		LastTradeTime: words[3].Int64(),
+		LastMarkTime:  words[4].Int64(),
 		MarkPrice:     words[5],
 	}
 	r.mu.Lock()
