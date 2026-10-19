@@ -153,6 +153,19 @@ Set them on the API **and** the matcher, and set `PERP_TRADE_MODULE_ADDRESS` on 
   cNGN), `ui_notional_usdc` (that size at the index), `mark_price_ui`/`index_price_ui`, unrealized
   PnL, IM/MM surplus and an estimated `liquidation_price_ui` in USDC per cNGN.
 
+  Dated-futures positions are listed separately under `futures`, one entry per listed series the
+  account holds (a flat account gets an empty array): `market`, `sub_id`, `status` (`trading`,
+  `closing` once past last trade time, `settled`), signed `contracts`, `side` (`long` is long USDC
+  and gains when the naira weakens), `notional_usdc` (contracts x contract size), the series'
+  `mark_price` in cNGN per USDC and its `mark_updated_at`, and `pending_vm_cngn`. Variation margin
+  accrues at each mark and is realised into cash at each settlement (when the manager next touches
+  the account); `pending_vm_cngn` is the chain's `getPendingVM`, what has accrued since, positive
+  owed to the account. The account's margin under the MarginEngine covers every series and the cNGN
+  it holds, so it is reported once, as `futures_account.im_surplus_usd`/`mm_surplus_usd`, and only
+  for an account under the engine. A futures read that fails leaves that field out (absent is
+  unknown, not zero) and the response is still served; a perp read that fails still fails the
+  request.
+
 ## cNGN future
 
 A cash-settled cNGN future: a `FutureAsset` series under the MarginEngine (risk-core
