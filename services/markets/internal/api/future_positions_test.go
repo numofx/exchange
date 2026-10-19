@@ -304,7 +304,8 @@ func TestPositionsServesTheFuturesWhenThePerpCannotBeRead(t *testing.T) {
 	if strings.Contains(raw, `"positions"`) || strings.Contains(raw, `"accounts"`) {
 		t.Fatalf("the perp keys are absent, not empty, when the perp could not be read: %s", raw)
 	}
-	if !strings.Contains(raw, `"perp_error":"could not read positions from chain"`) {
+	// With the chain unreachable the first perp read to fail is the account's manager.
+	if !strings.Contains(raw, `"perp_error":"could not read the account's manager from chain"`) {
 		t.Fatalf("the perp failure is named: %s", raw)
 	}
 }
@@ -314,7 +315,7 @@ func TestPositionsIsA502WhenThePerpCannotBeReadAndNoFutureIsListed(t *testing.T)
 	server := perpServer(t, deadRPC(t))
 	rec := httptest.NewRecorder()
 	server.handlePositions(rec, httptest.NewRequest(http.MethodGet, "/v1/positions?subaccount_id=42", nil))
-	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "could not read positions from chain") {
+	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "could not read the account's manager from chain") {
 		t.Fatalf("want the 502 as before, got %d %s", rec.Code, rec.Body.String())
 	}
 }
@@ -376,5 +377,86 @@ func TestPositionsNeverPutsTheRPCURLInTheResponse(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), key) {
 		t.Fatalf("the failure was not logged with its detail, or the error did not carry the URL; logs:\n%s", logs.String())
+	}
+}
+
+// moveAccount puts subaccount 42 under manager for one test, and optionally fails any SRM margin read.
+func moveAccount(t *testing.T, manager string, forbidSRM bool) {
+	t.Helper()
+	stubManagerOf["42"] = manager
+	stubForbidSRMReads = forbidSRM
+	t.Cleanup(func() { delete(stubManagerOf, "42"); stubForbidSRMReads = false })
+}
+
+// A futures holder sits under the MarginEngine, not the perp's SRM: it has no perp account, so the perp
+// keys are empty, not an error, and the SRM is never asked to price it (that read reverts on chain for an
+// account holding a dated future, which is how every futures holder got perp_error).
+func TestPositionsSkipsThePerpForAFuturesHolderUnderTheEngine(t *testing.T) {
+	moveAccount(t, testFutureEngine, true)
+	perpRPC := stubPerpRPC(t, big.NewInt(0))
+	defer perpRPC.Close()
+	stub := newFutureRPC()
+	stub.positions = map[string]*big.Int{"42": contractsWad(3, 0)}
+	rpc := stub.server(t)
+	defer rpc.Close()
+
+	body, raw := getPositions(t, perpAndFutureServer(t, perpRPC.URL, rpc.URL), "42")
+	if strings.Contains(raw, "perp_error") {
+		t.Fatalf("an account the perp's SRM does not manage is not a perp read failure: %s", raw)
+	}
+	if body.Positions == nil || len(body.Positions) != 0 || body.Accounts == nil || len(body.Accounts) != 0 {
+		t.Fatalf("the perp keys are present and empty: %s", raw)
+	}
+	if len(body.Futures) != 1 || body.Futures[0].Contracts != "3" || body.FuturesAccount == nil {
+		t.Fatalf("the futures are served: %s", raw)
+	}
+}
+
+// The same for a flat account under the engine, with no future listed: a 200 with empty perp keys.
+func TestPositionsIsEmptyForAnAccountUnderAnotherManager(t *testing.T) {
+	moveAccount(t, testFutureEngine, true)
+	rpc := stubPerpRPC(t, big.NewInt(0))
+	defer rpc.Close()
+	rec := httptest.NewRecorder()
+	perpServer(t, rpc.URL).handlePositions(rec, httptest.NewRequest(http.MethodGet, "/v1/positions?subaccount_id=42", nil))
+	if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusOK || got != `{"accounts":[],"futures":[],"positions":[]}` {
+		t.Fatalf("want an empty 200, got %d %s", rec.Code, got)
+	}
+}
+
+// An account under the close-only manager (the SRM its accounts are moving off) can still hold the perp.
+func TestPositionsReadsThePerpUnderTheCloseOnlyManager(t *testing.T) {
+	const closeOnly = "0x9999999999999999999999999999999999999999"
+	moveAccount(t, closeOnly, false)
+	rpc := stubPerpRPC(t, e18Int(10_000_000))
+	defer rpc.Close()
+	server := perpServer(t, rpc.URL)
+	server.cfg.CNGNPerpCloseOnlyManager = closeOnly
+	rec := httptest.NewRecorder()
+	server.handlePositions(rec, httptest.NewRequest(http.MethodGet, "/v1/positions?subaccount_id=42", nil))
+	var body positionsBody
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	if rec.Code != http.StatusOK || len(body.Positions) != 1 || len(body.Accounts) != 1 {
+		t.Fatalf("an account under the close-only manager is read: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Failing to read the manager is a real read failure: perp_error beside the futures, a 502 without them.
+func TestPositionsReportsAFailedManagerRead(t *testing.T) {
+	moveAccount(t, "fail", false)
+	perpRPC := stubPerpRPC(t, big.NewInt(0))
+	defer perpRPC.Close()
+	stub := newFutureRPC()
+	rpc := stub.server(t)
+	defer rpc.Close()
+
+	_, raw := getPositions(t, perpAndFutureServer(t, perpRPC.URL, rpc.URL), "42")
+	if !strings.Contains(raw, `"perp_error":"could not read the account's manager from chain"`) || strings.Contains(raw, `"positions"`) {
+		t.Fatalf("a failed manager read is a perp_error with the perp keys absent: %s", raw)
+	}
+	rec := httptest.NewRecorder()
+	perpServer(t, perpRPC.URL).handlePositions(rec, httptest.NewRequest(http.MethodGet, "/v1/positions?subaccount_id=42", nil))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("without a future it is the 502: %d %s", rec.Code, rec.Body.String())
 	}
 }

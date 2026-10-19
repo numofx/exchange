@@ -171,7 +171,10 @@ Set them on the API **and** the matcher, and set `PERP_TRADE_MODULE_ADDRESS` on 
   independently: a perp read that fails leaves `positions` and `accounts` out (absent, not empty,
   which would read as flat) and names the failure in `perp_error`, and the futures are still
   served. With no future listed there is nothing else to serve, and a perp failure is a 502 as
-  before.
+  before. Only an account under the perp's SRM (or `CNGN_PERP_CLOSE_ONLY_MANAGER`) can hold the
+  perp, so the account's manager is read first and any other account, such as every MarginEngine
+  account and so every futures holder, gets `positions: []` and `accounts: []`: no perp account,
+  not a failure. `perp_error` therefore means a perp read that genuinely failed.
 
 ## cNGN future
 
