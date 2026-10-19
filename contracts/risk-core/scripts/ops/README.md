@@ -30,19 +30,21 @@ python3 scripts/ops/check_feed_staleness.py
 
 ```bash
 cp ~/exchange/contracts/risk-core/scripts/ops/numo-feeds.service /etc/systemd/system/
-cp ~/exchange/contracts/risk-core/scripts/ops/numo-feed-alert.{service,timer} /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now numo-feeds numo-feed-alert.timer
+systemctl enable --now numo-feeds
 ```
 
 ## Verify
 
 ```bash
 journalctl -u numo-feeds -f          # one cngn tx/min, stable every 20 min
-systemctl list-timers numo-feed-alert.timer
 ```
 
-Kill `numo-feeds` for ~2 minutes to confirm the alert fires, then restart it.
+Feed staleness pages through the perp pager (`check_perp_pager.py`, `feed-halt`: the index past 960s
+of its 1200s heartbeat). The standalone feed alert (`numo-feed-alert`) was retired on 2026-10-19: it
+watched only SRM market feeds, which the live markets no longer use. `check_feed_staleness.py` stays,
+as a library the pager and the batch proposers import. To prove the page fires, stop `numo-feeds`
+past the warn age, confirm the page, then restart it.
 
 ## Basis logger (evidence for the Sep-16 fixing)
 

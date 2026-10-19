@@ -4,6 +4,9 @@
 #
 # HEARTBEAT_EXPECTED lists the checks that must exist. settlement-canary-ecs is the ECS
 # execution-service canary's check, pinged since execution:2478d1188563 (#150, deployed 2026-10-09).
+# feed-alert was retired 2026-10-19: it watched only SRM market feeds, none of which the live markets
+# use, so it was green while checking nothing. Feed staleness pages through the perp pager's
+# feed-halt, and the settlement canary calls getSpot on the live spot and stable feeds.
 [Unit]
 Description=Numo heartbeat arming check
 
@@ -13,5 +16,5 @@ User=ec2-user
 WorkingDirectory=/home/ec2-user/exchange/contracts/risk-core
 ExecStart=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-heartbeat.sh heartbeats /home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-ssm-readonly.sh /usr/bin/python3 scripts/ops/check_heartbeats.py
 Environment=AWS_REGION=us-east-1
-Environment=HEARTBEAT_EXPECTED=settlement-canary,settlement-canary-ecs,feed-alert,signer-balance-alert,rebalance-check,heartbeats
+Environment=HEARTBEAT_EXPECTED=settlement-canary,settlement-canary-ecs,signer-balance-alert,rebalance-check,heartbeats
 Environment=HEARTBEAT_SELF=heartbeats
