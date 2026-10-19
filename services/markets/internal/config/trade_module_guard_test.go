@@ -82,6 +82,7 @@ func TestPerpStackMustBeConfiguredWhole(t *testing.T) {
 		CNGNPerpTradeModuleAddress: "0x2222222222222222222222222222222222222222",
 		CNGNPerpCashAddress:        "0x4444444444444444444444444444444444444444",
 		CNGNPerpSRMAddress:         "0x5555555555555555555555555555555555555555",
+		CNGNPerpCloseOnly:          true,
 	}
 	if err := whole.validatePerpStack(); err != nil {
 		t.Fatalf("a whole stack must be accepted: %v", err)
@@ -104,6 +105,7 @@ func TestCloseOnlyManagerIsValidated(t *testing.T) {
 		CNGNPerpTradeModuleAddress: "0x2222222222222222222222222222222222222222",
 		CNGNPerpCashAddress:        "0x4444444444444444444444444444444444444444",
 		CNGNPerpSRMAddress:         "0x5555555555555555555555555555555555555555",
+		CNGNPerpCloseOnly:          true,
 	}
 	cutover := whole
 	cutover.CNGNPerpCloseOnlyManager = "0x9999999999999999999999999999999999999999"
