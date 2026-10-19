@@ -365,7 +365,10 @@ func (s *Server) handleCreateDeposit(w http.ResponseWriter, r *http.Request) {
 	svc.hourly.record(owner, svc.now())
 	receipt, err := svc.submitter.SubmitDeposit(r.Context(), req)
 	if err != nil {
-		rec.Status, rec.Error, rec.Revert = depositUnknown, err.Error(), ""
+		// The record is public (GET /v1/deposits/{action_hash}), so it keeps a fixed message: the error can carry the
+		// executor's URL, or, in an execution-service 500, its RPC's (an Alchemy URL holds the API key). The error is
+		// logged in full by writeDepositSubmitError.
+		rec.Status, rec.Error, rec.Revert = depositUnknown, depositUnconfirmedMessage, ""
 		var rejected *executorWithdrawError
 		if errors.As(err, &rejected) && (rejected.Status == http.StatusUnprocessableEntity || rejected.Status == http.StatusServiceUnavailable) {
 			// Refused before anything was broadcast: the same request may be retried.
@@ -464,7 +467,7 @@ func (svc *depositService) writeRecord(ctx context.Context, w http.ResponseWrite
 		"tx_hash": rec.TxHash, "permit_tx_hash": rec.PermitTxHash, "block_number": rec.BlockNumber,
 		"asset": amounts.Asset, "asset_symbol": amounts.AssetSymbol, "amount": amounts.Amount,
 		"amount_units": amounts.AmountUnits, "credited_e18": amounts.CreditedE18,
-		"error": rec.Error, "revert": rec.Revert, "created_at": rec.CreatedAt, "updated_at": rec.UpdatedAt,
+		"error": publicDepositError(rec), "revert": rec.Revert, "created_at": rec.CreatedAt, "updated_at": rec.UpdatedAt,
 	}
 	if amounts.AmountUSDC != "" {
 		body["amount_usdc"], body["credited_cash_e18"] = amounts.AmountUSDC, amounts.CreditedCashE18
@@ -681,9 +684,22 @@ func writeDepositSubmitError(w http.ResponseWriter, req depositRequest, module, 
 	// The executor may have broadcast before this failed. Retrying the SAME signed action is safe (the executor is
 	// idempotent on it and the nonce is spent once); a freshly signed one could deposit twice.
 	slog.Error("deposit_submit_failed", "nonce", req.Action.Nonce, "error", err)
-	writeJSON(w, http.StatusBadGateway, map[string]string{
-		"error": "could not confirm whether the deposit was submitted; retry the same signed request, or check the account before signing a new one",
-	})
+	writeJSON(w, http.StatusBadGateway, map[string]string{"error": depositUnconfirmedMessage})
+}
+
+// depositUnconfirmedMessage is what a deposit whose submission could not be confirmed says, in the POST response and
+// on its record, in place of the error, which is only logged.
+const depositUnconfirmedMessage = "could not confirm whether the deposit was submitted; retry the same signed request, or check the account before signing a new one"
+
+// publicDepositError is the error a record shows. A rejected record's is the refusal, written for the client (the
+// executor's 422/503 message, or this service's own). Any other record's error came from a failed submission, and
+// rows written before it was fixed hold the raw error (with the executor's or the RPC's URL), so it is shown as the
+// fixed message whatever the row holds.
+func publicDepositError(rec depositRecord) string {
+	if rec.Error == "" || rec.Status == depositRejected {
+		return rec.Error
+	}
+	return depositUnconfirmedMessage
 }
 
 func nonEmpty(value, fallback string) string {
