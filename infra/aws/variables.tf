@@ -73,8 +73,9 @@ variable "image_markets" {
 variable "image_execution" {
   description = "ECR image URI for services/execution."
   type        = string
-  # 2026-10-19: main 45144dff (#231: a 500 no longer carries the RPC URL, so its API key cannot reach a deposit record).
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/execution:45144dff2e41"
+  # 2026-10-19: main a74cec2c (#237: the settlement canary sums wrapper backing across the SRM and the MarginEngine,
+  # probes each account through its own manager, and watches 34 and 32), on top of 45144dff (#231).
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/execution:a74cec2c6bb5"
 }
 
 variable "secret_backend" {
