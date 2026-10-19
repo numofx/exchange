@@ -52,7 +52,6 @@ Env (or ~/.numo-feeds.env):
                      positive allowance on it (wrapped quote assets only -- a CashAsset credit
                      needs none), and the quote asset. All four required together, or the check
                      is skipped.
-  CANARY_ACCOUNTS    comma-separated subaccount ids (default: 26,24)
   CANARY_MIN_ACCOUNT_USD
                      each account's floor, by the manager's mark-to-market (default 10)
 
