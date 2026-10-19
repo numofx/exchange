@@ -163,8 +163,11 @@ Set them on the API **and** the matcher, and set `PERP_TRADE_MODULE_ADDRESS` on 
   owed to the account. The account's margin under the MarginEngine covers every series and the cNGN
   it holds, so it is reported once, as `futures_account.im_surplus_usd`/`mm_surplus_usd`, and only
   for an account under the engine. A futures read that fails leaves that field out (absent is
-  unknown, not zero) and the response is still served; a perp read that fails still fails the
-  request.
+  unknown, not zero) and the response is still served. The perp and the futures are read
+  independently: a perp read that fails leaves `positions` and `accounts` out (absent, not empty,
+  which would read as flat) and names the failure in `perp_error`, and the futures are still
+  served. With no future listed there is nothing else to serve, and a perp failure is a 502 as
+  before.
 
 ## cNGN future
 

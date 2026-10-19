@@ -623,8 +623,11 @@ func uiPriceString(price *big.Int) string {
 // under "futures", and its margin under the futures' engine under "futures_account" (absent when the
 // account is not under it). Positions are public on chain, so this needs no signature.
 //
-// A perp read that fails fails the request, as it always has; a futures read that fails leaves its
-// field out (see presentedFuturePosition).
+// The perp and the futures are read independently, so one failing does not hide the other. A futures
+// read that fails leaves its field out (see presentedFuturePosition). A perp read that fails leaves
+// "positions" and "accounts" out (absent, not empty: empty would say the account is flat) and names
+// the failure in "perp_error"; with no future listed there is nothing else to serve, and it is a 502,
+// as it was before the futures were added.
 func (s *Server) handlePositions(w http.ResponseWriter, r *http.Request) {
 	subaccountID := strings.TrimSpace(r.URL.Query().Get("subaccount_id"))
 	if subaccountID == "" {
@@ -635,35 +638,50 @@ func (s *Server) handlePositions(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "subaccount_id must be a non-negative integer"})
 		return
 	}
-	positions := []presentedPosition{}
-	accounts := []presentedPerpAccount{}
-	if s.perp != nil && s.instruments != nil {
-		for _, market := range s.instruments.Enabled() {
-			if !market.IsPerpetual() {
-				continue
-			}
-			position, err := s.perp.position(r.Context(), market, subaccountID)
-			if err != nil {
-				slog.Error("read perp position", "market", market.Symbol, "subaccount_id", subaccountID, "error", err)
-				writeJSON(w, http.StatusBadGateway, map[string]string{"error": "could not read positions from chain"})
-				return
-			}
-			if position != nil {
-				positions = append(positions, *position)
-			}
-			account, err := s.perp.account(r.Context(), market, subaccountID)
-			if err != nil {
-				slog.Error("read perp account", "market", market.Symbol, "subaccount_id", subaccountID, "error", err)
-				writeJSON(w, http.StatusBadGateway, map[string]string{"error": "could not read the account from chain"})
-				return
-			}
-			accounts = append(accounts, *account)
-		}
+	positions, accounts, perpErr := s.perpPositions(r.Context(), subaccountID)
+	if perpErr != "" && len(s.futureSeries) == 0 {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": perpErr})
+		return
 	}
 	futurePositions, futuresAccount := s.futuresPositions(r.Context(), subaccountID)
-	body := map[string]any{"positions": positions, "accounts": accounts, "futures": futurePositions}
+	body := map[string]any{"futures": futurePositions}
+	if perpErr != "" {
+		body["perp_error"] = perpErr
+	} else {
+		body["positions"], body["accounts"] = positions, accounts
+	}
 	if futuresAccount != nil {
 		body["futures_account"] = futuresAccount
 	}
 	writeJSON(w, http.StatusOK, body)
+}
+
+// perpPositions reads the account's position and margin account on every perp. On a failed read it
+// returns the message to report and nothing else: a partial perp section would read as complete.
+func (s *Server) perpPositions(ctx context.Context, subaccountID string) ([]presentedPosition, []presentedPerpAccount, string) {
+	positions := []presentedPosition{}
+	accounts := []presentedPerpAccount{}
+	if s.perp == nil || s.instruments == nil {
+		return positions, accounts, ""
+	}
+	for _, market := range s.instruments.Enabled() {
+		if !market.IsPerpetual() {
+			continue
+		}
+		position, err := s.perp.position(ctx, market, subaccountID)
+		if err != nil {
+			slog.Error("read perp position", "market", market.Symbol, "subaccount_id", subaccountID, "error", err)
+			return nil, nil, "could not read positions from chain"
+		}
+		if position != nil {
+			positions = append(positions, *position)
+		}
+		account, err := s.perp.account(ctx, market, subaccountID)
+		if err != nil {
+			slog.Error("read perp account", "market", market.Symbol, "subaccount_id", subaccountID, "error", err)
+			return nil, nil, "could not read the account from chain"
+		}
+		accounts = append(accounts, *account)
+	}
+	return positions, accounts, ""
 }

@@ -276,3 +276,58 @@ func show(v any) string {
 	out, _ := json.Marshal(v)
 	return string(out)
 }
+
+// deadRPC is a chain endpoint that refuses every connection.
+func deadRPC(t *testing.T) string {
+	t.Helper()
+	dead := httptest.NewServer(http.NotFoundHandler())
+	dead.Close()
+	return dead.URL
+}
+
+// A perp read that fails does not hide the futures: they are served, and the perp keys are absent
+// (not empty, which would say the account is flat) with the failure named in perp_error.
+func TestPositionsServesTheFuturesWhenThePerpCannotBeRead(t *testing.T) {
+	stub := newFutureRPC()
+	stub.positions = map[string]*big.Int{"42": new(big.Int).Neg(contractsWad(2, 5))}
+	rpc := stub.server(t)
+	defer rpc.Close()
+
+	cfg := futureConfig(rpc.URL)
+	cfg.MatchingAddress = "0x1111111111111111111111111111111111111111"
+	cfg.CNGNPerpAssetAddress, cfg.CNGNPerpSRMAddress = testPerpAsset, testPerpSRM
+	registry := instruments.DefaultRegistry(cfg)
+	future := newFutureStateReader(cfg)
+	perpCfg := cfg
+	perpCfg.ChainRPCURL = deadRPC(t)
+	server := &Server{cfg: cfg, instruments: registry, perp: newPerpStateReader(perpCfg), future: future,
+		futureSeries: newFutureSeriesReaders(cfg, registry, future)}
+	perpListed := false
+	for _, market := range registry.Enabled() {
+		perpListed = perpListed || market.IsPerpetual()
+	}
+	if !perpListed {
+		t.Fatal("the registry lists no perp, so its read is never attempted")
+	}
+
+	body, raw := getPositions(t, server, "42")
+	if len(body.Futures) != 1 || body.Futures[0].Contracts != "-2.5" || body.FuturesAccount == nil {
+		t.Fatalf("the futures are served despite the perp: %s", raw)
+	}
+	if strings.Contains(raw, `"positions"`) || strings.Contains(raw, `"accounts"`) {
+		t.Fatalf("the perp keys are absent, not empty, when the perp could not be read: %s", raw)
+	}
+	if !strings.Contains(raw, `"perp_error":"could not read positions from chain"`) {
+		t.Fatalf("the perp failure is named: %s", raw)
+	}
+}
+
+// With no future listed a perp failure leaves nothing to serve, and it is the 502 it always was.
+func TestPositionsIsA502WhenThePerpCannotBeReadAndNoFutureIsListed(t *testing.T) {
+	server := perpServer(t, deadRPC(t))
+	rec := httptest.NewRecorder()
+	server.handlePositions(rec, httptest.NewRequest(http.MethodGet, "/v1/positions?subaccount_id=42", nil))
+	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "could not read positions from chain") {
+		t.Fatalf("want the 502 as before, got %d %s", rec.Code, rec.Body.String())
+	}
+}
