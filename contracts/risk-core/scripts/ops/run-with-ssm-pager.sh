@@ -10,6 +10,7 @@
 #   pushover_token          pushover_user        (provider=pushover)
 #   pagerduty_routing_key                         (provider=pagerduty)
 #   heartbeat_url           optional dead-man's switch (healthchecks.io or similar)
+#   mute_matcher_dead_until  set only while a deploy replaces the matcher (infra/aws/with-matcher-mute.sh)
 set -euo pipefail
 
 REGION="${AWS_REGION:-us-east-1}"
@@ -28,5 +29,7 @@ export PUSHOVER_TOKEN="$(get_optional /numo/pager/pushover_token)"
 export PUSHOVER_USER="$(get_optional /numo/pager/pushover_user)"
 export PAGERDUTY_ROUTING_KEY="$(get_optional /numo/pager/pagerduty_routing_key)"
 export PAGER_HEARTBEAT_URL="$(get_optional /numo/pager/heartbeat_url)"
+# Set only while infra/aws/with-matcher-mute.sh replaces the matcher (a String, unix seconds).
+export PAGER_MUTE_MATCHER_DEAD_UNTIL="$(get_optional /numo/pager/mute_matcher_dead_until)"
 
 exec "$@"
