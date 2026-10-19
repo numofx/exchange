@@ -15,11 +15,14 @@ WorkingDirectory=/home/ec2-user/exchange/contracts/risk-core
 ExecStart=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-heartbeat.sh settlement-canary /home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-ssm.sh /usr/bin/python3 scripts/ops/check_settlement_canary.py
 Environment=AWS_REGION=us-east-1
 # Point this at subaccounts that actually hold positions. An empty account makes the manager
-# read no feed, so getMargin passes while proving nothing. Since the 2026-10-04 unified cutover
-# both makers sit under the perp SRM: 26 (spot, wrapped cNGN) and 24 (perp position). Mirrors
-# SETTLEMENT_CANARY_MANAGER/ACCOUNTS in infra/aws/ecs.tf.
+# read no feed, so getMargin passes while proving nothing. Since the MarginEngine cutover
+# (2026-10-13/14) the live makers sit under the engine: 32 (futures) and 34 (spot); 26 and 24,
+# under the perp SRM, are empty. Each account is probed through its own manager, and wrapper
+# backing sums the SRM's and the engine's credit. Mirrors SETTLEMENT_CANARY_MANAGER/
+# OTHER_MANAGERS/ACCOUNTS in infra/aws/ecs.tf.
 Environment=SRM_ADDRESS=0xDE0423D0a1E15536265C9513d2e0c10DAb5835D4
-Environment=CANARY_ACCOUNTS=26,24
+Environment=OTHER_MANAGERS=0xA19E296021c9DF25b90D96C2A0793CC3D0800758
+Environment=CANARY_ACCOUNTS=32,34
 
 # Pinned values, mirroring infra/aws/ecs.tf. Both are recorded here rather than only on the box:
 # the first version of this unit carried neither, because they were applied by hand over SSM, and
