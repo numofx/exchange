@@ -1,7 +1,9 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -293,22 +295,7 @@ func TestPositionsServesTheFuturesWhenThePerpCannotBeRead(t *testing.T) {
 	rpc := stub.server(t)
 	defer rpc.Close()
 
-	cfg := futureConfig(rpc.URL)
-	cfg.MatchingAddress = "0x1111111111111111111111111111111111111111"
-	cfg.CNGNPerpAssetAddress, cfg.CNGNPerpSRMAddress = testPerpAsset, testPerpSRM
-	registry := instruments.DefaultRegistry(cfg)
-	future := newFutureStateReader(cfg)
-	perpCfg := cfg
-	perpCfg.ChainRPCURL = deadRPC(t)
-	server := &Server{cfg: cfg, instruments: registry, perp: newPerpStateReader(perpCfg), future: future,
-		futureSeries: newFutureSeriesReaders(cfg, registry, future)}
-	perpListed := false
-	for _, market := range registry.Enabled() {
-		perpListed = perpListed || market.IsPerpetual()
-	}
-	if !perpListed {
-		t.Fatal("the registry lists no perp, so its read is never attempted")
-	}
+	server := perpAndFutureServer(t, deadRPC(t), rpc.URL)
 
 	body, raw := getPositions(t, server, "42")
 	if len(body.Futures) != 1 || body.Futures[0].Contracts != "-2.5" || body.FuturesAccount == nil {
@@ -329,5 +316,65 @@ func TestPositionsIsA502WhenThePerpCannotBeReadAndNoFutureIsListed(t *testing.T)
 	server.handlePositions(rec, httptest.NewRequest(http.MethodGet, "/v1/positions?subaccount_id=42", nil))
 	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "could not read positions from chain") {
 		t.Fatalf("want the 502 as before, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// perpAndFutureServer lists the perp, read at perpRPC, beside the future, read at futureRPC.
+func perpAndFutureServer(t *testing.T, perpRPC, futureRPC string) *Server {
+	t.Helper()
+	cfg := futureConfig(futureRPC)
+	cfg.MatchingAddress = "0x1111111111111111111111111111111111111111"
+	cfg.CNGNPerpAssetAddress, cfg.CNGNPerpSRMAddress = testPerpAsset, testPerpSRM
+	registry := instruments.DefaultRegistry(cfg)
+	future := newFutureStateReader(cfg)
+	perpCfg := cfg
+	perpCfg.ChainRPCURL = perpRPC
+	perpListed := false
+	for _, market := range registry.Enabled() {
+		perpListed = perpListed || market.IsPerpetual()
+	}
+	if !perpListed {
+		t.Fatal("the registry lists no perp, so its read is never attempted")
+	}
+	return &Server{cfg: cfg, instruments: registry, perp: newPerpStateReader(perpCfg), future: future,
+		futureSeries: newFutureSeriesReaders(cfg, registry, future)}
+}
+
+// An RPC URL carries its provider's API key (Alchemy: /v2/<key>), and Go's HTTP client puts the URL in
+// its errors. A failed perp read must log that detail on the server and never put it in the response:
+// perp_error and the 502 are fixed messages. The log is checked too, so the test cannot pass because
+// the error happened not to carry the URL.
+func TestPositionsNeverPutsTheRPCURLInTheResponse(t *testing.T) {
+	const key = "alch_TESTKEY_must_not_leak_0123456789"
+	keyed := deadRPC(t) + "/v2/" + key
+
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	stub := newFutureRPC()
+	stub.positions = map[string]*big.Int{"42": contractsWad(1, 0)}
+	rpc := stub.server(t)
+	defer rpc.Close()
+
+	_, withFutures := getPositions(t, perpAndFutureServer(t, keyed, rpc.URL), "42")
+	if !strings.Contains(withFutures, `"perp_error"`) {
+		t.Fatalf("the perp read was meant to fail: %s", withFutures)
+	}
+
+	rec := httptest.NewRecorder()
+	perpServer(t, keyed).handlePositions(rec, httptest.NewRequest(http.MethodGet, "/v1/positions?subaccount_id=42", nil))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("want the 502 without a future, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	for name, body := range map[string]string{"200 with futures": withFutures, "502": rec.Body.String()} {
+		if strings.Contains(body, key) || strings.Contains(body, "/v2/") || strings.Contains(body, "127.0.0.1") {
+			t.Fatalf("%s response carries the RPC URL: %s", name, body)
+		}
+	}
+	if !strings.Contains(logs.String(), key) {
+		t.Fatalf("the failure was not logged with its detail, or the error did not carry the URL; logs:\n%s", logs.String())
 	}
 }
