@@ -62,15 +62,19 @@ variable "acm_certificate_arn" {
 variable "image_markets" {
   description = "ECR image URI for the Go binary (serves both api and matcher modes)."
   type        = string
-  # 2026-10-13: the perp close-only switch (CNGN_PERP_CLOSE_ONLY, #199, on via cngn_perp_close_only) and
-  # the futures band's exact low edge (#192), on top of the cNGN future listing (#183).
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:60e0e0b24f76"
+  # 2026-10-19: main 45144dff: futures on /v1/positions (#227), the perp's boot guard (#230), unconfirmed
+  # deposits store and serve a fixed message, migration 000023 (#231). Before this, 2026-10-15's three
+  # deploys (5465545b8ea2 #222, 6c58a57e5ec1 #224, f788294616dd #226) were applied with -var and never
+  # written here, so this default still read 60e0e0b24f76 (2026-10-13) and a flag-less apply would have
+  # rolled markets back past all three.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:45144dff2e41"
 }
 
 variable "image_execution" {
   description = "ECR image URI for services/execution."
   type        = string
-  default     = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/execution:fc7ef5ccc6e3"
+  # 2026-10-19: main 45144dff (#231: a 500 no longer carries the RPC URL, so its API key cannot reach a deposit record).
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/execution:45144dff2e41"
 }
 
 variable "secret_backend" {
