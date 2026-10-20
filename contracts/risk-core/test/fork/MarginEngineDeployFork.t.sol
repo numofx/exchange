@@ -12,6 +12,7 @@ import {ISubAccounts} from "../../src/interfaces/ISubAccounts.sol";
 import {CashAsset} from "../../src/assets/CashAsset.sol";
 import {WrappedERC20Asset} from "../../src/assets/WrappedERC20Asset.sol";
 import {DutchAuction} from "../../src/liquidation/DutchAuction.sol";
+import {SecurityModule} from "../../src/SecurityModule.sol";
 import {IDutchAuction} from "../../src/interfaces/IDutchAuction.sol";
 import {IBaseManager} from "../../src/interfaces/IBaseManager.sol";
 import {StandardManager} from "../../src/risk-managers/StandardManager.sol";
@@ -600,6 +601,167 @@ contract MarginEngineDeployFork is Test {
     assertEq(smBefore - subAccounts.getBalance(smAcc, _cash(), 0), int(cashToBidder), "paid by the SecurityModule");
     assertEq(subAccounts.getBalance(eveAcc, d.future, d.subId), -1e18, "eve holds carol's short");
     assertEq(subAccounts.getBalance(carolAcc, d.future, d.subId), 0, "carol is closed out");
+  }
+
+  ///////////////////////////////////
+  //  SecurityModule coverage fit  //
+  ///////////////////////////////////
+
+  struct Coverage {
+    int equityAfter;
+    bool insolvent;
+    uint smPaidAtEnd;
+    uint smPaidKeeper;
+    uint keeperBidAfterSec;
+    uint oneSideUsd;
+    uint premium; // mark / index, 18dp: the short's loss per dollar of notional per unit of move
+  }
+
+  /// @dev The naira loses `s` (18dp) of its USD value: the index and the mark both rise by 1 / (1 - s), in marks of at
+  ///      most 4.5% a day, inside the 5% mark limit and the index band. Nobody is liquidated on the way. `settleAcc` is
+  ///      settled after every mark, as the keepers settle losers in production: left unsettled, a short's VM is a cNGN
+  ///      debt, and the naira's fall shrinks its dollar value, flattering the account by the old debt x s.
+  function _devalueBy(uint s, uint settleAcc) internal {
+    uint ratio = 1e36 / (1e18 - s);
+    while (ratio > 1e18) {
+      uint q = ratio > 1.045e18 ? 1.045e18 : ratio;
+      spot = spot * 1e18 / q;
+      _holdIndex(spot);
+      uint mark = d.future.futureContracts(d.subId).markPrice * q / 1e18;
+      vm.warp(block.timestamp + 1 days);
+      vm.prank(VAULT);
+      d.future.setMark(d.subId, uint64(block.timestamp), mark);
+      if (settleAcc != 0) d.engine.settleAccount(settleAcc);
+      ratio = ratio * 1e18 / q;
+    }
+  }
+
+  /// @dev Full 4.5% marks while one fits above the target, then the one mark that lands 5 bps above maintenance.
+  function _walkToMaintenance(uint acc, uint perUnit, uint mmUsd) internal {
+    uint fullMark = 1e18 - uint(1e36) / 1.045e18;
+    while (true) {
+      int excess = d.engine.getMargin(acc, false) - int(mmUsd * 5 / 10_000);
+      if (uint(excess) <= perUnit * fullMark / 1e18) return _devalueBy(uint(excess) * 1e18 / perUnit, acc);
+      _devalueBy(fullMark, acc);
+    }
+  }
+
+  /**
+   * One whole side at the launch cap (15 contracts short, opened at IM + $1) is walked to 5 bps above maintenance,
+   * then the naira loses `s` more of its value with nobody liquidating, and the account goes through the real auction
+   * against the perp stack's real SecurityModule, funded so its balance never caps the payout. Measured twice from the
+   * same state: (a) the ceiling, the auction run to its last second; (b) the venue's keeper, bidding the first minute
+   * the payout covers the deficit +2%.
+   */
+  function _coverageStep(uint s) internal returns (Coverage memory c) {
+    _executeVaultBatch();
+    _executeEnableBatch();
+    _holdIndex(spot);
+    {
+      address sm = vm.parseJsonAddress(
+        vm.readFile(string.concat(vm.projectRoot(), "/deployments/8453/CNGN_PERP_STACK.json")), ".securityModule"
+      );
+      deal(USDC, treasury, 1_000_000e6);
+      vm.startPrank(treasury);
+      IERC20Metadata(USDC).approve(sm, 1_000_000e6);
+      SecurityModule(sm).donate(1_000_000e6);
+      vm.stopPrank();
+    }
+
+    uint n = 15e18;
+    (uint mmReq, uint imReq) = d.engine.futureMarginRequirements(d.marketId);
+    c.oneSideUsd = n * d.future.contractSize() / 1e18;
+    uint deposit = c.oneSideUsd * imReq / 1e18 / 1e12 + 1e6; // USDC 6dp, IM + $1
+    uint carolAcc = _account(address(0xca401));
+    uint aliceAcc = _account(alice);
+    _depositUsdc(address(0xca401), carolAcc, deposit);
+    _depositUsdc(alice, aliceAcc, 50_000e6);
+    uint mark0 = d.future.futureContracts(d.subId).markPrice;
+    _trade(carolAcc, aliceAcc, int(n), mark0);
+    assertGe(d.engine.getMargin(carolAcc, true), 0, "opens within IM");
+
+    // One settled mark of the naira losing a costs the short notional x premium x a: walk to 5 bps above maintenance.
+    c.premium = mark0 * spot / 1e18;
+    uint mmUsd = c.oneSideUsd * mmReq / 1e18;
+    _walkToMaintenance(carolAcc, c.oneSideUsd * c.premium / 1e18, mmUsd);
+    assertGe(d.engine.getMargin(carolAcc, false), 0, "sits above MM");
+    assertLt(d.engine.getMargin(carolAcc, false), int(mmUsd / 100), "within 1% of MM");
+
+    _devalueBy(s, carolAcc);
+    (, c.equityAfter) = d.engine.getMarginAndMarkToMarket(carolAcc, false, 0);
+
+    DutchAuction auction = DutchAuction(params.auction);
+    uint daveAcc = _account(address(0xda5e));
+    _depositUsdc(address(0xda5e), daveAcc, 100_000e6);
+    uint branch = vm.snapshotState();
+
+    // (a) the ceiling. A solvent auction is paid by its bidder, never the SecurityModule: nothing to measure.
+    auction.startAuction(carolAcc, 0);
+    c.insolvent = _isInsolvent(carolAcc);
+    if (!c.insolvent) return c;
+    vm.warp(block.timestamp + auction.getAuctionParams().insolventAuctionLength);
+    vm.prank(address(0xda5e));
+    (,, c.smPaidAtEnd) = auction.bid(carolAcc, daveAcc, 1e18, 0, 0);
+    vm.revertToState(branch);
+
+    // (b) the keeper
+    auction.startAuction(carolAcc, 0);
+    int wanted = -c.equityAfter * 102 / 100;
+    uint started = block.timestamp;
+    uint length = auction.getAuctionParams().insolventAuctionLength;
+    while (-auction.getCurrentBidPrice(carolAcc) < wanted && block.timestamp - started < length) {
+      vm.warp(block.timestamp + 59);
+    }
+    c.keeperBidAfterSec = block.timestamp - started;
+    vm.prank(address(0xda5e));
+    (,, c.smPaidKeeper) = auction.bid(carolAcc, daveAcc, 1e18, 0, 0);
+  }
+
+  /**
+   * The SecurityModule sizing rule (check_perp_pager.sm_required_usd) against the fork, from a 10% move to 30%:
+   *   one-side notional x premium x ln(1 / (1 - s)) when that exceeds one-side notional x MM, else 0.
+   * Below the cliff the side stays solvent and the module pays nothing; past it, the module pays the step's whole loss
+   * (an insolvent auction ends at the account's maintenance margin), and the fit is never below the fork and within 5%
+   * of it (measured: 2.2%). The rule this replaced, one side x s x (1 - IM), is logged beside it: 35% under at 25%.
+   */
+  function testSecurityModuleCoverageAgainstTheFork() public {
+    uint16[8] memory steps = [uint16(1_000), 1_250, 1_500, 1_600, 1_750, 2_000, 2_500, 3_000];
+    // ln(1 / (1 - s)), 18dp, for each step: Solidity has no log
+    uint64[8] memory lns = [
+      uint64(105360515657826352),
+      133531392624522576,
+      162518929497774944,
+      174353387144777728,
+      192371892647456096,
+      223143551314209760,
+      287682072451780832,
+      356674943938732416
+    ];
+    (uint mmReq, uint imReq) = d.engine.futureMarginRequirements(d.marketId);
+    for (uint i; i < steps.length; ++i) {
+      uint s = uint(steps[i]) * 1e14;
+      uint snapshot = vm.snapshotState();
+      Coverage memory c = _coverageStep(s);
+      vm.revertToState(snapshot);
+      uint loss = c.oneSideUsd * c.premium / 1e18 * lns[i] / 1e18;
+      uint fit = loss > c.oneSideUsd * mmReq / 1e18 ? loss : 0;
+      console2.log("step bps:", steps[i]);
+      console2.log("  equity after ($, 18dp, signed):", c.equityAfter);
+      console2.log("  SM paid, auction to its end ($, 18dp):", c.smPaidAtEnd);
+      console2.log("  SM paid, keeper's bid ($, 18dp):", c.smPaidKeeper);
+      console2.log("  fit ($, 18dp):", fit);
+      console2.log(
+        "  replaced rule, one side x s x (1 - IM) ($, 18dp):", c.oneSideUsd * s / 1e18 * (1e18 - imReq) / 1e18
+      );
+      if (fit == 0) {
+        assertFalse(c.insolvent, "under the cliff the side stays solvent");
+        assertEq(c.smPaidAtEnd, 0, "and the SecurityModule pays nothing");
+      } else {
+        assertTrue(c.insolvent, "past the cliff the side is insolvent");
+        assertGe(fit, c.smPaidAtEnd, "the fit never understates the fork");
+        assertLe(fit, c.smPaidAtEnd * 105 / 100, "and is within 5% of it");
+      }
+    }
   }
 
   ////////////////////////////
