@@ -4,6 +4,8 @@
   setup   MARGIN_ENGINE_VAULT_ACTIONS.json: accept the four contracts the deployer nominated (engine, viewer,
           future, forward feed), wire the engine into the perp stack's cash, cNGN escrow (with its cap), perp
           and auction, and grant it the SRM's guardian. Opens nothing.
+  cap     future.setTotalPositionCap(engine, N): raise (or lower to no less than open interest) the future's cap on an
+          open engine. Built here, not from an artifact; proposed only while the cap gates below pass at the NEW cap.
   enable  MARGIN_ENGINE_ENABLE_VAULT_ACTIONS.json: the perp's cap under the engine (DEFERRED: not proposed, see
           below), the future's cap, then the
           future on the perp TradeModule. The only actions that open the engine. Proposed only while every gate
@@ -39,9 +41,9 @@ Enable gates (all read live, all required):
             while the pool's net is below zero, and the pager pages one that lasts). Refuses only if the
             index is unreadable
   escrow    the escrow cap still has a reserve's worth of headroom after the seed, so a top-up fits
-  sm        the SecurityModule's cash covers a 25% step across the perp's open interest now (under the
-            live SRM, until the cutover) and the future's one side at the cap being opened
-            (check_perp_pager.sm_required_usd)
+  sm        the SecurityModule's cash covers an SM_MOVE move (check_perp_pager.SM_MOVE, 10% since 2026-10-20) on the
+            future's one side at the cap being opened, at its maintenance margin and today's mark / index
+            (check_perp_pager.sm_required_usd, fitted on the fork). The perp is wound down and not counted.
   pager     check_perp_pager.py ran OK within 3 minutes, with a provider and a dead-man's switch, and its last run
             read the future under this engine (state futureManager): an older pager copy reads none
   keeper    numo-engine-keeper (ENGINE_KEEPER_HEALTH_URL, default 127.0.0.1:9465): its /health says a pass
@@ -70,6 +72,8 @@ Env (or ~/.numo-mark-keeper.env): MPCVAULT_TOKEN, MPCVAULT_VAULT, VAULT_ADDRESS,
   python3 scripts/ops/propose_margin_engine_batch.py enable             # gates + sheet
   python3 scripts/ops/propose_margin_engine_batch.py enable --propose
   python3 scripts/ops/propose_margin_engine_batch.py pool-withdraw --asset cash --amount 250000000 --recipient 0x...
+  python3 scripts/ops/propose_margin_engine_batch.py cap --contracts 200   # gates at the new cap + the action
+  python3 scripts/ops/propose_margin_engine_batch.py cap --contracts 200 --propose
   python3 scripts/ops/propose_margin_engine_batch.py --self-test
   python3 scripts/ops/propose_margin_engine_batch.py enable --local --dir deployments/31337 --json
                                                                  # a fork (31337): never proposes
@@ -90,9 +94,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from check_feed_staleness import feed_age  # noqa: E402
 from check_perp_pager import (  # noqa: E402  one implementation of the reserve and coverage rules
+  SM_MOVE,
   future_reserve_target_cngn,
-  read_one_side_usd,
-  read_perp_im,
   sm_required_usd,
 )
 from propose_cngn_spot_batch import (  # noqa: E402  one implementation of the MPCVault transport
@@ -503,12 +506,25 @@ def escrow_gate(used: float, cap: float, target: float | None) -> Gate:
   return Gate("escrow", True, f"escrow cap {cap:,.0f} cNGN, {used:,.0f} used, {headroom:,.0f} left")
 
 
-def sm_gate(sm_cash: float, books: dict[str, tuple[float, float]]) -> Gate:
-  required = sm_required_usd(list(books.values()))
-  parts = ", ".join(f"{n} one side ${o:,.0f} at IM {im * 100:.0f}%" for n, (o, im) in books.items())
+def sm_gate(sm_cash: float, one_side: float, mm: float, premium: float) -> Gate:
+  required = sm_required_usd(one_side, mm, premium)
+  what = f"a {SM_MOVE * 100:.0f}% move on the future's one side ${one_side:,.0f} at MM {mm * 100:.0f}%"
   if sm_cash < required:
-    return Gate("sm", False, f"SecurityModule ${sm_cash:,.0f} is under the ${required:,.0f} a 25% step costs across {parts}: fund it, or open a lower cap")
-  return Gate("sm", True, f"SecurityModule ${sm_cash:,.0f} covers ${required:,.0f} across {parts}")
+    return Gate("sm", False, f"SecurityModule ${sm_cash:,.0f} is under the ${required:,.0f} {what} costs: fund it, or open a lower cap")
+  return Gate("sm", True, f"SecurityModule ${sm_cash:,.0f} covers ${required:,.0f} for {what}")
+
+
+def gate_sm_at_cap(chain: Chain, d: dict, stack: dict, cap: float) -> Gate:
+  """The sm gate for the future at `cap` contracts (both sides), at the live MM and mark / index."""
+  try:
+    sm_cash = chain.balance(int(stack["securityModuleAccount"]), stack["cash"]) / 1e18
+    mm = chain.word(d["manager"], selector("futureMarginRequirements") + word_uint(int(d["marketId"]))) / 1e18
+    mark = chain.word(d["future"], selector("futureContracts") + word_uint(int(d["subId"])), 5) / 1e18
+    spot = chain.word(d["indexFeed"], selector("getSpot")) / 1e18
+    size = chain.word(d["future"], selector("contractSize")) / 1e18
+    return sm_gate(sm_cash, cap / 2 * size, mm, mark * spot)
+  except Exception as exc:  # noqa: BLE001
+    return Gate("sm", False, f"SecurityModule coverage unreadable: {str(exc)[:80]}")
 
 
 ENGINE_KEEPER_HEALTH_URL = "http://127.0.0.1:9465/health"  # numo-engine-keeper's HEALTH_PORT on the ops box
@@ -569,14 +585,7 @@ def gate_enable(chain: Chain, d: dict, stack: dict, vault: str) -> list[Gate]:
   escrow_cap = chain.word(d["cngnEscrow"], selector("totalPositionCap") + m) / 1e18
   gates.append(escrow_gate(used, escrow_cap, target))
 
-  try:
-    sm_cash = chain.balance(int(stack["securityModuleAccount"]), stack["cash"]) / 1e18
-    future_im = chain.word(d["manager"], selector("futureMarginRequirements") + word_uint(int(d["marketId"])), 1) / 1e18
-    books = {"perp": (read_one_side_usd(chain.url, stack), read_perp_im(chain.url, stack)),
-             "future at the cap": (oi_cap / 2 * size, future_im)}
-    gates.append(sm_gate(sm_cash, books))
-  except Exception as exc:  # noqa: BLE001
-    gates.append(Gate("sm", False, f"SecurityModule coverage unreadable: {str(exc)[:80]}"))
+  gates.append(gate_sm_at_cap(chain, d, stack, oi_cap))
 
   gates.append(gate_pager(Path(os.environ.get("PAGER_STATE_FILE", Path.home() / ".numo-perp-pager.json")),
                           future_manager=d["manager"]))
@@ -642,6 +651,57 @@ def gate_pool_withdraw(chain: Chain, d: dict, kind: str, amount: int, recipient:
 
 
 # ---------------------------------------------------------------------------------------------
+# cap changes
+# ---------------------------------------------------------------------------------------------
+
+def cap_action(d: dict, contracts: int) -> dict:
+  """future.setTotalPositionCap(engine, contracts): both sides, in whole contracts (18dp on chain)."""
+  data = selector("setTotalPositionCap") + word_address(d["manager"]) + word_uint(contracts * 10**18)
+  return {"description": f"future.setTotalPositionCap(engine, {contracts * 10**18}) [{contracts} contracts, {contracts // 2} a side]",
+          "to": d["future"], "value": "0", "data": data, "digest": digest(d["future"], data)}
+
+
+def cap_bounds_gate(contracts: int, current_cap: float, open_interest: float) -> Gate:
+  """A cap is whole, even (it counts both sides) and no lower than open interest: a cap under it is close-only, which
+  is the emergency response (set cap = current OI), not a cap change."""
+  if contracts <= 0 or contracts % 2:
+    return Gate("cap", False, f"{contracts} contracts: a cap is a positive, even number of contracts (it counts both sides)")
+  if contracts < open_interest:
+    return Gate("cap", False, f"{contracts} is under today's open interest {open_interest:,.0f}: that is close-only, not a cap change")
+  if contracts == current_cap:
+    return Gate("cap", False, f"the cap is already {contracts}")
+  return Gate("cap", True, f"{current_cap:,.0f} -> {contracts} contracts (open interest {open_interest:,.0f})")
+
+
+def gate_cap(chain: Chain, d: dict, stack: dict, vault: str, contracts: int) -> list[Gate]:
+  """What the enable gates check that a larger cap changes, at the NEW cap: the SecurityModule, the keeper's cash for
+  a full side, the escrow's headroom over the pool reserve; and that the engine is live (feeds, marks, pager)."""
+  m = word_address(d["manager"])
+  gates = [Gate("custody", chain.address(d["future"], "owner").lower() == vault.lower(), "vault owns the future")]
+  current = chain.word(d["future"], selector("totalPositionCap") + m) / 1e18
+  oi = chain.word(d["future"], selector("totalPosition") + m) / 1e18
+  gates.append(cap_bounds_gate(contracts, current, oi))
+  try:
+    age, _ = feed_age(chain.url, d["indexFeed"])
+    spot = chain.word(d["indexFeed"], selector("getSpot")) / 1e18
+    gates.append(Gate("feeds", age <= FEED_MAX_AGE_SEC, f"index {age}s old (limit {FEED_MAX_AGE_SEC}s)"))
+  except Exception as exc:  # noqa: BLE001
+    spot = 0.0
+    gates.append(Gate("feeds", False, f"index unreadable: {str(exc)[:80]}"))
+  mark_age = chain.head() - chain.word(d["future"], selector("futureContracts") + word_uint(int(d["subId"])), 4)
+  gates.append(Gate("marks", mark_age <= MARK_MAX_AGE_SEC, f"last mark {mark_age}s ago (limit {MARK_MAX_AGE_SEC}s)"))
+  size = chain.word(d["future"], selector("contractSize")) / 1e18
+  target = future_reserve_target_cngn(contracts, size, spot)
+  used = chain.word(d["cngnEscrow"], selector("totalPosition") + m) / 1e18
+  gates.append(escrow_gate(used, chain.word(d["cngnEscrow"], selector("totalPositionCap") + m) / 1e18, target))
+  gates.append(gate_sm_at_cap(chain, d, stack, contracts))
+  gates.append(gate_pager(Path(os.environ.get("PAGER_STATE_FILE", Path.home() / ".numo-perp-pager.json")),
+                          future_manager=d["manager"]))
+  gates.append(gate_engine_keeper(chain, {**d, "futureOICap": str(contracts * 10**18)}))
+  return gates
+
+
+# ---------------------------------------------------------------------------------------------
 # self-test
 # ---------------------------------------------------------------------------------------------
 
@@ -698,12 +758,21 @@ def self_test() -> int:
   # a full cNGN-margined book (~20.5M) beside the reserve: a 30M cap has under a reserve left, 50M has plenty
   assert not escrow_gate(20_500_000 + target, 30_000_000, target).ok
   assert escrow_gate(20_500_000 + target, 50_000_000, target).ok
-  # The launch cap is sized to the module as it stands: $3,250 covers the perp's $134 and a $15,000 futures
-  # side at IM 25% ($2,812.50), $2,947 in all. A 40-contract cap ($20,000 a side, $3,884 in all) is refused.
-  assert sm_gate(3_250, {"perp": (801, 1 / 3)}).ok
-  assert sm_gate(3_250, {"perp": (801, 1 / 3), "future at the cap": (15_000, 0.25)}).ok
-  assert not sm_gate(3_250, {"perp": (801, 1 / 3), "future at the cap": (20_000, 0.25)}).ok
-  assert sm_gate(3_900, {"perp": (801, 1 / 3), "future at the cap": (20_000, 0.25)}).ok
+  # The sm gate, the future alone: at a 10% move a side at MM 15% stays solvent, so any cap passes on any balance; past
+  # the cliff (here MM 8%: $1,616 for a $15,000 side) it refuses short of the requirement and passes at it.
+  assert sm_gate(0, 600_000, 0.15, 1.0124).ok
+  assert not sm_gate(1_600, 15_000, 0.08, 1.0225).ok and sm_gate(1_617, 15_000, 0.08, 1.0225).ok
+  # The cap action: setTotalPositionCap(engine, N x 1e18) on the future, its digest the deploy script's convention.
+  act = cap_action(d, 1_200)
+  assert act["to"] == d["future"] and act["data"] == "0x40a557bd" + word_address(d["manager"]) + word_uint(1_200 * 10**18)
+  assert act["digest"] == digest(d["future"], act["data"]) and "600 a side" in act["description"]
+  # Live: the enable batch's own calldata for the launch cap is what cap_action builds for 30.
+  launch = json.loads((ROOT / "deployments" / "8453" / FILES["enable"]).read_text())[1]
+  live = json.loads((ROOT / "deployments" / "8453" / f"{NAME}.json").read_text())
+  assert cap_action(live, 30)["data"] == launch["data"] and cap_action(live, 30)["digest"] == launch["digest"]
+  # Bounds: even, positive, not under open interest, not a no-op.
+  assert cap_bounds_gate(200, 30, 20).ok and not cap_bounds_gate(201, 30, 20).ok and not cap_bounds_gate(0, 30, 0).ok
+  assert not cap_bounds_gate(18, 30, 20).ok and cap_bounds_gate(20, 30, 20).ok and not cap_bounds_gate(30, 30, 20).ok
   # The chain's band from raw words: the live index 0.000733418... USDC per cNGN is 1,363.48 cNGN per USDC; a 10% band
   # is 1,227.1-1,499.8.
   low, high = chain_fill_band(733418223364218, 10**17)
@@ -757,7 +826,8 @@ def self_test() -> int:
 
 def main() -> int:
   ap = argparse.ArgumentParser(description="Propose the cNGN future's vault batches")
-  ap.add_argument("batch", nargs="?", choices=("setup", "enable", "pool-withdraw"))
+  ap.add_argument("batch", nargs="?", choices=("setup", "enable", "pool-withdraw", "cap"))
+  ap.add_argument("--contracts", type=int, help="cap: the new total-position cap, both sides, in whole contracts")
   ap.add_argument("--asset", choices=("cngn", "cash"), help="pool-withdraw: which balance")
   ap.add_argument("--amount", type=int, help="pool-withdraw: in the token's own units (USDC and cNGN: 6dp)")
   ap.add_argument("--recipient", help="pool-withdraw: where the tokens go")
@@ -791,6 +861,8 @@ def main() -> int:
   d = json.loads((args.dir / f"{NAME}.json").read_text())
   if args.batch == "pool-withdraw":
     return run_pool_withdraw(args, d, Chain(rpc_url), rpc_url, vault)
+  if args.batch == "cap":
+    return run_cap(args, d, json.loads(args.stack.read_text()), Chain(rpc_url), rpc_url, vault)
   actions = json.loads((args.dir / FILES[args.batch]).read_text())
   verify_actions(args.batch, d, actions)
   stack = json.loads(args.stack.read_text())
@@ -912,6 +984,40 @@ def run_pool_withdraw(args, d: dict, chain: Chain, rpc_url: str, vault: str) -> 
     raise SystemExit("not approved within the timeout")
   confirm_on_chain(rpc_url, tx_hash)
   print("pool-withdraw: done.")
+  return 0
+
+
+def run_cap(args, d: dict, stack: dict, chain: Chain, rpc_url: str, vault: str) -> int:
+  if args.contracts is None:
+    raise SystemExit("cap needs --contracts (both sides, whole contracts)")
+  action = cap_action(d, args.contracts)
+  gates = gate_cap(chain, d, stack, vault, args.contracts)
+  passed = report(gates)
+  print(f"\n  {action['to']}  {action['digest']}  {action['description']}")
+  if args.json:
+    print(json.dumps({"gates": [asdict(g) for g in gates], "landed": [False]}))
+  if not passed:
+    print("\nGATES FAILED: nothing proposed.")
+    return 1
+  if not args.propose:
+    print("\ndry run: nothing proposed. Re-run with --propose; compare the digest with MPCVault before approving.")
+    return 0
+  token, vault_uuid = os.environ.get("MPCVAULT_TOKEN", ""), os.environ.get("MPCVAULT_VAULT", "")
+  if not token or not vault_uuid:
+    raise SystemExit("MPCVAULT_TOKEN and MPCVAULT_VAULT are required (run via run-with-ssm-mark.sh on the ops box)")
+  uuid = propose(token, vault_uuid, vault, action)
+  print(f"  proposed uuid={uuid}\n       {action['description']}\n       digest {action['digest']}\n       -> approve in MPCVault now")
+  deadline, tx_hash = time.time() + CONFIRM_TIMEOUT_SEC, None
+  while time.time() < deadline and not tx_hash:
+    time.sleep(CONFIRM_POLL_SEC)
+    tx_hash = request_tx_hash(token, uuid)
+  if not tx_hash:
+    raise SystemExit("not approved within the timeout")
+  confirm_on_chain(rpc_url, tx_hash)
+  m = word_address(d["manager"])
+  if not await_postcondition(lambda: chain.word(d["future"], selector("totalPositionCap") + m) == args.contracts * 10**18):
+    raise SystemExit("mined, but the cap does not read back after 60s: stop and investigate")
+  print(f"cap: done. The future's cap reads {args.contracts} contracts.")
   return 0
 
 

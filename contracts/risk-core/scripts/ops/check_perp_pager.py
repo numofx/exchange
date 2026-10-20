@@ -10,8 +10,8 @@ Slack webhook, so the channel has the same record.
   keeper-unhealthy   the keeper's /health is unreachable, in dry run, failing, or stale. Armed once
                      the keeper has reported healthy at least once, or the market is open (cap > 0):
                      before that, a keeper that is not running yet is not a page.
-  sm-seed            the SecurityModule's cash is under the seed rule: a sixth of one side's notional
-                     at the cap (totalPositionCap / 2 at the index). The next insolvency may socialize.
+  perp-oi            the perp, wound down 2026-10-20, holds open interest: the SecurityModule is sized for
+                     the future alone, so that open interest is uncovered.
   oi-vs-keeper       one side's open interest, in USD at the index, is 3x or more the keeper's bid
                      account cash (KEEPER_ACCOUNT): the keeper could not margin the positions it may
                      have to take. Slack-only warning at 2x.
@@ -25,7 +25,8 @@ Slack webhook, so the channel has the same record.
 
 The cNGN future on MarginEngine (FUTURE_ARTIFACT, default deployments/8453/MARGIN_ENGINE.json; skipped
 while it does not exist) liquidates through the same auction and SecurityModule, so:
-  sm-coverage        counts the future's one-side open interest beside the perp's, each at its own IM.
+  sm-coverage        the SecurityModule's cash against what an SM_MOVE move costs on the future's one-side
+                     open interest (sm_required_usd); Slack past it, page at 1.2x.
   future-pool-reserve  the future's VM pool holds less than a quarter of its reserve target (Slack
                      under half). The target is FUTURE_RESERVE_MOVE of one side's notional at the
                      position cap, in cNGN at the index; FUTURE_POOL_RESERVE_CNGN overrides it.
@@ -72,6 +73,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -109,12 +111,18 @@ SEL_GET_SPOT = "0x2b37269c"  # getSpot() on the index feed: USDC per cNGN, 18dp
 # One side's OI notional against the keeper's cash. The keeper must hold maintenance margin (20%)
 # for what it inherits in an auction and may carry several accounts at once, so 3x is where a full
 # side could no longer be taken in one go; 2x is the warning to top up (runbook: keeper collateral).
-# SecurityModule coverage, leverage-aware (cngn-perp-leverage-batch.sol, CngnPerpLeverageBatchFork):
-# the module's payout when one whole side is liquidated at maintenance margin after a 25% step is
-# one-side notional x 25% x (1 - IM), within 0.2% of the fork's measured payouts (a sixth of a side at
-# 3x, a fifth at 5x). Read against ACTUAL one-side open interest, not the cap: Slack once open
-# interest passes what the module covers at the current IM, page at 1.2x of it.
-SM_STEP = 0.25
+# SecurityModule sizing, for the future alone since the perp's wind-down (MarginEngineDeployFork
+# .testSecurityModuleCoverageAgainstTheFork): one whole side opened at IM is left at maintenance margin, the naira
+# loses SM_MOVE of its USD value with the losers settled at every mark, and the auction runs to its end. The module
+# pays nothing while the side stays solvent and, once it is not, the step's whole loss, because an insolvent auction
+# ends at the account's maintenance margin:
+#   one-side notional x premium x ln(1 / (1 - SM_MOVE)) when that exceeds one-side notional x MM, else 0
+# premium is mark / index. Never below the fork and within 2.2% of it from 15% to 30%. At MM 15% a move under ~14%
+# costs the module nothing, so at SM_MOVE 0.10 the requirement is 0 at any open interest: the circuit breaker
+# (docs/cngn-future-security-module.md) is what keeps a larger move from arriving as one step. SM_MOVE is the one
+# place the assumed move is set; it was 0.25 until 2026-10-20. Read against ACTUAL one-side open interest here
+# (Slack past coverage, page at 1.2x), against the cap by the proposer's sm gate.
+SM_MOVE = 0.10
 SM_COVERAGE_PAGE_X = 1.2
 SM_COVERAGE_WARN_REPEAT_SEC = 6 * 3600
 SEL_PERP_MARGIN_REQUIREMENTS = "0xbf270f9d"  # perpMarginRequirements(uint256) -> (mm, im) -- `cast sig`, pinned in --self-test
@@ -159,6 +167,7 @@ NEGATIVE_CASH_WARN_REPEAT_SEC = 6 * 3600
 FUTURE_ARTIFACT = ROOT / "deployments" / "8453" / "MARGIN_ENGINE.json"
 SEL_CONTRACT_SIZE = "0x3d7cc610"  # contractSize() -- `cast sig`, pinned in --self-test
 SEL_FUTURE_MARGIN_REQUIREMENTS = "0x84033e5e"  # futureMarginRequirements(uint256) -> (mmReq, imReq) on MarginEngine
+SEL_FUTURE_CONTRACTS = "0xc3c74b34"  # futureContracts(uint256) -> FutureContract; markPrice is word 5 -- `cast sig`, pinned in --self-test
 # The pool's cNGN reserve, as a fraction of one side's notional at the cap. 0 since 2026-10-13 (decided):
 # launch traders margin in USDC, so a seed would drain to winners and be refilled in USDC within a few
 # marks, and the reserve changes neither settlement (which never reverts) nor anyone's margin. Without it
@@ -315,37 +324,39 @@ def gas_warning(name: str, balance: float, burn_per_day: float) -> str | None:
   return f"cNGN-PERP {name} gas runway {balance / burn_per_day:.1f} days ({balance:.5f} ETH at {burn_per_day:.5f}/day): top up this week."
 
 
-def sm_covered_one_side_usd(sm_cash_usd: float, im: float) -> float:
-  """One-side notional the SecurityModule covers through a 25% step at initial margin `im` (a fraction)."""
-  if not 0 < im < 1:
+def sm_required_usd(one_side_usd: float, mm: float, premium: float, move: float = SM_MOVE) -> float:
+  """What the SecurityModule pays if one whole side of the future, at maintenance margin `mm`, is liquidated after the
+  naira loses `move` of its value (the fit at SM_MOVE): the whole loss once the side is insolvent, 0 before."""
+  if one_side_usd <= 0 or not 0 < move < 1:
     return 0.0
-  return sm_cash_usd / (SM_STEP * (1 - im))
+  loss = one_side_usd * premium * math.log(1 / (1 - move))
+  return loss if loss > one_side_usd * mm else 0.0
 
 
-def sm_required_usd(books: list[tuple[float, float]]) -> float:
-  """What the SecurityModule pays if one whole side of every book is liquidated after a 25% step:
-  sum of one-side notional x 25% x (1 - IM), over (one-side USD, IM) pairs. The perp's term is the
-  fork-measured one; the future's uses the same formula (same auction, margin as a fraction of
-  notional) and has not been measured on a fork."""
-  return sum(one_side * SM_STEP * (1 - im) for one_side, im in books if 0 < im < 1)
-
-
-def sm_combined_condition(books: dict[str, tuple[float, float]], sm_cash_usd: float) -> Condition | None:
-  """sm-coverage across the perp and the future together: pages at 1.2x of what the module holds."""
-  required = sm_required_usd(list(books.values()))
+def sm_future_condition(one_side_usd: float, mm: float, premium: float, sm_cash_usd: float) -> Condition | None:
+  """sm-coverage for the future: pages at 1.2x of what the module holds."""
+  required = sm_required_usd(one_side_usd, mm, premium)
   if required <= 0 or required < SM_COVERAGE_PAGE_X * sm_cash_usd:
     return None
-  parts = ", ".join(f"{name} one side ${one_side:,.0f} at IM {im * 100:.0f}%" for name, (one_side, im) in books.items())
-  return Condition("sm-coverage", f"cNGN SecurityModule ${sm_cash_usd:,.0f} covers less than 1/{SM_COVERAGE_PAGE_X:.1f} of a 25% step "
-                   f"across {parts} (needs ${required:,.0f}). Fund the SecurityModule, or set cap = current OI.")
+  return Condition("sm-coverage", f"cNGN SecurityModule ${sm_cash_usd:,.0f} covers less than 1/{SM_COVERAGE_PAGE_X:.1f} of a "
+                   f"{SM_MOVE * 100:.0f}% move on the future's one side ${one_side_usd:,.0f} at MM {mm * 100:.0f}% "
+                   f"(needs ${required:,.0f}). Fund the SecurityModule, or set cap = current OI.")
 
 
-def sm_combined_warning(books: dict[str, tuple[float, float]], sm_cash_usd: float) -> str | None:
-  required = sm_required_usd(list(books.values()))
+def sm_future_warning(one_side_usd: float, mm: float, premium: float, sm_cash_usd: float) -> str | None:
+  required = sm_required_usd(one_side_usd, mm, premium)
   if required <= sm_cash_usd or required >= SM_COVERAGE_PAGE_X * sm_cash_usd:
     return None
-  return (f"cNGN SecurityModule ${sm_cash_usd:,.0f} is short of the ${required:,.0f} a 25% step across the perp and the future "
+  return (f"cNGN SecurityModule ${sm_cash_usd:,.0f} is short of the ${required:,.0f} a {SM_MOVE * 100:.0f}% move on the future "
           f"would cost (page at {SM_COVERAGE_PAGE_X:.1f}x): fund it.")
+
+
+def perp_oi_condition(one_side_usd: float) -> Condition | None:
+  """The SecurityModule is sized for the future alone since the perp's wind-down: perp open interest is uncovered."""
+  if one_side_usd < 1:
+    return None
+  return Condition("perp-oi", f"cNGN-PERP holds ${one_side_usd:,.0f} of one-side open interest, which the SecurityModule is no "
+                   "longer sized for (wound down 2026-10-20). Close it, and set the perp's cap to 0 (vault).")
 
 
 def pool_net_usd(pool_cngn: float, pool_cash_usd: float, spot_usd_per_cngn: float) -> float:
@@ -434,14 +445,19 @@ def read_future(url: str, future: dict) -> dict:
   total = int(call(future["future"], SEL_TOTAL_POSITION + manager_word), 16)
   size = int(call(future["future"], SEL_CONTRACT_SIZE), 16)
   cap = int(call(future["future"], SEL_TOTAL_POSITION_CAP + manager_word), 16)
-  im = int(call(future["manager"], SEL_FUTURE_MARGIN_REQUIREMENTS + f"{int(future['marketId']):064x}")[64:128], 16) / 1e18
+  requirements = call(future["manager"], SEL_FUTURE_MARGIN_REQUIREMENTS + f"{int(future['marketId']):064x}")
+  mm, im = int(requirements[:64], 16) / 1e18, int(requirements[64:128], 16) / 1e18
   spot = int(call(future["indexFeed"], SEL_GET_SPOT)[:64], 16) / 1e18
+  mark = int(call(future["future"], SEL_FUTURE_CONTRACTS + f"{int(future['subId']):064x}")[5 * 64:6 * 64], 16) / 1e18
   escrow_used = int(call(future["cngnEscrow"], SEL_TOTAL_POSITION + manager_word), 16) / 1e18
   escrow_cap = int(call(future["cngnEscrow"], SEL_TOTAL_POSITION_CAP + manager_word), 16) / 1e18
   pool = int(future["poolAccount"])
   return {
     "one_side_usd": (total / 2) / 1e18 * (size / 1e18),
     "im": im,
+    "mm": mm,
+    # mark / index: the short's loss per dollar of notional per unit of move
+    "premium": mark * spot,
     "open": cap > 0,
     "reserve_target_cngn": future_reserve_target_cngn(cap / 1e18, size / 1e18, spot),
     "escrow_used_cngn": escrow_used,
@@ -456,22 +472,6 @@ def read_future(url: str, future: dict) -> dict:
 def future_artifact() -> dict | None:
   path = Path(os.environ.get("FUTURE_ARTIFACT", FUTURE_ARTIFACT))
   return json.loads(path.read_text()) if path.exists() else None
-
-
-def sm_coverage_condition(one_side_usd: float, covered_usd: float, im: float) -> Condition | None:
-  if one_side_usd <= 0 or (covered_usd > 0 and one_side_usd < SM_COVERAGE_PAGE_X * covered_usd):
-    return None
-  return Condition("sm-coverage", f"cNGN-PERP one-side OI ${one_side_usd:,.0f} is past {SM_COVERAGE_PAGE_X:.1f}x what the SecurityModule "
-                   f"covers (${covered_usd:,.0f} at IM {im * 100:.0f}%: a 25% step on that side would cost it more than it holds). "
-                   "Fund the SecurityModule, or set cap = current OI.")
-
-
-def sm_coverage_warning(one_side_usd: float, covered_usd: float, im: float) -> str | None:
-  """Slack-only, from coverage up to the page."""
-  if covered_usd <= 0 or one_side_usd <= covered_usd or one_side_usd >= SM_COVERAGE_PAGE_X * covered_usd:
-    return None
-  return (f"cNGN-PERP one-side OI ${one_side_usd:,.0f} exceeds the ${covered_usd:,.0f} the SecurityModule covers at IM {im * 100:.0f}% "
-          f"(page at {SM_COVERAGE_PAGE_X:.1f}x): fund it before the next step costs more than it holds.")
 
 
 def perp_manager(stack: dict) -> str:
@@ -774,18 +774,21 @@ def check_and_page(stack_path: Path, state: dict) -> int:
     print("oi: KEEPER_ACCOUNT unset, not watched")
 
   coverage = None
+  perp_oi = None
   future_pages: list[Condition] = []
   try:
-    im = read_perp_im(url, stack)
-    one_side_now = read_one_side_usd(url, stack)
-    books = {"perp": (one_side_now, im)}
+    perp_one_side = read_one_side_usd(url, stack)
+    perp_oi = perp_oi_condition(perp_one_side)
+    print(f"perp: one side ${perp_one_side:,.0f} (wound down: the SecurityModule is not sized for it)")
+  except Exception as exc:  # noqa: BLE001
+    print(f"perp: unreadable ({str(exc)[:80]})")
+  try:
     future = future_artifact()
     # Which manager's future this run read, for the MarginEngine enable gate: a pager that does not read
     # the engine's future (an old copy, a missing artifact, a failed read) must not pass it.
     state.pop("futureManager", None)
     if future is not None:
       f = read_future(url, future)
-      books["future"] = (f["one_side_usd"], f["im"])
       state["futureManager"] = future["manager"]
       override = os.environ.get("FUTURE_POOL_RESERVE_CNGN", "").strip()
       reserve = float(override) if override else f["reserve_target_cngn"]
@@ -803,15 +806,15 @@ def check_and_page(stack_path: Path, state: dict) -> int:
             f"pool {f['pool_cngn']:,.0f} cNGN (reserve {'unreadable' if reserve is None else f'{reserve:,.0f}'}{' set' if override else ' at the cap'}), "
             f"${f['pool_cash_usd']:,.2f} cash, net ${net:,.2f}{f' (below zero {negative_for / 60:,.0f} min)' if negative_for else ''}; "
             f"escrow {f['escrow_used_cngn']:,.0f} of {f['escrow_cap_cngn']:,.0f} cNGN")
+      coverage = sm_future_condition(f["one_side_usd"], f["mm"], f["premium"], sm_cash)
+      warning = sm_future_warning(f["one_side_usd"], f["mm"], f["premium"], sm_cash)
+      if warning and time.time() - state.get("smCoverageWarnedAt", 0) >= SM_COVERAGE_WARN_REPEAT_SEC:
+        mirror(f"{os.environ.get('PAGE_PREFIX', '')}{warning}")
+        state["smCoverageWarnedAt"] = time.time()
+      print(f"sm coverage: ${sm_cash:,.0f} against ${sm_required_usd(f['one_side_usd'], f['mm'], f['premium']):,.0f} for a "
+            f"{SM_MOVE * 100:.0f}% move on the future's one side ${f['one_side_usd']:,.0f} (page at {SM_COVERAGE_PAGE_X:.1f}x)")
     else:
       print("future: not deployed (no artifact)")
-    coverage = sm_combined_condition(books, sm_cash)
-    warning = sm_combined_warning(books, sm_cash)
-    if warning and time.time() - state.get("smCoverageWarnedAt", 0) >= SM_COVERAGE_WARN_REPEAT_SEC:
-      mirror(f"{os.environ.get('PAGE_PREFIX', '')}{warning}")
-      state["smCoverageWarnedAt"] = time.time()
-    print(f"sm coverage: ${sm_cash:,.0f} against ${sm_required_usd(list(books.values())):,.0f} for a 25% step across "
-          f"{', '.join(f'{n} ${o:,.0f}' for n, (o, _) in books.items())} (page at {SM_COVERAGE_PAGE_X:.1f}x)")
   except Exception as exc:  # noqa: BLE001
     print(f"sm coverage: unreadable ({str(exc)[:80]})")
 
@@ -830,7 +833,7 @@ def check_and_page(stack_path: Path, state: dict) -> int:
   previous_sm = state.get("smCash")
   active = [c for c in (feed_condition(ages), keeper_condition(health, now, armed), insolvent_condition(health),
                         sm_condition(previous_sm, sm_cash), unwatched_condition(heartbeat_urls()[0]),
-                        peg_condition(read_index_status(), time.time()), coverage, oi, negative_cash, *future_pages, *gas, *matcher) if c is not None]
+                        peg_condition(read_index_status(), time.time()), coverage, perp_oi, oi, negative_cash, *future_pages, *gas, *matcher) if c is not None]
   to_page, resolved = step_state(state, active, now)
   state["smCash"] = sm_cash
 
@@ -912,26 +915,21 @@ def self_test() -> int:
   assert gas_condition("executor", 0.0019, 0.0, 0.002) is not None and "unknown burn" in gas_condition("executor", 0.0019, 0.0, 0.002).message
   assert gas_condition("executor", 0.0079, 0.00003, 0.002) is None
   assert gas_warning("relayer", 0.015, 0.0013) is None and "runway 5.0 days" in gas_warning("relayer", 0.0065, 0.0013)
-  # SecurityModule coverage: $3,250 covers a $19,500 side at 3x (a sixth) and $16,250 at 5x (a fifth);
-  # Slack past coverage, page at 1.2x; nothing while open interest is under it.
-  assert round(sm_covered_one_side_usd(3_250, 1 / 3)) == 19_500 and round(sm_covered_one_side_usd(3_250, 0.2)) == 16_250
-  assert sm_coverage_condition(18_000, 19_500, 1 / 3) is None and sm_coverage_warning(18_000, 19_500, 1 / 3) is None
-  assert "$17,000" in sm_coverage_warning(17_000, 16_250, 0.2) and sm_coverage_condition(17_000, 16_250, 0.2) is None
-  assert sm_coverage_condition(19_500, 16_250, 0.2).key == "sm-coverage" and sm_coverage_warning(19_500, 16_250, 0.2) is None
-  assert sm_coverage_condition(2, 16_250, 0.2) is None and sm_covered_one_side_usd(3_250, 0) == 0.0
-  # Coverage across both books: the perp alone at $3,250 covers a $19,500 side at 3x; a $4,000 futures side
-  # at IM 25% adds $750 of need. Perp-only matches the single-book rule exactly.
-  assert round(sm_required_usd([(19_500, 1 / 3)])) == 3_250
-  assert round(sm_required_usd([(19_500, 1 / 3), (4_000, 0.25)])) == 4_000
-  assert sm_combined_condition({"perp": (19_500, 1 / 3)}, 3_250) is None
-  # +$1,000 a side of futures needs $187.50 more: past what the module holds, short of the 1.2x page
-  assert sm_combined_condition({"perp": (19_500, 1 / 3), "future": (1_000, 0.25)}, 3_250) is None
-  assert "3,438" in sm_combined_warning({"perp": (19_500, 1 / 3), "future": (1_000, 0.25)}, 3_250)
-  # +$4,000 needs $4,000 in all, past 1.2 x $3,250: a page the perp alone would not raise
-  assert sm_combined_condition({"perp": (19_500, 1 / 3), "future": (4_000, 0.25)}, 3_250).key == "sm-coverage"
-  combined = sm_combined_condition({"perp": (19_500, 1 / 3), "future": (20_000, 0.25)}, 3_250)
-  assert combined.key == "sm-coverage" and "future one side $20,000 at IM 25%" in combined.message
-  assert sm_combined_condition({"perp": (0, 1 / 3), "future": (0, 0.25)}, 0) is None
+  # SecurityModule coverage, against the fork (MarginEngineDeployFork.testSecurityModuleCoverageAgainstTheFork: a $15,000
+  # side at MM 15%, premium 1.0225): the fit is 0 while the side stays solvent and the whole loss after, never below the
+  # fork and within 2.2% of it.
+  for move, fork in [(0.10, 0.0), (0.125, 0.0), (0.15, 2_440.57), (0.20, 3_348.51), (0.25, 4_320.07), (0.30, 5_354.55)]:
+    fit = sm_required_usd(15_000, 0.15, 1.0225, move)
+    assert (fit == 0) if fork == 0 else (fork <= fit <= fork * 1.05), (move, fit, fork)
+  # At the default move (10%) a side at MM 15% stays solvent: nothing required, nothing paged, at any size.
+  assert SM_MOVE == 0.10 and sm_required_usd(600_000, 0.15, 1.0124) == 0.0
+  assert sm_future_condition(600_000, 0.15, 1.0124, 0) is None and sm_future_warning(600_000, 0.15, 1.0124, 0) is None
+  # Past the cliff the page and warning still work: at MM 8% a 10% move is insolvent, $15,000 a side costs $1,616.
+  assert round(sm_required_usd(15_000, 0.08, 1.0225)) == 1_616
+  assert "1,616" in sm_future_warning(15_000, 0.08, 1.0225, 1_500) and sm_future_condition(15_000, 0.08, 1.0225, 1_500) is None
+  assert sm_future_condition(15_000, 0.08, 1.0225, 1_300).key == "sm-coverage"
+  # The perp is wound down: any open interest on it pages, rounding does not.
+  assert perp_oi_condition(0.4) is None and perp_oi_condition(801).key == "perp-oi"
   # The future's pool: nothing while closed; reserve page under a quarter, Slack under half; an unreadable
   # reserve warns, a zero one (no reserve, the launch) is silent; borrowing pages past $250, Slack below zero.
   assert future_pool_conditions(0, -1_000, 1_000_000, open_=False) == ([], [])
@@ -1041,7 +1039,8 @@ def self_test() -> int:
                               (SEL_TOTAL_POSITION_CAP, "totalPositionCap(address)"),
                               (SEL_TOTAL_POSITION, "totalPosition(address)"), (SEL_GET_SPOT, "getSpot()"),
                               (SEL_CONTRACT_SIZE, "contractSize()"),
-                              (SEL_FUTURE_MARGIN_REQUIREMENTS, "futureMarginRequirements(uint256)")]:
+                              (SEL_FUTURE_MARGIN_REQUIREMENTS, "futureMarginRequirements(uint256)"),
+                              (SEL_FUTURE_CONTRACTS, "futureContracts(uint256)")]:
     assert selector == "0x" + keccak(signature.encode()).hex()[:8], signature
   # The peg guard pages from perp-feeds' status; missing or stale status is silent (feed-halt covers it).
   wall = 2_000_000_000.0
