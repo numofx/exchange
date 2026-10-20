@@ -96,7 +96,10 @@ resource "aws_ecs_task_definition" "market_maker_future" {
       # outward to 0.598 (598 USDC), about 3,000 USDC a side. Sizes and inventory are contracts, rounded to
       # the venue's 0.001-contract unit (market-maker #41; an older image floors 0.116 to nothing);
       # notional is USDC. 15 bps out and 5 bps further each, so the outer rung is 60 bps out. Inventory
-      # stays bounded at +/- 10 contracts. At 25% IM a contract adds 250 USDC of IM: three resting
+      # stays bounded at +/- 15 contracts, one side of the series' 30-contract total-position cap (15 a
+      # side): at +/-10 the bot sat at its limit long 10 against takers' 10 short and pulled every bid,
+      # with the cap still holding 10 contracts of room. The IM surplus binds near the same place, so
+      # going past 15 needs USDC into #32 and a cap raise (SecurityModule first). At 25% IM a contract adds 250 USDC of IM: three resting
       # contracts a side need about 750 of surplus, well inside MM_FUTURE_IM_USAGE 0.8 of the account's
       # (#32) 4,002 USDC, and the bot trims rungs itself when the surplus falls short.
       { name = "MM_ORDER_SIZE", value = "0.116" },
@@ -104,8 +107,8 @@ resource "aws_ecs_task_definition" "market_maker_future" {
       { name = "MM_LEVEL_SIZE_MULT", value = "1.2" },
       { name = "MM_HALF_SPREAD_BPS", value = "15" },
       { name = "MM_LEVEL_SPREAD_STEP_BPS", value = "5" },
-      { name = "MM_MAX_LONG_INVENTORY", value = "10" },
-      { name = "MM_MAX_SHORT_INVENTORY", value = "-10" },
+      { name = "MM_MAX_LONG_INVENTORY", value = "15" },
+      { name = "MM_MAX_SHORT_INVENTORY", value = "-15" },
       { name = "MM_MAX_NOTIONAL_PER_SIDE", value = "10000" },
       { name = "MM_INVENTORY_SKEW_BPS", value = "25" },
       { name = "MM_INVENTORY_SKEW_FULL_AT", value = "10" },
