@@ -718,18 +718,19 @@ contract MarginEngineDeployFork is Test {
   }
 
   /**
-   * The SecurityModule sizing rule (check_perp_pager.sm_required_usd) against the fork, from a 10% move to 30%:
+   * The SecurityModule sizing rule (check_perp_pager.sm_required_usd) against the fork, from a 10% move to 30% (14%, SM_MOVE, just past the cliff):
    *   one-side notional x premium x ln(1 / (1 - s)) when that exceeds one-side notional x MM, else 0.
    * Below the cliff the side stays solvent and the module pays nothing; past it, the module pays the step's whole loss
    * (an insolvent auction ends at the account's maintenance margin), and the fit is never below the fork and within 5%
    * of it (measured: 2.2%). The rule this replaced, one side x s x (1 - IM), is logged beside it: 35% under at 25%.
    */
   function testSecurityModuleCoverageAgainstTheFork() public {
-    uint16[8] memory steps = [uint16(1_000), 1_250, 1_500, 1_600, 1_750, 2_000, 2_500, 3_000];
+    uint16[9] memory steps = [uint16(1_000), 1_250, 1_400, 1_500, 1_600, 1_750, 2_000, 2_500, 3_000];
     // ln(1 / (1 - s)), 18dp, for each step: Solidity has no log
-    uint64[8] memory lns = [
+    uint64[9] memory lns = [
       uint64(105360515657826352),
       133531392624522576,
+      150822889734583680,
       162518929497774944,
       174353387144777728,
       192371892647456096,
