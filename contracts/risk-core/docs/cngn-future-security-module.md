@@ -93,6 +93,35 @@ about a day. Under this sizing, a move like that is absorbed only by (1)-(4) hol
 they fail, a shortfall past the module's cash is socialized across every USDC balance on the venue
 (`CashAsset.socializeLoss`).
 
+## cNGN's margin factor: 0.8
+
+**Decided 2026-10-20:** cNGN counts for 80% of its value as margin on the engine (was 0.5, copied from the SRM at
+launch). The vault sets it with `propose_margin_engine_batch.py margin-factor --factor 0.8`, which refuses anything
+above `MARGIN_FACTOR_MAX` (0.8) and any value not in `ENGINE_BASE_FACTORS`. The factor is per market, so it applies to
+every cNGN balance under the engine: spot, the future, and the perp if it ever moves there.
+
+What the fork measured (`MarginEngineDeployFork.testCngnMarginedSideAgainstTheFit`): the same $15,000 side, margined in
+cNGN alone (long naira on the position and on the collateral), walked to maintenance and stepped.
+
+| Factor | 10% | 12.5% | 15% | 20% | 25% |
+|---|---|---|---|---|---|
+| 0.5 | solvent | solvent | solvent | solvent | SM pays $2,710 |
+| **0.8** | solvent | solvent | **solvent, by $91** | SM pays $3,074 | SM pays $4,045 |
+| USDC side (the sizing) | $0 | $0 | $2,493 | $3,422 | $4,412 |
+
+- **The 15% sizing still covers it.** At maintenance a cNGN-margined account's real equity is the requirement / factor,
+  more than a USDC account's, so it breaks later and costs the SecurityModule less, at every move. The test asserts it.
+- **0.8 is about the limit.** At 0.95 a cNGN side costs more than the USDC side at 15% ($2,536 against $2,493), and the
+  test fails. Past 0.8, measure before proposing.
+- **Spot borrowing goes to 80%.** Borrowing is on for cNGN margin, so a spot account can borrow USDC up to 80% of its
+  cNGN's value (it was 50%). At the limit it is liquidatable on any fall and insolvent past a 20% one, and a bidder who
+  takes it takes cNGN into a spot book with a few hundred dollars of bids. The pager's `negative-cash` page watches the
+  total borrowed.
+- **Escrow goes further.** Initial margin in cNGN locks 425,585 cNGN a contract (was 680,936), so the shared 100M cap
+  binds at about 117 contracts a side with all-cNGN margin (was 73) and 234 at a 50/50 mix (was 146).
+- **Unsettled gains count at the factor too** (`FutureVMLib.marketMargin`): 80% of a winner's pending VM counts as margin
+  until it settles.
+
 ## The perp's wind-down (as of 2026-10-20)
 
 | | State |
