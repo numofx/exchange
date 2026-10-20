@@ -646,14 +646,37 @@ contract MarginEngineDeployFork is Test {
     }
   }
 
+  /// @dev The same walk for a side margined in cNGN alone: its collateral falls with the naira too, and a loss is paid
+  ///      from it, so a move of a costs factor x (notional x premium + cNGN held) of margin. Sized on the account as it
+  ///      stands each step, which over-reads the sensitivity a little, so it closes on the target from above.
+  function _walkCngnToMaintenance(uint acc, uint oneSideUsd, uint premium, uint factor, uint mmUsd) internal {
+    uint fullMark = 1e18 - uint(1e36) / 1.045e18;
+    for (uint i; i < 40; ++i) {
+      int excess = d.engine.getMargin(acc, false) - int(mmUsd * 5 / 10_000);
+      if (excess <= int(mmUsd / 1_000)) return;
+      uint perUnit = (oneSideUsd * premium / 1e18 + uint(_cngnBalance(acc)) * spot / 1e18) * factor / 1e18;
+      uint a = uint(excess) * 1e18 / perUnit;
+      _devalueBy(a < fullMark ? a : fullMark, acc);
+    }
+    revert("walk to maintenance did not converge");
+  }
+
+  /// @dev Margin for the short: `imUsd` + $1 in USDC (factor 0), or in cNGN alone at `factor`, worth imUsd / factor + 0.1%.
+  function _fundShort(uint acc, uint imUsd, uint factor) internal {
+    if (factor == 0) return _depositUsdc(address(0xca401), acc, imUsd / 1e12 + 1e6);
+    vm.prank(VAULT);
+    d.engine.setBaseAssetMarginFactor(d.marketId, factor, 1e18);
+    _depositCngn(address(0xca401), acc, imUsd * 1e18 / factor * 1e18 / spot * 1_001 / 1_000 / 1e12);
+  }
+
   /**
-   * One whole side at the launch cap (15 contracts short, opened at IM + $1) is walked to 5 bps above maintenance,
+   * One whole side at the launch cap (15 contracts short, opened at IM) is walked to 5 bps above maintenance,
    * then the naira loses `s` more of its value with nobody liquidating, and the account goes through the real auction
    * against the perp stack's real SecurityModule, funded so its balance never caps the payout. Measured twice from the
    * same state: (a) the ceiling, the auction run to its last second; (b) the venue's keeper, bidding the first minute
-   * the payout covers the deficit +2%.
+   * the payout covers the deficit +2%. `factor` 0 margins the side in USDC; otherwise in cNGN alone, at that factor.
    */
-  function _coverageStep(uint s) internal returns (Coverage memory c) {
+  function _coverageStep(uint s, uint factor) internal returns (Coverage memory c) {
     _executeVaultBatch();
     _executeEnableBatch();
     _holdIndex(spot);
@@ -671,10 +694,9 @@ contract MarginEngineDeployFork is Test {
     uint n = 15e18;
     (uint mmReq, uint imReq) = d.engine.futureMarginRequirements(d.marketId);
     c.oneSideUsd = n * d.future.contractSize() / 1e18;
-    uint deposit = c.oneSideUsd * imReq / 1e18 / 1e12 + 1e6; // USDC 6dp, IM + $1
     uint carolAcc = _account(address(0xca401));
     uint aliceAcc = _account(alice);
-    _depositUsdc(address(0xca401), carolAcc, deposit);
+    _fundShort(carolAcc, c.oneSideUsd * imReq / 1e18, factor);
     _depositUsdc(alice, aliceAcc, 50_000e6);
     uint mark0 = d.future.futureContracts(d.subId).markPrice;
     _trade(carolAcc, aliceAcc, int(n), mark0);
@@ -683,7 +705,8 @@ contract MarginEngineDeployFork is Test {
     // One settled mark of the naira losing a costs the short notional x premium x a: walk to 5 bps above maintenance.
     c.premium = mark0 * spot / 1e18;
     uint mmUsd = c.oneSideUsd * mmReq / 1e18;
-    _walkToMaintenance(carolAcc, c.oneSideUsd * c.premium / 1e18, mmUsd);
+    if (factor == 0) _walkToMaintenance(carolAcc, c.oneSideUsd * c.premium / 1e18, mmUsd);
+    else _walkCngnToMaintenance(carolAcc, c.oneSideUsd, c.premium, factor, mmUsd);
     assertGe(d.engine.getMargin(carolAcc, false), 0, "sits above MM");
     assertLt(d.engine.getMargin(carolAcc, false), int(mmUsd / 100), "within 1% of MM");
 
@@ -742,7 +765,7 @@ contract MarginEngineDeployFork is Test {
     for (uint i; i < steps.length; ++i) {
       uint s = uint(steps[i]) * 1e14;
       uint snapshot = vm.snapshotState();
-      Coverage memory c = _coverageStep(s);
+      Coverage memory c = _coverageStep(s, 0);
       vm.revertToState(snapshot);
       uint loss = c.oneSideUsd * c.premium / 1e18 * lns[i] / 1e18;
       uint fit = loss > c.oneSideUsd * mmReq / 1e18 ? loss : 0;
@@ -761,6 +784,40 @@ contract MarginEngineDeployFork is Test {
         assertTrue(c.insolvent, "past the cliff the side is insolvent");
         assertGe(fit, c.smPaidAtEnd, "the fit never understates the fork");
         assertLe(fit, c.smPaidAtEnd * 105 / 100, "and is within 5% of it");
+      }
+    }
+  }
+
+  /**
+   * The same side margined in cNGN alone (long naira twice: on the position and on its collateral), at margin factor
+   * 0.5 (the launch value) and 0.8 (propose_margin_engine_batch MARGIN_FACTOR_MAX), through the same moves. At maintenance
+   * its real equity is the requirement / factor, more than a USDC side's, so it breaks later and costs the SecurityModule
+   * less than the USDC side the sizing covers, at every move: that is what lets the factor rise without resizing.
+   * At 0.8 it survives SM_MOVE (15%), by $91 on $15,000.
+   */
+  function testCngnMarginedSideAgainstTheFit() public {
+    uint16[5] memory steps = [uint16(1_000), 1_250, 1_500, 2_000, 2_500];
+    uint64[5] memory lns =
+      [uint64(105360515657826352), 133531392624522576, 162518929497774944, 223143551314209760, 287682072451780832];
+    uint64[2] memory factors = [uint64(0.5e18), 0.8e18];
+    (uint mmReq,) = d.engine.futureMarginRequirements(d.marketId);
+    for (uint f; f < factors.length; ++f) {
+      for (uint i; i < steps.length; ++i) {
+        uint snapshot = vm.snapshotState();
+        Coverage memory c = _coverageStep(uint(steps[i]) * 1e14, factors[f]);
+        vm.revertToState(snapshot);
+        uint loss = c.oneSideUsd * c.premium / 1e18 * lns[i] / 1e18;
+        console2.log("factor (18dp):", factors[f]);
+        console2.log("  step bps:", steps[i]);
+        console2.log("  equity after ($, 18dp, signed):", c.equityAfter);
+        console2.log("  insolvent?", c.insolvent);
+        console2.log("  SM paid, auction to its end ($, 18dp):", c.smPaidAtEnd);
+        console2.log("  SM paid, keeper's bid ($, 18dp):", c.smPaidKeeper);
+        uint fit = loss > c.oneSideUsd * mmReq / 1e18 ? loss : 0;
+        console2.log("  USDC-side fit ($, 18dp):", fit);
+        assertLe(c.smPaidAtEnd, fit, "a cNGN-margined side never costs the SecurityModule more than the USDC side");
+        if (fit == 0) assertFalse(c.insolvent, "and is solvent wherever the USDC side is");
+        if (steps[i] == 1_500) assertFalse(c.insolvent, "it survives the 15% move the SecurityModule is sized for");
       }
     }
   }

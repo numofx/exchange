@@ -323,7 +323,7 @@ The engine is **24,142 of 24,576 bytes**; StandardManager had 1,174 bytes of hea
 | | Value | Source |
 |---|---|---|
 | Perp IM / MM | 33.333% / 20% | copied from the SRM |
-| cNGN base factor / IM scale | 0.5 / 1.0 | copied |
+| cNGN base factor / IM scale | 0.5 / 1.0 at launch; **0.8 / 1.0 decided 2026-10-20** ([cngn-future-security-module.md](cngn-future-security-module.md#cngns-margin-factor-08)), proposed by `margin-factor` | copied; then the vault |
 | Oracle contingency | 0.55 / 0.55 / 0.55, factor 1.0 | copied |
 | Depeg | threshold 0.99, factor 2 | copied |
 | Futures IM / MM | 25% / 15% | deploy script |

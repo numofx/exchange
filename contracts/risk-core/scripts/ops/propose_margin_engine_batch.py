@@ -6,6 +6,8 @@
           and auction, and grant it the SRM's guardian. Opens nothing.
   cap     future.setTotalPositionCap(engine, N): raise (or lower to no less than open interest) the future's cap on an
           open engine. Built here, not from an artifact; proposed only while the cap gates below pass at the NEW cap.
+  margin-factor  engine.setBaseAssetMarginFactor(market, F, IM scale unchanged): what cNGN counts for as margin, on
+          spot, the perp and the future alike. Refused above MARGIN_FACTOR_MAX, the largest factor the fork measured.
   enable  MARGIN_ENGINE_ENABLE_VAULT_ACTIONS.json: the perp's cap under the engine (DEFERRED: not proposed, see
           below), the future's cap, then the
           future on the perp TradeModule. The only actions that open the engine. Proposed only while every gate
@@ -74,6 +76,7 @@ Env (or ~/.numo-mark-keeper.env): MPCVAULT_TOKEN, MPCVAULT_VAULT, VAULT_ADDRESS,
   python3 scripts/ops/propose_margin_engine_batch.py pool-withdraw --asset cash --amount 250000000 --recipient 0x...
   python3 scripts/ops/propose_margin_engine_batch.py cap --contracts 200   # gates at the new cap + the action
   python3 scripts/ops/propose_margin_engine_batch.py cap --contracts 200 --propose
+  python3 scripts/ops/propose_margin_engine_batch.py margin-factor --factor 0.8     # gates + the action
   python3 scripts/ops/propose_margin_engine_batch.py --self-test
   python3 scripts/ops/propose_margin_engine_batch.py enable --local --dir deployments/31337 --json
                                                                  # a fork (31337): never proposes
@@ -128,6 +131,12 @@ EXECUTION_MATCHING_JSON = ROOT.parent / "execution" / "deployments" / "8453" / "
 WHITELISTED_CALLEE_SLOT = 12
 # markets-service's fill band against the chain's: the index moves between the two reads, so they may differ this much
 FILL_BAND_TOLERANCE = 0.001
+# cNGN's margin factor on the engine. Launched at the SRM's 0.5; 0.8 decided 2026-10-20. The largest factor the fork
+# measured (MarginEngineDeployFork.testCngnMarginedSideAgainstTheFit): a side margined in cNGN alone, left at maintenance,
+# survives a 15% move at 0.8 (by $91 on $15,000) and costs the SecurityModule less than the USDC side its 15% sizing
+# covers, at every move to 25%. Past it the sizing is unmeasured: measure first.
+MARGIN_FACTOR_MAX = 0.8
+ENGINE_BASE_FACTORS = (int(0.5e18), int(0.8e18))  # the launch value (the SRM's) and the decided one
 MARK_MAX_AGE_SEC = 2 * 3600  # FORWARD_MARK_LATE_MS: an hourly pull, one missed
 SUB_ACCOUNTS = "0x7019244E25FA416e6Ca2ed2F3cA25277aef72843"
 
@@ -188,6 +197,8 @@ SIGNATURES = {
   "guardian": "guardian()",
   "getBalance": "getBalance(uint256,address,uint256)",
   "getSpot": "getSpot()",
+  "setBaseAssetMarginFactor": "setBaseAssetMarginFactor(uint256,uint256,uint256)",
+  "totalBorrow": "totalBorrow()",
 }
 PINNED = {
   "acceptOwnership": "0x79ba5097", "owner": "0x8da5cb5b", "pendingOwner": "0xe30c3978",
@@ -197,7 +208,7 @@ PINNED = {
   "contractSize": "0x3d7cc610", "futureMarginRequirements": "0x84033e5e", "getBalance": "0x0806e640",
   "getSpot": "0x2b37269c", "setGuardian": "0x8a0dac4a", "guardian": "0x452a9320",
   "withdrawFromPool": "0xfac95a9e", "markIndexBand": "0x968564c5", "matching": "0xae5ec2e9", "allowedModules": "0x8ba5a0c2",
-  "maxAccountSize": "0xf1f8c61f",
+  "maxAccountSize": "0xf1f8c61f", "setBaseAssetMarginFactor": "0xc27009e2", "totalBorrow": "0x8285ef40",
   "borrowingEnabled": "0xa35d1300",
   "stableFeed": "0xf4d0508a",
   "depegParams": "0x4deda10f",
@@ -390,7 +401,11 @@ def gate_parity(chain: Chain, d: dict, vault: str) -> Gate:
     pairs.append((f"depegParams[{i}]", w(engine, "depegParams", index=i), w(srm, "depegParams", index=i)))
   for name, n in (("perpMarginRequirements", 2), ("baseMarginParams", 2), ("oracleContingencyParams", 4)):
     for i in range(n):
+      if (name, i) == ("baseMarginParams", 0):
+        continue  # the engine's cNGN factor left the SRM's on purpose (margin-factor): checked below
       pairs.append((f"{name}[{i}]", w(engine, name, word_uint(m), index=i), w(srm, name, word_uint(1), index=i)))
+  factor = w(engine, "baseMarginParams", word_uint(m), index=0)
+  pairs.append(("baseMarginParams[0] is a decided factor", factor_decided(factor), True))
   for asset_type, name in ((2, "perp"), (3, "base")):
     pairs.append((f"assetMap {name}", a(engine, "assetMap", word_uint(m), word_uint(asset_type)),
                   a(srm, "assetMap", word_uint(1), word_uint(asset_type))))
@@ -702,6 +717,58 @@ def gate_cap(chain: Chain, d: dict, stack: dict, vault: str, contracts: int) -> 
 
 
 # ---------------------------------------------------------------------------------------------
+# cNGN margin factor
+# ---------------------------------------------------------------------------------------------
+
+def factor_decided(factor18: int) -> bool:
+  """The engine's cNGN factor is the launch value or the decided one, nothing else."""
+  return factor18 in ENGINE_BASE_FACTORS
+
+
+def factor_action(d: dict, factor18: int, im_scale18: int) -> dict:
+  """engine.setBaseAssetMarginFactor(market, factor, IM scale): both 18dp."""
+  data = selector("setBaseAssetMarginFactor") + word_uint(int(d["marketId"])) + word_uint(factor18) + word_uint(im_scale18)
+  return {"description": f"engine.setBaseAssetMarginFactor({d['marketId']}, {factor18}, {im_scale18}) "
+                         f"[cNGN counts {factor18 / 1e16:.0f}% of its value as margin]",
+          "to": d["manager"], "value": "0", "data": data, "digest": digest(d["manager"], data)}
+
+
+def factor_bounds_gate(factor: float, current: float) -> Gate:
+  if not 0 < factor <= MARGIN_FACTOR_MAX:
+    return Gate("factor", False, f"{factor} is outside (0, {MARGIN_FACTOR_MAX}]: past {MARGIN_FACTOR_MAX} the fork has not measured "
+                "a cNGN-margined side against the SecurityModule's sizing")
+  if not factor_decided(int(round(factor * 1e18))):
+    return Gate("factor", False, f"{factor} is not a decided factor {[f / 1e18 for f in ENGINE_BASE_FACTORS]}: add it to "
+                "ENGINE_BASE_FACTORS with its fork measurement first")
+  if round(factor * 1e18) == round(current * 1e18):
+    return Gate("factor", False, f"the factor is already {current}")
+  return Gate("factor", True, f"{current} -> {factor}")
+
+
+def borrow_capacity_gate(cngn_used: float, spot: float, factor: float, total_borrow: float) -> Gate:
+  """Informational: what the factor lets the venue's cNGN borrow in USDC (cNGN at spot x factor, IM scale 1), against
+  what is borrowed now. Borrowing is on for cNGN margin, so this is the USDC a full draw would take."""
+  return Gate("borrow", True, f"cNGN under the engine {cngn_used:,.0f} (${cngn_used * spot:,.0f}) could back up to "
+              f"${cngn_used * spot * factor:,.0f} of USDC borrowing at {factor}; ${total_borrow:,.2f} borrowed now")
+
+
+def gate_margin_factor(chain: Chain, d: dict, stack: dict, vault: str, factor: float) -> list[Gate]:
+  m = word_uint(int(d["marketId"]))
+  gates = [Gate("custody", chain.address(d["manager"], "owner").lower() == vault.lower(), "vault owns the engine")]
+  current = chain.word(d["manager"], selector("baseMarginParams") + m) / 1e18
+  gates.append(factor_bounds_gate(factor, current))
+  spot = chain.word(d["indexFeed"], selector("getSpot")) / 1e18
+  used = chain.word(d["cngnEscrow"], selector("totalPosition") + word_address(d["manager"])) / 1e18
+  gates.append(borrow_capacity_gate(used, spot, factor, chain.word(d["cash"], selector("totalBorrow")) / 1e18))
+  # The SecurityModule's sizing is the USDC side's; the fork measured a cNGN side under it at every factor to the max.
+  cap = chain.word(d["future"], selector("totalPositionCap") + word_address(d["manager"])) / 1e18
+  gates.append(gate_sm_at_cap(chain, d, stack, cap))
+  gates.append(gate_pager(Path(os.environ.get("PAGER_STATE_FILE", Path.home() / ".numo-perp-pager.json")),
+                          future_manager=d["manager"]))
+  return gates
+
+
+# ---------------------------------------------------------------------------------------------
 # self-test
 # ---------------------------------------------------------------------------------------------
 
@@ -771,6 +838,14 @@ def self_test() -> int:
   launch = json.loads((ROOT / "deployments" / "8453" / FILES["enable"]).read_text())[1]
   live = json.loads((ROOT / "deployments" / "8453" / f"{NAME}.json").read_text())
   assert cap_action(live, 30)["data"] == launch["data"] and cap_action(live, 30)["digest"] == launch["digest"]
+  # The factor action: setBaseAssetMarginFactor(market, 0.8e18, 1e18) on the engine; its bounds and the decided values.
+  fa = factor_action(live, int(0.8e18), int(1e18))
+  assert fa["to"] == live["manager"] and fa["data"] == ("0xc27009e2" + word_uint(int(live["marketId"])) + word_uint(int(0.8e18))
+                                                         + word_uint(int(1e18))) and "80%" in fa["description"]
+  assert factor_bounds_gate(0.8, 0.5).ok and not factor_bounds_gate(0.8, 0.8).ok and not factor_bounds_gate(0.85, 0.5).ok
+  assert not factor_bounds_gate(0.7, 0.5).ok and not factor_bounds_gate(0, 0.5).ok and factor_bounds_gate(0.5, 0.8).ok
+  assert factor_decided(int(0.5e18)) and factor_decided(int(0.8e18)) and not factor_decided(int(0.81e18))
+  assert "$8,000" in borrow_capacity_gate(10_000, 1.0, 0.8, 0).detail
   # Bounds: even, positive, not under open interest, not a no-op.
   assert cap_bounds_gate(200, 30, 20).ok and not cap_bounds_gate(201, 30, 20).ok and not cap_bounds_gate(0, 30, 0).ok
   assert not cap_bounds_gate(18, 30, 20).ok and cap_bounds_gate(20, 30, 20).ok and not cap_bounds_gate(30, 30, 20).ok
@@ -827,7 +902,8 @@ def self_test() -> int:
 
 def main() -> int:
   ap = argparse.ArgumentParser(description="Propose the cNGN future's vault batches")
-  ap.add_argument("batch", nargs="?", choices=("setup", "enable", "pool-withdraw", "cap"))
+  ap.add_argument("batch", nargs="?", choices=("setup", "enable", "pool-withdraw", "cap", "margin-factor"))
+  ap.add_argument("--factor", type=float, help="margin-factor: cNGN's new margin factor, e.g. 0.8 (IM scale unchanged)")
   ap.add_argument("--contracts", type=int, help="cap: the new total-position cap, both sides, in whole contracts")
   ap.add_argument("--asset", choices=("cngn", "cash"), help="pool-withdraw: which balance")
   ap.add_argument("--amount", type=int, help="pool-withdraw: in the token's own units (USDC and cNGN: 6dp)")
@@ -864,6 +940,8 @@ def main() -> int:
     return run_pool_withdraw(args, d, Chain(rpc_url), rpc_url, vault)
   if args.batch == "cap":
     return run_cap(args, d, json.loads(args.stack.read_text()), Chain(rpc_url), rpc_url, vault)
+  if args.batch == "margin-factor":
+    return run_margin_factor(args, d, json.loads(args.stack.read_text()), Chain(rpc_url), rpc_url, vault)
   actions = json.loads((args.dir / FILES[args.batch]).read_text())
   verify_actions(args.batch, d, actions)
   stack = json.loads(args.stack.read_text())
@@ -988,11 +1066,8 @@ def run_pool_withdraw(args, d: dict, chain: Chain, rpc_url: str, vault: str) -> 
   return 0
 
 
-def run_cap(args, d: dict, stack: dict, chain: Chain, rpc_url: str, vault: str) -> int:
-  if args.contracts is None:
-    raise SystemExit("cap needs --contracts (both sides, whole contracts)")
-  action = cap_action(d, args.contracts)
-  gates = gate_cap(chain, d, stack, vault, args.contracts)
+def run_single(args, action: dict, gates: list[Gate], rpc_url: str, landed_now, what: str) -> int:
+  """Report the gates and one action; with --propose, send it to MPCVault, wait for it to mine, read it back."""
   passed = report(gates)
   print(f"\n  {action['to']}  {action['digest']}  {action['description']}")
   if args.json:
@@ -1006,7 +1081,7 @@ def run_cap(args, d: dict, stack: dict, chain: Chain, rpc_url: str, vault: str) 
   token, vault_uuid = os.environ.get("MPCVAULT_TOKEN", ""), os.environ.get("MPCVAULT_VAULT", "")
   if not token or not vault_uuid:
     raise SystemExit("MPCVAULT_TOKEN and MPCVAULT_VAULT are required (run via run-with-ssm-mark.sh on the ops box)")
-  uuid = propose(token, vault_uuid, vault, action)
+  uuid = propose(token, vault_uuid, EXPECTED_VAULT, action)
   print(f"  proposed uuid={uuid}\n       {action['description']}\n       digest {action['digest']}\n       -> approve in MPCVault now")
   deadline, tx_hash = time.time() + CONFIRM_TIMEOUT_SEC, None
   while time.time() < deadline and not tx_hash:
@@ -1015,11 +1090,30 @@ def run_cap(args, d: dict, stack: dict, chain: Chain, rpc_url: str, vault: str) 
   if not tx_hash:
     raise SystemExit("not approved within the timeout")
   confirm_on_chain(rpc_url, tx_hash)
-  m = word_address(d["manager"])
-  if not await_postcondition(lambda: chain.word(d["future"], selector("totalPositionCap") + m) == args.contracts * 10**18):
-    raise SystemExit("mined, but the cap does not read back after 60s: stop and investigate")
-  print(f"cap: done. The future's cap reads {args.contracts} contracts.")
+  if not await_postcondition(landed_now):
+    raise SystemExit("mined, but it does not read back after 60s: stop and investigate")
+  print(f"{what}: done.")
   return 0
+
+
+def run_cap(args, d: dict, stack: dict, chain: Chain, rpc_url: str, vault: str) -> int:
+  if args.contracts is None:
+    raise SystemExit("cap needs --contracts (both sides, whole contracts)")
+  m = word_address(d["manager"])
+  return run_single(args, cap_action(d, args.contracts), gate_cap(chain, d, stack, vault, args.contracts), rpc_url,
+                    lambda: chain.word(d["future"], selector("totalPositionCap") + m) == args.contracts * 10**18,
+                    f"cap: the future's cap reads {args.contracts} contracts")
+
+
+def run_margin_factor(args, d: dict, stack: dict, chain: Chain, rpc_url: str, vault: str) -> int:
+  if args.factor is None:
+    raise SystemExit("margin-factor needs --factor (e.g. 0.8)")
+  m = word_uint(int(d["marketId"]))
+  factor18 = int(round(args.factor * 1e18))
+  im_scale18 = chain.word(d["manager"], selector("baseMarginParams") + m, 1)  # unchanged
+  return run_single(args, factor_action(d, factor18, im_scale18), gate_margin_factor(chain, d, stack, vault, args.factor),
+                    rpc_url, lambda: chain.word(d["manager"], selector("baseMarginParams") + m) == factor18,
+                    f"margin-factor: cNGN counts {args.factor} of its value")
 
 
 if __name__ == "__main__":
