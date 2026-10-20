@@ -659,7 +659,7 @@ long-naira account on cNGN insolvent after a 25% step; confirmed again on 2026-1
 The venue has no hedge mode: the app's Hedge block is information only.
 
 > **Superseded 2026-10-20 for the SecurityModule's sizing.** The perp is wound down, and the module is now sized for
-> the USDC-cNGN future alone, against a 14% move, by a rule fitted on the future's own fork run:
+> the USDC-cNGN future alone, against a 15% move, by a rule fitted on the future's own fork run:
 > [cngn-future-security-module.md](cngn-future-security-module.md). The perp rule below is kept as the record of how
 > the perp was sized. It does not describe the future: there it understates a 25% move by 35%.
 

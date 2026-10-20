@@ -118,12 +118,12 @@ SEL_GET_SPOT = "0x2b37269c"  # getSpot() on the index feed: USDC per cNGN, 18dp
 # ends at the account's maintenance margin:
 #   one-side notional x premium x ln(1 / (1 - SM_MOVE)) when that exceeds one-side notional x MM, else 0
 # premium is mark / index. Never below the fork and within 2.2% of it from 15% to 30%. At MM 15% the cliff is a move of
-# 1 - exp(-MM / premium), 13.8% at premium 1.0106: below it the module pays nothing at any open interest. 0.14 sits
-# just past it while premium stays above 0.9945 (the future at most 0.55% under the index); under that, a 14% move
-# leaves the side solvent and the requirement is 0 again. SM_MOVE is the one place the assumed move is set: 0.25 until
-# 2026-10-20 (the perp's rule), then 0.14. Read against ACTUAL one-side open interest here (Slack past coverage, page
-# at 1.2x), against the cap by the proposer's sm gate. docs/cngn-future-security-module.md has the reasoning.
-SM_MOVE = 0.14
+# 1 - exp(-MM / premium), 13.8% at premium 1.0106: below it the module pays nothing at any open interest. 0.15 clears
+# it while premium stays above 0.923 (the future less than 7.7% under the index); 0.14 sat on it, at 0.9945.
+# SM_MOVE is the one place the assumed move is set: 0.25 until 2026-10-20 (the perp's rule), then 0.15. Read against
+# ACTUAL one-side open interest here (Slack past coverage, page at 1.2x), against the cap by the proposer's sm gate.
+# docs/cngn-future-security-module.md has the reasoning.
+SM_MOVE = 0.15
 SM_COVERAGE_PAGE_X = 1.2
 SM_COVERAGE_WARN_REPEAT_SEC = 6 * 3600
 SEL_PERP_MARGIN_REQUIREMENTS = "0xbf270f9d"  # perpMarginRequirements(uint256) -> (mm, im) -- `cast sig`, pinned in --self-test
@@ -922,16 +922,18 @@ def self_test() -> int:
   for move, fork in [(0.10, 0.0), (0.125, 0.0), (0.15, 2_440.57), (0.20, 3_348.51), (0.25, 4_320.07), (0.30, 5_354.55)]:
     fit = sm_required_usd(15_000, 0.15, 1.0225, move)
     assert (fit == 0) if fork == 0 else (fork <= fit <= fork * 1.05), (move, fit, fork)
-  # At the default move (14%) a side at MM 15% is just past the cliff: the launch cap's side costs $2,290 and the 1,200
-  # cap's $91,616 at today's premium; a 10% move costs nothing at any size.
-  assert SM_MOVE == 0.14 and round(sm_required_usd(15_000, 0.15, 1.0124)) == 2_290
-  assert round(sm_required_usd(600_000, 0.15, 1.0124)) == 91_616 and sm_required_usd(600_000, 0.15, 1.0124, 0.10) == 0.0
-  # The edge of 14%: with the future more than 0.55% under the index (premium < 0.9945) the side survives it again.
-  assert sm_required_usd(15_000, 0.15, 0.995) > 0 and sm_required_usd(15_000, 0.15, 0.994) == 0.0
+  # At the default move (15%) a side at MM 15% is past the cliff: the launch cap's side costs $2,468 and the 1,200
+  # cap's $98,721 at today's premium; a 10% move costs nothing at any size.
+  assert SM_MOVE == 0.15 and round(sm_required_usd(15_000, 0.15, 1.0124)) == 2_468
+  assert int(sm_required_usd(600_000, 0.15, 1.0124)) == 98_720 and sm_required_usd(600_000, 0.15, 1.0124, 0.10) == 0.0
+  # The edge of 15%: only with the future more than 7.7% under the index (premium < 0.923) does the side survive it.
+  assert sm_required_usd(15_000, 0.15, 0.923) > 0 and sm_required_usd(15_000, 0.15, 0.922) == 0.0
+  # 14% sat on the edge: half a percent under the index was enough.
+  assert sm_required_usd(15_000, 0.15, 0.995, 0.14) > 0 and sm_required_usd(15_000, 0.15, 0.994, 0.14) == 0.0
   # Slack past coverage, page at 1.2x of it.
-  assert "2,290" in sm_future_warning(15_000, 0.15, 1.0124, 2_000) and sm_future_condition(15_000, 0.15, 1.0124, 2_000) is None
-  assert sm_future_condition(15_000, 0.15, 1.0124, 1_900).key == "sm-coverage"
-  assert sm_future_condition(15_000, 0.15, 1.0124, 2_291) is None and sm_future_warning(15_000, 0.15, 1.0124, 2_291) is None
+  assert "2,468" in sm_future_warning(15_000, 0.15, 1.0124, 2_100) and sm_future_condition(15_000, 0.15, 1.0124, 2_100) is None
+  assert sm_future_condition(15_000, 0.15, 1.0124, 2_000).key == "sm-coverage"
+  assert sm_future_condition(15_000, 0.15, 1.0124, 2_469) is None and sm_future_warning(15_000, 0.15, 1.0124, 2_469) is None
   # The perp is wound down: any open interest on it pages, rounding does not.
   assert perp_oi_condition(0.4) is None and perp_oi_condition(801).key == "perp-oi"
   # The future's pool: nothing while closed; reserve page under a quarter, Slack under half; an unreadable

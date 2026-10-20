@@ -718,7 +718,7 @@ contract MarginEngineDeployFork is Test {
   }
 
   /**
-   * The SecurityModule sizing rule (check_perp_pager.sm_required_usd) against the fork, from a 10% move to 30% (14%, SM_MOVE, just past the cliff):
+   * The SecurityModule sizing rule (check_perp_pager.sm_required_usd) against the fork, from a 10% move to 30% (15%, SM_MOVE, past the cliff):
    *   one-side notional x premium x ln(1 / (1 - s)) when that exceeds one-side notional x MM, else 0.
    * Below the cliff the side stays solvent and the module pays nothing; past it, the module pays the step's whole loss
    * (an insolvent auction ends at the account's maintenance margin), and the fit is never below the fork and within 5%

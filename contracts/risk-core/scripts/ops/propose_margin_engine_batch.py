@@ -41,7 +41,7 @@ Enable gates (all read live, all required):
             while the pool's net is below zero, and the pager pages one that lasts). Refuses only if the
             index is unreadable
   escrow    the escrow cap still has a reserve's worth of headroom after the seed, so a top-up fits
-  sm        the SecurityModule's cash covers an SM_MOVE move (check_perp_pager.SM_MOVE, 14% since 2026-10-20) on the
+  sm        the SecurityModule's cash covers an SM_MOVE move (check_perp_pager.SM_MOVE, 15% since 2026-10-20) on the
             future's one side at the cap being opened, at its maintenance margin and today's mark / index
             (check_perp_pager.sm_required_usd, fitted on the fork). The perp is wound down and not counted.
   pager     check_perp_pager.py ran OK within 3 minutes, with a provider and a dead-man's switch, and its last run
@@ -758,10 +758,11 @@ def self_test() -> int:
   # a full cNGN-margined book (~20.5M) beside the reserve: a 30M cap has under a reserve left, 50M has plenty
   assert not escrow_gate(20_500_000 + target, 30_000_000, target).ok
   assert escrow_gate(20_500_000 + target, 50_000_000, target).ok
-  # The sm gate, the future alone, at 14%: the launch cap's side needs $2,290 and the 1,200 cap's $91,616 at today's
-  # premium. The live $3,250 opens up to about 42 contracts; it refuses short of the requirement and passes at it.
-  assert not sm_gate(2_289, 15_000, 0.15, 1.0124).ok and sm_gate(2_291, 15_000, 0.15, 1.0124).ok
-  assert not sm_gate(3_250, 600_000, 0.15, 1.0124).ok and sm_gate(91_616, 600_000, 0.15, 1.0124).ok
+  # The sm gate, the future alone, at 15%: the launch cap's side needs $2,468 and the 1,200 cap's $98,721 at today's
+  # premium. The live $3,250 opens up to 38 contracts (40 needs $3,291); it refuses short of the requirement and passes at it.
+  assert not sm_gate(2_467, 15_000, 0.15, 1.0124).ok and sm_gate(2_469, 15_000, 0.15, 1.0124).ok
+  assert sm_gate(3_250, 19_000, 0.15, 1.0124).ok and not sm_gate(3_250, 20_000, 0.15, 1.0124).ok
+  assert not sm_gate(3_250, 600_000, 0.15, 1.0124).ok and sm_gate(98_721, 600_000, 0.15, 1.0124).ok
   # The cap action: setTotalPositionCap(engine, N x 1e18) on the future, its digest the deploy script's convention.
   act = cap_action(d, 1_200)
   assert act["to"] == d["future"] and act["data"] == "0x40a557bd" + word_address(d["manager"]) + word_uint(1_200 * 10**18)

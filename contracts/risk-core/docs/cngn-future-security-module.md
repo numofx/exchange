@@ -1,10 +1,10 @@
 # cNGN future: SecurityModule sizing
 
-**Decided 2026-10-20:** the SecurityModule is sized for the USDC-cNGN future alone, against a **14% move**
+**Decided 2026-10-20:** the SecurityModule is sized for the USDC-cNGN future alone, against a **15% move**
 (`SM_MOVE` in `scripts/ops/check_perp_pager.py`, the one place it is set; it was 25%, the perp's rule). The perp is
-wound down and no longer counted. 10% was proposed first and dropped the same day: the fork showed it requires
-nothing at all (below). This page records the rule, what the fork measured, what 14% does and does not cover, and the
-circuit breaker it depends on.
+wound down and no longer counted. Two values were tried first the same day: 10% requires nothing at all, and 14% sat
+on the edge where it would too (below). This page records the rule, what the fork measured, what 15% does and does
+not cover, and the circuit breaker it depends on.
 
 ## The rule
 
@@ -30,8 +30,8 @@ stack's real SecurityModule (funded so its balance never caps the payout). Premi
 |---|---|---|---|---|---|
 | 10% | no | $0 | $0 | $0 | $1,125 |
 | 12.5% | no | $0 | $0 | $0 | $1,406 |
-| **14%** | yes, by $15 | $2,265 | $52 | $2,313 (+2.1%) | $1,575 |
-| 15% | yes | $2,441 | $227 | $2,493 (+2.1%) | $1,688 |
+| 14% | yes, by $15 | $2,265 | $52 | $2,313 (+2.1%) | $1,575 |
+| **15%** | yes | $2,441 | $227 | $2,493 (+2.1%) | $1,688 |
 | 16% | yes | $2,616 | $402 | $2,674 (+2.2%) | $1,800 |
 | 17.5% | yes | $2,889 | $676 | $2,951 (+2.1%) | $1,969 |
 | 20% | yes | $3,349 | $1,135 | $3,423 (+2.2%) | $2,250 |
@@ -51,11 +51,11 @@ Three things the old rule got wrong for the future:
   dollar value: left unsettled through a 10% step, a $1,500 debt reads as $1,350. The keepers settle losers at every
   mark in production, so the test does too; without that the fork read 10% low.
 
-## What 14% means
+## What 15% means
 
 With MM 15% and today's premium (1.0106) the cliff is at a **13.8%** move (`1 - exp(-MM / premium)`): any assumed
-move under it requires **nothing**, which is why 10% was dropped. 14% is just past the cliff, so it asks for the
-whole loss of a 14% move:
+move under it requires **nothing**, which is why 10% was dropped. 15% is past the cliff, so it asks for the whole loss
+of a 15% move:
 
 | Cap (both sides) | One side | 10% | 14% | 15% | 20% | 25% |
 |---|---|---|---|---|---|---|
@@ -65,15 +65,14 @@ whole loss of a 14% move:
 | 1,200 | $600,000 | $0 | $91,457 | $98,549 | $135,311 | $174,446 |
 
 (2026-10-20, live premium 1.0106, MM 15%. The keeper gate, unchanged, still needs cap / 2 x 1,000 x 25%: $150,000 at
-1,200.) Today's $3,250 opens a cap of up to about 42 contracts at 14%.
+1,200.) Today's $3,250 opens a cap of up to 38 contracts at 15%; 40 needs $3,286.
 
-**The edge of 14%.** The cliff moves with the premium. While the future trades above the index (carry; 1.0106 today,
-falling toward 1.0 at expiry) the cliff is under 14% and the rule asks for the amounts above. If the future trades more
-than 0.55% under the index (premium below 0.9945), a side at maintenance survives a 14% move and the requirement drops
-to 0, at any cap. The pager's self-test pins that edge. A move set a point or two higher (15%: $2,464 at the launch
-cap) would not sit on it.
+**Why 15% and not 14%.** The cliff moves with the premium. 14% cleared it only while the future traded no more than
+0.55% under the index (premium 0.9945): any lower, and a side at maintenance survived a 14% move, so the requirement
+fell back to 0 at any cap. 15% falls to 0 only with the future 7.7% under the index (premium 0.923), near the edge of
+the 10% index band. The pager's self-test pins both edges.
 
-14% covers a single step of 14%. It is still well short of the moves the naira has made, so it holds only while all of
+15% covers a single step of 15%. It is still well short of the moves the naira has made, so it holds only while all of
 these do:
 
 1. **No mark moves more than 5%.** `maxMarkDeviation` is 5% and marks are at least an hour apart
@@ -90,7 +89,7 @@ these do:
 
 For scale: Nigeria's official-rate unifications in June 2023 and January 2024 each moved the rate roughly 40% within
 about a day. Under this sizing, a move like that is absorbed only by (1)-(4) holding; the SecurityModule covers one
-14% step of it. If
+15% step of it. If
 they fail, a shortfall past the module's cash is socialized across every USDC balance on the venue
 (`CashAsset.socializeLoss`).
 
@@ -127,7 +126,7 @@ of the index.
 every thin account at once into a thin market. Raising initial margin only would do the same as blocking increases,
 less exactly.
 
-5% sits well inside the 14% the module is sized for and above the naira's ordinary day. A move that big means the regime has changed,
+5% sits well inside the 15% the module is sized for and above the naira's ordinary day. A move that big means the regime has changed,
 and the point is to stop open interest growing at the top of it, not to time the move.
 
 Where it would live, in order of how quickly each can be built:
