@@ -90,7 +90,12 @@ type Config struct {
 	DeribitWSURL        string
 
 	CNGNSpotAssetAddress string
-	// SpotMarginManagerAddress is the manager the spot market's accounts live under when spot runs
+	// EURCSpotAssetAddress (EURC_SPOT_ASSET_ADDRESS) is EURC-USDC's WrappedERC20Asset escrow of Base
+	// EURC, under the same MarginEngine, TradeModule and quote asset as cNGN spot. Empty: EURC-USDC is
+	// not listed. A withdrawable asset by default when set.
+	EURCSpotAssetAddress string
+	// SpotMarginManagerAddress is the manager the spot markets' accounts live under (both cNGN-USDC and
+	// EURC-USDC: they are under the same MarginEngine), when spot runs
 	// on the perp stack (the unified account): set to the perp SRM so the venue refuses spot orders
 	// while that SRM is paused and presents the manager to clients. Empty: spot's own stack.
 	SpotMarginManagerAddress string
@@ -206,6 +211,7 @@ func Load() (Config, error) {
 		DeribitWSURL:            getenvDefault("DERIBIT_WS_URL", "wss://test.deribit.com/ws/api/v2"),
 
 		CNGNSpotAssetAddress:         strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_SPOT_ASSET_ADDRESS"))),
+		EURCSpotAssetAddress:         strings.ToLower(strings.TrimSpace(os.Getenv("EURC_SPOT_ASSET_ADDRESS"))),
 		SpotMarginManagerAddress:     strings.ToLower(strings.TrimSpace(os.Getenv("SPOT_MARGIN_MANAGER_ADDRESS"))),
 		CNGNPerpAssetAddress:         strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_ASSET_ADDRESS"))),
 		CNGNPerpTradeModuleAddress:   strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_TRADE_MODULE_ADDRESS"))),
@@ -300,6 +306,9 @@ func Load() (Config, error) {
 		cfg.CNGNFutureExpiry = expiry
 	}
 	if err := cfg.validateFutureStack(); err != nil {
+		return Config{}, err
+	}
+	if err := cfg.validateEURCSpot(); err != nil {
 		return Config{}, err
 	}
 	if err := cfg.validatePerpStack(); err != nil {
@@ -582,17 +591,42 @@ func getenvBool(key string, fallback bool) bool {
 	}
 }
 
+// validateEURCSpot refuses an EURC_SPOT_ASSET_ADDRESS that is not an address, or that is another
+// market's asset: the registry keys markets by (asset, sub_id), so a shared address would list two
+// markets under one key and answer one of them with the other's book.
+func (c Config) validateEURCSpot() error {
+	eurc := strings.TrimSpace(c.EURCSpotAssetAddress)
+	if eurc == "" {
+		return nil
+	}
+	if !isConfiguredAddress(eurc) {
+		return fmt.Errorf("EURC_SPOT_ASSET_ADDRESS %q is not an address", eurc)
+	}
+	for name, other := range map[string]string{
+		"CNGN_SPOT_ASSET_ADDRESS":      c.CNGNSpotAssetAddress,
+		"CNGN_PERP_ASSET_ADDRESS":      c.CNGNPerpAssetAddress,
+		"CNGN_FUTURE_ASSET_ADDRESS":    c.CNGNFutureAssetAddress,
+		"CNGN_PERP_COLLATERAL_ADDRESS": c.CNGNPerpCollateralAddress,
+		"QUOTE_ASSET_ADDRESS":          c.QuoteAsset(),
+	} {
+		if strings.EqualFold(eurc, strings.TrimSpace(other)) {
+			return fmt.Errorf("EURC_SPOT_ASSET_ADDRESS is %s: EURC-USDC needs its own escrow", name)
+		}
+	}
+	return nil
+}
+
 // withdrawalAssets are the assets a signed withdrawal may pay out of: WITHDRAWAL_ASSET_ADDRESSES when set,
-// otherwise those this venue settles in: the quote asset, the cNGN spot asset and, when the perp is
-// configured, the perp stack's cash and its cNGN collateral escrow.
+// otherwise those this venue settles in: the quote asset, the cNGN and EURC spot assets and, when the perp
+// is configured, the perp stack's cash and its cNGN collateral escrow.
 func withdrawalAssets(cfg Config) []string {
 	if configured := getenvCSV("WITHDRAWAL_ASSET_ADDRESSES", ""); len(configured) > 0 {
 		return configured
 	}
-	assets := make([]string, 0, 4)
+	assets := make([]string, 0, 5)
 	// The perp's cash is withdrawable too: it is real USDC held by that stack's CashAsset; so is
 	// the cNGN its collateral escrow holds.
-	for _, asset := range []string{cfg.QuoteAsset(), cfg.CNGNSpotAssetAddress, cfg.CNGNPerpCashAddress, cfg.CNGNPerpCollateralAddress} {
+	for _, asset := range []string{cfg.QuoteAsset(), cfg.CNGNSpotAssetAddress, cfg.EURCSpotAssetAddress, cfg.CNGNPerpCashAddress, cfg.CNGNPerpCollateralAddress} {
 		if asset = strings.ToLower(strings.TrimSpace(asset)); asset != "" {
 			assets = append(assets, asset)
 		}

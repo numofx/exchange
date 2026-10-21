@@ -72,27 +72,29 @@ type integrationTradesResponse struct {
 }
 
 // marketOrientation maps engine values onto a market's advertised base and quote. The advertised
-// pair is the engine's own, so price, volumes and side pass through; only the scales differ. It uses
-// the same predicate that derives spot_contract, so the two views cannot disagree.
+// pair is the engine's own, so price, volumes and side pass through; only the scales differ: the
+// market's own display places (ui_price_decimals / ui_size_decimals), or the engine's 18 when it sets
+// none. The ui_intent markets' places equal the spot_contract echo's, so the two views cannot
+// disagree (TestUIDecimalsMatchTheSpotContractEcho).
 type marketOrientation struct {
-	// uiScales is true for markets under the ui_intent contract, shown at the UI's scales.
-	uiScales bool
+	priceDecimals int
+	sizeDecimals  int
 }
 
 func orientationFor(market instruments.Metadata) marketOrientation {
-	return marketOrientation{uiScales: isSpotContractInstrument(market)}
+	return marketOrientation{priceDecimals: market.UIPriceDecimals, sizeDecimals: market.UISizeDecimals}
 }
 
 func (o marketOrientation) priceScale() int {
-	if o.uiScales {
-		return spotUIPriceDecimalScale
+	if o.priceDecimals > 0 {
+		return o.priceDecimals
 	}
 	return spotEngineDecimalScale
 }
 
 func (o marketOrientation) baseScale() int {
-	if o.uiScales {
-		return spotUISizeDecimalScale
+	if o.sizeDecimals > 0 {
+		return o.sizeDecimals
 	}
 	return spotEngineDecimalScale
 }

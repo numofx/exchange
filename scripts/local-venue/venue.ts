@@ -977,8 +977,9 @@ switch (command) {
     // spot-market-check: /v1/markets binds the spot market to the stack venue.json says it should.
     const expected = { asset: SPOT.asset, module: SPOT.module, quote: SPOT.wrappedUsdc, manager: venue.unified ? SPOT.srm : null };
     const markets = (await (await fetch(`${MARKETS}/v1/markets`)).json()) as Record<string, string>[];
-    const spot = markets.find((m) => m.contract_type === 'spot');
-    if (!spot) throw new Error('no spot market served');
+    // By symbol, not the first spot: EURC-USDC is a second spot market, on another escrow.
+    const spot = markets.find((m) => m.contract_type === 'spot' && m.market === 'cNGN-USDC');
+    if (!spot) throw new Error('no cNGN-USDC spot market served');
     const same = (a: string | undefined, b: Address | null) => (b === null ? true : (a ?? '').toLowerCase() === b.toLowerCase());
     if (!same(spot.asset_address, expected.asset)) throw new Error(`spot asset ${spot.asset_address}, expected ${expected.asset}`);
     if (!same(spot.trade_module_address, expected.module)) throw new Error(`spot module ${spot.trade_module_address}, expected ${expected.module}`);
