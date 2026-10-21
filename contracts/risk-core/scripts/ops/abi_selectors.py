@@ -46,6 +46,26 @@ ENCODE_PLACEHOLDER = "f"
 # does not look.
 NOT_COMPILED: dict[str, dict[str, str]] = {
   "log_cngn_basis.py": {"slot0()": "the Uniswap v3 cNGN/USDC pool's price, an external contract"},
+  # eurc_depth/: Base DEXes the EURC depth reading quotes; selectors pinned against `cast sig` in depth.py --self-test.
+  "pools.py": {
+    "Deposit(address,uint256,uint128)": "Aerodrome CLGauge event (topic, not a call)",
+    "Withdraw(address,uint256,uint128)": "Aerodrome CLGauge event (topic, not a call)",
+    "gauge()": "Aerodrome Slipstream CLPool",
+    "nft()": "Aerodrome Slipstream CLPool",
+    "slot0()": "Aerodrome Slipstream CLPool",
+    "liquidity()": "Aerodrome Slipstream CLPool",
+    "stakedLiquidity()": "Aerodrome Slipstream CLPool",
+    "getPool(address,address,uint24)": "Uniswap v3 factory",
+    "getPool(address,address,bool)": "Aerodrome v2 PoolFactory",
+    "getPool(address,address,int24)": "Aerodrome Slipstream CLFactory",
+  },
+  "depth.py": {
+    "quoteExactInputSingle((address,address,uint256,uint24,uint160))": "Uniswap v3 QuoterV2",
+    "quoteExactInputSingle((address,address,uint256,int24,uint160))": "Aerodrome Slipstream QuoterV2",
+    "quoteExactInputSingle(((address,address,uint24,int24,address),bool,uint128,bytes))": "Uniswap v4 V4Quoter",
+    "getAmountsOut(uint256,(address,address,bool,address)[])": "Aerodrome v2 Router",
+    "stakedLiquidity()": "Aerodrome Slipstream CLPool",
+  },
 }
 
 
@@ -118,7 +138,7 @@ def assert_selectors_compiled(selectors, where: str) -> None:
 
 
 def scripts() -> list[Path]:
-  return sorted([*RISK_CORE.glob("scripts/*.py"), *RISK_CORE.glob("scripts/ops/*.py")])
+  return sorted([*RISK_CORE.glob("scripts/*.py"), *RISK_CORE.glob("scripts/ops/*.py"), *RISK_CORE.glob("scripts/ops/*/*.py")])
 
 
 def check_file(path: Path) -> list[str]:

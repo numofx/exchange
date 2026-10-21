@@ -10,7 +10,7 @@ func loadWithdrawalTestConfig(t *testing.T, env map[string]string) Config {
 	t.Helper()
 	t.Setenv("DATABASE_URL", "postgres://test")
 	t.Setenv("APP_ENV", "test")
-	for _, key := range []string{"WITHDRAWAL_ASSET_ADDRESSES", "WITHDRAWAL_MODULE_ADDRESS", "EXECUTOR_WITHDRAW_URL", "EXECUTOR_WITHDRAW_TIMEOUT"} {
+	for _, key := range []string{"WITHDRAWAL_ASSET_ADDRESSES", "WITHDRAWAL_MODULE_ADDRESS", "EXECUTOR_WITHDRAW_URL", "EXECUTOR_WITHDRAW_TIMEOUT", "EURC_SPOT_ASSET_ADDRESS"} {
 		t.Setenv(key, "")
 	}
 	for key, value := range env {

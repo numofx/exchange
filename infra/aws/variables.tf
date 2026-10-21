@@ -185,6 +185,17 @@ variable "cngn_spot_asset_address" {
   default = "0x37c976bb5d4887a714ef19AF6B83e34fe2f37c98"
 }
 
+# EURC-USDC spot: a WrappedERC20Asset escrow for Base EURC (0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42, 6
+# decimals) under the MarginEngine as its market 2, on the same TradeModule and USDC cash as cNGN spot, and
+# sharing spot_margin_manager_address. Empty lists nothing: markets-service and the matcher get no
+# EURC_SPOT_ASSET_ADDRESS at all, EURC is neither depositable nor withdrawable, and every task definition
+# renders exactly as it did before this variable existed (ecs.tf local.eurc_spot_env).
+variable "eurc_spot_asset_address" {
+  description = "The EURC-USDC spot market's EURC escrow (risk-core deployments/8453/EURC_SPOT.json .escrow once deployed). Empty: the market is not listed and EURC is not a deposit or withdrawal asset."
+  type        = string
+  default     = ""
+}
+
 # USDCcNGN-PERP, on its own stack, live on Base since 2026-09-30. The defaults ARE the deployed
 # contracts (risk-core deployments/8453/CNGN_PERP_STACK.json, execution
 # deployments/8453/CNGN_PERP_TRADE_MODULE.json): public addresses, committed so that an apply from a

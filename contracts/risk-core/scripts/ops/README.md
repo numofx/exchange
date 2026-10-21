@@ -46,6 +46,32 @@ watched only SRM market feeds, which the live markets no longer use. `check_feed
 as a library the pager and the batch proposers import. To prove the page fires, stop `numo-feeds`
 past the warn age, confirm the page, then restart it.
 
+## EURC depth readings (evidence for the EURC deposit cap)
+
+`eurc_depth/depth.py --once` measures EURC/USDC depth within 2% on Base (every pool, both directions, one block) and
+the main pool's LP concentration, and appends one row to a CSV. The EURC cap is to be set at ~50% of the median 2%
+sell depth over 7 days of readings, and the engine keeper's `MAX_EURC_INVENTORY` at or below it (exchange #247; the
+EURC enable gate refuses a larger or unset limit). Read-only, through `run-with-ssm-readonly.sh` for the provider RPC.
+Twice a day, from its own checkout (the box's `~/exchange` is pinned at `bf9da89` and has no `eurc_depth/`):
+
+```bash
+# as ec2-user: a checkout at the commit that carries eurc_depth/, then one reading by hand (backfills the gauge)
+git clone https://github.com/numofx/exchange.git ~/exchange-eurc-depth
+git -C ~/exchange-eurc-depth checkout --detach <commit>
+cd ~/exchange-eurc-depth/contracts/risk-core && python3 scripts/ops/eurc_depth/depth.py --self-test
+EURC_DEPTH_CSV=~/numo-eurc-depth.csv EURC_DEPTH_STATE=~/numo-eurc-depth-state.json \
+  scripts/ops/run-with-ssm-readonly.sh python3 scripts/ops/eurc_depth/depth.py --once
+# as root
+cp /home/ec2-user/exchange-eurc-depth/contracts/risk-core/scripts/ops/numo-eurc-depth.{service,timer} /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now numo-eurc-depth.timer
+systemctl list-timers numo-eurc-depth.timer   # next run 00:00 or 12:00 UTC
+# after 7 days (the script samples nothing past them, and says so)
+python3 scripts/ops/eurc_depth/depth.py --summary
+systemctl disable --now numo-eurc-depth.timer
+```
+
+Record the checkout, the units and the CSV path in `OPS_BOX_CHANGES.md` the same day.
+
 ## Basis logger (evidence for the Sep-16 fixing)
 
 `log_cngn_basis.py` samples the competing cNGN reference prices into a CSV so the
