@@ -7,7 +7,7 @@ import {IMarginEngine} from "../src/interfaces/IMarginEngine.sol";
 import {ISpotFeed} from "../src/interfaces/ISpotFeed.sol";
 import {IForwardFeed} from "../src/interfaces/IForwardFeed.sol";
 import {IVolFeed} from "../src/interfaces/IVolFeed.sol";
-import {MarginEngine} from "../src/risk-managers/MarginEngine.sol";
+import {MarginEngineV1 as MarginEngine} from "../src/legacy/v1/MarginEngineV1.sol";
 import {ChainlinkSpotFeed} from "../src/feeds/ChainlinkSpotFeed.sol";
 import {WrappedERC20Asset} from "../src/assets/WrappedERC20Asset.sol";
 import {ManagerWhitelist} from "../src/assets/utils/ManagerWhitelist.sol";

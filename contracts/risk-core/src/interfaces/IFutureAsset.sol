@@ -5,9 +5,10 @@ import {IAsset} from "./IAsset.sol";
 import {IPositionTracking} from "./IPositionTracking.sol";
 
 /**
- * @notice USDC/cNGN dated future, cash settled in cNGN.
- * @dev    Prices are cNGN per USDC (18dp). Contract size is in USDC (18dp). Variation margin is denominated in
- *         cNGN (18dp): a long gains `contractSize * (newMark - oldMark)` cNGN per contract.
+ * @notice cNGN dated future. Shared by both deployed versions, whose units differ:
+ *         - v2 (src/assets/FutureAsset, cNGN-<expiry>): prices USDC per cNGN, contract size in cNGN, VM in USDC.
+ *         - v1 (src/legacy/v1/FutureAssetV1, USDC-cNGN-<expiry>): prices cNGN per USDC, contract size in USDC, VM in cNGN.
+ * @dev    All 18dp. Either way a long gains `contractSize * (newMark - oldMark)` per contract, in the VM unit.
  */
 interface IFutureAsset is IAsset, IPositionTracking {
   struct FutureContract {
@@ -20,7 +21,7 @@ interface IFutureAsset is IAsset, IPositionTracking {
     int cumulativeVMPerContract;
   }
 
-  /// @dev Settlement fixing state. Prices are cNGN per USDC; the accumulator sums price * seconds held.
+  /// @dev Settlement fixing state. Prices are in the series' quote units; the accumulator sums price * seconds held.
   struct Fixing {
     uint64 windowStart;
     uint64 maxSampleGap;
@@ -53,11 +54,11 @@ interface IFutureAsset is IAsset, IPositionTracking {
 
   function fallbackReference(uint96 subId) external view returns (uint);
 
-  /// @notice Realise and return the cNGN owed to (positive) or by (negative) an account. Manager only.
-  function settleAccountVM(uint accountId, uint subId) external returns (int cngnDelta);
+  /// @notice Realise and return the VM owed to (positive) or by (negative) an account, in the VM unit. Manager only.
+  function settleAccountVM(uint accountId, uint subId) external returns (int vmDelta);
 
-  /// @notice cNGN that settleAccountVM would return now, without changing state.
-  function getPendingVM(uint accountId, uint subId) external view returns (int cngnDelta);
+  /// @notice What settleAccountVM would return now, without changing state.
+  function getPendingVM(uint accountId, uint subId) external view returns (int vmDelta);
 
   function getReferencePrice(uint subId) external view returns (uint price, bool isSet);
 
@@ -87,7 +88,7 @@ interface IFutureAsset is IAsset, IPositionTracking {
   event ForwardFeedSet(address forwardFeed, uint minMarkInterval);
   event FixingSampled(uint96 indexed subId, uint64 sampleTime, uint indexPrice);
   event SettlementPriceSet(uint96 indexed subId, uint settlementPrice, int cumulativeVMPerContract, bool fromIndex);
-  event FutureVMSynchronized(uint indexed accountId, uint96 indexed subId, int cngnDelta, int cumulativeVMPerContract);
+  event FutureVMSynchronized(uint indexed accountId, uint96 indexed subId, int vmDelta, int cumulativeVMPerContract);
 
   error FA_NotManager();
   error FA_UnknownFuture();
