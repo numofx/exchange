@@ -159,7 +159,7 @@ func TestHandleMarketsListsBothSpotsUnderTheirOwnAssets(t *testing.T) {
 	}
 	eurc, cngn := markets[0], markets[1]
 	if eurc.ContractType != "spot" || eurc.AssetAddress != testEURCSpotEscrow || eurc.BaseAssetSymbol != "EURC" || eurc.QuoteAssetSymbol != "USDC" ||
-		eurc.OrderEntrySpec != "" || eurc.UIPriceUnit != "USDC per EURC" || eurc.TakerFeeBps != 25 || eurc.MakerFeeBps != 0 ||
+		eurc.OrderEntrySpec != "" || eurc.UIPriceUnit != "USDC per EURC" || eurc.TakerFeeBps != 5 || eurc.MakerFeeBps != 0 ||
 		eurc.AmountScale != instruments.SpotAmountScale || eurc.MinSize != "1" || eurc.AmountStep != "1" ||
 		eurc.UIPriceDecimals != 5 || eurc.UISizeDecimals != 6 {
 		t.Fatalf("EURC-USDC listing = %+v", eurc)

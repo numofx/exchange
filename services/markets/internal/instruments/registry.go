@@ -162,9 +162,9 @@ func eurcSpotMetadata(cfg config.Config) Metadata {
 		BaseAssetSymbol:  "EURC",
 		QuoteAssetSymbol: "USDC",
 		TickSize:         "0.000000000000000001",
-		// 25 bps taker, 0 maker, as on cNGN-USDC: charged in the trade module's quote asset and paid
-		// to the module's feeRecipient.
-		TakerFeeBps:        25,
+		// 5 bps taker, 0 maker (set 2026-10-21: a stable pair, priced against EURC/USDC pools that charge
+		// 1-5 bps): charged in the trade module's quote asset and paid to the module's feeRecipient.
+		TakerFeeBps:        5,
 		MakerFeeBps:        0,
 		MinSize:            AmountStep,
 		ContractMultiplier: "1",

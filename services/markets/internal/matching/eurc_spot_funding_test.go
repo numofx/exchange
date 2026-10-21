@@ -10,7 +10,7 @@ import (
 )
 
 // EURC-USDC is checked exactly like cNGN-USDC: the buyer must hold notional + taker fee in the process-wide quote
-// asset, the fee from EURC-USDC's own schedule. 100 EURC at 1.12 USDC is 112 USDC; 25 bps of it is 0.28 USDC.
+// asset, the fee from EURC-USDC's own schedule. 100 EURC at 1.12 USDC is 112 USDC; 5 bps of it is 0.056 USDC.
 func TestEURCSpotBuyerIsCheckedForUSDCNotionalPlusItsFee(t *testing.T) {
 	eurc, ok := instruments.DefaultRegistry(config.Config{EURCSpotAssetAddress: "0x00000000000000000000000000000000000e0dc0"}).Resolve(instruments.EURCSpotSymbol)
 	if !ok {
@@ -26,17 +26,17 @@ func TestEURCSpotBuyerIsCheckedForUSDCNotionalPlusItsFee(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fee != "280000000000000000" {
-		t.Fatalf("fee = %s, want 0.28 USDC (2.8e17)", fee)
+	if fee != "56000000000000000" {
+		t.Fatalf("fee = %s, want 0.056 USDC (5.6e16)", fee)
 	}
 
 	candidate := candidateWithBuyer(orders.SideBuy, "11", "22")
-	short := &stubChecker{balance: "112279999999999999999"}
-	if ok, required, _, err := buyerCanFund(context.Background(), short, candidate, price, amount, fee); err != nil || ok || required.String() != "112280000000000000000" {
-		t.Fatalf("one wei short of 112.28 USDC: ok=%v required=%v err=%v", ok, required, err)
+	short := &stubChecker{balance: "112055999999999999999"}
+	if ok, required, _, err := buyerCanFund(context.Background(), short, candidate, price, amount, fee); err != nil || ok || required.String() != "112056000000000000000" {
+		t.Fatalf("one wei short of 112.056 USDC: ok=%v required=%v err=%v", ok, required, err)
 	}
-	exact := &stubChecker{balance: "112280000000000000000"}
+	exact := &stubChecker{balance: "112056000000000000000"}
 	if ok, _, _, err := buyerCanFund(context.Background(), exact, candidate, price, amount, fee); err != nil || !ok {
-		t.Fatalf("exactly 112.28 USDC: ok=%v err=%v", ok, err)
+		t.Fatalf("exactly 112.056 USDC: ok=%v err=%v", ok, err)
 	}
 }
