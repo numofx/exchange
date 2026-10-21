@@ -107,6 +107,8 @@ from propose_cngn_spot_batch import (  # noqa: E402  one implementation of the M
   request_tx_hash,
   rpc,
 )
+from perp_cap_guard import opens_a_perp_cap  # noqa: E402  the check every proposer shares
+import perp_cap_guard  # noqa: E402
 from propose_perp_enable_batch import gate_pager, http_json, keeper_gate  # noqa: E402
 from resolve_cngn_action6 import keccak  # noqa: E402
 
@@ -273,21 +275,10 @@ def to_propose(batch: str, count: int) -> list[int]:
   return [i for i in range(count) if i not in DEFERRED.get(batch, {}) and i not in REFUSED.get(batch, {})]
 
 
-def opens_a_perp_cap(action: dict, d: dict) -> bool:
-  """Whether the action is perp.setTotalPositionCap(any manager, nonzero): what this script may never send."""
-  data = action["data"].lower()
-  if action["to"].lower() != d["perp"].lower() or not data.startswith(selector("setTotalPositionCap")):
-    return False
-  cap = data[2 + 8 + 64:2 + 8 + 128]
-  return cap == "" or int(cap, 16) != 0
-
-
 def propose_checked(token: str, vault_uuid: str, vault: str, action: dict, d: dict, send=None) -> str:
-  """The only way this script reaches MPCVault: refuses a nonzero perp cap by content, whatever the tables say."""
-  if opens_a_perp_cap(action, d):
-    raise SystemExit(f"REFUSED: {action.get('description')} would open the delisted perp (exchange #251); "
-                     "this script never proposes a nonzero perp cap")
-  return (send or propose)(token, vault_uuid, vault, action)
+  """The only way this script reaches MPCVault: perp_cap_guard refuses a nonzero perp cap by content, whatever the
+  tables say."""
+  return perp_cap_guard.propose_checked(token, vault_uuid, vault, action, send or propose, perp=d["perp"])
 
 
 def expected_actions(batch: str, d: dict) -> list[tuple[str, str]]:
@@ -788,9 +779,9 @@ def self_test() -> int:
   for manager in (deployed["manager"], "0xDE0423D0a1E15536265C9513d2e0c10DAb5835D4"):
     for cap, opens in ((1, True), (50_000_000 * 10**18, True), (0, False)):
       act = {"to": deployed["perp"], "data": selector("setTotalPositionCap") + word_address(manager) + word_uint(cap)}
-      assert opens_a_perp_cap(act, deployed) is opens, (manager, cap)
+      assert opens_a_perp_cap(act, deployed["perp"]) is opens, (manager, cap)
   for to, data in expected_actions("enable", deployed)[1:] + expected_actions("setup", deployed):
-    assert not opens_a_perp_cap({"to": to, "data": data}, deployed), (to, data[:10])
+    assert not opens_a_perp_cap({"to": to, "data": data}, deployed["perp"]), (to, data[:10])
   assert propose_checked("t", "v", "0x" + "00" * 20, {"to": deployed["future"], "data": "0x00"}, deployed,
                          send=lambda *_: "sent") == "sent"
   # No flag reaches MPCVault around the check: main sends only through propose_checked.
