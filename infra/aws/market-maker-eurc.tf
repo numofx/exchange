@@ -75,25 +75,33 @@ resource "aws_ecs_task_definition" "market_maker_eurc" {
       { name = "MM_SUBACCOUNT_ID", value = var.mm_eurc_subaccount_id },
       { name = "MM_RECIPIENT_ID", value = var.mm_eurc_subaccount_id },
 
-      # Anchored externally to Chainlink EURC/USD on Base (8 decimals, 24 h heartbeat, so USD per EURC: the
-      # market's own orientation, USDC per EURC, taking USDC at par). 90,000 s is the heartbeat plus an hour:
-      # a feed that has missed its heartbeat stops the quotes rather than leaving them on a stale price.
+      # Quotes around a live EURC/USDC reference, banded by Chainlink (numofx/market-maker#43). The reference is
+      # the 60 s TWAP of the EURC/USDC Slipstream pool, tick spacing 50 (~80% of Base's 2% depth), which moves
+      # every block. The band is Chainlink EURC/USD on Base, the 1 h feed (Chainlink's directory: 0.1%
+      # deviation, 3,600 s heartbeat, 8 decimals; USD per EURC, read as USDC per EURC): a TWAP more than 50 bps
+      # from it halts the bot at once ("anchor out of band") instead of being followed. The other EURC/USD feed,
+      # 0xDAe3...8250 (0.3%, 24 h; the venue's collateral oracle), sat ~15 bps from the market on 2026-10-21;
+      # the 1 h feed and the pool were 1.9 bps apart. 7,200 s is its heartbeat plus an hour: a missed heartbeat
+      # stops the quotes rather than leaving the band on a stale price.
       { name = "MM_ANCHOR_SOURCE_TYPE", value = "chainlink" },
-      { name = "MM_ANCHOR_CHAINLINK_FEED", value = "0xDAe398520e2B67cd3f27aeF9Cf14D93D927f8250" },
-      { name = "MM_ANCHOR_CHAINLINK_MAX_AGE_SECONDS", value = "90000" },
+      { name = "MM_ANCHOR_CHAINLINK_FEED", value = "0x9867186e52d2F1C2c565CDA6E747101Fa56501e0" },
+      { name = "MM_ANCHOR_CHAINLINK_MAX_AGE_SECONDS", value = "7200" },
+      { name = "MM_ANCHOR_POOL_ADDRESS", value = "0xE846373C1a92B167b4E9cd5d8E4d6B1Db9E90EC7" },
+      { name = "MM_ANCHOR_POOL_TWAP_SECONDS", value = "60" },
+      { name = "MM_ANCHOR_BAND_BPS", value = "50" },
       { name = "MM_USDCCNGN_SPOT_EXTERNAL_ANCHOR_ENABLED", value = "false" },
-      # A stable pair: the venue's reference should never be 50 bps from the feed. Past that the bot stops
-      # quoting instead of following it.
+      # The venue's own book against the reference: past 50 bps the bot stops quoting instead of following it.
       { name = "MM_MAX_ANCHOR_DEVIATION_BPS", value = "50" },
       # How long the feed may be UNREADABLE (RPC down) before the bot halts and cancels. The age of the price
       # itself is MM_ANCHOR_CHAINLINK_MAX_AGE_SECONDS, which halts at once.
       { name = "MM_STALE_ANCHOR_TIMEOUT_SECONDS", value = "300" },
 
-      # Launch size, against a 5,000,000 EURC venue cap. Units as the bot reads them for EURC-USDC (market-maker
-      # README, EURC-USDC units): sizes and MM_MAX_NOTIONAL_PER_SIDE in EURC; inventory limits in USDC, the EURC
-      # held valued at the reference.
-      # Four rungs a side from 5,000 EURC, 1.2x outward: 5,000 + 6,000 + 7,200 + 8,640 = 26,840 EURC a side,
-      # ~30,060 USDC at 1.12. 5 bps out and 3 bps further each, so the outer rung is 14 bps out.
+      # Launch size. Units as the bot reads them for EURC-USDC (market-maker README, EURC-USDC units):
+      # MM_ORDER_SIZE and the inventory limits in USDC (EURC valued at the reference), MM_MAX_NOTIONAL_PER_SIDE
+      # in EURC. Four rungs a side from 5,000 USDC, 1.2x outward: 5,000 + 6,000 + 7,200 + 8,640 = 26,840 USDC
+      # a side, ~23,900 EURC at 1.12. 5 bps out and 3 bps further each, so the outer rung is 14 bps out: with
+      # the live reference the inner rung sits inside the 1 h feed's 10 bps deviation threshold, which a
+      # Chainlink-only anchor could not do without quoting a stale price.
       { name = "MM_ORDER_SIZE", value = "5000" },
       { name = "MM_QUOTE_LEVELS", value = "4" },
       { name = "MM_LEVEL_SIZE_MULT", value = "1.2" },
@@ -106,8 +114,8 @@ resource "aws_ecs_task_definition" "market_maker_eurc" {
       { name = "MM_MAX_NET_INVENTORY", value = "56000" },
       { name = "MM_MAX_LONG_INVENTORY", value = "56000" },
       { name = "MM_MAX_SHORT_INVENTORY", value = "-56000" },
-      # Per side and per order, in EURC: above the 26,840 EURC ladder and its largest rung (8,640 EURC), so the
-      # ladder rather than this binds.
+      # Per side and per order, in EURC: above the ~23,900 EURC ladder and its largest rung (~7,700 EURC), so
+      # the ladder rather than this binds.
       { name = "MM_MAX_NOTIONAL_PER_SIDE", value = "30000" },
 
       # 8 resting quotes; 300 s keeps replacements far inside the cancel cap, as on the other makers.
