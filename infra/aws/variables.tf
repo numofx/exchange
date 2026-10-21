@@ -62,9 +62,10 @@ variable "acm_certificate_arn" {
 variable "image_markets" {
   description = "ECR image URI for the Go binary (serves both api and matcher modes)."
   type        = string
-  # 2026-10-19: main 891fafb8 (#242: /v1/positions skips the perp for accounts the perp's SRM does not manage,
-  # so futures holders no longer get perp_error), on top of 45144dff (#227, #230, #231; migration 000023).
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:891fafb8713d"
+  # 2026-10-21 13:59 UTC: main 06d35e16 (#251: the perp delisted, cngn_perp_asset_address ""; also carries the
+  # EURC-USDC listing, inert while EURC_SPOT_ASSET_ADDRESS is unset). markets td :44, matcher td :43. Rollback is
+  # 891fafb8713d AND cngn_perp_asset_address = the PerpAsset, in one apply: the older image refuses the empty asset.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:06d35e168f58"
 }
 
 variable "image_execution" {
