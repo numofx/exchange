@@ -64,7 +64,6 @@ insert into active_orders (
 		canonical, alias, asset, size string
 	}{
 		{"cNGN-USDC", "USDCcNGN-SPOT", spotAsset, "1111"},
-		{"cNGN-PERP", "USDCcNGN-PERP", perpAsset, "2222"},
 	}
 	endpoints := []struct {
 		path    string
@@ -111,6 +110,18 @@ insert into active_orders (
 				t.Errorf("book for %s carries %s's order: %s", market.alias, other.canonical, book)
 			}
 		}
+	}
+
+	// The perp answers under its canonical name with its own order, never spot's. Its pre-rename name,
+	// USDCcNGN-PERP, is no longer an alias: an unknown market.
+	perpBook := get(server.handleBook, "/v1/book?symbol=cNGN-PERP").Body.String()
+	if !strings.Contains(perpBook, `"2222"`) || strings.Contains(perpBook, `"1111"`) {
+		t.Errorf("book for cNGN-PERP is not its own: %s", perpBook)
+	}
+	retired := httptest.NewRecorder()
+	server.handleBook(retired, httptest.NewRequest(http.MethodGet, "/v1/book?symbol=USDCcNGN-PERP", nil))
+	if retired.Code != http.StatusBadRequest || !strings.Contains(retired.Body.String(), "unknown_market") {
+		t.Errorf("GET /v1/book?symbol=USDCcNGN-PERP: status=%d body=%s; want 400 unknown_market", retired.Code, retired.Body.String())
 	}
 
 	// /v1/markets lists the canonical names only.
