@@ -161,10 +161,11 @@ variable "withdrawal_module_address" {
 # account): the perp SRM. Empty while spot is on its own stack. Set together with
 # trade_module_address = the perp TradeModule, quote_asset_address = the perp cash and
 # cngn_spot_asset_address = the perp cNGN escrow: the unified cutover moves the four as one, and
-# did so on 2026-10-04.
+# did so on 2026-10-04. Since 2026-10-14 (exchange #219) spot's accounts live under the MarginEngine
+# (risk-core deployments/8453/MARGIN_ENGINE.json .manager), with deposit_manager_address.
 variable "spot_margin_manager_address" {
   type    = string
-  default = "0xDE0423D0a1E15536265C9513d2e0c10DAb5835D4"
+  default = "0xA19E296021c9DF25b90D96C2A0793CC3D0800758"
 }
 
 # Wrapped assets of a retired spot stack that withdrawals must keep paying out of after a cutover
@@ -210,9 +211,9 @@ variable "cngn_perp_srm_address" {
 }
 
 variable "deposit_manager_address" {
-  description = "DEPOSIT_MANAGER_ADDRESS: the manager /v1/deposits opens accounts under. Empty keeps the perp SRM; the MarginEngine cutover sets the engine, with spot_margin_manager_address."
+  description = "DEPOSIT_MANAGER_ADDRESS: the manager /v1/deposits opens accounts under. Empty keeps the perp SRM. The MarginEngine since 2026-10-14, with spot_margin_manager_address."
   type        = string
-  default     = ""
+  default     = "0xA19E296021c9DF25b90D96C2A0793CC3D0800758"
 }
 
 # The perp's cNGN collateral escrow (risk-core CNGN_PERP_COLLATERAL.json `escrow`). Set it only
@@ -363,12 +364,12 @@ variable "desired_count_market_maker" {
   }
 }
 
-# The spot market-maker's trading account (its MM_SUBACCOUNT_ID and MM_RECIPIENT_ID): #26, the
-# unified account under the perp SRM, since the 2026-10-04 cutover. #15, on the retired spot stack,
-# is empty.
+# The spot market-maker's trading account (its MM_SUBACCOUNT_ID and MM_RECIPIENT_ID): #34 under the
+# MarginEngine since 2026-10-14 (inventory moved from #26 under the perp SRM, exchange #219). #26, and
+# #15 on the retired spot stack, are no longer the maker's.
 variable "mm_subaccount_id" {
   type    = string
-  default = "26"
+  default = "34"
 }
 
 variable "mm_address" {
