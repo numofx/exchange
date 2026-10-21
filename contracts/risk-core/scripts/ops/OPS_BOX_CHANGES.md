@@ -5,6 +5,20 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-21 19:50–20:10 UTC: proposer checkout `exchange-ops` at `223b829` (#254, #255: perp-cap refusals)
+
+New checkout `/home/ec2-user/exchange-ops`, owned by ec2-user, cloned from GitHub, detached at
+`223b8292775d7cf872f66a7d690bde2dfb7f14d8`, clean; sha256 of `perp_cap_guard.py` (`dc761c78…`),
+`propose_perp_enable_batch.py` (`38cd01b6…`), `propose_margin_engine_batch.py` (`ba0245c9…`) and
+`CNGN_PERP_ENABLE_VAULT_ACTIONS.json` (`ea7fda2d…`) matched the repo. Proposers run from here from now on; the pinned
+`/home/ec2-user/exchange` (`bf9da89`, three tracked scripts edited in place, ~20 untracked copies, seven units) and
+every unit are unchanged, nothing stashed. Inspection `cb1c4cc4-…` (read-only; "Failed" only on the final `ls` of the
+not-yet-created checkout), checkout `c75cf36c-…`, verification `28f6a812-…` (read-only). Self-tests (enable, engine,
+perp_cap_guard) passed with the ABI-name step skipped (no forge build on the box; it passed in CI on this commit). The
+enable dry run, via `run-with-ssm-readonly.sh`, listed action 0 `[REFUSED]`: custody FAIL (module allowed, cap 0),
+keeper FAIL (perp funding account #23 at 0 cash), quoter FAIL (no perp book), feeds, sm and pager PASS; nothing
+written or proposed, checkout still clean after.
+
 ## 2026-10-21 14:06–14:09 UTC: the delisted perp's open-interest cap set to 0
 
 Run from the box over SSM through `run-with-ssm-mark.sh`. `propose_perp_oi_cap_zero.py`, its import
