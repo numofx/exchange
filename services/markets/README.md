@@ -287,7 +287,7 @@ quote asset as cNGN-USDC, so the funding check and the pause gate apply to it un
 - **No `order_entry_spec`.** Orders are taken in engine units only; a `ui_intent` is refused, and
   orders, fills and trades carry no `spot_contract` echo. `ui_price_decimals` 5 / `ui_size_decimals` 6
   are the places the integrations endpoints round to (cNGN-USDC: 10 / 6, the echo's).
-- Fees from the registry like every market: 25 bps taker, 0 maker.
+- Fees from the registry like every market: 5 bps taker, 0 maker (cNGN-USDC stays at 25).
 - Deposits are a `DEPOSIT_ASSETS` entry (`<escrow>:EURC:<minimum in 6-decimal units>`); withdrawals
   default to including the escrow. EURC has no permit path here: approve the DepositModule on chain.
 - `EURC_SPOT_ASSET_ADDRESS` must be an address of its own; the service refuses to start if it is

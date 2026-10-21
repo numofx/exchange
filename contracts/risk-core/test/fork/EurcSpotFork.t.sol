@@ -10,6 +10,7 @@ import {EURCSpotBatch} from "../../scripts/eurc-spot-batch.sol";
 import {SubAccounts} from "../../src/SubAccounts.sol";
 import {CashAsset} from "../../src/assets/CashAsset.sol";
 import {MarginEngine} from "../../src/risk-managers/MarginEngine.sol";
+import {BaseManager} from "../../src/risk-managers/BaseManager.sol";
 import {ChainlinkSpotFeed, IAggregatorV3} from "../../src/feeds/ChainlinkSpotFeed.sol";
 import {IManager} from "../../src/interfaces/IManager.sol";
 import {IAsset} from "../../src/interfaces/IAsset.sol";
@@ -65,6 +66,10 @@ contract EurcSpotFork is Test {
   uint marketOneFactor;
   uint marketOneScale;
   uint nonce;
+  /// @dev The taker's signed per-unit fee ceiling; 1e18 (1 USDC per EURC) unless a test narrows it.
+  uint takerWorstFee = 1e18;
+  /// @dev EURC-USDC's taker fee in markets-service's registry (services/markets/internal/instruments/registry.go).
+  uint constant TAKER_FEE_BPS = 5;
 
   function setUp() public {
     vm.createSelectFork(vm.envString("BASE_RPC_URL"), FORK_BLOCK);
@@ -251,6 +256,50 @@ contract EurcSpotFork is Test {
     assertEq(subAccounts.getBalance(makerAcc, cash, 0) - makerCash, price * 100, "seller receives it");
   }
 
+  /// The 5 bps taker fee is charged in USDC cash on top of the notional and lands in the TradeModule's fee account
+  /// (under the old SRM: a transfer across managers, as on every market); the maker pays nothing.
+  function testTheFiveBpsTakerFeeIsCollected() public {
+    _ready();
+    uint makerAcc = _eurcAccount(maker, 1_000e6);
+    uint takerAcc = _usdcAccount(taker, 2_000e6);
+    (uint spot,) = d.spotFeed.getSpot();
+    uint fee = spot * 100 * TAKER_FEE_BPS / 10_000; // 100 EURC: 5 bps of ~112 USDC, ~0.056 USDC
+    uint feeAcc = tradeModule.feeRecipient();
+    // The fee account's accrued interest would land with the fee; settle it first so the delta is the fee alone.
+    BaseManager(address(subAccounts.manager(feeAcc))).settleInterest(feeAcc);
+    int feeBefore = subAccounts.getBalance(feeAcc, cash, 0);
+    int takerCash = subAccounts.getBalance(takerAcc, cash, 0);
+    int makerCash = subAccounts.getBalance(makerAcc, cash, 0);
+
+    _fill(makerAcc, takerAcc, 100e18, int(spot), fee);
+
+    assertEq(subAccounts.getBalance(feeAcc, cash, 0) - feeBefore, int(fee), "the fee lands in the fee account");
+    assertEq(takerCash - subAccounts.getBalance(takerAcc, cash, 0), int(spot) * 100 + int(fee), "taker: notional + fee");
+    assertEq(subAccounts.getBalance(makerAcc, cash, 0) - makerCash, int(spot) * 100, "maker: notional, no fee");
+  }
+
+  /// The chain holds the taker to the per-unit fee ceiling it signed (the bound the market maker derives from
+  /// /v1/markets): a ceiling of exactly 5 bps at the fill price clears a 5 bps fee, one wei less does not.
+  function testTheTakersSignedCeilingBoundsTheFee() public {
+    _ready();
+    uint makerAcc = _eurcAccount(maker, 1_000e6);
+    uint takerAcc = _usdcAccount(taker, 2_000e6);
+    (uint spot,) = d.spotFeed.getSpot();
+    uint perUnit = spot * TAKER_FEE_BPS / 10_000;
+    uint fee = perUnit * 100;
+
+    takerWorstFee = perUnit - 1;
+    (Action[] memory actions, bytes[] memory sigs, bytes memory orderData) =
+      _order(makerAcc, takerAcc, 100e18, int(spot), fee);
+    vm.prank(executor);
+    vm.expectRevert();
+    matching.verifyAndMatch(actions, sigs, orderData);
+
+    takerWorstFee = perUnit;
+    _fill(makerAcc, takerAcc, 100e18, int(spot), fee);
+    assertEq(subAccounts.getBalance(takerAcc, d.escrow, 0), 100e18, "filled at a ceiling of exactly 5 bps");
+  }
+
   /// Before the enable action the escrow refuses the engine, so the book cannot settle a fill.
   function testNoFillBeforeTheEnableAction() public {
     _configure();
@@ -374,7 +423,7 @@ contract EurcSpotFork is Test {
           subId: 0,
           limitPrice: price,
           desiredAmount: int(amount),
-          worstFee: 1e18,
+          worstFee: isBid ? takerWorstFee : 1e18,
           recipientId: accountId,
           isBid: isBid
         })

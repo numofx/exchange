@@ -232,8 +232,8 @@ func TestEURCSpotIsListedOnlyWhenItsEscrowIsConfigured(t *testing.T) {
 		item.PricingModel != PricingModelLinear || item.DisplayPriceKind != DisplayPriceDirect || item.DisplayLabel != "USDC per EURC" {
 		t.Fatalf("EURC-USDC orientation: %+v", item)
 	}
-	// cNGN spot's schedule and units: 25 bps taker, 0 maker; desired_amount 1 = 1 EURC = 1e18 signed.
-	if item.TakerFeeBps != 25 || item.MakerFeeBps != 0 || item.AmountScale != "1000000000000000000" ||
+	// Its own schedule, cNGN spot's units: 5 bps taker, 0 maker; desired_amount 1 = 1 EURC = 1e18 signed.
+	if item.TakerFeeBps != 5 || item.MakerFeeBps != 0 || item.AmountScale != "1000000000000000000" ||
 		item.TickSize != "0.000000000000000001" || item.MinSize != AmountStep || item.QuotePrecision != 18 || item.ContractMultiplier != "1" {
 		t.Fatalf("EURC-USDC fees and units: %+v", item)
 	}
