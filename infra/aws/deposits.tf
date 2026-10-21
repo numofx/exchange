@@ -31,6 +31,12 @@ variable "deposit_cngn_min_amount" {
   default     = "15000000000"
 }
 
+variable "deposit_eurc_min_amount" {
+  description = "Smallest EURC deposit, in 6-decimal EURC base units: 10000000 is 10 EURC, USDC's minimum in whole units. Empty turns EURC deposits off; nothing is listed while eurc_spot_asset_address is empty."
+  type        = string
+  default     = "10000000"
+}
+
 variable "deposit_max_gas_eth_per_hour" {
   description = "ETH of gas sponsored deposits (and their permits) may spend per rolling hour, measured from receipts; past it, 503."
   type        = string
@@ -56,11 +62,14 @@ variable "deposits_per_owner_per_hour" {
 }
 
 locals {
-  # Depositable: the perp CashAsset (USDC) and the cNGN escrow, each at its own minimum, only under the perp SRM. The
-  # chain also accepts any other wrapped asset, so DEPOSIT_ASSETS is what refuses one. Both services read the same list.
+  # Depositable: the perp CashAsset (USDC), the cNGN escrow and, once deployed, the EURC escrow, each at its own
+  # minimum. The chain also accepts any other wrapped asset, so DEPOSIT_ASSETS is what refuses one. Both services read the same list.
   deposit_assets = join(",", compact([
     "${var.cngn_perp_cash_address}:USDC:${var.deposit_min_amount}",
     var.deposit_cngn_min_amount == "" ? "" : "${var.cngn_perp_collateral_address}:cNGN:${var.deposit_cngn_min_amount}",
+    # EURC-USDC spot's escrow, last so the two entries above keep their order. "" while either is unset, which
+    # compact drops: the list is then exactly the two-entry string it was before EURC.
+    var.eurc_spot_asset_address == "" || var.deposit_eurc_min_amount == "" ? "" : "${var.eurc_spot_asset_address}:EURC:${var.deposit_eurc_min_amount}",
   ]))
 
   # The manager a deposit opens an account under: the perp SRM until the MarginEngine cutover, then the

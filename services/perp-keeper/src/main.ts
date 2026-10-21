@@ -2,7 +2,9 @@ import { createServer } from 'node:http';
 
 import { createAlerter } from './alert.js';
 import { createKeeperChain } from './chain.js';
+import type { CollateralConfig } from './collateral.js';
 import { loadConfig } from './config.js';
+import { fmt } from './health.js';
 import { runOnce, type PassSummary } from './keeper.js';
 
 /**
@@ -24,6 +26,8 @@ async function main() {
   }
 
   console.log(`[keeper] manager=${config.MANAGER} eoa=${chain.keeper.address} account=${config.KEEPER_ACCOUNT} dryRun=${config.DRY_RUN}`);
+  // What it can be paid in, and how it prices each: a missing line here is a collateral bid unhaircut.
+  console.log(`[keeper] collateral: ${config.COLLATERAL.length === 0 ? 'none (cash only)' : config.COLLATERAL.map(describeCollateral).join('; ')}`);
 
   // What /health reports. A pass that throws is recorded as failed, so a keeper looping on an
   // error reads as unhealthy rather than merely alive.
@@ -77,6 +81,11 @@ async function main() {
           cngnEscrow: config.CNGN_ESCROW ?? null,
           cngnHaircutBps: config.CNGN_HAIRCUT_BPS.toString(),
           maxCngnInventory: config.MAX_CNGN_INVENTORY?.toString() ?? null,
+          // The EURC escrow and spot feed (null: not configured), for the EURC enable gate to read.
+          eurcEscrow: config.EURC_ESCROW ?? null,
+          eurcSpotFeed: config.EURC_SPOT_FEED ?? null,
+          eurcHaircutBps: config.EURC_HAIRCUT_BPS.toString(),
+          maxEurcInventory: config.MAX_EURC_INVENTORY?.toString() ?? null,
         }),
       );
     }).listen(config.HEALTH_PORT, config.HEALTH_HOST);
@@ -107,6 +116,12 @@ async function main() {
       running = false;
     }
   }, config.POLL_INTERVAL_MS);
+}
+
+function describeCollateral(asset: CollateralConfig): string {
+  const price = asset.price.kind === 'perpIndex' ? `perp index ${asset.price.address}` : `spot feed ${asset.price.address}`;
+  const limit = asset.maxInventory === null ? 'no limit' : `max ${fmt(asset.maxInventory)}`;
+  return `${asset.asset} escrow=${asset.escrow} price=${price} haircut=${asset.haircutBps}bps ${limit}`;
 }
 
 main().catch((error) => {

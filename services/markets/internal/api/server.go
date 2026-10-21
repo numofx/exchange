@@ -92,6 +92,10 @@ type marketPresentation struct {
 	EngineSidePolicy string `json:"engine_side_policy,omitempty"`
 	UIPriceToEngine  string `json:"ui_price_to_engine,omitempty"`
 	UISizeToEngine   string `json:"ui_size_to_engine,omitempty"`
+	// The places the venue shows a price and a size at (the integrations endpoints round to them).
+	// Absent: the engine's 18.
+	UIPriceDecimals int `json:"ui_price_decimals,omitempty"`
+	UISizeDecimals  int `json:"ui_size_decimals,omitempty"`
 	// What an order for this market is signed for and settles in, so a client resolves the stack
 	// from the venue rather than from its own configuration: the TradeModule, its quote asset, and
 	// the manager the market's accounts live under (absent for a spot market on its own stack).
@@ -1207,6 +1211,8 @@ func presentMarket(market instruments.Metadata) marketPresentation {
 		EngineSidePolicy:     market.EngineSidePolicy,
 		UIPriceToEngine:      market.UIPriceToEngine,
 		UISizeToEngine:       market.UISizeToEngine,
+		UIPriceDecimals:      market.UIPriceDecimals,
+		UISizeDecimals:       market.UISizeDecimals,
 		TradeModuleAddress:   strings.ToLower(market.TradeModuleAddress),
 		QuoteAssetAddress:    strings.ToLower(market.QuoteAssetAddress),
 		MarginManagerAddress: strings.ToLower(market.MarginManagerAddress),

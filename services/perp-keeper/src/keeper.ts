@@ -1,7 +1,8 @@
 import type { Alerter } from './alert.js';
 import type { AuctionCall, KeeperChain } from './chain.js';
 import type { Config } from './config.js';
-import { decide, type Action } from './decide.js';
+import type { CollateralAsset } from './collateral.js';
+import { decide, type Action, type KeeperRules } from './decide.js';
 import { assessHealth, fmt } from './health.js';
 
 /**
@@ -24,13 +25,11 @@ export async function runOnce(
   const accounts = await chain.discoverAccounts();
   const actions: Action[] = [];
   let keeperCash = await chain.keeperCash();
-  const rules = {
+  const rules: KeeperRules = {
     minSolventDiscountBps: config.MIN_SOLVENT_DISCOUNT_BPS,
     minBidPercent: BigInt(Math.round(config.MIN_BID_PERCENT * 1e16)),
     maxBidUsd: config.MAX_BID_USD,
-    cngnHaircutBps: config.CNGN_HAIRCUT_BPS,
-    cngnInventory: await chain.keeperCngn(),
-    maxCngnInventory: config.MAX_CNGN_INVENTORY,
+    collateral: collateralRules(config, await chain.keeperCollateral()),
   };
 
   for (const accountId of accounts) {
@@ -51,6 +50,15 @@ export async function runOnce(
         }
       }
       action = decide(view, keeperCash, rules);
+      const unpriced = view.collateral.filter((held) => held.price === null).map((held) => held.asset);
+      if (unpriced.length > 0) {
+        // Not a skip to stay quiet about: the engine cannot value this account either, so nobody can
+        // liquidate it until the feed reports again.
+        await alert(
+          `collateral-unpriced-${unpriced.join('-')}`,
+          `account ${accountId} holds ${unpriced.join(', ')} but its price feed cannot be read (stale?): no start, no bid until it reports`,
+        );
+      }
     } catch (error) {
       await alert('margin-unreadable', `cannot read margin for account ${accountId} (stale feed?): ${(error as Error).message}`);
       continue;
@@ -75,10 +83,10 @@ export async function runOnce(
       const { sent } = await chain.execute(call, config.DRY_RUN);
       console.log(`[keeper] #${accountId}: ${describe(action)} ${sent ? `tx=${sent}` : '(dry-run, simulated ok)'}`);
       await alert(`action-${action.kind}-${accountId}`, `${config.DRY_RUN ? 'DRY-RUN ' : ''}${describe(action)} on account ${accountId}`);
-      // A bid spends keeper cash and may pay it in cNGN; re-read both before sizing the next one.
+      // A bid spends keeper cash and may pay it in any collateral; re-read both before sizing the next one.
       if (action.kind === 'bid' && sent) {
         keeperCash = await chain.keeperCash();
-        rules.cngnInventory = await chain.keeperCngn();
+        rules.collateral = collateralRules(config, await chain.keeperCollateral());
       }
     } catch (error) {
       // Funded but not bid from: still cash-only, so the next bid can use it.
@@ -93,12 +101,21 @@ export async function runOnce(
     minKeeperCash: config.MIN_KEEPER_CASH_USD,
     minKeeperEthWei: config.MIN_KEEPER_ETH,
     capWarnBps: config.OI_CAP_WARN_BPS,
-    maxCngnInventory: config.MAX_CNGN_INVENTORY,
+    maxInventory: Object.fromEntries(config.COLLATERAL.map((asset) => [asset.asset, asset.maxInventory])),
   })) {
     await alert(problem.key, problem.message);
   }
 
   return actions;
+}
+
+/** decide()'s per-asset rules: each configured collateral's haircut and limit, with what the keeper holds of it. */
+export function collateralRules(config: Config, inventory: Partial<Record<CollateralAsset, bigint>>): KeeperRules['collateral'] {
+  const rules: KeeperRules['collateral'] = {};
+  for (const asset of config.COLLATERAL) {
+    rules[asset.asset] = { haircutBps: asset.haircutBps, inventory: inventory[asset.asset] ?? 0n, maxInventory: asset.maxInventory };
+  }
+  return rules;
 }
 
 export function toCall(action: Exclude<Action, { kind: 'none' }>, bidderAccount: bigint): AuctionCall {

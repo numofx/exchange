@@ -53,6 +53,26 @@ across its accounts: a bid that would pass it is sized down to the room left, th
 (`keeper-cngn-over-limit`). Inherited cNGN is alerted (`keeper-cngn-inventory`) and left for an
 operator to sell on spot or hold, like inherited perp.
 
+## EURC collateral (MarginEngine market 2)
+
+Collateral is a list: each asset has its own escrow, price source, haircut and inventory limit. An
+auction bid takes a share of *every* asset in the account, so once EURC is margin on the engine the
+keeper is paid in EURC by any account that holds it. Set `EURC_ESCROW` and `EURC_SPOT_FEED` from
+risk-core `deployments/8453/EURC_SPOT.json` (`escrow`, `spotFeed`) — both or neither; the keeper refuses
+to start with one, or with `MAX_EURC_INVENTORY` and no escrow. EURC is priced at the feed's `getSpot()`
+(18dp USD per EURC, Chainlink EURC/USD), haircut `EURC_HAIRCUT_BPS` (default 2%), limited by
+`MAX_EURC_INVENTORY` (whole EURC; unset is no limit).
+
+An insolvent bid waits for the deficit plus the margin plus the **sum** of every held asset's haircut;
+a bid is sized to the **tightest** inventory limit among the assets the account holds, and the note
+names the asset that bound. Inventory is alerted per asset (`keeper-eurc-inventory`,
+`keeper-eurc-over-limit`, alongside the cNGN keys). The feed is read only for accounts holding EURC.
+When it reverts (stale, `CLF_DataTooOld`), the engine's margin read for those accounts reverts too:
+the keeper does nothing to them that pass — no start, no bid — notes `cannot price EURC`, and alerts
+`collateral-unpriced-EURC`; every other account is handled as usual. The startup log lists the
+configured collateral, and `/health` reports `eurcEscrow`, `eurcSpotFeed`, `eurcHaircutBps` and
+`maxEurcInventory`.
+
 A solvent auction sells only what restores the account's margin and ends at *buffer* margin.
 When an earlier bid has put the account above maintenance margin and a rounding sliver under the
 keeper's minimum is all that is left, the keeper takes it if the cash it pays in restores buffer

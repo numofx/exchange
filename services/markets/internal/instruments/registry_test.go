@@ -1,6 +1,7 @@
 package instruments
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/numofx/matching-backend/internal/config"
@@ -193,5 +194,103 @@ func TestTheFutureIsListedUnderItsExpiryOnlyWhenConfigured(t *testing.T) {
 	}
 	if future.TakerFeeBps != 25 || future.MakerFeeBps != 0 || future.ContractMultiplier != FutureContractSizeUSDC {
 		t.Fatalf("future fees and size: %d/%d %s", future.TakerFeeBps, future.MakerFeeBps, future.ContractMultiplier)
+	}
+}
+
+const testEURCEscrow = "0x00000000000000000000000000000000000E0dC0"
+
+func TestEURCSpotIsListedOnlyWhenItsEscrowIsConfigured(t *testing.T) {
+	off := DefaultRegistry(config.Config{CNGNSpotAssetAddress: "0xF000000000000000000000000000000000000123"})
+	if _, ok := off.Resolve(EURCSpotSymbol); ok {
+		t.Fatal("EURC-USDC resolved without EURC_SPOT_ASSET_ADDRESS")
+	}
+	if ids := off.Identifiers(); len(ids) != 1 || ids[0] != CNGNSpotSymbol {
+		t.Fatalf("Identifiers() = %v without EURC configured", ids)
+	}
+	if len(DefaultRegistry(config.Config{}).Enabled()) != 0 {
+		t.Fatal("a market is enabled with nothing configured")
+	}
+
+	cfg := config.Config{
+		EURCSpotAssetAddress:     testEURCEscrow,
+		TradeModuleAddress:       "0xDea968188598BA0E3F58A56C0fdfF338C74F699f",
+		CashAssetAddress:         "0xA74E49b4Ed7cb176bc02ef4D8a1A3240C9aD4272",
+		SpotMarginManagerAddress: "0xA19E296021c9DF25b90D96C2A0793CC3D0800758",
+	}
+	item, ok := DefaultRegistry(cfg).Resolve(EURCSpotSymbol)
+	if !ok {
+		t.Fatal("EURC-USDC not listed with EURC_SPOT_ASSET_ADDRESS set")
+	}
+	if item.Symbol != "EURC-USDC" || item.AssetAddress != strings.ToLower(testEURCEscrow) || item.SubID != "0" ||
+		item.ContractType != ContractTypeSpot || item.SettlementType != "spot" ||
+		item.BaseAssetSymbol != "EURC" || item.QuoteAssetSymbol != "USDC" || len(item.Aliases) != 0 {
+		t.Fatalf("EURC-USDC identity: %+v", item)
+	}
+	// Direct and linear, no inversion, and no ui_intent contract: orders are taken in engine units.
+	if item.OrderEntrySpec != "" || item.EngineSidePolicy != "same_as_ui" || item.UIPriceUnit != "USDC per EURC" ||
+		item.EnginePriceUnit != item.UIPriceUnit || item.UISizeUnit != "EURC amount" || item.EngineAmountUnit != item.UISizeUnit ||
+		item.PricingModel != PricingModelLinear || item.DisplayPriceKind != DisplayPriceDirect || item.DisplayLabel != "USDC per EURC" {
+		t.Fatalf("EURC-USDC orientation: %+v", item)
+	}
+	// Its own schedule, cNGN spot's units: 5 bps taker, 0 maker; desired_amount 1 = 1 EURC = 1e18 signed.
+	if item.TakerFeeBps != 5 || item.MakerFeeBps != 0 || item.AmountScale != "1000000000000000000" ||
+		item.TickSize != "0.000000000000000001" || item.MinSize != AmountStep || item.QuotePrecision != 18 || item.ContractMultiplier != "1" {
+		t.Fatalf("EURC-USDC fees and units: %+v", item)
+	}
+	if item.UIPriceDecimals != 5 || item.UISizeDecimals != 6 {
+		t.Fatalf("EURC-USDC display places = %d/%d", item.UIPriceDecimals, item.UISizeDecimals)
+	}
+	// The same TradeModule, quote and manager as cNGN spot.
+	if item.TradeModuleAddress != strings.ToLower(cfg.TradeModuleAddress) || item.QuoteAssetAddress != strings.ToLower(cfg.CashAssetAddress) ||
+		item.MarginManagerAddress != strings.ToLower(cfg.SpotMarginManagerAddress) || item.IsFuture() || item.IsPerpetual() {
+		t.Fatalf("EURC-USDC stack: %+v", item)
+	}
+}
+
+// Two spot markets on one TradeModule and manager: every lookup must answer each with its own metadata, never the
+// other spot's. Nothing may pick "the" spot market by contract type.
+func TestTwoSpotMarketsDoNotCollideInAnyLookup(t *testing.T) {
+	cfg := config.Config{
+		CNGNSpotAssetAddress: "0xF000000000000000000000000000000000000123",
+		EURCSpotAssetAddress: testEURCEscrow,
+		CNGNPerpAssetAddress: "0xF000000000000000000000000000000000000456",
+	}
+	registry := DefaultRegistry(cfg)
+
+	want := map[string]string{
+		CNGNSpotSymbol:           CNGNSpotSymbol,
+		EURCSpotSymbol:           EURCSpotSymbol,
+		CNGNSpotDeprecatedSymbol: CNGNSpotSymbol,
+		"0xf000000000000000000000000000000000000123:0": CNGNSpotSymbol,
+		strings.ToLower(testEURCEscrow) + ":0":         EURCSpotSymbol,
+		testEURCEscrow + ":0":                          EURCSpotSymbol,
+	}
+	for identifier, symbol := range want {
+		if item, ok := registry.Resolve(identifier); !ok || item.Symbol != symbol {
+			t.Errorf("Resolve(%q) = %q, %v; want %q", identifier, item.Symbol, ok, symbol)
+		}
+	}
+	if item, ok := registry.ByAssetAndSubID(strings.ToLower(testEURCEscrow), "0"); !ok || item.Symbol != EURCSpotSymbol || item.BaseAssetSymbol != "EURC" {
+		t.Fatalf("ByAssetAndSubID(EURC escrow) = %+v, %v", item, ok)
+	}
+	if item, ok := registry.ByAssetAddress("0xf000000000000000000000000000000000000123"); !ok || item.Symbol != CNGNSpotSymbol || item.BaseAssetSymbol != "cNGN" {
+		t.Fatalf("ByAssetAddress(cNGN escrow) = %+v, %v", item, ok)
+	}
+	for _, refused := range []string{"eurc-usdc", "EURC", "USDC-EURC", "EURC/USDC", strings.ToLower(testEURCEscrow) + ":1"} {
+		if item, ok := registry.Resolve(refused); ok {
+			t.Errorf("Resolve(%q) = %q; want a refusal", refused, item.Symbol)
+		}
+	}
+	if ids := registry.Identifiers(); len(ids) != 3 || ids[0] != CNGNSpotSymbol || ids[1] != EURCSpotSymbol || ids[2] != CNGNPerpSymbol {
+		t.Fatalf("Identifiers() = %v", ids)
+	}
+	spots := 0
+	for _, item := range registry.Enabled() {
+		if item.ContractType == ContractTypeSpot {
+			spots++
+		}
+	}
+	if spots != 2 {
+		t.Fatalf("enabled spot markets = %d, want 2", spots)
 	}
 }
