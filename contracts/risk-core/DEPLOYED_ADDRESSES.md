@@ -162,6 +162,10 @@ market rather than a slot in market 1, whose Base slot is the cNGN escrow every 
 
 Steps, in order:
 
+0. The cNGN spot maker (ECS `market-maker-spot`) runs an image with numofx/market-maker#42. Before it, the maker took
+   "the first spot market in the map" as its own: with EURC-USDC listed, a routine restart could pick EURC and refuse to
+   start, leaving cNGN-USDC unquoted. Deployed and read back (the running task's image) before step 2, so it is in
+   place well before step 3, where markets-service starts listing EURC-USDC.
 1. `forge script scripts/deploy-eurc-spot.s.sol` (keystore) — writes `deployments/8453/EURC_SPOT.json`,
    `EURC_SPOT_VAULT_ACTIONS.json` (7 actions) and `EURC_SPOT_ENABLE_VAULT_ACTIONS.json` (1).
 2. `scripts/ops/propose_eurc_spot_batch.py --propose` from the ops box — configure. Refuses unless the engine has
