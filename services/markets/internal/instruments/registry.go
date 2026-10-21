@@ -13,11 +13,11 @@ const (
 	CNGNSpotSymbol = "cNGN-USDC"
 	CNGNPerpSymbol = "cNGN-PERP"
 
-	// The identifiers the markets were listed under before the rename, inverted relative to how
-	// they are quoted. Accepted anywhere an identifier is, by exact match, and answered with the
-	// canonical name and a Deprecation header; never emitted.
+	// The identifier spot was listed under before the rename, inverted relative to how it is quoted.
+	// Accepted anywhere an identifier is, by exact match, and answered with the canonical name and a
+	// Deprecation header; never emitted. The perp's old name, USDCcNGN-PERP, is no longer an alias:
+	// the perp is being delisted, and both its names are an unknown market once it is.
 	CNGNSpotDeprecatedSymbol = "USDCcNGN-SPOT"
-	CNGNPerpDeprecatedSymbol = "USDCcNGN-PERP"
 
 	CNGNSpotLegacySymbol = "USDC/cNGN"
 
@@ -99,7 +99,6 @@ func DefaultRegistry(cfg config.Config) *Registry {
 			// cNGN, so PnL lands in USDC cash with no conversion. The venue shows it exactly so,
 			// like spot: a UI long is the on-chain long of the cNGN perp.
 			Symbol:                 CNGNPerpSymbol,
-			Aliases:                []string{CNGNPerpDeprecatedSymbol},
 			AssetAddress:           strings.ToLower(strings.TrimSpace(cfg.CNGNPerpAssetAddress)),
 			SubID:                  "0",
 			ContractType:           ContractTypePerpetual,

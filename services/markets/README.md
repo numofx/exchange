@@ -98,8 +98,18 @@ Also needs `CHAIN_ID`, `MATCHING_ADDRESS` and `CHAIN_RPC_URL`, whatever `ENFORCE
 
 A USDC-settled perpetual on its own stack: a CashAsset over real USDC, its own SRM, security module
 and auction (risk-core `CNGN_PERP_STACK.json`), traded through its own TradeModule quoted in that cash
-(execution `CNGN_PERP_TRADE_MODULE.json`). Enabled by four variables, all or none — a partial set
-refuses to boot:
+(execution `CNGN_PERP_TRADE_MODULE.json`). Configured by four variables. The TradeModule, CashAsset
+and SRM are the venue's shared stack: spot and the future trade through that module and settle in
+that cash, and USDC deposits default to it. The asset is the perp's listing alone. Three sets boot:
+all four (the perp listed), the shared three without the asset (the perp delisted), or none; any
+other set refuses to boot.
+
+**Delisted since 2026-10-21** (production leaves `CNGN_PERP_ASSET_ADDRESS` empty): `/v1/markets` does
+not list it, `cNGN-PERP` and `USDCcNGN-PERP` are a `400 unknown_market`, and perp state, funding,
+the perp margin check and the position indexer are off. The shared stack runs as before, including
+the USDC withdrawal ledger check on its cash and the quote-asset guard on its module.
+`CNGN_PERP_CLOSE_ONLY` and `CNGN_PERP_CLOSE_ONLY_MANAGER` describe a listed perp and refuse to boot
+without one.
 
 | Env | Source |
 | --- | --- |
@@ -183,8 +193,8 @@ A cash-settled cNGN future: a `FutureAsset` series under the MarginEngine (risk-
 `MARGIN_ENGINE.json`), quoted in cNGN per USDC, one contract 1,000 USDC, traded on the perp's
 TradeModule and settled in the perp's cash. Listed as `USDC-cNGN-<DDMONYY>` (for example
 `USDC-cNGN-31DEC26`) under `(asset_address, sub_id)`, where the sub id is the expiry. Enabled by three
-variables, all or none, and only beside the perp stack and `CHAIN_RPC_URL` — anything else refuses to
-boot:
+variables, all or none, and only beside the shared stack (the perp's TradeModule, CashAsset and SRM;
+the perp itself may be delisted) and `CHAIN_RPC_URL` — anything else refuses to boot:
 
 | Env | Source |
 | --- | --- |
@@ -263,9 +273,10 @@ fields such as `display_name` and `display_label`.
 Every endpoint that takes a `symbol`, `market` or `ticker_id` resolves it through one exact-match
 lookup (`instruments.Registry.Resolve`): the canonical symbol, a deprecated alias, or
 `asset_address:sub_id`. Anything else is a `400 unknown_market` naming the accepted identifiers;
-nothing falls back to another market. The identifiers the markets were listed under before the
-rename, `USDCcNGN-SPOT` and `USDCcNGN-PERP`, are accepted as deprecated aliases: the response names
-the market canonically and carries `Deprecation: true` and `X-Canonical-Market`.
+nothing falls back to another market. Spot's identifier before the rename, `USDCcNGN-SPOT`, is
+accepted as a deprecated alias: the response names the market canonically and carries
+`Deprecation: true` and `X-Canonical-Market`. The perp's, `USDCcNGN-PERP`, is no longer an alias
+(removed with the perp's delisting) and is an unknown market like any other.
 
 - `contract_type=spot`
 - `settlement_type=spot`

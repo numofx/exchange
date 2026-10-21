@@ -84,8 +84,9 @@ type withdrawalService struct {
 	custody       withdrawalCustody
 	// tokens reads the issuer's pause and freezes for token_controls.go; nil skips that check.
 	tokens tokenStateReader
-	// perpCash is the perp's CashAsset, lowercased, and ledger reads its balances; both empty/nil
-	// without a perp, in which case no cash rule applies.
+	// perpCash is the shared stack's CashAsset (the venue's USDC cash), lowercased, and ledger reads its
+	// balances; both empty/nil without that stack, in which case no cash rule applies. It runs whether or
+	// not the perp is listed: spot and the future settle in the same cash.
 	perpCash  string
 	ledger    withdrawalLedger
 	submitter withdrawalSubmitter
@@ -112,7 +113,7 @@ func newWithdrawalService(cfg config.Config, signatures signatureChecker) *withd
 	}
 	var ledger withdrawalLedger
 	perpCash := strings.ToLower(strings.TrimSpace(cfg.CNGNPerpCashAddress))
-	if cfg.PerpEnabled() && isHexAddress(perpCash) {
+	if cfg.PerpTradeStackConfigured() && isHexAddress(perpCash) {
 		ledger = &chainCashLedger{chain: custody, cash: perpCash}
 	}
 	return &withdrawalService{
