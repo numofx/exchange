@@ -28,8 +28,8 @@ Unchanged: every external signature the ops scripts call (`settleAccountVM`, `ge
 
 ## SecurityModule sizing: what moves
 
-The v1 sizing (`docs/cngn-future-security-module.md` on `risk/futures-sm-step-10pct`) rests on the inverse payoff and a
-fixed-USD maintenance margin. Both go:
+The v1 sizing ([`cngn-future-security-module.md`](cngn-future-security-module.md), from #245) rests on the inverse payoff
+and a fixed-USD maintenance margin. Both go:
 
 - **Loss on a step.** v1's `notional × premium × ln(1/(1−s))` came from inverse VM. v2's VM is linear, so a step `s`
   against a side costs `notional × s`.
@@ -41,8 +41,27 @@ fixed-USD maintenance margin. Both go:
 - **Unsettled VM no longer flatters an account.** It is cash at par, not cNGN whose USD value moves.
 - **The pool's cNGN reserve is gone.** The pool only ever holds cash, fronts winners and is repaid by losers; the
   pager's reserve check and `withdrawFromPool` rebalancing are v1-only.
-- **Caps.** 30 contracts over both sides is ~$22k at 0.000743, against v1's $30k. Re-size against the SecurityModule
-  with the linear formula before the enable batch opens it.
+- **Caps.** 30 contracts over both sides is ~$22k at 0.000743, against v1's $30k. Sized below.
+
+### Cap against an overnight devaluation gap
+
+Inputs, read 2026-10-21 at Base block 52,912,673: SecurityModule capacity **$3,250** (account 21's USDC cash; #245
+changes the sizing formula, not the capacity, so the same figure holds on `main` and on #245). One contract is
+1,000,000 cNGN × 0.000743 = **$743**. Every capped contract is taken to be a long opened at exactly IM (25%), which a
+devaluation gap bankrupts at 25%; conservative, since a cap counts both sides and so admits at most half as many longs.
+
+| Gap | Bad debt per contract, $743 × (gap − 25%) | Max cap | If the module pays the whole step, $743 × gap | Max cap |
+|---|---|---|---|---|
+| 30% | $37.15 | **87** | $222.90 | 14 |
+| 40% | $111.45 | **29** | $297.20 | 10 |
+| 50% | $185.75 | **17** | $371.50 | 8 |
+
+**40 contracts does not pass at 40%:** $4,458 of bad debt against $3,250, short by $1,208. 29 is the most that does.
+
+The right-hand columns are an upper bound, not the sizing rule. #245's fork run on v1 found that an insolvent auction
+ends at the account's maintenance margin, so the module paid close to the step's whole loss once a side was insolvent,
+not just the part past bankruptcy. Whether v2's linear payoff does the same is unmeasured: #245's
+`testSecurityModuleCoverageAgainstTheFork`, run against v2, settles which column the cap should come from.
 
 ## Migration
 

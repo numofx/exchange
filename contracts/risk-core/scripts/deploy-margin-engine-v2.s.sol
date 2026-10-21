@@ -165,7 +165,27 @@ contract DeployMarginEngineV2 is Utils {
   // inputs
   // ---------------------------------------------------------------------------------------------
 
+  /// @dev The operator's inputs from the environment over the chain's, then checked.
   function loadParams() public view returns (Params memory params) {
+    params = loadChainParams();
+    params.expiry = uint64(vm.envOr("EXPIRY", uint(params.expiry)));
+    params.lastTradeTime = uint64(vm.envOr("LAST_TRADE_TIME", uint(params.expiry - FIXING_WINDOW)));
+    params.contractSize = vm.envOr("CONTRACT_SIZE", params.contractSize);
+    params.initialMark = vm.envUint("INITIAL_MARK");
+    params.carry = vm.envUint("CARRY");
+    params.initialMarkTolerance = vm.envOr("INITIAL_MARK_TOLERANCE", params.initialMarkTolerance);
+    params.futureOICap = vm.envOr("FUTURE_OI_CAP", params.futureOICap);
+    params.forwardSigner = vm.envAddress("FORWARD_SIGNER");
+
+    checkParams(params);
+  }
+
+  /**
+   * @dev Everything read from the chain and the v1 artifact, with the defaults; no environment, no checks. The fork test
+   *      builds on this and supplies the operator's inputs itself: forge runs suites in parallel in one process, and a
+   *      suite writing INITIAL_MARK races deploy-margin-engine.s.sol's suites, which read the same name in v1's units.
+   */
+  function loadChainParams() public view returns (Params memory params) {
     string memory v1 = _readDeploymentFile("MARGIN_ENGINE");
     params.subAccounts = vm.parseJsonAddress(_readDeploymentFile("core"), ".subAccounts");
     params.vault = EXPECTED_VAULT;
@@ -192,16 +212,11 @@ contract DeployMarginEngineV2 is Utils {
         escrow == address(0) ? 0 : WrappedERC20Asset(escrow).totalPositionCap(IManager(params.v1));
     }
 
-    params.expiry = uint64(vm.envOr("EXPIRY", uint(DEFAULT_EXPIRY)));
-    params.lastTradeTime = uint64(vm.envOr("LAST_TRADE_TIME", uint(params.expiry - FIXING_WINDOW)));
-    params.contractSize = vm.envOr("CONTRACT_SIZE", DEFAULT_CONTRACT_SIZE);
-    params.initialMark = vm.envUint("INITIAL_MARK");
-    params.carry = vm.envUint("CARRY");
-    params.initialMarkTolerance = vm.envOr("INITIAL_MARK_TOLERANCE", DEFAULT_INITIAL_MARK_TOLERANCE);
-    params.futureOICap = vm.envOr("FUTURE_OI_CAP", DEFAULT_FUTURE_OI_CAP);
-    params.forwardSigner = vm.envAddress("FORWARD_SIGNER");
-
-    checkParams(params);
+    params.expiry = DEFAULT_EXPIRY;
+    params.lastTradeTime = DEFAULT_EXPIRY - uint64(FIXING_WINDOW);
+    params.contractSize = DEFAULT_CONTRACT_SIZE;
+    params.initialMarkTolerance = DEFAULT_INITIAL_MARK_TOLERANCE;
+    params.futureOICap = DEFAULT_FUTURE_OI_CAP;
   }
 
   /// @dev Each check is a way the deployment lands and then cannot be governed, trade, or settle.

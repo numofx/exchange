@@ -1,6 +1,6 @@
 # .github/workflows/services-perp-feeds.yml
 # The USDCcNGN-PERP price publishers, and the cNGN future's forward publisher (forward-main.ts). The
-# anvil suites run too: they deploy the real feed contracts (and FutureAsset) from risk-core and check
+# anvil suites run too: they deploy the real feed contracts (and FutureAssetV1, the live series the keepers run) from risk-core and check
 # they accept what the service signs, so they need forge and anvil.
 name: services-perp-feeds
 on:
@@ -11,6 +11,7 @@ on:
       - 'contracts/risk-core/src/feeds/**'
       - 'contracts/risk-core/src/periphery/OracleDataSubmitter.sol'
       - 'contracts/risk-core/src/assets/FutureAsset.sol'
+      - 'contracts/risk-core/src/legacy/v1/FutureAssetV1.sol'
       - 'packages/kms-signer/**'
       - 'pnpm-workspace.yaml'
       - 'pnpm-lock.yaml'
@@ -21,6 +22,7 @@ on:
       - 'contracts/risk-core/src/feeds/**'
       - 'contracts/risk-core/src/periphery/OracleDataSubmitter.sol'
       - 'contracts/risk-core/src/assets/FutureAsset.sol'
+      - 'contracts/risk-core/src/legacy/v1/FutureAssetV1.sol'
       - 'packages/kms-signer/**'
       - 'pnpm-workspace.yaml'
       - 'pnpm-lock.yaml'
@@ -46,7 +48,7 @@ jobs:
       - run: pnpm --filter @numo/kms-signer build
       - run: pnpm --filter perp-feeds run check
       - run: pnpm --filter perp-feeds run build
-      - run: forge build src/feeds/LyraSpotFeed.sol src/feeds/LyraSpotDiffFeed.sol src/feeds/LyraForwardFeed.sol src/periphery/OracleDataSubmitter.sol src/assets/FutureAsset.sol src/SubAccounts.sol
+      - run: forge build src/feeds/LyraSpotFeed.sol src/feeds/LyraSpotDiffFeed.sol src/feeds/LyraForwardFeed.sol src/periphery/OracleDataSubmitter.sol src/legacy/v1/FutureAssetV1.sol src/SubAccounts.sol
         working-directory: contracts/risk-core
       - run: |
           anvil --port 8599 --silent &

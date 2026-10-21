@@ -72,17 +72,13 @@ contract MarginEngineV2DeployFork is Test {
     (ISpotFeed index,,) = v1.getMarketFeeds(1);
     (spot,) = index.getSpot();
 
-    // The initial mark is the operator's input; here it is exactly the fair forward, index / (1 + carry * tau).
-    uint tau = uint(1798725600) - block.timestamp;
-    uint initialMark = spot * 1e18 / (1e18 + CARRY * tau / 365 days);
-    vm.setEnv("CARRY", vm.toString(CARRY));
-    vm.setEnv("INITIAL_MARK", vm.toString(initialMark));
-    vm.setEnv("FORWARD_SIGNER", vm.toString(forwardSigner));
-
-    params = script.loadParams();
-    // forge runs suites in parallel and the environment is one per process: put this suite's own values back.
+    // The operator's inputs, supplied here rather than through the environment: forge runs suites in parallel in one
+    // process, and v1's deploy suites read INITIAL_MARK in cNGN per USDC. The initial mark is exactly the fair forward,
+    // index / (1 + carry * tau).
+    params = script.loadChainParams();
+    uint tau = uint(params.expiry) - block.timestamp;
     params.carry = CARRY;
-    params.initialMark = initialMark;
+    params.initialMark = spot * 1e18 / (1e18 + CARRY * tau / 365 days);
     params.forwardSigner = forwardSigner;
     script.checkParams(params);
 

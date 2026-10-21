@@ -141,7 +141,7 @@ describe('forward publisher against real contracts on anvil', { skip: !RPC }, ()
     at.subAccounts = await deploy('SubAccounts.sol', 'SubAccounts', ['Accounts', 'ACC']);
     at.index = await deploy('LyraSpotFeed.sol', 'LyraSpotFeed');
     at.forward = await deploy('LyraForwardFeed.sol', 'LyraForwardFeed', [at.index]);
-    at.future = await deploy('FutureAsset.sol', 'FutureAsset', [at.subAccounts, CONTRACT_SIZE]);
+    at.future = await deploy('FutureAssetV1.sol', 'FutureAssetV1', [at.subAccounts, CONTRACT_SIZE]);
 
     await send(at.index, 'addSigner', [privateKeyToAccount(INDEX_SIGNER_KEY).address, true]);
     await send(at.index, 'setHeartbeat', [86_400n]);
