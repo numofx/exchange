@@ -96,7 +96,7 @@ describe('expiry keeper against a real FutureAsset on anvil', { skip: !RPC }, ()
     at.submitter = await deploy('OracleDataSubmitter.sol', 'OracleDataSubmitter');
     at.subAccounts = await deploy('SubAccounts.sol', 'SubAccounts', ['Accounts', 'ACC']);
     at.index = await deploy('LyraSpotFeed.sol', 'LyraSpotFeed');
-    at.future = await deploy('FutureAsset.sol', 'FutureAsset', [at.subAccounts, 1_000n * ONE]);
+    at.future = await deploy('FutureAssetV1.sol', 'FutureAssetV1', [at.subAccounts, 1_000n * ONE]);
     await send(at.index, 'addSigner', [privateKeyToAccount(INDEX_SIGNER_KEY).address, true]);
     await send(at.index, 'setHeartbeat', [86_400n]);
 

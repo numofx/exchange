@@ -36,12 +36,14 @@ import {FutureVMLib} from "../libraries/FutureVMLib.sol";
 /**
  * @title MarginEngine
  * @author Lyra (StandardManager), forked by Numo
- * @notice A fork of StandardManager that margins spot (the base asset), perps, options and cNGN-settled dated futures in
- *         one account. Each market is margined as in StandardManager; positions are margined gross (no offsets).
- * @dev    The fork's changes, against StandardManager:
- *         - The dated-future type is the cNGN-settled FutureAsset. Its VM moves as the market's base asset (wrapped cNGN)
- *           through this manager's pool account `accId`, with any shortfall in cash (FutureVMLib), instead of as cash.
- *         - Views count unsettled VM, as StandardManager counts unrealised perp PnL: owed at par, due at the base factor.
+ * @notice A fork of StandardManager that margins spot (the base asset), perps, options and American-terms dated futures
+ *         (FutureAsset v2: USDC per cNGN, a cNGN contract, VM in USDC) in one account. Each market is margined as in
+ *         StandardManager; positions are margined gross (no offsets).
+ * @dev    v2. The v1 engine deployed at 0xA19E… (cNGN-per-USDC futures, VM in cNGN) is src/legacy/v1/MarginEngineV1.
+ *         The fork's changes, against StandardManager:
+ *         - The dated-future type is FutureAsset. Its VM moves as cash through this manager's pool account `accId`
+ *           (FutureVMLib), and its notional is |position| x contractSize x mark.
+ *         - Views count unsettled VM, as StandardManager counts unrealised perp PnL: at par.
  *         - VM is realised before every risk check, before an auction prices or takes a bid on an account (the auction
  *           calls settlePerpsWithIndex), by anyone through settleAccount, and at expiry by closeOutExpired at the
  *           settlement price. A bidder's VM on what it takes accrues in FutureAsset and is counted by the views.
@@ -484,8 +486,7 @@ contract MarginEngine is IMarginEngine, ILiquidatableManager, BaseManager, Reent
       margin += _getNetPerpMargin(marketHolding, spotPrice, isInitial, spotConf);
       // futures, with unsettled VM counted as unrealised perp PnL is below; realised on every path that writes
       int futureMargin;
-      (futureMargin, futureVMMtM) =
-        _getFutureMarginAndMtM(accountId, marketHolding, spotPrice, isInitial, depegMultiplier);
+      (futureMargin, futureVMMtM) = _getFutureMarginAndMtM(accountId, marketHolding, isInitial, depegMultiplier);
       margin += futureMargin;
       int netOptionMargin;
       (netOptionMargin, optionMtm) = _getNetOptionMarginAndMtM(marketHolding, spotPrice, isInitial, spotConf);
@@ -558,32 +559,24 @@ contract MarginEngine is IMarginEngine, ILiquidatableManager, BaseManager, Reent
 
   /**
    * @notice Margin for every futures position in a market (FutureVMLib.marketMargin): the requirement and any depeg
-   *         penalty, gross, on |position| x contractSize, plus unsettled VM valued as settlement will pay it: a loss
-   *         from held base first (at the base factor), the rest at par; a gain at the base factor. Mark-to-market is
-   *         the VM at par, in stable.
+   *         penalty, gross, on each position's USDC notional (|position| x contractSize x mark), plus unsettled VM,
+   *         which is cash, at par. Mark-to-market is that VM.
    */
   function _getFutureMarginAndMtM(
     uint accountId,
     MarketHolding memory marketHolding,
-    uint spotPrice,
     bool isInitial,
     uint depegMultiplier
   ) internal view returns (int margin, int markToMarket) {
     if (marketHolding.futurePositions.length == 0) return (0, 0);
     uint marketId = marketHolding.marketId;
-    BaseMarginParams memory params = baseMarginParams[marketId];
     (margin, markToMarket) = FutureVMLib.marketMargin(
       FutureVMLib.MarketInputs({
         future: marketHolding.future,
         accountId: accountId,
-        spotPrice: spotPrice,
         // the depeg penalty on the futures' own notional, as on a perp's (0 for maintenance)
         requirement: (isInitial ? futureMarginRequirements[marketId].imReq : futureMarginRequirements[marketId].mmReq)
-          + depegMultiplier,
-        marginFactor: isInitial ? params.marginFactor.multiplyDecimal(params.IMScale) : params.marginFactor,
-        // losses are paid from the base the account holds first
-        heldBase: marketHolding.basePosition,
-        stableFeed: stableFeed
+          + depegMultiplier
       }),
       marketHolding.futurePositions
     );
@@ -712,16 +705,16 @@ contract MarginEngine is IMarginEngine, ILiquidatableManager, BaseManager, Reent
 
   /**
    * @notice After a future's settlement price is fixed, realise the last VM and remove the position. Anyone may call.
-   * @dev    Any VM that moves as cash converts at the settlement price, not the spot feed: close-out depends only on a
-   *         settlement price existing, so a stale or dead feed after expiry cannot hold positions open.
+   * @dev    VM is USDC and was accrued to the settlement price by the asset, so close-out reads no feed: a stale or dead
+   *         feed after expiry cannot hold positions open.
    */
   function closeOutExpired(uint accountId, uint96 subId) external nonReentrant {
     FutureVMLib.closeOutAll(subAccounts, cashAsset, accId, accountId, subId);
   }
 
   /**
-   * @notice Take base or cash out of the VM pool. The pool holds a base reserve so winners can be paid before the
-   *         losers who fund them are settled; this is how that reserve is rebalanced.
+   * @notice Take cash out of the VM pool. VM is zero-sum, so the pool nets to the dust of rounding once every holder is
+   *         settled; this sweeps it, or anything sent to the pool by mistake.
    */
   function withdrawFromPool(IERC20BasedAsset asset, uint amount, address recipient) external onlyOwner {
     asset.withdraw(accId, amount, recipient);

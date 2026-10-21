@@ -9,7 +9,7 @@ import {DeployEurcSpot} from "../../scripts/deploy-eurc-spot.s.sol";
 import {EURCSpotBatch} from "../../scripts/eurc-spot-batch.sol";
 import {SubAccounts} from "../../src/SubAccounts.sol";
 import {CashAsset} from "../../src/assets/CashAsset.sol";
-import {MarginEngine} from "../../src/risk-managers/MarginEngine.sol";
+import {MarginEngineV1 as MarginEngine} from "../../src/legacy/v1/MarginEngineV1.sol";
 import {BaseManager} from "../../src/risk-managers/BaseManager.sol";
 import {ChainlinkSpotFeed, IAggregatorV3} from "../../src/feeds/ChainlinkSpotFeed.sol";
 import {IManager} from "../../src/interfaces/IManager.sol";
