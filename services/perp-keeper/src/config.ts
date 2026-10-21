@@ -3,6 +3,8 @@ import 'dotenv/config';
 import { z } from 'zod';
 import { getAddress, parseUnits } from 'viem';
 
+import type { CollateralConfig } from './collateral.js';
+
 const address = z.string().regex(/^0x[0-9a-fA-F]{40}$/).transform((value) => getAddress(value));
 const bool = z.union([z.literal('true'), z.literal('false')]).transform((value) => value === 'true');
 const usd = z.coerce.number().nonnegative().transform((value) => parseUnits(String(value), 18));
@@ -94,6 +96,25 @@ const envSchema = z.object({
    */
   MAX_CNGN_INVENTORY: z.coerce.number().positive().optional().transform((value) => (value === undefined ? null : parseUnits(String(value), 18))),
 
+  /**
+   * The MarginEngine's EURC escrow (risk-core deployments/8453/EURC_SPOT.json `escrow`), market 2. Set
+   * together with EURC_SPOT_FEED or not at all: the keeper is paid in EURC by any account that holds it,
+   * and EURC has no perp index to fall back on.
+   */
+  EURC_ESCROW: address.optional(),
+  /**
+   * The engine's market-2 spot feed (EURC_SPOT.json `spotFeed`): ISpotFeed.getSpot(), 18dp USD per EURC
+   * (a ChainlinkSpotFeed over Chainlink EURC/USD, reverting CLF_DataTooOld when stale).
+   */
+  EURC_SPOT_FEED: address.optional(),
+  /**
+   * Haircut on EURC the keeper is paid in, bps of its spot value; same rule as CNGN_HAIRCUT_BPS. Lower
+   * by default: EURC/USD moves about a tenth as much as NGN/USD and sells on deep books.
+   */
+  EURC_HAIRCUT_BPS: z.coerce.bigint().nonnegative().max(10_000n).default(200n),
+  /** Most EURC the keeper will hold across its accounts, in whole EURC. Unset: no limit. */
+  MAX_EURC_INVENTORY: z.coerce.number().positive().optional().transform((value) => (value === undefined ? null : parseUnits(String(value), 18))),
+
   MIN_SECURITY_MODULE_USD: usd.default(1000),
   MIN_KEEPER_CASH_USD: usd.default(1000),
   MIN_KEEPER_ETH: z.coerce.number().nonnegative().default(0.005).transform((value) => parseUnits(String(value), 18)),
@@ -101,12 +122,50 @@ const envSchema = z.object({
 });
 
 type Parsed = z.infer<typeof envSchema>;
-export type Config = Omit<Parsed, 'MANAGER' | 'SRM'> & { MANAGER: Parsed['SUB_ACCOUNTS'] };
+export type Config = Omit<Parsed, 'MANAGER' | 'SRM'> & {
+  MANAGER: Parsed['SUB_ACCOUNTS'];
+  /** Every base collateral the keeper reads, prices and limits, from the *_ESCROW settings; empty for cash only. */
+  COLLATERAL: CollateralConfig[];
+};
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const { SRM, MANAGER, ...rest } = envSchema.parse(env);
   if (MANAGER && SRM && MANAGER !== SRM) throw new Error(`MANAGER ${MANAGER} and SRM ${SRM} disagree: set one`);
   const manager = MANAGER ?? SRM;
   if (!manager) throw new Error('MANAGER (or SRM) is required: the manager whose accounts this keeper liquidates');
-  return { ...rest, MANAGER: manager };
+  return { ...rest, MANAGER: manager, COLLATERAL: collateral(rest) };
+}
+
+function collateral(env: Omit<Parsed, 'MANAGER' | 'SRM'>): CollateralConfig[] {
+  // Half an EURC setup is refused rather than run: an escrow without a price would bid on EURC
+  // portfolios with no haircut, and a feed without an escrow reads nothing.
+  if ((env.EURC_ESCROW === undefined) !== (env.EURC_SPOT_FEED === undefined)) {
+    throw new Error('EURC_ESCROW and EURC_SPOT_FEED are set together or not at all (risk-core deployments/8453/EURC_SPOT.json escrow, spotFeed)');
+  }
+  if (env.EURC_ESCROW === undefined && env.MAX_EURC_INVENTORY !== null) {
+    throw new Error('MAX_EURC_INVENTORY is set without EURC_ESCROW: it would limit nothing');
+  }
+  if (env.EURC_ESCROW !== undefined && env.EURC_ESCROW === env.CNGN_ESCROW) {
+    throw new Error(`EURC_ESCROW and CNGN_ESCROW are the same address ${env.EURC_ESCROW}`);
+  }
+  const assets: CollateralConfig[] = [];
+  if (env.CNGN_ESCROW !== undefined) {
+    assets.push({
+      asset: 'cNGN',
+      escrow: env.CNGN_ESCROW,
+      price: { kind: 'perpIndex', address: env.PERP },
+      haircutBps: env.CNGN_HAIRCUT_BPS,
+      maxInventory: env.MAX_CNGN_INVENTORY,
+    });
+  }
+  if (env.EURC_ESCROW !== undefined && env.EURC_SPOT_FEED !== undefined) {
+    assets.push({
+      asset: 'EURC',
+      escrow: env.EURC_ESCROW,
+      price: { kind: 'spotFeed', address: env.EURC_SPOT_FEED },
+      haircutBps: env.EURC_HAIRCUT_BPS,
+      maxInventory: env.MAX_EURC_INVENTORY,
+    });
+  }
+  return assets;
 }

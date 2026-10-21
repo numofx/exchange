@@ -5,6 +5,8 @@
  * All amounts are 18dp cash (USD), signed as DutchAuction returns them.
  */
 
+import type { CollateralAsset } from './collateral.js';
+
 export type AuctionView = {
   ongoing: boolean;
   insolvent: boolean;
@@ -14,12 +16,27 @@ export type AuctionView = {
   startTime: bigint;
 };
 
-/** cNGN held as margin, as the SRM sees it: the escrow balance and the index it is valued at. */
+/** One base collateral held as margin: the escrow balance and the price the keeper values it at. */
 export type CollateralView = {
-  /** WrappedERC20Asset balance, 18dp cNGN. */
-  cngn: bigint;
-  /** PerpAsset.getIndexPrice(): USDC per cNGN, 18dp. */
-  indexPrice: bigint;
+  asset: CollateralAsset;
+  /** WrappedERC20Asset balance, 18dp of the asset. */
+  amount: bigint;
+  /**
+   * USD per whole unit, 18dp: PerpAsset.getIndexPrice() for cNGN, the market's ISpotFeed.getSpot() for
+   * EURC. Null when that read failed (a stale Chainlink feed reverts): the keeper cannot price the
+   * haircut, and the engine cannot value the account either.
+   */
+  price: bigint | null;
+};
+
+/** What the keeper applies to one collateral asset it may be paid in. */
+export type CollateralRules = {
+  /** Haircut on it, bps of its price (CNGN_HAIRCUT_BPS, EURC_HAIRCUT_BPS). */
+  haircutBps: bigint;
+  /** How much of it the keeper's accounts hold now, 18dp. */
+  inventory: bigint;
+  /** Most of it the keeper will hold, 18dp; null for no limit. */
+  maxInventory: bigint | null;
 };
 
 export type AccountView = {
@@ -37,8 +54,8 @@ export type AccountView = {
   bidPrice: bigint | null;
   /** getMaxProportion while solvent (18dp percent), null when it reverts. */
   maxProportion: bigint | null;
-  /** cNGN in the account, or null when it holds none (or no escrow is configured). */
-  collateral: CollateralView | null;
+  /** Each configured collateral the account holds a positive balance of; empty for cash only. */
+  collateral: CollateralView[];
 };
 
 export type KeeperRules = {
@@ -53,12 +70,8 @@ export type KeeperRules = {
    * later pass takes the next slice. Null for no cap.
    */
   maxBidUsd: bigint | null;
-  /** Haircut on cNGN the keeper is paid in, bps of index value (CNGN_HAIRCUT_BPS). */
-  cngnHaircutBps: bigint;
-  /** cNGN the keeper's accounts hold now, 18dp. */
-  cngnInventory: bigint;
-  /** Most cNGN the keeper will hold, 18dp; null for no limit. */
-  maxCngnInventory: bigint | null;
+  /** Per configured collateral; an account holding one with no entry here is a wiring error. */
+  collateral: Partial<Record<CollateralAsset, CollateralRules>>;
 };
 
 export type Action =
@@ -82,6 +95,14 @@ const ONE = 10n ** 18n;
 
 export function decide(account: AccountView, keeperCash: bigint, rules: KeeperRules): Action {
   const { accountId, auction } = account;
+
+  // A held asset the keeper cannot price: the engine values the account with the same feed, so its
+  // margin is unreadable too (or, if only the keeper's read failed, the haircut is). Nothing is done
+  // to the account this pass -- no start, no bid -- and the next pass reads the feed again.
+  const unpriced = account.collateral.filter((held) => held.price === null).map((held) => held.asset);
+  if (unpriced.length > 0) {
+    return { kind: 'none', accountId, note: `cannot price ${unpriced.join(', ')} (feed unreadable, stale?): no bid` };
+  }
 
   if (!auction.ongoing) {
     return account.mm < 0n ? { kind: 'start', accountId } : { kind: 'none', accountId };
@@ -119,7 +140,7 @@ function decideSolventBid(account: AccountView, keeperCash: bigint, rules: Keepe
   // haircut is the insolvent rule's, where it sets what the security module pays.
   const perUnit = bidPrice + abs(account.bm - account.auction.reservedCash);
   const affordable = perUnit === 0n ? ONE : (keeperCash * ONE) / perUnit;
-  const room = cngnRoom(account, rules);
+  const { room, bound } = collateralRoom(account, rules);
   const percent = min(maxProportion, affordable, capToMaxBid(perUnit, rules), room, ONE);
   // The finishing bid. What the auction will still sell is below the keeper's minimum (an earlier bid
   // took the rest) and the keeper can take all of it. DutchAuction caps any bid at that proportion
@@ -146,8 +167,8 @@ function decideSolventBid(account: AccountView, keeperCash: bigint, rules: Keepe
   if (percent < rules.minBidPercent) {
     // Say which limit bound: an auction nearly sold out is routine, a keeper out of cash is an alarm.
     const note =
-      room < maxProportion && room < affordable
-        ? `keeper cNGN inventory ${rules.cngnInventory} (18dp) leaves room for only ${room} (18dp) of the bid`
+      bound !== null && room < maxProportion && room < affordable
+        ? `keeper ${bound} inventory ${rules.collateral[bound]!.inventory} (18dp) leaves room for only ${room} (18dp) of the bid`
         : maxProportion <= affordable
           ? `auction has only ${maxProportion} (18dp) left to sell`
           : `keeper cash covers only ${affordable} (18dp) of the bid`;
@@ -184,19 +205,19 @@ function decideInsolventBid(account: AccountView, keeperCash: bigint, rules: Kee
 
   const paid = bidPrice < 0n ? -bidPrice : 0n;
   const deficit = mtm < 0n ? -mtm : 0n;
-  const wanted = (deficit * (10_000n + rules.minSolventDiscountBps)) / 10_000n + cngnHaircut(account, rules);
+  const wanted = (deficit * (10_000n + rules.minSolventDiscountBps)) / 10_000n + collateralHaircut(account, rules);
   if (paid < wanted) {
     return { kind: 'none', accountId, note: `insolvent payout ${paid} below deficit + margin ${wanted}; waiting` };
   }
 
   const needPerUnit = abs(mm) > paid ? abs(mm) - paid : 0n;
   const affordable = needPerUnit === 0n ? ONE : (keeperCash * ONE) / needPerUnit;
-  const room = cngnRoom(account, rules);
+  const { room, bound } = collateralRoom(account, rules);
   const percent = min(affordable, capToMaxBid(abs(mm), rules), room, ONE);
   if (percent < rules.minBidPercent) {
     const note =
-      room < affordable
-        ? `keeper cNGN inventory ${rules.cngnInventory} (18dp) leaves room for only ${room} (18dp) of the insolvent bid`
+      bound !== null && room < affordable
+        ? `keeper ${bound} inventory ${rules.collateral[bound]!.inventory} (18dp) leaves room for only ${room} (18dp) of the insolvent bid`
         : `keeper cash covers only ${percent} of the insolvent bid`;
     return { kind: 'none', accountId, note };
   }
@@ -204,19 +225,44 @@ function decideInsolventBid(account: AccountView, keeperCash: bigint, rules: Kee
   return { kind: 'bid', accountId, percent, priceLimit: 0n, insolvent: true, bidderCash: (needPerUnit * percent) / ONE };
 }
 
-/** What the keeper discounts the account's cNGN by, in USD 18dp: index value × haircut. */
-function cngnHaircut(account: AccountView, rules: KeeperRules): bigint {
-  if (account.collateral === null) return 0n;
-  const value = (account.collateral.cngn * account.collateral.indexPrice) / ONE;
-  return (value * rules.cngnHaircutBps) / 10_000n;
+function rulesFor(asset: CollateralAsset, rules: KeeperRules): CollateralRules {
+  const found = rules.collateral[asset];
+  if (found === undefined) throw new Error(`account holds ${asset} but the keeper has no rules for it`);
+  return found;
 }
 
-/** The share of the account whose cNGN still fits under the keeper's inventory limit. */
-function cngnRoom(account: AccountView, rules: KeeperRules): bigint {
-  if (account.collateral === null || account.collateral.cngn === 0n || rules.maxCngnInventory === null) return ONE;
-  const room = rules.maxCngnInventory - rules.cngnInventory;
-  if (room <= 0n) return 0n;
-  return min((room * ONE) / account.collateral.cngn, ONE);
+/**
+ * What the keeper discounts the account's collateral by, in USD 18dp: the sum over every asset it
+ * holds of value × that asset's haircut. Each term rounds on its own, so a cNGN-only account is
+ * discounted exactly as before EURC existed.
+ */
+function collateralHaircut(account: AccountView, rules: KeeperRules): bigint {
+  let total = 0n;
+  for (const held of account.collateral) {
+    const value = (held.amount * held.price!) / ONE; // decide() returned before here on a null price
+    total += (value * rulesFor(held.asset, rules).haircutBps) / 10_000n;
+  }
+  return total;
+}
+
+/**
+ * The share of the account whose collateral still fits under every inventory limit: the least over
+ * the assets it holds, and which asset set it (null when none binds, room is then 100%).
+ */
+function collateralRoom(account: AccountView, rules: KeeperRules): { room: bigint; bound: CollateralAsset | null } {
+  let room = ONE;
+  let bound: CollateralAsset | null = null;
+  for (const held of account.collateral) {
+    const { inventory, maxInventory } = rulesFor(held.asset, rules);
+    if (held.amount === 0n || maxInventory === null) continue;
+    const left = maxInventory - inventory;
+    const share = left <= 0n ? 0n : min((left * ONE) / held.amount, ONE);
+    if (share < room) {
+      room = share;
+      bound = held.asset;
+    }
+  }
+  return { room, bound };
 }
 
 /** The share of an account whose `perUnit` (USD per 100% of it) fits inside the max bid. */

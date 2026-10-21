@@ -90,15 +90,22 @@ type Config struct {
 	DeribitWSURL        string
 
 	CNGNSpotAssetAddress string
-	// SpotMarginManagerAddress is the manager the spot market's accounts live under when spot runs
+	// EURCSpotAssetAddress (EURC_SPOT_ASSET_ADDRESS) is EURC-USDC's WrappedERC20Asset escrow of Base
+	// EURC, under the same MarginEngine, TradeModule and quote asset as cNGN spot. Empty: EURC-USDC is
+	// not listed. A withdrawable asset by default when set.
+	EURCSpotAssetAddress string
+	// SpotMarginManagerAddress is the manager the spot markets' accounts live under (both cNGN-USDC and
+	// EURC-USDC: they are under the same MarginEngine), when spot runs
 	// on the perp stack (the unified account): set to the perp SRM so the venue refuses spot orders
 	// while that SRM is paused and presents the manager to clients. Empty: spot's own stack.
 	SpotMarginManagerAddress string
 
 	// cNGN-PERP, on its own stack (risk-core CNGN_PERP_STACK.json and execution
-	// CNGN_PERP_TRADE_MODULE.json). All four or none: the perp settles through its own TradeModule,
-	// in its own CashAsset, margined by its own SRM, and a partial set would route perp orders
-	// through the spot module or check them against the wrong manager.
+	// CNGN_PERP_TRADE_MODULE.json). The TradeModule, CashAsset and SRM are the venue's shared stack:
+	// spot and the future trade through that module and settle in that cash, and deposits default to
+	// it. The asset is the listing. All four lists the perp; the three without the asset keeps the
+	// shared stack with the perp delisted; none is neither. Anything else is refused: a partial set
+	// would route orders through the wrong module or check them against the wrong manager.
 	CNGNPerpAssetAddress       string
 	CNGNPerpTradeModuleAddress string
 	CNGNPerpCashAddress        string
@@ -206,6 +213,7 @@ func Load() (Config, error) {
 		DeribitWSURL:            getenvDefault("DERIBIT_WS_URL", "wss://test.deribit.com/ws/api/v2"),
 
 		CNGNSpotAssetAddress:         strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_SPOT_ASSET_ADDRESS"))),
+		EURCSpotAssetAddress:         strings.ToLower(strings.TrimSpace(os.Getenv("EURC_SPOT_ASSET_ADDRESS"))),
 		SpotMarginManagerAddress:     strings.ToLower(strings.TrimSpace(os.Getenv("SPOT_MARGIN_MANAGER_ADDRESS"))),
 		CNGNPerpAssetAddress:         strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_ASSET_ADDRESS"))),
 		CNGNPerpTradeModuleAddress:   strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_TRADE_MODULE_ADDRESS"))),
@@ -302,6 +310,9 @@ func Load() (Config, error) {
 	if err := cfg.validateFutureStack(); err != nil {
 		return Config{}, err
 	}
+	if err := cfg.validateEURCSpot(); err != nil {
+		return Config{}, err
+	}
 	if err := cfg.validatePerpStack(); err != nil {
 		return Config{}, err
 	}
@@ -394,50 +405,74 @@ func (c Config) validateTradeModule() error {
 	)
 }
 
-// PerpEnabled reports whether cNGN-PERP is configured. The asset address is the switch; the rest
-// of the stack is required alongside it by validatePerpStack.
+// PerpEnabled reports whether cNGN-PERP is listed. The asset address is the switch; the shared
+// stack is required alongside it by validatePerpStack. Unset with the shared stack set, the perp is
+// delisted: no listing, no perp state, funding, margin check or position indexer.
 func (c Config) PerpEnabled() bool {
 	return strings.TrimSpace(c.CNGNPerpAssetAddress) != ""
 }
 
-// validatePerpStack refuses a partial perp configuration, in every environment. The four addresses
-// are one deployment: with the module but not the SRM the margin check would read nothing, and with
-// the asset but not the module perp orders would be pinned to the spot module and rejected (or,
-// worse, if the two ever matched, settled in the wrong cash).
+// PerpTradeStackConfigured reports whether the shared stack is set: the perp's TradeModule,
+// CashAsset and SRM. Spot and the future trade through that module and settle in that cash whether
+// or not the perp is listed, and the USDC withdrawal ledger check reads that cash.
+func (c Config) PerpTradeStackConfigured() bool {
+	return isConfiguredAddress(c.CNGNPerpTradeModuleAddress) &&
+		isConfiguredAddress(c.CNGNPerpCashAddress) &&
+		isConfiguredAddress(c.CNGNPerpSRMAddress)
+}
+
+// perpSharedStackNames are the shared stack's variables, in the order a refusal names them.
+var perpSharedStackNames = []string{"CNGN_PERP_TRADE_MODULE_ADDRESS", "CNGN_PERP_CASH_ADDRESS", "CNGN_PERP_SRM_ADDRESS"}
+
+// validatePerpStack refuses a partial perp configuration, in every environment. Three sets are
+// accepted: all four (the perp listed), the shared three without the asset (the perp delisted, spot
+// and the future still on its module and cash), and none. Anything else is one deployment half
+// configured: with the module but not the SRM the margin check would read nothing, and with the
+// asset but not the module perp orders would be pinned to the spot module and rejected (or, worse,
+// if the two ever matched, settled in the wrong cash).
 func (c Config) validatePerpStack() error {
 	fields := map[string]string{
-		"CNGN_PERP_ASSET_ADDRESS":        c.CNGNPerpAssetAddress,
 		"CNGN_PERP_TRADE_MODULE_ADDRESS": c.CNGNPerpTradeModuleAddress,
 		"CNGN_PERP_CASH_ADDRESS":         c.CNGNPerpCashAddress,
 		"CNGN_PERP_SRM_ADDRESS":          c.CNGNPerpSRMAddress,
 	}
 	var set, missing []string
-	for _, name := range []string{"CNGN_PERP_ASSET_ADDRESS", "CNGN_PERP_TRADE_MODULE_ADDRESS", "CNGN_PERP_CASH_ADDRESS", "CNGN_PERP_SRM_ADDRESS"} {
+	for _, name := range perpSharedStackNames {
 		if isConfiguredAddress(fields[name]) {
 			set = append(set, name)
 		} else {
 			missing = append(missing, name)
 		}
 	}
+	listed := isConfiguredAddress(c.CNGNPerpAssetAddress)
+	if listed && len(missing) != 0 {
+		return fmt.Errorf("the perp stack is configured partially: CNGN_PERP_ASSET_ADDRESS set but %s missing; "+
+			"set all four, the three shared ones without CNGN_PERP_ASSET_ADDRESS to delist the perp, or none",
+			strings.Join(missing, ", "))
+	}
+	if !listed && strings.TrimSpace(c.CNGNPerpAssetAddress) != "" {
+		return fmt.Errorf("CNGN_PERP_ASSET_ADDRESS %q is not an address", c.CNGNPerpAssetAddress)
+	}
 	if len(set) != 0 && len(missing) != 0 {
-		return fmt.Errorf("the perp stack is configured partially: %s set but %s missing; set all four or none",
+		return fmt.Errorf("the perp stack is configured partially: %s set but %s missing; "+
+			"set all four, the three shared ones without CNGN_PERP_ASSET_ADDRESS to delist the perp, or none",
 			strings.Join(set, ", "), strings.Join(missing, ", "))
 	}
 	if closeOnly := strings.TrimSpace(c.CNGNPerpCloseOnlyManager); closeOnly != "" {
 		if !isConfiguredAddress(closeOnly) {
 			return fmt.Errorf("CNGN_PERP_CLOSE_ONLY_MANAGER %q is not an address", closeOnly)
 		}
-		if len(set) == 0 {
-			return errors.New("CNGN_PERP_CLOSE_ONLY_MANAGER is set without a perp stack")
+		if !listed {
+			return errors.New("CNGN_PERP_CLOSE_ONLY_MANAGER is set without a listed perp (CNGN_PERP_ASSET_ADDRESS)")
 		}
 		if strings.EqualFold(closeOnly, c.CNGNPerpSRMAddress) {
 			return errors.New("CNGN_PERP_CLOSE_ONLY_MANAGER is CNGN_PERP_SRM_ADDRESS: the manager accounts open under cannot be close-only")
 		}
 	}
-	if c.CNGNPerpCloseOnly && len(set) == 0 {
-		return errors.New("CNGN_PERP_CLOSE_ONLY is set without a perp stack")
+	if c.CNGNPerpCloseOnly && !listed {
+		return errors.New("CNGN_PERP_CLOSE_ONLY is set without a listed perp (CNGN_PERP_ASSET_ADDRESS)")
 	}
-	if len(set) != 0 && !c.CNGNPerpCloseOnly && c.CNGNPerpReopenAck != PerpReopenAck {
+	if listed && !c.CNGNPerpCloseOnly && c.CNGNPerpReopenAck != PerpReopenAck {
 		return fmt.Errorf("the perp is configured without CNGN_PERP_CLOSE_ONLY=true, and CNGN_PERP_REOPEN_ACK is not %q: "+
 			"the perp may not reopen until numofx/trading-app#131 is fixed (the trading app shows a perp holder as flat "+
 			"whenever /v1/positions cannot read the perp). Set CNGN_PERP_CLOSE_ONLY=true, or, once #131 is merged and "+
@@ -464,7 +499,8 @@ func (c Config) FutureSubID() string {
 }
 
 // validateFutureStack refuses a partial future configuration. The future trades on the perp's
-// TradeModule and settles in its cash, so it needs the perp stack; without its expiry the venue would
+// TradeModule and settles in its cash, so it needs the shared stack (not the perp's listing: it
+// runs with the perp delisted); without its expiry the venue would
 // book orders under a series that does not exist, and without its manager it could not tell a paused
 // engine from an open one. The fill band is read from the chain, so CHAIN_RPC_URL is required too:
 // a future whose band cannot be read is a future whose fills cannot be checked.
@@ -489,13 +525,14 @@ func (c Config) validateFutureStack() error {
 		return fmt.Errorf("the future is configured partially: %s set but %s missing; set all three or none",
 			strings.Join(present, ", "), strings.Join(missing, ", "))
 	}
-	if !c.PerpEnabled() {
-		return errors.New("CNGN_FUTURE_ASSET_ADDRESS is set without a perp stack: the future trades on the perp's TradeModule and settles in its cash")
+	if !c.PerpTradeStackConfigured() {
+		return errors.New("CNGN_FUTURE_ASSET_ADDRESS is set without the shared stack (CNGN_PERP_TRADE_MODULE_ADDRESS, " +
+			"CNGN_PERP_CASH_ADDRESS, CNGN_PERP_SRM_ADDRESS): the future trades on that TradeModule and settles in its cash")
 	}
 	if strings.TrimSpace(c.ChainRPCURL) == "" {
 		return errors.New("CNGN_FUTURE_ASSET_ADDRESS is set without CHAIN_RPC_URL: the future's fill band is read from the chain")
 	}
-	if strings.EqualFold(c.CNGNFutureAssetAddress, c.CNGNPerpAssetAddress) {
+	if c.PerpEnabled() && strings.EqualFold(c.CNGNFutureAssetAddress, c.CNGNPerpAssetAddress) {
 		return errors.New("CNGN_FUTURE_ASSET_ADDRESS is the perp's asset")
 	}
 	return nil
@@ -582,17 +619,42 @@ func getenvBool(key string, fallback bool) bool {
 	}
 }
 
+// validateEURCSpot refuses an EURC_SPOT_ASSET_ADDRESS that is not an address, or that is another
+// market's asset: the registry keys markets by (asset, sub_id), so a shared address would list two
+// markets under one key and answer one of them with the other's book.
+func (c Config) validateEURCSpot() error {
+	eurc := strings.TrimSpace(c.EURCSpotAssetAddress)
+	if eurc == "" {
+		return nil
+	}
+	if !isConfiguredAddress(eurc) {
+		return fmt.Errorf("EURC_SPOT_ASSET_ADDRESS %q is not an address", eurc)
+	}
+	for name, other := range map[string]string{
+		"CNGN_SPOT_ASSET_ADDRESS":      c.CNGNSpotAssetAddress,
+		"CNGN_PERP_ASSET_ADDRESS":      c.CNGNPerpAssetAddress,
+		"CNGN_FUTURE_ASSET_ADDRESS":    c.CNGNFutureAssetAddress,
+		"CNGN_PERP_COLLATERAL_ADDRESS": c.CNGNPerpCollateralAddress,
+		"QUOTE_ASSET_ADDRESS":          c.QuoteAsset(),
+	} {
+		if strings.EqualFold(eurc, strings.TrimSpace(other)) {
+			return fmt.Errorf("EURC_SPOT_ASSET_ADDRESS is %s: EURC-USDC needs its own escrow", name)
+		}
+	}
+	return nil
+}
+
 // withdrawalAssets are the assets a signed withdrawal may pay out of: WITHDRAWAL_ASSET_ADDRESSES when set,
-// otherwise those this venue settles in: the quote asset, the cNGN spot asset and, when the perp is
-// configured, the perp stack's cash and its cNGN collateral escrow.
+// otherwise those this venue settles in: the quote asset, the cNGN and EURC spot assets and, when set, the
+// shared stack's cash and the perp's cNGN collateral escrow (both stay withdrawable with the perp delisted).
 func withdrawalAssets(cfg Config) []string {
 	if configured := getenvCSV("WITHDRAWAL_ASSET_ADDRESSES", ""); len(configured) > 0 {
 		return configured
 	}
-	assets := make([]string, 0, 4)
+	assets := make([]string, 0, 5)
 	// The perp's cash is withdrawable too: it is real USDC held by that stack's CashAsset; so is
 	// the cNGN its collateral escrow holds.
-	for _, asset := range []string{cfg.QuoteAsset(), cfg.CNGNSpotAssetAddress, cfg.CNGNPerpCashAddress, cfg.CNGNPerpCollateralAddress} {
+	for _, asset := range []string{cfg.QuoteAsset(), cfg.CNGNSpotAssetAddress, cfg.EURCSpotAssetAddress, cfg.CNGNPerpCashAddress, cfg.CNGNPerpCollateralAddress} {
 		if asset = strings.ToLower(strings.TrimSpace(asset)); asset != "" {
 			assets = append(assets, asset)
 		}

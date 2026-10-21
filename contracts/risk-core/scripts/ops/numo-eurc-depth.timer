@@ -1,0 +1,11 @@
+[Unit]
+Description=Numo EURC/USDC 2% depth reading at 00:00 and 12:00 UTC
+
+[Timer]
+OnCalendar=*-*-* 00,12:00:00 UTC
+AccuracySec=1min
+# A reboot must not leave a gap in a dataset whose value is its span: a missed reading runs at boot.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,24 @@
+# One reading of EURC/USDC depth within 2% on Base (scripts/ops/eurc_depth/depth.py --once), appended to a CSV that
+# sizes the EURC deposit cap: ~50% of the median 2% sell depth over 7 days (exchange #247). Paired with
+# numo-eurc-depth.timer, twice a day. After 7 days of readings the script samples nothing and says so; disable the
+# timer then and run --summary.
+#
+# Read-only: run-with-ssm-readonly.sh hands it the provider RPC and nothing that signs. The provider, not the public
+# endpoint: a reading is ~1,000 quotes, and the first one backfills the main pool's gauge logs.
+#
+# Runs from its own checkout, like exchange-rebalance and exchange-pager: the box's /home/ec2-user/exchange is pinned
+# at bf9da89 and has no eurc_depth/.
+[Unit]
+Description=Numo EURC/USDC 2% depth reading
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/home/ec2-user/exchange-eurc-depth/contracts/risk-core
+ExecStart=/home/ec2-user/exchange-eurc-depth/contracts/risk-core/scripts/ops/run-with-ssm-readonly.sh /usr/bin/python3 scripts/ops/eurc_depth/depth.py --once
+Environment=AWS_REGION=us-east-1
+Environment=EURC_DEPTH_CSV=/home/ec2-user/numo-eurc-depth.csv
+Environment=EURC_DEPTH_STATE=/home/ec2-user/numo-eurc-depth-state.json
+Environment=EURC_DEPTH_DAYS=7
+# The first reading backfills the gauge's history; later ones scan only new blocks.
+TimeoutStartSec=2h

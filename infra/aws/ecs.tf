@@ -8,7 +8,11 @@ resource "aws_ecs_cluster" "main" {
 }
 
 resource "aws_cloudwatch_log_group" "tasks" {
-  for_each          = toset(["markets-service", "matcher", "execution-service", "migrate", "market-maker", "market-maker-perp", "market-maker-future"])
+  # market-maker-eurc only once its image is set (market-maker-eurc.tf), so an unset maker plans nothing.
+  for_each = toset(concat(
+    ["markets-service", "matcher", "execution-service", "migrate", "market-maker", "market-maker-perp", "market-maker-future"],
+    var.image_market_maker_eurc == "" ? [] : ["market-maker-eurc"],
+  ))
   name              = "/ecs/${var.name}/${each.key}"
   retention_in_days = 30
 }
@@ -85,8 +89,24 @@ locals {
     { name = "CNGN_FUTURE_EXPIRY", value = var.cngn_future_expiry },
     { name = "CNGN_FUTURE_MANAGER_ADDRESS", value = var.cngn_future_manager_address },
     # The perp close-only, here so the api (intake) and the matcher (fills) cannot disagree on it.
-    { name = "CNGN_PERP_CLOSE_ONLY", value = tostring(var.cngn_perp_close_only) },
+    # It describes a listed perp: with the perp delisted (no asset) markets-service refuses it set.
+    { name = "CNGN_PERP_CLOSE_ONLY", value = tostring(var.cngn_perp_asset_address != "" && var.cngn_perp_close_only) },
   ]
+
+  # EURC-USDC spot, for the api and the matcher alike, and only once the escrow exists. Absent rather than
+  # empty when unset: an EURC_SPOT_ASSET_ADDRESS="" entry would read the same to markets-service (not listed)
+  # but change both task definitions, and a matcher redeploy is a ~70 s matching gap (with-matcher-mute.sh).
+  eurc_spot_env = var.eurc_spot_asset_address == "" ? [] : [
+    { name = "EURC_SPOT_ASSET_ADDRESS", value = var.eurc_spot_asset_address },
+  ]
+
+  # What signed withdrawals may pay out of: one list for markets-service (which verifies) and
+  # execution-service (which submits), so the two cannot disagree. compact drops the EURC escrow while it is
+  # unset, so the string is the one both services had before EURC existed.
+  withdrawal_asset_addresses = join(",", compact(concat(
+    [var.quote_asset_address, var.cngn_spot_asset_address, var.cngn_perp_cash_address, var.eurc_spot_asset_address],
+    var.legacy_withdrawal_asset_addresses,
+  )))
 
   log_options = { for k, g in aws_cloudwatch_log_group.tasks : k => {
     logDriver = "awslogs"
@@ -154,10 +174,10 @@ resource "aws_ecs_task_definition" "markets" {
       # Signed withdrawals (POST /v1/withdrawals): verified here, submitted by execution-service.
       # EXECUTOR_WITHDRAW_TIMEOUT must outlast execution-service's WITHDRAWAL_RECEIPT_TIMEOUT_MS (30s).
       { name = "WITHDRAWAL_MODULE_ADDRESS", value = var.withdrawal_module_address },
-      { name = "WITHDRAWAL_ASSET_ADDRESSES", value = join(",", compact(concat([var.quote_asset_address, var.cngn_spot_asset_address, var.cngn_perp_cash_address], var.legacy_withdrawal_asset_addresses))) },
+      { name = "WITHDRAWAL_ASSET_ADDRESSES", value = local.withdrawal_asset_addresses },
       { name = "EXECUTOR_WITHDRAW_URL", value = "http://execution-service.${var.internal_namespace}:8081/withdraw" },
       { name = "EXECUTOR_WITHDRAW_TIMEOUT", value = "45s" },
-    ], local.future_env, local.markets_deposit_env)
+    ], local.future_env, local.markets_deposit_env, local.eurc_spot_env)
 
     secrets = [
       { name = "INDEX_STATUS_TOKEN", valueFrom = local.secret_arns.index_status_token },
@@ -207,7 +227,7 @@ resource "aws_ecs_task_definition" "matcher" {
       # Hostname preserved from Railway — see internal_namespace.
       { name = "EXECUTOR_URL", value = "http://execution-service.${var.internal_namespace}:8081/execute" },
       { name = "MATCHER_HEALTH_ADDR", value = ":8082" },
-    ], local.future_env)
+    ], local.future_env, local.eurc_spot_env)
 
     secrets = [
       { name = "DATABASE_URL", valueFrom = local.secret_arns.database_url },
@@ -292,7 +312,7 @@ resource "aws_ecs_task_definition" "execution" {
       # once it is configured), and
       # markets-service's EXECUTOR_WITHDRAW_TIMEOUT (45s) must outlast the receipt wait.
       { name = "WITHDRAWAL_MODULE_ADDRESS", value = var.withdrawal_module_address },
-      { name = "WITHDRAWAL_ASSET_ADDRESSES", value = join(",", compact(concat([var.quote_asset_address, var.cngn_spot_asset_address, var.cngn_perp_cash_address], var.legacy_withdrawal_asset_addresses))) },
+      { name = "WITHDRAWAL_ASSET_ADDRESSES", value = local.withdrawal_asset_addresses },
       { name = "WITHDRAWAL_RECEIPT_TIMEOUT_MS", value = "30000" },
 
       # Settlement canary. Calls StandardManager.getMargin against a real subaccount on a
@@ -311,7 +331,8 @@ resource "aws_ecs_task_definition" "execution" {
       # the SRM alone, the cNGN escrow read 396,131.97 cNGN short for five days while backed 1:1.
       { name = "SETTLEMENT_CANARY_MANAGER", value = var.cngn_perp_srm_address },
       { name = "SETTLEMENT_CANARY_OTHER_MANAGERS", value = var.cngn_future_manager_address },
-      { name = "SETTLEMENT_CANARY_ACCOUNTS", value = "${var.mm_subaccount_id},${var.mm_future_subaccount_id}" },
+      # The EURC-USDC maker's account is appended only once it is set, so the string is unchanged until then.
+      { name = "SETTLEMENT_CANARY_ACCOUNTS", value = "${var.mm_subaccount_id},${var.mm_future_subaccount_id}${var.mm_eurc_subaccount_id == "" ? "" : ",${var.mm_eurc_subaccount_id}"}" },
       { name = "SETTLEMENT_CANARY_INTERVAL_MS", value = "60000" },
       # Re-alert after 30 consecutive failing checks (30 minutes at a 60s interval), so one
       # dropped webhook is not silence for the whole outage.

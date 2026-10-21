@@ -82,7 +82,6 @@ func TestResolveMarketAcceptsListedIdentifiersOnly(t *testing.T) {
 		"symbol=cNGN-USDC":                                         instruments.CNGNSpotSymbol,
 		"symbol=cNGN-PERP":                                         instruments.CNGNPerpSymbol,
 		"symbol=USDCcNGN-SPOT":                                     instruments.CNGNSpotSymbol, // deprecated alias
-		"symbol=USDCcNGN-PERP":                                     instruments.CNGNPerpSymbol, // deprecated alias
 		"asset_address=" + resolutionSpotAsset:                     instruments.CNGNSpotSymbol,
 		"asset_address=" + resolutionPerpAsset + "&sub_id=0":       instruments.CNGNPerpSymbol,
 		"asset_address=0xF000000000000000000000000000000000000456": instruments.CNGNPerpSymbol,
@@ -150,8 +149,9 @@ func TestWebsocketSubscribeRefusesUnknownMarkets(t *testing.T) {
 		}
 	}
 
-	// The canonical name, its deprecated alias and the asset form all subscribe to the one stream.
-	for _, identifier := range []string{"cNGN-PERP", "USDCcNGN-PERP", resolutionPerpAsset + ":0"} {
+	// The canonical name and the asset form subscribe to the one stream. USDCcNGN-PERP is no longer
+	// an alias.
+	for _, identifier := range []string{"cNGN-PERP", resolutionPerpAsset + ":0"} {
 		c := &wsConn{srv: server, out: make(chan wsOut, 1), subs: map[string]*wsSubscription{}}
 		filter, meta, ok := c.buildFilter(events.ChannelBook, identifier)
 		if !ok || meta.Symbol != instruments.CNGNPerpSymbol || filter.Market != resolutionPerpAsset+":0" {

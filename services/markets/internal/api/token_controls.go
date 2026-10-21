@@ -29,7 +29,7 @@ const (
 // tokenControl is how one token's issuer can stop a transfer.
 type tokenControl struct {
 	symbol string
-	// blacklist answers the per-address freeze query: the token itself for USDC, a separate admin contract for cNGN.
+	// blacklist answers the per-address freeze query: the token itself for USDC and EURC, a separate admin contract for cNGN.
 	blacklist string
 	selector  string
 }
@@ -39,6 +39,8 @@ type tokenControl struct {
 var knownTokenControls = map[string]tokenControl{
 	"0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": {symbol: "USDC", blacklist: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", selector: sigIsBlacklisted},
 	"0x46c85152bfe9f96829aa94755d9f915f9b10ef5f": {symbol: "cNGN", blacklist: "0x2a7483194a651b398582c9a935f793ec2dee2fa7", selector: sigIsBlackListed},
+	// EURC is a Circle FiatToken like USDC: its own paused() and isBlacklisted(address) (read on Base 2026-10-21).
+	"0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42": {symbol: "EURC", blacklist: "0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42", selector: sigIsBlacklisted},
 }
 
 // tokenStateReader is the chain access the check needs: which token a wrapped asset holds, and one eth_call.

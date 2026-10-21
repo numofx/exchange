@@ -5,6 +5,74 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-21 19:50–20:10 UTC: proposer checkout `exchange-ops` at `223b829` (#254, #255: perp-cap refusals)
+
+New checkout `/home/ec2-user/exchange-ops`, owned by ec2-user, cloned from GitHub, detached at
+`223b8292775d7cf872f66a7d690bde2dfb7f14d8`, clean; sha256 of `perp_cap_guard.py` (`dc761c78…`),
+`propose_perp_enable_batch.py` (`38cd01b6…`), `propose_margin_engine_batch.py` (`ba0245c9…`) and
+`CNGN_PERP_ENABLE_VAULT_ACTIONS.json` (`ea7fda2d…`) matched the repo. Proposers run from here from now on; the pinned
+`/home/ec2-user/exchange` (`bf9da89`, three tracked scripts edited in place, ~20 untracked copies, seven units) and
+every unit are unchanged, nothing stashed. Inspection `cb1c4cc4-…` (read-only; "Failed" only on the final `ls` of the
+not-yet-created checkout), checkout `c75cf36c-…`, verification `28f6a812-…` (read-only). Self-tests (enable, engine,
+perp_cap_guard) passed with the ABI-name step skipped (no forge build on the box; it passed in CI on this commit). The
+enable dry run, via `run-with-ssm-readonly.sh`, listed action 0 `[REFUSED]`: custody FAIL (module allowed, cap 0),
+keeper FAIL (perp funding account #23 at 0 cash), quoter FAIL (no perp book), feeds, sm and pager PASS; nothing
+written or proposed, checkout still clean after.
+
+## 2026-10-21 14:06–14:09 UTC: the delisted perp's open-interest cap set to 0
+
+Run from the box over SSM through `run-with-ssm-mark.sh`. `propose_perp_oi_cap_zero.py`, its import
+`resolve_cngn_action6.py` and `deployments/8453/PERP_OI_CAP_ZERO_VAULT_ACTIONS.json` were sparse-cloned from
+`main` at `06d35e1` (#251) into `/tmp/perp-oi-cap`, outside the box's pinned checkout; nothing in
+`/home/ec2-user/exchange` changed. `/tmp/perp-oi-cap` was removed afterwards (SSM `f899d254-…`, Success); the
+`--confirm` run was not needed, the read-back below did its job.
+
+- **What.** MPCVault signing request `5fe66b24-9f8f-429d-aa37-7cc20a278491`: from the vault `0x1dcA…F435` to the
+  PerpAsset `0xC74E…5b8E`, `setTotalPositionCap(address,uint256)` (`0x40a557bd`) with the perp SRM `0xDE04…35D4`
+  and 0. Artifact digest `0x6748a90e3ae19e4051f2c88f238a92b7539be2460495d354e0d39f5ff8922f68`.
+- **Why.** The perp was delisted from the venue at 13:59 UTC (#251), but `SubAccounts.submitTransfer` lets the owner
+  of two accounts under the perp SRM open a perp position without Matching, bounded only by this cap (was 50M). At
+  zero no transfer can raise open interest; closing is unaffected.
+- **Checked first, on the box.** Dry run (SSM `036c5c86-…`, 14:06:05) and the proposing run (SSM `b0b92b48-…`,
+  14:07:11) both passed: PerpAsset owned by the vault, cap 50,000,000, open interest 0, the vault's call simulates.
+- **Landed.** Approved in the MPCVault app, executed in tx
+  `0x77efbb8498b77e0e4fa9371d6c7044ea4e6f5e7b85052bb4a399ecbdbdc57ec7` (block 52901207, 14:09:21 UTC, status 1).
+- **Read back independently.** From a laptop on a different RPC: the tx is from the vault to the PerpAsset with the
+  artifact's calldata exactly; `totalPositionCap(perp SRM)` 0 and `totalPosition(perp SRM)` 0 at block 52901218.
+- **Side effect.** `propose_collateral_cap.py` refuses a cNGN collateral cap above this one, so the perp SRM's cNGN
+  escrow cap (50M, 5,000 held by #27) can no longer be raised. Spot and the future are margined under the
+  MarginEngine, whose caps are separate (escrow 100M, future 30 contracts).
+
+## 2026-10-21 12:06–12:07 UTC: EURC/USDC depth readings, twice a day for 7 days
+
+Repo change #247 (`a2e4872`). One SSM run as root, command `12f42a6c-4fa8-4cf2-ab09-da60c86578e4` (stamp
+`20261021T120609Z`), after a read-only inspection (`39c1969e-…`).
+
+- **What.**
+  - `/home/ec2-user/exchange-eurc-depth`: a new checkout, owned by ec2-user. Cloned from `exchange-pager`, origin
+    set to GitHub, detached at `a2e48721758d21c3fd69e818913126fee5b9a075`, clean. The sha256 of `eurc_depth/depth.py`
+    (`2e733a85…`), `pools.py` (`43e0ee23…`) and both units matched the repo at `a2e4872`.
+  - `/etc/systemd/system/numo-eurc-depth.service` and `.timer`, copied from that checkout; `daemon-reload`;
+    `systemctl enable --now numo-eurc-depth.timer`. Next runs 00:00 and 12:00 UTC.
+  - The first reading started by hand, through the unit (`systemctl start numo-eurc-depth.service`).
+  - New files: `/home/ec2-user/numo-eurc-depth.csv` (one row per reading) and `numo-eurc-depth-state.json` (the main
+    pool's gauge scan; it resumes from there).
+  - `--self-test` was NOT run on the box: it checks selectors against compiled ABIs and the box has no forge build
+    (as `check_settlement_canary.py`, #238). It passed in CI on this commit.
+  - Nothing else touched.
+- **Why.** The EURC deposit cap is to be set at ~50% of the median 2% sell depth over 7 days of readings, and the
+  engine keeper's `MAX_EURC_INVENTORY` at or below it (#247, open item 2).
+- **How it was checked.** The unit exited 0 at 12:06:54. The row at block 52897513:
+  - 2% depth: sell 590,051 EURC, buy 696,514 USDC; 484,445 EURC of the sell depth is in the Slipstream ts50 pool.
+  - Main pool LPs: 184 staked, 82 in range; largest `0xc6bf059aabef5668c32ebeef3dae82e59d4ebc4a` at 28.8% of in-range
+    liquidity; 13.5% unattributed (unstaked); `lp_check=ok`. The staked in-range positions summed exactly to the
+    pool's `stakedLiquidity()`.
+  - The gauge history (from block 17827325) backfilled through the provider RPC in 40 s.
+  - `systemctl list-timers` shows the next run at 2026-10-22 00:00 UTC.
+- **Undo.** `systemctl disable --now numo-eurc-depth.timer`; remove both units and `daemon-reload`. The CSV and the
+  state file can stay. After 7 days the script samples nothing and says so; disable the timer then and run
+  `--summary`.
+
 ## 2026-10-19 18:25–18:28 UTC: alert cleanup: canaries on the MarginEngine, rebalance on #34, feed-alert retired, pager mute
 
 Every red monitor had gone stale at the MarginEngine cutover (2026-10-13/14) rather than found a fault, and one

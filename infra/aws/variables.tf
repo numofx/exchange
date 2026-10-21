@@ -62,9 +62,10 @@ variable "acm_certificate_arn" {
 variable "image_markets" {
   description = "ECR image URI for the Go binary (serves both api and matcher modes)."
   type        = string
-  # 2026-10-19: main 891fafb8 (#242: /v1/positions skips the perp for accounts the perp's SRM does not manage,
-  # so futures holders no longer get perp_error), on top of 45144dff (#227, #230, #231; migration 000023).
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:891fafb8713d"
+  # 2026-10-21 13:59 UTC: main 06d35e16 (#251: the perp delisted, cngn_perp_asset_address ""; also carries the
+  # EURC-USDC listing, inert while EURC_SPOT_ASSET_ADDRESS is unset). markets td :44, matcher td :43. Rollback is
+  # 891fafb8713d AND cngn_perp_asset_address = the PerpAsset, in one apply: the older image refuses the empty asset.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:06d35e168f58"
 }
 
 variable "image_execution" {
@@ -161,10 +162,11 @@ variable "withdrawal_module_address" {
 # account): the perp SRM. Empty while spot is on its own stack. Set together with
 # trade_module_address = the perp TradeModule, quote_asset_address = the perp cash and
 # cngn_spot_asset_address = the perp cNGN escrow: the unified cutover moves the four as one, and
-# did so on 2026-10-04.
+# did so on 2026-10-04. Since 2026-10-14 (exchange #219) spot's accounts live under the MarginEngine
+# (risk-core deployments/8453/MARGIN_ENGINE.json .manager), with deposit_manager_address.
 variable "spot_margin_manager_address" {
   type    = string
-  default = "0xDE0423D0a1E15536265C9513d2e0c10DAb5835D4"
+  default = "0xA19E296021c9DF25b90D96C2A0793CC3D0800758"
 }
 
 # Wrapped assets of a retired spot stack that withdrawals must keep paying out of after a cutover
@@ -184,14 +186,33 @@ variable "cngn_spot_asset_address" {
   default = "0x37c976bb5d4887a714ef19AF6B83e34fe2f37c98"
 }
 
-# USDCcNGN-PERP, on its own stack, live on Base since 2026-09-30. The defaults ARE the deployed
-# contracts (risk-core deployments/8453/CNGN_PERP_STACK.json, execution
-# deployments/8453/CNGN_PERP_TRADE_MODULE.json): public addresses, committed so that an apply from a
-# fresh clone can never plan the perp off. All four or none: markets-service refuses a partial set
-# at boot. Setting all four to "" is how the perp is switched off; spot is unaffected either way.
+# EURC-USDC spot: a WrappedERC20Asset escrow for Base EURC (0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42, 6
+# decimals) under the MarginEngine as its market 2, on the same TradeModule and USDC cash as cNGN spot, and
+# sharing spot_margin_manager_address. Empty lists nothing: markets-service and the matcher get no
+# EURC_SPOT_ASSET_ADDRESS at all, EURC is neither depositable nor withdrawable, and every task definition
+# renders exactly as it did before this variable existed (ecs.tf local.eurc_spot_env).
+variable "eurc_spot_asset_address" {
+  description = "The EURC-USDC spot market's EURC escrow (risk-core deployments/8453/EURC_SPOT.json .escrow once deployed). Empty: the market is not listed and EURC is not a deposit or withdrawal asset."
+  type        = string
+  default     = ""
+}
+
+# cNGN-PERP's stack, on Base since 2026-09-30 (risk-core deployments/8453/CNGN_PERP_STACK.json,
+# execution deployments/8453/CNGN_PERP_TRADE_MODULE.json). The TradeModule, CashAsset and SRM below
+# are the venue's shared stack, not the perp's alone: spot and the future trade through that module
+# and settle in that cash, USDC deposits default to it, and the settlement canary and both makers read
+# it. Their defaults are the deployed contracts, committed so that an apply from a fresh clone can
+# never plan them off; blanking them takes spot and the future down with the perp.
+#
+# The asset is the perp's listing alone. Empty since 2026-10-21: the perp is delisted (open interest
+# zero, close-only since 2026-10-13), so /v1/markets no longer lists it, cNGN-PERP and USDCcNGN-PERP
+# are an unknown market, and perp state, funding, the perp margin check and the position indexer are
+# off. markets-service accepts all four, the shared three without the asset, or none; it needs an
+# image with that rule (exchange markets/delist-perp) before an apply that leaves this empty, or it
+# refuses to boot. Relisting is setting it back to the PerpAsset, 0xC74EfC8B4808803dBCF439E76Fde076d56625b8E.
 variable "cngn_perp_asset_address" {
   type    = string
-  default = "0xC74EfC8B4808803dBCF439E76Fde076d56625b8E" # PerpAsset
+  default = ""
 }
 
 variable "cngn_perp_trade_module_address" {
@@ -210,9 +231,9 @@ variable "cngn_perp_srm_address" {
 }
 
 variable "deposit_manager_address" {
-  description = "DEPOSIT_MANAGER_ADDRESS: the manager /v1/deposits opens accounts under. Empty keeps the perp SRM; the MarginEngine cutover sets the engine, with spot_margin_manager_address."
+  description = "DEPOSIT_MANAGER_ADDRESS: the manager /v1/deposits opens accounts under. Empty keeps the perp SRM. The MarginEngine since 2026-10-14, with spot_margin_manager_address."
   type        = string
-  default     = ""
+  default     = "0xA19E296021c9DF25b90D96C2A0793CC3D0800758"
 }
 
 # The perp's cNGN collateral escrow (risk-core CNGN_PERP_COLLATERAL.json `escrow`). Set it only
@@ -336,7 +357,10 @@ variable "image_market_maker" {
   type        = string
   # What market-maker-spot runs. It was briefly shared with the perp maker, so a perp-only image bump (#160, for
   # MM_INVENTORY_SKEW_FULL_AT) silently became a planned spot rollout; each maker now has its own pin.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:8851f9ba5070"
+  # 2026-10-21: d3a78aa3a2df, market-maker #42 (SpotMarket names only the cNGN spot market; with EURC-USDC listed
+  # the old image could pick it at startup and refuse to run). Everything else in it already runs as the future
+  # maker's 91ad6ac7462e. EURC rollout step 0.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:d3a78aa3a2df"
 }
 
 variable "image_market_maker_perp" {
@@ -363,12 +387,12 @@ variable "desired_count_market_maker" {
   }
 }
 
-# The spot market-maker's trading account (its MM_SUBACCOUNT_ID and MM_RECIPIENT_ID): #26, the
-# unified account under the perp SRM, since the 2026-10-04 cutover. #15, on the retired spot stack,
-# is empty.
+# The spot market-maker's trading account (its MM_SUBACCOUNT_ID and MM_RECIPIENT_ID): #34 under the
+# MarginEngine since 2026-10-14 (inventory moved from #26 under the perp SRM, exchange #219). #26, and
+# #15 on the retired spot stack, are no longer the maker's.
 variable "mm_subaccount_id" {
   type    = string
-  default = "26"
+  default = "34"
 }
 
 variable "mm_address" {
