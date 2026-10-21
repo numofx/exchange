@@ -5,7 +5,7 @@ import "forge-std/Test.sol";
 import {IERC20Metadata} from "openzeppelin/token/ERC20/extensions/IERC20Metadata.sol";
 
 import {DeployMarginEngine} from "../../scripts/deploy-margin-engine.s.sol";
-import {MarginEngine} from "../../src/risk-managers/MarginEngine.sol";
+import {MarginEngineV1 as MarginEngine} from "../../src/legacy/v1/MarginEngineV1.sol";
 import {PerpAsset} from "../../src/assets/PerpAsset.sol";
 import {SubAccounts} from "../../src/SubAccounts.sol";
 import {ISubAccounts} from "../../src/interfaces/ISubAccounts.sol";

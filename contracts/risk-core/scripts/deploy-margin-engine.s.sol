@@ -3,10 +3,10 @@ pragma solidity ^0.8.0;
 
 import {SubAccounts} from "../src/SubAccounts.sol";
 import {CashAsset} from "../src/assets/CashAsset.sol";
-import {FutureAsset} from "../src/assets/FutureAsset.sol";
+import {FutureAssetV1 as FutureAsset} from "../src/legacy/v1/FutureAssetV1.sol";
 import {PerpAsset} from "../src/assets/PerpAsset.sol";
 import {WrappedERC20Asset} from "../src/assets/WrappedERC20Asset.sol";
-import {MarginEngine} from "../src/risk-managers/MarginEngine.sol";
+import {MarginEngineV1 as MarginEngine} from "../src/legacy/v1/MarginEngineV1.sol";
 import {MarginEnginePortfolioViewer} from "../src/risk-managers/MarginEnginePortfolioViewer.sol";
 import {DutchAuction} from "../src/liquidation/DutchAuction.sol";
 import {StandardManager} from "../src/risk-managers/StandardManager.sol";
