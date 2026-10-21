@@ -87,6 +87,9 @@ contract MarginEngineTradeModuleFork is Test {
   address constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
   uint64 constant EXPIRY = 1796047200;
   uint constant CARRY = 0.2e18;
+  // The perp cap the deploy took over from the SRM on 2026-10-13. Read live it is 0 since the perp's delisting (tx
+  // 0x77efbb84…, 2026-10-21), and the script refuses a zero cap, so the rehearsal passes the value it deployed with.
+  uint constant DEPLOYED_PERP_OI_CAP = 50_000_000e18;
 
   // Derived rather than memorable: well-known keys carry EIP-7702 delegations on Base.
   uint makerPk = uint(keccak256("numo.margin-engine.trade-fork.maker"));
@@ -122,10 +125,12 @@ contract MarginEngineTradeModuleFork is Test {
     vm.setEnv("CARRY", vm.toString(CARRY));
     vm.setEnv("INITIAL_MARK", vm.toString(initialMark));
     vm.setEnv("FORWARD_SIGNER", vm.toString(vm.addr(forwardPk)));
+    vm.setEnv("PERP_OI_CAP", vm.toString(DEPLOYED_PERP_OI_CAP));
     params = script.loadParams();
     // The environment is one per process and forge runs suites in parallel: MarginEngineDeployFork sets these too,
     // with its own signer. This suite's own values, put back and checked again, are what it deploys with.
     params.carry = CARRY;
+    params.perpOICap = DEPLOYED_PERP_OI_CAP;
     params.initialMark = initialMark;
     params.forwardSigner = vm.addr(forwardPk);
     script.checkParams(params);
