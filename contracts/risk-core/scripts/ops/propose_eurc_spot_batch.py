@@ -259,18 +259,27 @@ def http_json(url: str) -> dict | list:
     return json.loads(resp.read())
 
 
-def keeper_gate(art: dict, health: dict) -> Gate:
+def keeper_gate(art: dict, health: dict, cap18: int) -> Gate:
   """The ENGINE keeper (services/perp-keeper/src/main.ts /health), live, not dry, bidding for this escrow. The perp
-  SRM's keeper serves the same shape on another port, so the manager is checked, not assumed from the URL."""
+  SRM's keeper serves the same shape on another port, so the manager is checked, not assumed from the URL.
+
+  Its MAX_EURC_INVENTORY (served as maxEurcInventory, 18dp) must be set and at most the escrow's on-chain deposit cap
+  (18dp): the most EURC the keeper will take from liquidations may not exceed the most the venue can hold, and the cap
+  is sized to on-chain sell depth (eurc_depth/depth.py). Unset means no limit, which is refused for the same reason."""
   escrow = str(health.get("eurcEscrow") or "").lower()
   manager = str(health.get("manager") or "").lower()
+  raw = health.get("maxEurcInventory")
+  inventory = int(raw) if raw not in (None, "") else None
+  within_cap = inventory is not None and 0 < inventory <= cap18
   ok = bool(health.get("lastPassOk")) and health.get("dryRun") is False and escrow == art["escrow"].lower() \
-    and manager == art["engine"].lower()
+    and manager == art["engine"].lower() and within_cap
+  limit = "unset (no limit)" if inventory is None else f"{inventory / 1e18:,.0f} EURC"
   return Gate("engine keeper", ok, f"manager {manager or '(unset)'}, lastPassOk {health.get('lastPassOk')}, "
-                                   f"dryRun {health.get('dryRun')}, EURC escrow {escrow or '(unset)'}")
+                                   f"dryRun {health.get('dryRun')}, EURC escrow {escrow or '(unset)'}, "
+                                   f"MAX_EURC_INVENTORY {limit} vs on-chain cap {cap18 / 1e18:,.0f} EURC")
 
 
-def gate_services(art: dict, markets_url: str, keeper_health_url: str) -> list[Gate]:
+def gate_services(rpc_url: str, art: dict, markets_url: str, keeper_health_url: str) -> list[Gate]:
   """Enable only: the services that handle EURC must be live with this escrow."""
   gates = []
   try:
@@ -284,7 +293,8 @@ def gate_services(art: dict, markets_url: str, keeper_health_url: str) -> list[G
     gates.append(Gate("markets-service", False, f"unreadable: {exc}"))
   try:
     health = http_json(keeper_health_url)
-    gates.append(keeper_gate(art, health))
+    cap18 = uint_at(read_fn(rpc_url, art["escrow"], "totalPositionCap(address)", word_address(art["engine"])))
+    gates.append(keeper_gate(art, health, cap18))
   except Exception as exc:  # noqa: BLE001
     gates.append(Gate("engine keeper", False, f"unreadable: {exc}"))
   return gates
@@ -400,11 +410,15 @@ def self_test() -> int:
   _refuses({**art, "cap": MAX_CAP + 1}, configure, CONFIGURE_ORDER, "cap is outside")
   _refuses({**art, "marketId": 1}, configure, CONFIGURE_ORDER, "not 2")
   # The enable gate's keeper check: the engine's keeper, live, not dry, on this escrow.
-  live = {"manager": g, "lastPassOk": True, "dryRun": False, "eurcEscrow": e}
-  assert keeper_gate(art, live).ok
+  cap = 250_000 * 10**18
+  live = {"manager": g, "lastPassOk": True, "dryRun": False, "eurcEscrow": e, "maxEurcInventory": str(cap)}
+  assert keeper_gate(art, live, cap).ok, "inventory limit equal to the cap passes"
+  assert keeper_gate(art, {**live, "maxEurcInventory": str(cap // 2)}, cap).ok
   for broken in [{**live, "manager": "0xde0423d0a1e15536265c9513d2e0c10dab5835d4"}, {**live, "lastPassOk": False},
-                 {**live, "dryRun": True}, {k: v for k, v in live.items() if k != "dryRun"}, {**live, "eurcEscrow": None}]:
-    assert not keeper_gate(art, broken).ok, broken
+                 {**live, "dryRun": True}, {k: v for k, v in live.items() if k != "dryRun"}, {**live, "eurcEscrow": None},
+                 {**live, "maxEurcInventory": str(cap + 1)}, {**live, "maxEurcInventory": None},
+                 {k: v for k, v in live.items() if k != "maxEurcInventory"}, {**live, "maxEurcInventory": "0"}]:
+    assert not keeper_gate(art, broken, cap).ok, broken
   print("self-test ok: selectors name compiled functions; a reordered, retargeted, market-1, over-generous, "
         "over-cap, wrong-digest or value-carrying batch is refused")
   return 0
@@ -442,7 +456,7 @@ def main() -> int:
     if args.batch == "enable":
       done = all(landed(rpc_url, art, i, a, vault) for i, a in enumerate(configure))
       g.append(Gate("configure landed", done, "every configuring action's post-state reads back" if done else "a configuring action has not landed"))
-      g.extend(gate_services(art, args.markets_url, args.keeper_health_url))
+      g.extend(gate_services(rpc_url, art, args.markets_url, args.keeper_health_url))
       g.append(Gate("fork rehearsal", args.rehearsed, "--rehearsed given" if args.rehearsed else "pass --rehearsed once EurcSpotFork has run against this escrow"))
     return g
 
