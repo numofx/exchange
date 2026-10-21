@@ -259,6 +259,17 @@ def http_json(url: str) -> dict | list:
     return json.loads(resp.read())
 
 
+def keeper_gate(art: dict, health: dict) -> Gate:
+  """The ENGINE keeper (services/perp-keeper/src/main.ts /health), live, not dry, bidding for this escrow. The perp
+  SRM's keeper serves the same shape on another port, so the manager is checked, not assumed from the URL."""
+  escrow = str(health.get("eurcEscrow") or "").lower()
+  manager = str(health.get("manager") or "").lower()
+  ok = bool(health.get("lastPassOk")) and health.get("dryRun") is False and escrow == art["escrow"].lower() \
+    and manager == art["engine"].lower()
+  return Gate("engine keeper", ok, f"manager {manager or '(unset)'}, lastPassOk {health.get('lastPassOk')}, "
+                                   f"dryRun {health.get('dryRun')}, EURC escrow {escrow or '(unset)'}")
+
+
 def gate_services(art: dict, markets_url: str, keeper_health_url: str) -> list[Gate]:
   """Enable only: the services that handle EURC must be live with this escrow."""
   gates = []
@@ -273,9 +284,7 @@ def gate_services(art: dict, markets_url: str, keeper_health_url: str) -> list[G
     gates.append(Gate("markets-service", False, f"unreadable: {exc}"))
   try:
     health = http_json(keeper_health_url)
-    escrow = str(health.get("eurcEscrow") or "").lower()  # services/perp-keeper/src/main.ts /health
-    ok = bool(health.get("lastPassOk")) and not health.get("dryRun") and escrow == art["escrow"].lower()
-    gates.append(Gate("engine keeper", ok, f"lastPassOk {health.get('lastPassOk')}, dryRun {health.get('dryRun')}, EURC escrow {escrow or '(unset)'}"))
+    gates.append(keeper_gate(art, health))
   except Exception as exc:  # noqa: BLE001
     gates.append(Gate("engine keeper", False, f"unreadable: {exc}"))
   return gates
@@ -390,6 +399,12 @@ def self_test() -> int:
   _refuses({**art, "marginFactor": SIZED_MARGIN_FACTOR + 1}, configure, CONFIGURE_ORDER, "more generous")
   _refuses({**art, "cap": MAX_CAP + 1}, configure, CONFIGURE_ORDER, "cap is outside")
   _refuses({**art, "marketId": 1}, configure, CONFIGURE_ORDER, "not 2")
+  # The enable gate's keeper check: the engine's keeper, live, not dry, on this escrow.
+  live = {"manager": g, "lastPassOk": True, "dryRun": False, "eurcEscrow": e}
+  assert keeper_gate(art, live).ok
+  for broken in [{**live, "manager": "0xde0423d0a1e15536265c9513d2e0c10dab5835d4"}, {**live, "lastPassOk": False},
+                 {**live, "dryRun": True}, {k: v for k, v in live.items() if k != "dryRun"}, {**live, "eurcEscrow": None}]:
+    assert not keeper_gate(art, broken).ok, broken
   print("self-test ok: selectors name compiled functions; a reordered, retargeted, market-1, over-generous, "
         "over-cap, wrong-digest or value-carrying batch is refused")
   return 0
