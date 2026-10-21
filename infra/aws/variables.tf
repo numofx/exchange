@@ -196,14 +196,22 @@ variable "eurc_spot_asset_address" {
   default     = ""
 }
 
-# USDCcNGN-PERP, on its own stack, live on Base since 2026-09-30. The defaults ARE the deployed
-# contracts (risk-core deployments/8453/CNGN_PERP_STACK.json, execution
-# deployments/8453/CNGN_PERP_TRADE_MODULE.json): public addresses, committed so that an apply from a
-# fresh clone can never plan the perp off. All four or none: markets-service refuses a partial set
-# at boot. Setting all four to "" is how the perp is switched off; spot is unaffected either way.
+# cNGN-PERP's stack, on Base since 2026-09-30 (risk-core deployments/8453/CNGN_PERP_STACK.json,
+# execution deployments/8453/CNGN_PERP_TRADE_MODULE.json). The TradeModule, CashAsset and SRM below
+# are the venue's shared stack, not the perp's alone: spot and the future trade through that module
+# and settle in that cash, USDC deposits default to it, and the settlement canary and both makers read
+# it. Their defaults are the deployed contracts, committed so that an apply from a fresh clone can
+# never plan them off; blanking them takes spot and the future down with the perp.
+#
+# The asset is the perp's listing alone. Empty since 2026-10-21: the perp is delisted (open interest
+# zero, close-only since 2026-10-13), so /v1/markets no longer lists it, cNGN-PERP and USDCcNGN-PERP
+# are an unknown market, and perp state, funding, the perp margin check and the position indexer are
+# off. markets-service accepts all four, the shared three without the asset, or none; it needs an
+# image with that rule (exchange markets/delist-perp) before an apply that leaves this empty, or it
+# refuses to boot. Relisting is setting it back to the PerpAsset, 0xC74EfC8B4808803dBCF439E76Fde076d56625b8E.
 variable "cngn_perp_asset_address" {
   type    = string
-  default = "0xC74EfC8B4808803dBCF439E76Fde076d56625b8E" # PerpAsset
+  default = ""
 }
 
 variable "cngn_perp_trade_module_address" {
