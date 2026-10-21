@@ -87,8 +87,8 @@ contract MarginEngineTradeModuleFork is Test {
   address constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
   uint64 constant EXPIRY = 1796047200;
   uint constant CARRY = 0.2e18;
-  // The perp cap the deploy took over from the SRM on 2026-10-13. Read live it is 0 since the perp's delisting (tx
-  // 0x77efbb84…, 2026-10-21), and the script refuses a zero cap, so the rehearsal passes the value it deployed with.
+  // The perp cap the 2026-10-13 deploy used. PERP_OI_CAP is required since the perp's delisting (the SRM's cap, which
+  // the script used to read, is 0: tx 0x77efbb84…, 2026-10-21), so the rehearsal passes the value it deployed with.
   uint constant DEPLOYED_PERP_OI_CAP = 50_000_000e18;
 
   // Derived rather than memorable: well-known keys carry EIP-7702 delegations on Base.
