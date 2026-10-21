@@ -72,6 +72,21 @@ systemctl disable --now numo-eurc-depth.timer
 
 Record the checkout, the units and the CSV path in `OPS_BOX_CHANGES.md` the same day.
 
+## EURC batch rehearsal (anvil only)
+
+`rehearse_eurc_batch.py` runs `propose_eurc_spot_batch.py`'s own propose loop on an anvil fork of Base. It is the same
+gates, the same createMarket market-id rule and the same landed-checks, with each MPCVault signing request replaced by a
+transaction from the impersonated vault. It refuses any RPC that does not answer `anvil_nodeInfo`. The commands are in
+its docstring: fork, broadcast `deploy-eurc-spot.s.sol` to the fork, rehearse `configure` then `enable`, and delete the
+fork's `deployments/8453/EURC_SPOT*.json` and broadcast records afterwards. Rehearsed 2026-10-21 at block 52898297:
+all 7 configure actions landed (heaviest 103k gas, against the proposer's 400k); market 1 untouched; the enable gate
+refused on markets-service and the keeper, as it should before step 3.
+
+**On deploy day, rerun it with the real cap, at that morning's deployer nonce,** immediately before step 1. The escrow
+and feed are CREATE addresses of the deployer (`0x2D72…E2D`), so they, every action digest and the batch hash all follow
+from its nonce and the cap. The rehearsal's sheet is the reference: MPCVault approvers check each request's digest
+against that run's sheet, and a digest that matches no line of it is not approved.
+
 ## Basis logger (evidence for the Sep-16 fixing)
 
 `log_cngn_basis.py` samples the competing cNGN reference prices into a CSV so the
