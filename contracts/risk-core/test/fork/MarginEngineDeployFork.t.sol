@@ -54,6 +54,9 @@ contract MarginEngineDeployFork is Test {
 
   uint64 constant EXPIRY = 1796047200;
   uint constant CARRY = 0.2e18;
+  // The perp cap the deploy took over from the SRM on 2026-10-13. Read live it is 0 since the perp's delisting (tx
+  // 0x77efbb84…, 2026-10-21), and the script refuses a zero cap, so the rehearsal passes the value it deployed with.
+  uint constant DEPLOYED_PERP_OI_CAP = 50_000_000e18;
 
   address alice = address(0xa11ce);
   address bob = address(0xb0b);
@@ -85,11 +88,13 @@ contract MarginEngineDeployFork is Test {
     vm.setEnv("CARRY", vm.toString(CARRY));
     vm.setEnv("INITIAL_MARK", vm.toString(initialMark));
     vm.setEnv("FORWARD_SIGNER", vm.toString(forwardSigner));
+    vm.setEnv("PERP_OI_CAP", vm.toString(DEPLOYED_PERP_OI_CAP));
 
     params = script.loadParams();
     // The environment is one per process and forge runs suites in parallel: another fork suite can set these between
     // the setEnv above and loadParams. This suite's own values, put back and checked again, are what it deploys with.
     params.carry = CARRY;
+    params.perpOICap = DEPLOYED_PERP_OI_CAP;
     params.initialMark = initialMark;
     params.forwardSigner = forwardSigner;
     script.checkParams(params);
@@ -258,6 +263,10 @@ contract MarginEngineDeployFork is Test {
     _executeEnableBatch();
     _holdPerpFeeds(spot);
     IManager srm = IManager(params.srm);
+    // The perp is delisted and its SRM cap is 0 on chain; on this fork only, the vault reopens it so the SRM side of
+    // the comparison can hold a position at all.
+    vm.prank(params.vault);
+    PerpAsset(params.perp).setTotalPositionCap(srm, DEPLOYED_PERP_OI_CAP);
 
     (uint srmLong, uint srmShort) = (_accountUnder(alice, srm), _accountUnder(bob, srm));
     (uint engLong, uint engShort) = (_account(alice), _account(bob));
