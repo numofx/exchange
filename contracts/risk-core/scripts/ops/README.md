@@ -58,7 +58,7 @@ Twice a day, from its own checkout (the box's `~/exchange` is pinned at `bf9da89
 # as ec2-user: a checkout at the commit that carries eurc_depth/, then one reading by hand (backfills the gauge)
 git clone https://github.com/numofx/exchange.git ~/exchange-eurc-depth
 git -C ~/exchange-eurc-depth checkout --detach <commit>
-cd ~/exchange-eurc-depth/contracts/risk-core && python3 scripts/ops/eurc_depth/depth.py --self-test
+cd ~/exchange-eurc-depth/contracts/risk-core   # no --self-test here: it needs compiled ABIs, and the box has no forge build
 EURC_DEPTH_CSV=~/numo-eurc-depth.csv EURC_DEPTH_STATE=~/numo-eurc-depth-state.json \
   scripts/ops/run-with-ssm-readonly.sh python3 scripts/ops/eurc_depth/depth.py --once
 # as root
