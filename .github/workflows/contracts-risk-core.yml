@@ -33,7 +33,7 @@ jobs:
       - run: forge build
       - run: forge build
         working-directory: contracts/execution
-      - run: for f in scripts/ops/*.py; do if grep -q -- "--self-test" "$f"; then echo "$f"; python3 "$f" --self-test || exit 1; fi; done
+      - run: for f in scripts/ops/*.py scripts/ops/*/*.py; do if grep -q -- "--self-test" "$f"; then echo "$f"; python3 "$f" --self-test || exit 1; fi; done
       # Every ops script, one at a time: `bash -n a.sh b.sh` parses only a.sh. Mirrors verify.sh.
       - run: for f in scripts/ops/*.sh; do bash -n "$f" || exit 1; done
       - run: forge test -vvv
