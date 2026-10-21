@@ -3,6 +3,8 @@
  * reads the numbers, this decides which of them are alarms.
  */
 
+import { COLLATERAL_ASSETS, maxInventoryEnv, type CollateralAsset } from './collateral.js';
+
 export type StackHealth = {
   /** Security module's cash balance, 18dp. */
   securityModuleCash: bigint;
@@ -15,8 +17,8 @@ export type StackHealth = {
   keeperEthWei: bigint;
   /** Net perp across the keeper's bid accounts, NGN 18dp: inventory inherited from liquidations. */
   keeperPerpPosition: bigint;
-  /** cNGN across the keeper's accounts, 18dp: collateral it was paid in by liquidations. */
-  keeperCngn: bigint;
+  /** Each configured collateral across the keeper's accounts, 18dp: what it was paid in by liquidations. */
+  keeperCollateral: Partial<Record<CollateralAsset, bigint>>;
   /** Keeper-owned accounts below maintenance margin: the liquidator itself needs liquidating. */
   keeperAccountsUnderMargin: bigint[];
   /** PerpAsset totalPosition for the SRM against its cap: both count |long| + |short|. */
@@ -33,8 +35,8 @@ export type HealthRules = {
   minKeeperEthWei: bigint;
   /** Alert when total position reaches this share of the cap, in bps. */
   capWarnBps: bigint;
-  /** Most cNGN the keeper means to hold, 18dp; null for no limit. */
-  maxCngnInventory: bigint | null;
+  /** Most of each collateral the keeper means to hold, 18dp; null (or absent) for no limit. */
+  maxInventory: Partial<Record<CollateralAsset, bigint | null>>;
 };
 
 export type HealthAlert = { key: string; message: string };
@@ -80,13 +82,19 @@ export function assessHealth(health: StackHealth, rules: HealthRules): HealthAle
       message: `keeper holds ${fmt(health.keeperPerpPosition)} cNGN of perp inherited from liquidations: close or hedge it`,
     });
   }
-  if (health.keeperCngn > 0n) {
-    const over = rules.maxCngnInventory !== null && health.keeperCngn > rules.maxCngnInventory;
+  // One alert per asset, under its own key, so EURC over its limit does not hide behind a cNGN one
+  // still in cooldown (keeper-cngn-inventory, keeper-cngn-over-limit, keeper-eurc-...).
+  for (const asset of COLLATERAL_ASSETS) {
+    const held = health.keeperCollateral[asset] ?? 0n;
+    if (held <= 0n) continue;
+    const limit = rules.maxInventory[asset] ?? null;
+    const over = limit !== null && held > limit;
+    const slug = asset.toLowerCase();
     alerts.push({
-      key: over ? 'keeper-cngn-over-limit' : 'keeper-cngn-inventory',
+      key: over ? `keeper-${slug}-over-limit` : `keeper-${slug}-inventory`,
       message: over
-        ? `keeper holds ${fmt(health.keeperCngn)} cNGN from liquidations, OVER its ${fmt(rules.maxCngnInventory!)} limit: it will not take more; sell on spot or raise MAX_CNGN_INVENTORY`
-        : `keeper holds ${fmt(health.keeperCngn)} cNGN from liquidations${rules.maxCngnInventory === null ? '' : ` (limit ${fmt(rules.maxCngnInventory)})`}: sell on spot or hold`,
+        ? `keeper holds ${fmt(held)} ${asset} from liquidations, OVER its ${fmt(limit)} limit: it will not take more; sell on spot or raise ${maxInventoryEnv(asset)}`
+        : `keeper holds ${fmt(held)} ${asset} from liquidations${limit === null ? '' : ` (limit ${fmt(limit)})`}: sell on spot or hold`,
     });
   }
   if (health.keeperAccountsUnderMargin.length > 0) {
