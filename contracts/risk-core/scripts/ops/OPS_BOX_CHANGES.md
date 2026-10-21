@@ -5,6 +5,36 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-21 12:06–12:07 UTC: EURC/USDC depth readings, twice a day for 7 days
+
+Repo change #247 (`a2e4872`). One SSM run as root, command `12f42a6c-4fa8-4cf2-ab09-da60c86578e4` (stamp
+`20261021T120609Z`), after a read-only inspection (`39c1969e-…`).
+
+- **What.**
+  - `/home/ec2-user/exchange-eurc-depth`: a new checkout, owned by ec2-user. Cloned from `exchange-pager`, origin
+    set to GitHub, detached at `a2e48721758d21c3fd69e818913126fee5b9a075`, clean. The sha256 of `eurc_depth/depth.py`
+    (`2e733a85…`), `pools.py` (`43e0ee23…`) and both units matched the repo at `a2e4872`.
+  - `/etc/systemd/system/numo-eurc-depth.service` and `.timer`, copied from that checkout; `daemon-reload`;
+    `systemctl enable --now numo-eurc-depth.timer`. Next runs 00:00 and 12:00 UTC.
+  - The first reading started by hand, through the unit (`systemctl start numo-eurc-depth.service`).
+  - New files: `/home/ec2-user/numo-eurc-depth.csv` (one row per reading) and `numo-eurc-depth-state.json` (the main
+    pool's gauge scan; it resumes from there).
+  - `--self-test` was NOT run on the box: it checks selectors against compiled ABIs and the box has no forge build
+    (as `check_settlement_canary.py`, #238). It passed in CI on this commit.
+  - Nothing else touched.
+- **Why.** The EURC deposit cap is to be set at ~50% of the median 2% sell depth over 7 days of readings, and the
+  engine keeper's `MAX_EURC_INVENTORY` at or below it (#247, open item 2).
+- **How it was checked.** The unit exited 0 at 12:06:54. The row at block 52897513:
+  - 2% depth: sell 590,051 EURC, buy 696,514 USDC; 484,445 EURC of the sell depth is in the Slipstream ts50 pool.
+  - Main pool LPs: 184 staked, 82 in range; largest `0xc6bf059aabef5668c32ebeef3dae82e59d4ebc4a` at 28.8% of in-range
+    liquidity; 13.5% unattributed (unstaked); `lp_check=ok`. The staked in-range positions summed exactly to the
+    pool's `stakedLiquidity()`.
+  - The gauge history (from block 17827325) backfilled through the provider RPC in 40 s.
+  - `systemctl list-timers` shows the next run at 2026-10-22 00:00 UTC.
+- **Undo.** `systemctl disable --now numo-eurc-depth.timer`; remove both units and `daemon-reload`. The CSV and the
+  state file can stay. After 7 days the script samples nothing and says so; disable the timer then and run
+  `--summary`.
+
 ## 2026-10-19 18:25–18:28 UTC: alert cleanup: canaries on the MarginEngine, rebalance on #34, feed-alert retired, pager mute
 
 Every red monitor had gone stale at the MarginEngine cutover (2026-10-13/14) rather than found a fault, and one
