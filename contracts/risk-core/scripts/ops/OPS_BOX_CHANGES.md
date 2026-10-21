@@ -10,7 +10,8 @@ the only place the box's real state is written down. Newest first.
 Run from the box over SSM through `run-with-ssm-mark.sh`. `propose_perp_oi_cap_zero.py`, its import
 `resolve_cngn_action6.py` and `deployments/8453/PERP_OI_CAP_ZERO_VAULT_ACTIONS.json` were sparse-cloned from
 `main` at `06d35e1` (#251) into `/tmp/perp-oi-cap`, outside the box's pinned checkout; nothing in
-`/home/ec2-user/exchange` changed. Delete `/tmp/perp-oi-cap` if it is still there (the `--confirm` run removes it).
+`/home/ec2-user/exchange` changed. `/tmp/perp-oi-cap` was removed afterwards (SSM `f899d254-…`, Success); the
+`--confirm` run was not needed, the read-back below did its job.
 
 - **What.** MPCVault signing request `5fe66b24-9f8f-429d-aa37-7cc20a278491`: from the vault `0x1dcA…F435` to the
   PerpAsset `0xC74E…5b8E`, `setTotalPositionCap(address,uint256)` (`0x40a557bd`) with the perp SRM `0xDE04…35D4`
