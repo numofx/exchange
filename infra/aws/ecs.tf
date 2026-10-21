@@ -89,7 +89,8 @@ locals {
     { name = "CNGN_FUTURE_EXPIRY", value = var.cngn_future_expiry },
     { name = "CNGN_FUTURE_MANAGER_ADDRESS", value = var.cngn_future_manager_address },
     # The perp close-only, here so the api (intake) and the matcher (fills) cannot disagree on it.
-    { name = "CNGN_PERP_CLOSE_ONLY", value = tostring(var.cngn_perp_close_only) },
+    # It describes a listed perp: with the perp delisted (no asset) markets-service refuses it set.
+    { name = "CNGN_PERP_CLOSE_ONLY", value = tostring(var.cngn_perp_asset_address != "" && var.cngn_perp_close_only) },
   ]
 
   # EURC-USDC spot, for the api and the matcher alike, and only once the escrow exists. Absent rather than

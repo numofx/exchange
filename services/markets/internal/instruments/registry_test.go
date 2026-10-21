@@ -127,7 +127,6 @@ func TestResolveAcceptsDeprecatedAliasesAsSuchOnly(t *testing.T) {
 		{"cNGN-USDC", CNGNSpotSymbol, false},
 		{"cNGN-PERP", CNGNPerpSymbol, false},
 		{"USDCcNGN-SPOT", CNGNSpotSymbol, true},
-		{"USDCcNGN-PERP", CNGNPerpSymbol, true},
 		{"0xf000000000000000000000000000000000000456:0", CNGNPerpSymbol, false},
 	}
 	for _, c := range cases {
@@ -135,6 +134,10 @@ func TestResolveAcceptsDeprecatedAliasesAsSuchOnly(t *testing.T) {
 		if !ok || item.Symbol != c.want || deprecated != c.deprecated {
 			t.Errorf("ResolveIdentifier(%q) = %q, deprecated=%v, ok=%v; want %q, deprecated=%v", c.identifier, item.Symbol, deprecated, ok, c.want, c.deprecated)
 		}
+	}
+	// The perp's pre-rename name is no longer an alias, even while the perp is listed.
+	if item, _, ok := registry.ResolveIdentifier("USDCcNGN-PERP"); ok {
+		t.Errorf("ResolveIdentifier(USDCcNGN-PERP) = %q; want unknown", item.Symbol)
 	}
 	if CNGNSpotSymbol != "cNGN-USDC" || CNGNPerpSymbol != "cNGN-PERP" {
 		t.Fatalf("canonical symbols = %q / %q", CNGNSpotSymbol, CNGNPerpSymbol)

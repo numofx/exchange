@@ -63,7 +63,8 @@ resource "aws_ecs_task_definition" "market_maker_perp" {
       { name = "MM_OPERATOR_MODE", value = "normal" },
       { name = "MM_DRY_RUN", value = "false" },
 
-      { name = "MM_MARKET_SYMBOL", value = "USDCcNGN-PERP" },
+      # The canonical name: USDCcNGN-PERP is no longer an alias (exchange markets/delist-perp).
+      { name = "MM_MARKET_SYMBOL", value = "cNGN-PERP" },
       { name = "MM_OWNER_ADDRESS", value = var.mm_address },
       { name = "MM_SIGNER_ADDRESS", value = var.mm_address },
       { name = "MM_SUBACCOUNT_ID", value = var.mm_perp_subaccount_id },
@@ -127,8 +128,9 @@ resource "aws_ecs_service" "market_maker_perp" {
   name            = "market-maker-perp"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.market_maker_perp.arn
-  desired_count   = var.desired_count_market_maker_perp
-  launch_type     = "FARGATE"
+  # Zero while the perp is delisted, whatever counts.auto.tfvars says: there is no market to quote.
+  desired_count = var.cngn_perp_asset_address == "" ? 0 : var.desired_count_market_maker_perp
+  launch_type   = "FARGATE"
 
   deployment_minimum_healthy_percent = 0
   deployment_maximum_percent         = 100
