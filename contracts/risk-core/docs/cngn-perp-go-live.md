@@ -658,6 +658,11 @@ long-naira account on cNGN insolvent after a 25% step; confirmed again on 2026-1
 0.35 at 5x both solvent through 25%, `testMarginFactorSizingThroughA25PctStep` / `testCngnLongNairaAt5x`).
 The venue has no hedge mode: the app's Hedge block is information only.
 
+> **Superseded 2026-10-20 for the SecurityModule's sizing.** The perp is wound down, and the module is now sized for
+> the USDC-cNGN future alone, against a 15% move, by a rule fitted on the future's own fork run:
+> [cngn-future-security-module.md](cngn-future-security-module.md). The perp rule below is kept as the record of how
+> the perp was sized. It does not describe the future: there it understates a 25% move by 35%.
+
 **The SecurityModule rule is leverage-aware and read against actual open interest.** The module's
 payout when one whole side is liquidated at maintenance margin after a single 25% step, auction run to
 its end, is within 0.2% of
