@@ -6,7 +6,7 @@ import {IERC20Metadata} from "openzeppelin/token/ERC20/extensions/IERC20Metadata
 
 import {ISubAccounts} from "../src/interfaces/ISubAccounts.sol";
 import {IManager} from "../src/interfaces/IManager.sol";
-import {MarginEngine} from "../src/risk-managers/MarginEngine.sol";
+import {MarginEngineV1 as MarginEngine} from "../src/legacy/v1/MarginEngineV1.sol";
 import {WrappedERC20Asset} from "../src/assets/WrappedERC20Asset.sol";
 import {ChainlinkSpotFeed, IAggregatorV3} from "../src/feeds/ChainlinkSpotFeed.sol";
 import {Utils} from "./utils.sol";

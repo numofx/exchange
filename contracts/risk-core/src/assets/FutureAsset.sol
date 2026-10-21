@@ -15,16 +15,19 @@ import {PositionTracking} from "./utils/PositionTracking.sol";
 
 /**
  * @title FutureAsset
- * @notice USDC/cNGN dated futures, cash settled in cNGN.
- * @dev Quoted in cNGN per USDC; one contract is `contractSize` USDC. Variation margin accrues in cNGN at each mark and is
- *      realised lazily: the manager calls settleAccountVM whenever an account is touched and moves the cNGN.
+ * @notice cNGN dated futures in American terms (cNGN-<expiry>), cash settled in USDC.
+ * @dev Quoted in USDC per cNGN; one contract is `contractSize` cNGN. Variation margin is linear in the price: a long
+ *      gains (newMark - oldMark) x contractSize USDC per contract as cNGN strengthens. It is realised lazily: the
+ *      manager calls settleAccountVM whenever an account is touched and moves the cash.
+ *
+ *      v2. The v1 series (USDC-cNGN-<expiry>, cNGN per USDC, a USDC contract, VM in cNGN) is src/legacy/v1/FutureAssetV1.
  *      Fills carry their price in `assetData`, so a position opened away from the mark starts accruing from the fill
  *      price rather than the mark.
  *
  *      Marks come from the forward feed: anyone may pullMark, at most every `minMarkInterval`, until last trade. The
  *      owner's setMark is the fallback when the feed cannot be used. Both are held to the same limits.
  *
- *      The index is the cNGN spot feed the perp also reads (USDC per cNGN, published from the rate picker). It is not
+ *      The index is the cNGN spot feed (USDC per cNGN, published from the rate picker), read as is. It is not
  *      the mark: the future trades at a forward, away from spot by the NGN/USD carry. It does two jobs:
  *      - every mark must sit within markIndexBand of it: maxMarkIndexDeviation, narrowing to minMarkIndexDeviation
  *        over the last bandNarrowingPeriod before expiry;
@@ -35,7 +38,7 @@ import {PositionTracking} from "./utils/PositionTracking.sol";
 contract FutureAsset is IFutureAsset, PositionTracking, ManagerWhitelist {
   using SafeCast for uint;
 
-  /// @dev USDC (18dp) per contract.
+  /// @dev cNGN (18dp) per contract.
   uint public immutable contractSize;
 
   /// @dev Largest move a single mark may make, as a fraction of the previous mark (18dp). 0 disables.
@@ -77,7 +80,7 @@ contract FutureAsset is IFutureAsset, PositionTracking, ManagerWhitelist {
   /// @dev The manual fallback must sit within this of its reference: the fixing samples' TWAP, else the last index.
   uint public constant FALLBACK_BAND = 0.02e18;
 
-  /// @dev The last index this contract read (cNGN per USDC), and when. Stored by every mark and fixing sample, so the
+  /// @dev The last index this contract read (USDC per cNGN), and when. Stored by every mark and fixing sample, so the
   ///      fallback has a reference even when the feed has gone stale.
   uint public lastIndexPrice;
   uint64 public lastIndexTime;
@@ -87,8 +90,8 @@ contract FutureAsset is IFutureAsset, PositionTracking, ManagerWhitelist {
   /// @dev accountId => subId => cumulative VM per contract at which the account is checkpointed
   mapping(uint accountId => mapping(uint subId => int cumulative)) public accountLastCumulativeVM;
 
-  /// @dev accountId => subId => cNGN realised but not yet moved by the manager
-  mapping(uint accountId => mapping(uint subId => int cngn)) public accountCngnToSettle;
+  /// @dev accountId => subId => USDC realised but not yet moved by the manager
+  mapping(uint accountId => mapping(uint subId => int cash)) public accountCashToSettle;
 
   constructor(ISubAccounts _subAccounts, uint _contractSize) ManagerWhitelist(_subAccounts) {
     if (_contractSize == 0) revert FA_InvalidSchedule();
@@ -171,7 +174,7 @@ contract FutureAsset is IFutureAsset, PositionTracking, ManagerWhitelist {
 
   /**
    * @notice Mark from the forward feed. Anyone may call, at most every `minMarkInterval`, until last trade.
-   * @dev    The feed is USDC per cNGN; the mark is its inverse. Held to the same move limit and index band as an owner
+   * @dev    The feed is USDC per cNGN, as the mark is. Held to the same move limit and index band as an owner
    *         mark, so a bad forward print is bounded by the index, which comes from a separate signer.
    */
   function pullMark(uint96 subId) external {
@@ -183,7 +186,7 @@ contract FutureAsset is IFutureAsset, PositionTracking, ManagerWhitelist {
 
     (uint forward,) = forwardFeed.getForwardPrice(market.expiry);
     if (forward == 0) revert FA_InvalidMark();
-    _applyMark(subId, market, uint64(block.timestamp), 1e36 / forward, true);
+    _applyMark(subId, market, uint64(block.timestamp), forward, true);
   }
 
   /// @notice The owner's mark, for when the forward feed cannot be used. Same checks as pullMark.
@@ -332,11 +335,10 @@ contract FutureAsset is IFutureAsset, PositionTracking, ManagerWhitelist {
     return market.expiry - fixingWindow.toUint64();
   }
 
-  /// @dev The index in this contract's units: cNGN per USDC. The feed is USDC per cNGN, and reverts when stale.
-  function _indexPrice() internal view returns (uint) {
-    (uint spot,) = indexFeed.getSpot();
+  /// @dev The index, USDC per cNGN: the feed's own units, which are this contract's. The feed reverts when stale.
+  function _indexPrice() internal view returns (uint spot) {
+    (spot,) = indexFeed.getSpot();
     if (spot == 0) revert FA_InvalidMark();
-    return 1e36 / spot;
   }
 
   /// @dev Read the index and keep it as the last valid one.
@@ -419,22 +421,22 @@ contract FutureAsset is IFutureAsset, PositionTracking, ManagerWhitelist {
   //     Settlement       //
   //////////////////////////
 
-  function settleAccountVM(uint accountId, uint subId) external returns (int cngnDelta) {
+  function settleAccountVM(uint accountId, uint subId) external returns (int vmDelta) {
     if (msg.sender != address(subAccounts.manager(accountId))) revert FA_NotManager();
 
     int position = subAccounts.getBalance(accountId, this, subId);
     _synchronizeVM(accountId, subId, position);
 
-    cngnDelta = accountCngnToSettle[accountId][subId];
-    accountCngnToSettle[accountId][subId] = 0;
+    vmDelta = accountCashToSettle[accountId][subId];
+    accountCashToSettle[accountId][subId] = 0;
   }
 
-  function getPendingVM(uint accountId, uint subId) external view returns (int cngnDelta) {
-    cngnDelta = accountCngnToSettle[accountId][subId];
+  function getPendingVM(uint accountId, uint subId) external view returns (int vmDelta) {
+    vmDelta = accountCashToSettle[accountId][subId];
     int position = subAccounts.getBalance(accountId, this, subId);
-    if (position == 0) return cngnDelta;
+    if (position == 0) return vmDelta;
     int diff = _futureContracts[subId].cumulativeVMPerContract - accountLastCumulativeVM[accountId][subId];
-    cngnDelta += position * diff / 1e18;
+    vmDelta += position * diff / 1e18;
   }
 
   function _accrue(FutureContract storage market, uint newPrice) internal {
@@ -450,12 +452,12 @@ contract FutureAsset is IFutureAsset, PositionTracking, ManagerWhitelist {
 
     accountLastCumulativeVM[accountId][subId] = latest;
 
-    int cngnDelta = position * diff / 1e18;
-    if (cngnDelta != 0) {
-      accountCngnToSettle[accountId][subId] += cngnDelta;
+    int vmDelta = position * diff / 1e18;
+    if (vmDelta != 0) {
+      accountCashToSettle[accountId][subId] += vmDelta;
     }
 
-    emit FutureVMSynchronized(accountId, uint96(subId), cngnDelta, latest);
+    emit FutureVMSynchronized(accountId, uint96(subId), vmDelta, latest);
   }
 
   /**
@@ -482,10 +484,10 @@ contract FutureAsset is IFutureAsset, PositionTracking, ManagerWhitelist {
       accountLastCumulativeVM[acc][subId] = (preBalance * latest + amount * entryVM) / finalBalance;
     } else if (sameSign) {
       // reducing: the closed part realises (mark -> fill) now, the rest stays at the mark
-      accountCngnToSettle[acc][subId] += amount * (latest - entryVM) / 1e18;
+      accountCashToSettle[acc][subId] += amount * (latest - entryVM) / 1e18;
     } else {
       // closing, or flipping through zero: the old position realises at the fill, any new one enters at it
-      accountCngnToSettle[acc][subId] += -preBalance * (latest - entryVM) / 1e18;
+      accountCashToSettle[acc][subId] += -preBalance * (latest - entryVM) / 1e18;
       accountLastCumulativeVM[acc][subId] = entryVM;
     }
   }

@@ -12,8 +12,9 @@ import {IVolFeed} from "./IVolFeed.sol";
 
 /**
  * @title IMarginEngine
- * @notice A fork of IStandardManager: the dated-future type is the cNGN-settled FutureAsset, whose variation margin
- *         moves as the market's base asset (wrapped cNGN) through the engine's own pool account.
+ * @notice A fork of IStandardManager with a dated-future type whose variation margin moves through the engine's own
+ *         pool account. Shared by both deployed versions: v2 (src/risk-managers/MarginEngine) moves USDC VM as cash;
+ *         v1 (src/legacy/v1/MarginEngineV1) moves cNGN VM as the market's base asset (wrapped cNGN) first.
  */
 interface IMarginEngine is IBaseManager {
   enum AssetType {
@@ -226,9 +227,9 @@ interface IMarginEngine is IBaseManager {
 
   event BorrowingEnabled(bool borrowingEnabled);
 
-  /// @dev VM realised for an account: cngnDelta > 0 is paid to it. cngnMoved is what moved as the base asset, cashMoved
-  ///      the remainder in cash.
-  event VMSettled(uint indexed accountId, uint96 indexed subId, int cngnDelta, uint cngnMoved, uint cashMoved);
+  /// @dev VM realised for an account: vmDelta > 0 is paid to it, in the future's VM unit. baseMoved is what moved as the
+  ///      base asset, cashMoved what moved in cash. v1 pays cNGN VM as base first; v2's VM is USDC, all cash (baseMoved 0).
+  event VMSettled(uint indexed accountId, uint96 indexed subId, int vmDelta, uint baseMoved, uint cashMoved);
 
   event PositionClosedOut(uint indexed accountId, uint96 indexed subId, int position);
 }
