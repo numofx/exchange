@@ -146,6 +146,50 @@ delta is negative, so `_assessRisk` — and every feed read — is skipped. Fund
 book is halted; only balance-reducing paths (trades, withdrawals) surface a stale feed. That is why
 the six-day feed outage was invisible.
 
+### EURC-USDC spot on the MarginEngine — PREPARED, not deployed
+
+Nothing below exists on chain yet. Market 2 on the MarginEngine `0xA19E296021c9DF25b90D96C2A0793CC3D0800758`, its own
+market rather than a slot in market 1, whose Base slot is the cNGN escrow every live market margins through.
+
+- `baseAsset`: a new `WrappedERC20Asset` over Circle EURC `0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42` (6 dec, 18dp in the ledger)
+- `spotFeed`: a new `ChainlinkSpotFeed` over Chainlink EURC/USD `0xDAe398520e2B67cd3f27aeF9Cf14D93D927f8250`, 25h staleness
+  limit (Chainlink's directory: 0.3% deviation, 24h heartbeat). Stale: every account **holding EURC** fails closed;
+  nobody else reads it. Base also has a 1h EURC/USD feed, `0x9867186e52d2F1C2c565CDA6E747101Fa56501e0` (0.1%,
+  3,600s), which the maker bands its quotes with; it tracks the market more closely (2026-10-21: ~2 bps from the
+  pools, the 24h feed ~15 bps) but would fail EURC holders closed after a ~2h gap instead of 25h. Not switched.
+- Fees: 5 bps taker / 0 maker (`services/markets/internal/instruments/registry.go`).
+- Margin: factor `0.9`, IM scale `0.8` — 90% of oracle value at maintenance, 72% at initial. Borrowing is **on** under
+  the engine, so this is also a loan book: an account can withdraw USDC against EURC down to IM. From the IM limit a
+  ~20% EURC drop reaches maintenance and ~28% insolvency (`test/fork/EurcSpotFork.t.sol`).
+- Cap: 5,000,000 EURC, summed across the engine; bounds the on-chain loan book near $4M at the IM credit.
+- Trades through the live TradeModule `0xDea9…699f` against USDC cash `0xA74E…4272`; no per-asset registration.
+
+Steps, in order:
+
+0. The cNGN spot maker (ECS `market-maker-spot`) runs an image with numofx/market-maker#42. Before it, the maker took
+   "the first spot market in the map" as its own: with EURC-USDC listed, a routine restart could pick EURC and refuse to
+   start, leaving cNGN-USDC unquoted. Deployed and read back (the running task's image) before step 2, so it is in
+   place well before step 3, where markets-service starts listing EURC-USDC.
+1. `forge script scripts/deploy-eurc-spot.s.sol` (keystore) — writes `deployments/8453/EURC_SPOT.json`,
+   `EURC_SPOT_VAULT_ACTIONS.json` (7 actions) and `EURC_SPOT_ENABLE_VAULT_ACTIONS.json` (1). Immediately before it,
+   rerun `scripts/ops/rehearse_eurc_batch.py` on a fork with the real cap (scripts/ops/README.md); its sheet is what the
+   MPCVault approvers check digests against in step 2.
+
+   **The deployer (`0x2D724867d3AeD4A9F09c096B87F939285DD3AE2D`) sends no transactions before step 1.** At nonce 334
+   (2026-10-21) the escrow is `0xfD2AFbF4eF6E7a7f34A04D16Ff6da249Ca086cD9` and the feed
+   `0xaaE62Ae5df3747B8f43F895561043FB77D97C435`, both CREATE addresses of that nonce. Any transaction first moves both,
+   every action digest, and the batch hash (`0x256285d8…` at the 5M default; the real cap changes it in any case).
+   Check `cast nonce` on deploy morning and rehearse at whatever it reads.
+
+   **Nothing hard-codes the escrow address.** It is known only once step 1 lands. markets-service takes it from
+   `EURC_SPOT_ASSET_ADDRESS`, the keeper from `EURC_ESCROW`, the maker and the trading app from `/v1/markets`
+   (`asset_address` of `EURC-USDC`) or their own config, never from a constant copied out of this file.
+2. `scripts/ops/propose_eurc_spot_batch.py --propose` from the ops box — configure. Refuses unless the engine has
+   exactly one market before `createMarket` and exactly two after it.
+3. Services live with the escrow: markets-service (`EURC_SPOT_ASSET_ADDRESS`), the engine keeper (`EURC_ESCROW`,
+   `EURC_SPOT_FEED` in `scripts/ops/engine-keeper.env`), the maker (`infra/aws/market-maker-eurc.tf`).
+4. `--batch enable --rehearsed --propose` — `setWhitelistManager(engine, true)`, the switch that opens deposits.
+
 ## Base — ABANDONED deployment (pre-2026-07)
 
 The original deployment (owner `0xc7Be60b228B997C23094dDFdD71e22e2De6c9310`) is

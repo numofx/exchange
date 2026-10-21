@@ -278,11 +278,12 @@ func verifyQuoteAssetMatchesTradeModule(ctx context.Context, cfg config.Config) 
 	return nil
 }
 
-// verifyPerpQuoteAsset applies the same guard to the perp: its module must settle in the perp
-// stack's cash, the asset its SRM settles PnL and funding in. Split legs -- the price-vs-mark leg in
-// one asset, PnL in another -- are what this stack exists to avoid.
+// verifyPerpQuoteAsset applies the same guard to the shared stack: its module must settle in the
+// perp stack's cash, the asset its SRM settles PnL and funding in and the future settles in. Split
+// legs -- the price-vs-mark leg in one asset, PnL in another -- are what this stack exists to avoid.
+// It runs with the perp delisted too: the future still trades through that module.
 func verifyPerpQuoteAsset(ctx context.Context, cfg config.Config) error {
-	if !cfg.PerpEnabled() || strings.TrimSpace(cfg.ChainRPCURL) == "" {
+	if !cfg.PerpTradeStackConfigured() || strings.TrimSpace(cfg.ChainRPCURL) == "" {
 		return nil
 	}
 	c := &chainFundingChecker{rpcURL: strings.TrimSpace(cfg.ChainRPCURL), httpClient: &http.Client{Timeout: 5 * time.Second}}

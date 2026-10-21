@@ -58,25 +58,29 @@ type Metadata struct {
 	ContractMultiplier string `json:"contract_multiplier"`
 	// AmountScale, when set, is the signed on-chain amount of one unit of desired_amount, and the
 	// only one intake takes. Empty leaves it to each order, as spot and the perp always have.
-	AmountScale      string        `json:"amount_scale,omitempty"`
-	QuotePrecision   int           `json:"quote_precision"`
-	PricingModel     string        `json:"pricing_model,omitempty"`
-	PriceSemantics   string        `json:"price_semantics,omitempty"`
-	DisplayPriceKind string        `json:"display_price_kind,omitempty"`
-	DisplaySemantics string        `json:"display_semantics,omitempty"`
-	DisplayLabel     string        `json:"display_label,omitempty"`
-	DisplayName      string        `json:"display_name,omitempty"`
-	SettlementNote   string        `json:"settlement_note,omitempty"`
-	OrderEntrySpec   string        `json:"order_entry_spec,omitempty"`
-	UIPriceUnit      string        `json:"ui_price_unit,omitempty"`
-	UISizeUnit       string        `json:"ui_size_unit,omitempty"`
-	UISideMeaning    string        `json:"ui_side_meaning,omitempty"`
-	EnginePriceUnit  string        `json:"engine_price_unit,omitempty"`
-	EngineAmountUnit string        `json:"engine_amount_unit,omitempty"`
-	EngineSidePolicy string        `json:"engine_side_policy,omitempty"`
-	UIPriceToEngine  string        `json:"ui_price_to_engine,omitempty"`
-	UISizeToEngine   string        `json:"ui_size_to_engine,omitempty"`
-	FundingInterval  time.Duration `json:"-"`
+	AmountScale      string `json:"amount_scale,omitempty"`
+	QuotePrecision   int    `json:"quote_precision"`
+	PricingModel     string `json:"pricing_model,omitempty"`
+	PriceSemantics   string `json:"price_semantics,omitempty"`
+	DisplayPriceKind string `json:"display_price_kind,omitempty"`
+	DisplaySemantics string `json:"display_semantics,omitempty"`
+	DisplayLabel     string `json:"display_label,omitempty"`
+	DisplayName      string `json:"display_name,omitempty"`
+	SettlementNote   string `json:"settlement_note,omitempty"`
+	OrderEntrySpec   string `json:"order_entry_spec,omitempty"`
+	UIPriceUnit      string `json:"ui_price_unit,omitempty"`
+	UISizeUnit       string `json:"ui_size_unit,omitempty"`
+	UISideMeaning    string `json:"ui_side_meaning,omitempty"`
+	EnginePriceUnit  string `json:"engine_price_unit,omitempty"`
+	EngineAmountUnit string `json:"engine_amount_unit,omitempty"`
+	EngineSidePolicy string `json:"engine_side_policy,omitempty"`
+	UIPriceToEngine  string `json:"ui_price_to_engine,omitempty"`
+	UISizeToEngine   string `json:"ui_size_to_engine,omitempty"`
+	// UIPriceDecimals and UISizeDecimals are the places a price and a size are shown at, wherever the
+	// venue rounds for display (the integrations endpoints, the ui_intent echo). Zero: the engine's 18.
+	UIPriceDecimals int           `json:"ui_price_decimals,omitempty"`
+	UISizeDecimals  int           `json:"ui_size_decimals,omitempty"`
+	FundingInterval time.Duration `json:"-"`
 	// Where this market settles. Per market because the perp runs on its own stack: its orders name
 	// its own TradeModule, which settles in its own CashAsset, margined by its own SRM. Spot's are
 	// the process-wide TRADE_MODULE_ADDRESS / QUOTE_ASSET_ADDRESS, exactly as before.

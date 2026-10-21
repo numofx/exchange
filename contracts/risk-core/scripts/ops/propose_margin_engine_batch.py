@@ -8,8 +8,8 @@
           open engine. Built here, not from an artifact; proposed only while the cap gates below pass at the NEW cap.
   margin-factor  engine.setBaseAssetMarginFactor(market, F, IM scale unchanged): what cNGN counts for as margin, on
           spot, the perp and the future alike. Refused above MARGIN_FACTOR_MAX, the largest factor the fork measured.
-  enable  MARGIN_ENGINE_ENABLE_VAULT_ACTIONS.json: the perp's cap under the engine (DEFERRED: not proposed, see
-          below), the future's cap, then the
+  enable  MARGIN_ENGINE_ENABLE_VAULT_ACTIONS.json: the perp's cap under the engine (REFUSED: never proposed, the
+          perp is delisted; see below), the future's cap, then the
           future on the perp TradeModule. The only actions that open the engine. Proposed only while every gate
           below passes, re-read before each action. Making the live SRM close-only is not here: it is set to
           the live open interest at the cutover, once markets-service refuses orders that would increase it.
@@ -113,6 +113,8 @@ from propose_cngn_spot_batch import (  # noqa: E402  one implementation of the M
   request_tx_hash,
   rpc,
 )
+from perp_cap_guard import opens_a_perp_cap  # noqa: E402  the check every proposer shares
+import perp_cap_guard  # noqa: E402
 from propose_perp_enable_batch import gate_pager, http_json, keeper_gate  # noqa: E402
 from resolve_cngn_action6 import keccak  # noqa: E402
 
@@ -272,16 +274,25 @@ def owned(d: dict) -> list[str]:
   return [d["manager"], d["viewer"], d["future"], d["forwardFeed"]]
 
 
-# Actions in a batch file that are checked against the deployment like the rest but not proposed, and why.
-# The perp's cap under the engine stays 0 at enable (decided 2026-10-13): the perp is close-only
-# (CNGN_PERP_CLOSE_ONLY) with no market maker, and markets-service still margins the perp against the SRM
-# (CNGN_PERP_SRM_ADDRESS), so an engine account must not open a perp position before the perp's own
-# cutover moves it. That cutover opens it; until then the batch ends by confirming the cap still reads 0.
-DEFERRED = {"enable": {0: "the perp's cap under the engine stays 0 until the perp's own cutover"}}
+# Actions in a batch file that are checked against the deployment like the rest but not proposed yet, and why.
+DEFERRED: dict[str, dict[int, str]] = {}
+
+# Actions that are never proposed. The perp's cap under the engine was deferred at enable (2026-10-13) to a perp
+# cutover that will not happen: the perp is delisted (exchange #251, 2026-10-21) and its cap under the SRM is 0 (tx
+# 0x77efbb84…). Opening it under the engine would let SubAccounts.submitTransfer open perp positions between engine
+# accounts that no venue lists. This is not the only guard: propose_checked refuses any nonzero perp cap by content,
+# so neither this table nor DEFERRED can be edited to let it through.
+REFUSED = {"enable": {0: "the perp is delisted (exchange #251): its cap under the engine is never opened"}}
 
 
 def to_propose(batch: str, count: int) -> list[int]:
-  return [i for i in range(count) if i not in DEFERRED.get(batch, {})]
+  return [i for i in range(count) if i not in DEFERRED.get(batch, {}) and i not in REFUSED.get(batch, {})]
+
+
+def propose_checked(token: str, vault_uuid: str, vault: str, action: dict, d: dict, send=None) -> str:
+  """The only way this script reaches MPCVault: perp_cap_guard refuses a nonzero perp cap by content, whatever the
+  tables say."""
+  return perp_cap_guard.propose_checked(token, vault_uuid, vault, action, send or propose, perp=d["perp"])
 
 
 def expected_actions(batch: str, d: dict) -> list[tuple[str, str]]:
@@ -884,9 +895,44 @@ def self_test() -> int:
   # The engine keeper's floor is a full side of the future's IM at the cap, from the deployed artifact.
   deployed = json.loads((ROOT / "deployments" / "8453" / f"{NAME}.json").read_text())
   assert abs(engine_keeper_min_cash(deployed) - 3_750) < 1e-6, engine_keeper_min_cash(deployed)
-  # The enable batch proposes the future's cap and its registration, never the perp's cap (deferred).
+  # The enable batch proposes the future's cap and its registration, never the perp's cap (refused).
   assert to_propose("enable", 3) == [1, 2], to_propose("enable", 3)
   assert to_propose("setup", 10) == list(range(10)), "setup defers nothing"
+  # Refused, not deferred: emptying DEFERRED changes nothing, and with REFUSED emptied too, the content check
+  # still stops action 0 before any request is made.
+  global DEFERRED, REFUSED
+  saved = (DEFERRED, REFUSED)
+  try:
+    DEFERRED = {}
+    assert to_propose("enable", 3) == [1, 2], "emptying DEFERRED must not release the perp's cap"
+    DEFERRED, REFUSED = {}, {}
+    perp_cap_action = {"to": deployed["perp"], "description": "perp cap",
+                       "data": expected_actions("enable", deployed)[0][1]}
+
+    def must_not_send(*_):
+      raise AssertionError("a nonzero perp cap reached MPCVault")
+
+    try:
+      propose_checked("t", "v", "0x" + "00" * 20, perp_cap_action, deployed, send=must_not_send)
+    except SystemExit as refused:
+      assert "REFUSED" in str(refused) and "#251" in str(refused), refused
+    else:
+      raise AssertionError("propose_checked let a nonzero perp cap through")
+  finally:
+    DEFERRED, REFUSED = saved
+  # Under any manager, at any nonzero cap; a zero cap (closing) and every other action pass.
+  for manager in (deployed["manager"], "0xDE0423D0a1E15536265C9513d2e0c10DAb5835D4"):
+    for cap, opens in ((1, True), (50_000_000 * 10**18, True), (0, False)):
+      act = {"to": deployed["perp"], "data": selector("setTotalPositionCap") + word_address(manager) + word_uint(cap)}
+      assert opens_a_perp_cap(act, deployed["perp"]) is opens, (manager, cap)
+  for to, data in expected_actions("enable", deployed)[1:] + expected_actions("setup", deployed):
+    assert not opens_a_perp_cap({"to": to, "data": data}, deployed["perp"]), (to, data[:10])
+  assert propose_checked("t", "v", "0x" + "00" * 20, {"to": deployed["future"], "data": "0x00"}, deployed,
+                         send=lambda *_: "sent") == "sent"
+  # No flag reaches MPCVault around the check: main sends only through propose_checked.
+  import inspect
+  for path in (main, run_pool_withdraw):
+    assert "propose(token" not in inspect.getsource(path), f"{path.__name__} calls propose() directly"
   assert expected_actions("enable", deployed)[0][1].startswith(selector("setTotalPositionCap")) and \
     expected_actions("enable", deployed)[0][0].lower() == deployed["perp"].lower(), "action 0 is the perp's cap"
 
@@ -953,20 +999,23 @@ def main() -> int:
   current = gates()
   passed = report(current)
   done = [landed(chain, args.batch, d, i, vault) for i in range(len(actions))]
+  # A refused action is never going to land; the batch is done when everything it may propose has.
+  proposable = to_propose(args.batch, len(actions))
   print()
   for i, a in enumerate(actions):
-    state = "deferred" if i in DEFERRED.get(args.batch, {}) else ("landed  " if done[i] else "pending ")
+    state = ("refused " if i in REFUSED.get(args.batch, {}) else "deferred" if i in DEFERRED.get(args.batch, {})
+             else "landed  " if done[i] else "pending ")
     print(f"  {i}  {state}  {a['to']}  {a['digest']}  {a['description']}")
-  for i, why in DEFERRED.get(args.batch, {}).items():
+  for i, why in {**DEFERRED.get(args.batch, {}), **REFUSED.get(args.batch, {})}.items():
     print(f"     action {i} is not proposed: {why}")
-  if all(done) and args.batch == "setup":
+  if all(done[i] for i in proposable) and args.batch == "setup":
     # the vault owns everything now: re-read what the deployer could have changed while it did
     current.append(gate_parity(chain, d, vault))
     report(current[-1:])
   if args.json:
     print(json.dumps({"gates": [asdict(g) for g in current], "landed": done}))
-  if all(done):
-    print(f"\n{args.batch}: every action has landed; nothing to propose.")
+  if all(done[i] for i in proposable):
+    print(f"\n{args.batch}: every action it may propose has landed; nothing to propose.")
     if args.batch == "setup" and not current[-1].ok:
       print("\nPARITY BROKEN after the setup batch: a setting differs from the deploy. Do not enable; investigate.")
       return 1
@@ -984,7 +1033,7 @@ def main() -> int:
   proposing = to_propose(args.batch, len(actions))
   for i, a in enumerate(actions):
     if i not in proposing:
-      print(f"  [{i}] deferred, not proposed: {DEFERRED[args.batch][i]}")
+      print(f"  [{i}] not proposed: {REFUSED.get(args.batch, {}).get(i) or DEFERRED[args.batch][i]}")
       continue
     if landed(chain, args.batch, d, i, vault):
       print(f"  [{i}] already landed, skipped: {a['description']}")
@@ -996,7 +1045,7 @@ def main() -> int:
       again = gates_after_mining(lambda: [g for g in gates() if not (args.batch == "enable" and g.name == "custody")])
       if not report(again):
         raise SystemExit(f"a gate failed before action {i}: stop and investigate")
-    uuid = propose(token, vault_uuid, vault, a)
+    uuid = propose_checked(token, vault_uuid, vault, a, d)
     print(f"  [{i}] proposed uuid={uuid}\n       {a['description']}\n       digest {a['digest']}\n       -> approve in MPCVault now")
     deadline, tx_hash = time.time() + CONFIRM_TIMEOUT_SEC, None
     while time.time() < deadline and not tx_hash:
@@ -1012,7 +1061,7 @@ def main() -> int:
     perp_cap = chain.word(d["perp"], selector("totalPositionCap") + word_address(d["manager"]))
     if perp_cap != 0:
       raise SystemExit(f"the perp's cap under the engine reads {perp_cap}, not 0: it was to stay closed. Investigate.")
-    print("  the perp's cap under the engine still reads 0: deferred to the perp's cutover")
+    print("  the perp's cap under the engine still reads 0: refused, the perp is delisted (#251)")
   if args.batch == "setup":
     return setup_parity(chain, d, vault)
   return 0
@@ -1053,7 +1102,7 @@ def run_pool_withdraw(args, d: dict, chain: Chain, rpc_url: str, vault: str) -> 
   token, vault_uuid = os.environ.get("MPCVAULT_TOKEN", ""), os.environ.get("MPCVAULT_VAULT", "")
   if not token or not vault_uuid:
     raise SystemExit("MPCVAULT_TOKEN and MPCVAULT_VAULT are required (run via run-with-ssm-mark.sh on the ops box)")
-  uuid = propose(token, vault_uuid, vault, action)
+  uuid = propose_checked(token, vault_uuid, vault, action, d)
   print(f"  proposed uuid={uuid}\n       {action['description']}\n       digest {action['digest']}\n       -> approve in MPCVault now")
   deadline, tx_hash = time.time() + CONFIRM_TIMEOUT_SEC, None
   while time.time() < deadline and not tx_hash:

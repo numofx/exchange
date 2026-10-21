@@ -14,8 +14,9 @@ import {
 import { privateKeyToAccount } from 'viem/accounts';
 import { base } from 'viem/chains';
 
+import type { CollateralAsset, CollateralConfig } from './collateral.js';
 import type { Config } from './config.js';
-import type { AccountView } from './decide.js';
+import type { AccountView, CollateralView } from './decide.js';
 import type { StackHealth } from './health.js';
 import { readAtOrAfter } from './pinned-read.js';
 
@@ -42,6 +43,8 @@ export const auctionAbi = parseAbi([
   'error BLF_NotEnoughSigners()',
   'error BLF_SignatureSignersLengthMismatch()',
   'error BM_AccountUnderLiquidation()',
+  'error CLF_DataTooOld()',
+  'error CLF_InvalidPrice()',
   'error BM_AdjustmentsPaused()',
   'error BM_AssetCapExceeded()',
   'error BM_GuardianOnly()',
@@ -147,6 +150,7 @@ const perpAbi = parseAbi([
   'function isDisabled() view returns (bool)',
 ]);
 const settleAbi = parseAbi(['function settlePerpsWithIndex(uint256 accountId)']);
+const spotFeedAbi = parseAbi(['function getSpot() view returns (uint256, uint256)', 'error CLF_DataTooOld()', 'error CLF_InvalidPrice()']);
 
 const accountCreated = parseAbiItem(
   'event AccountCreated(address indexed owner, uint256 indexed accountId, address indexed manager)',
@@ -232,13 +236,34 @@ export function createKeeperChain(config: Config, transportOverride?: Transport)
     }
   }
 
-  /** The account's cNGN margin, valued at the perp index; null when it holds none or no escrow is set. */
-  async function readCollateral(accountId: bigint): Promise<AccountView['collateral']> {
-    if (config.CNGN_ESCROW === undefined) return null;
-    const cngn = await balance(accountId, config.CNGN_ESCROW);
-    if (cngn <= 0n) return null;
-    const [indexPrice] = await read({ address: config.PERP, abi: perpAbi, functionName: 'getIndexPrice' });
-    return { cngn, indexPrice };
+  /**
+   * One asset's USD price, 18dp. The perp index (cNGN) throws as it always has: it is the same index the
+   * margin read uses, so a failure here is a failure there. A spot feed (EURC) that reverts -- a stale
+   * Chainlink round, CLF_DataTooOld -- is null instead, so that only accounts actually holding the asset
+   * are held back by it (decide: "cannot price").
+   */
+  async function readPrice(asset: CollateralConfig): Promise<bigint | null> {
+    if (asset.price.kind === 'perpIndex') {
+      const [indexPrice] = await read({ address: asset.price.address, abi: perpAbi, functionName: 'getIndexPrice' });
+      return indexPrice;
+    }
+    const address = asset.price.address;
+    const spot = await optional(() => read({ address, abi: spotFeedAbi, functionName: 'getSpot' }));
+    return spot === null ? null : spot[0];
+  }
+
+  /**
+   * Every configured collateral the account holds, with its price; empty when it holds none (or none is
+   * configured). An asset's price is read only for an account that holds it.
+   */
+  async function readCollateral(accountId: bigint): Promise<CollateralView[]> {
+    const held: CollateralView[] = [];
+    for (const asset of config.COLLATERAL) {
+      const amount = await balance(accountId, asset.escrow);
+      if (amount <= 0n) continue;
+      held.push({ asset: asset.asset, amount, price: await readPrice(asset) });
+    }
+    return held;
   }
 
   /** A fresh cash-only account under MANAGER, owned by the keeper, to bid from. */
@@ -348,14 +373,38 @@ export function createKeeperChain(config: Config, transportOverride?: Transport)
     },
 
 
-    /** Everything decide() needs about one account. Throws if margin cannot be read (stale feeds). */
+    /**
+     * Everything decide() needs about one account. Throws if margin cannot be read (stale feeds), except
+     * when the account holds a collateral whose own feed is what fails: the engine values it with that
+     * feed, so its margin reverts with it. That account comes back with its unpriced collateral and zero
+     * margins, for decide() to hold back ("cannot price") rather than for the pass to call it unreadable.
+     */
     async readAccount(accountId: bigint): Promise<AccountView> {
-      const [mm, bm, mtm] = await read({
-        address: config.AUCTION,
-        abi: auctionAbi,
-        functionName: 'getMarginAndMarkToMarket',
-        args: [accountId, 0n],
-      });
+      let margins: readonly [bigint, bigint, bigint];
+      try {
+        margins = await read({
+          address: config.AUCTION,
+          abi: auctionAbi,
+          functionName: 'getMarginAndMarkToMarket',
+          args: [accountId, 0n],
+        });
+      } catch (error) {
+        const collateral = await optional(() => readCollateral(accountId));
+        if (collateral === null || !collateral.some((held) => held.price === null)) throw error;
+        const auction = await read({ address: config.AUCTION, abi: auctionAbi, functionName: 'getAuction', args: [accountId] });
+        return {
+          accountId,
+          mm: 0n,
+          bm: 0n,
+          mtm: 0n,
+          auction: { ongoing: auction.ongoing, insolvent: auction.insolvent, reservedCash: auction.reservedCash, startTime: auction.startTime },
+          canTerminate: false,
+          bidPrice: null,
+          maxProportion: null,
+          collateral,
+        };
+      }
+      const [mm, bm, mtm] = margins;
       const auction = await read({
         address: config.AUCTION,
         abi: auctionAbi,
@@ -423,12 +472,14 @@ export function createKeeperChain(config: Config, transportOverride?: Transport)
       return balance(config.KEEPER_ACCOUNT, config.CASH);
     },
 
-    /** cNGN across every keeper-owned account: what liquidations have paid it in so far. */
-    async keeperCngn(): Promise<bigint> {
-      if (config.CNGN_ESCROW === undefined) return 0n;
-      const escrow = config.CNGN_ESCROW;
-      const held = await Promise.all([...ownAccounts].map((id) => balance(id, escrow)));
-      return held.reduce((sum, amount) => sum + amount, 0n);
+    /** Each configured collateral across every keeper-owned account: what liquidations have paid it in so far. */
+    async keeperCollateral(): Promise<Partial<Record<CollateralAsset, bigint>>> {
+      const inventory: Partial<Record<CollateralAsset, bigint>> = {};
+      for (const asset of config.COLLATERAL) {
+        const held = await Promise.all([...ownAccounts].map((id) => balance(id, asset.escrow)));
+        inventory[asset.asset] = held.reduce((sum, amount) => sum + amount, 0n);
+      }
+      return inventory;
     },
 
     async readHealth(): Promise<StackHealth> {
@@ -454,7 +505,7 @@ export function createKeeperChain(config: Config, transportOverride?: Transport)
             read({ address: future, abi: perpAbi, functionName: 'totalPositionCap', args: [config.MANAGER] }),
           ])
         : [0n, 0n];
-      const [securityModuleCash, totalInsolventMM, cashExchangeRate, temporaryWithdrawFeeEnabled, keeperCash, keeperEthWei, totalPosition, totalPositionCap, keeperCngn] =
+      const [securityModuleCash, totalInsolventMM, cashExchangeRate, temporaryWithdrawFeeEnabled, keeperCash, keeperEthWei, totalPosition, totalPositionCap, keeperCollateral] =
         await Promise.all([
           balance(config.SECURITY_MODULE_ACCOUNT, config.CASH),
           read({ address: config.AUCTION, abi: auctionAbi, functionName: 'totalInsolventMM' }),
@@ -464,7 +515,7 @@ export function createKeeperChain(config: Config, transportOverride?: Transport)
           ethBalance(keeper.address),
           read({ address: config.PERP, abi: perpAbi, functionName: 'totalPosition', args: [config.MANAGER] }),
           read({ address: config.PERP, abi: perpAbi, functionName: 'totalPositionCap', args: [config.MANAGER] }),
-          this.keeperCngn(),
+          this.keeperCollateral(),
         ]);
       return {
         securityModuleCash,
@@ -474,7 +525,7 @@ export function createKeeperChain(config: Config, transportOverride?: Transport)
         keeperCash,
         keeperEthWei,
         keeperPerpPosition: ownPerp.reduce((sum, position) => sum + position, 0n),
-        keeperCngn,
+        keeperCollateral,
         keeperAccountsUnderMargin,
         totalPosition,
         totalPositionCap,

@@ -46,6 +46,47 @@ watched only SRM market feeds, which the live markets no longer use. `check_feed
 as a library the pager and the batch proposers import. To prove the page fires, stop `numo-feeds`
 past the warn age, confirm the page, then restart it.
 
+## EURC depth readings (evidence for the EURC deposit cap)
+
+`eurc_depth/depth.py --once` measures EURC/USDC depth within 2% on Base (every pool, both directions, one block) and
+the main pool's LP concentration, and appends one row to a CSV. The EURC cap is to be set at ~50% of the median 2%
+sell depth over 7 days of readings, and the engine keeper's `MAX_EURC_INVENTORY` at or below it (exchange #247; the
+EURC enable gate refuses a larger or unset limit). Read-only, through `run-with-ssm-readonly.sh` for the provider RPC.
+Twice a day, from its own checkout (the box's `~/exchange` is pinned at `bf9da89` and has no `eurc_depth/`):
+
+```bash
+# as ec2-user: a checkout at the commit that carries eurc_depth/, then one reading by hand (backfills the gauge)
+git clone https://github.com/numofx/exchange.git ~/exchange-eurc-depth
+git -C ~/exchange-eurc-depth checkout --detach <commit>
+cd ~/exchange-eurc-depth/contracts/risk-core   # no --self-test here: it needs compiled ABIs, and the box has no forge build
+EURC_DEPTH_CSV=~/numo-eurc-depth.csv EURC_DEPTH_STATE=~/numo-eurc-depth-state.json \
+  scripts/ops/run-with-ssm-readonly.sh python3 scripts/ops/eurc_depth/depth.py --once
+# as root
+cp /home/ec2-user/exchange-eurc-depth/contracts/risk-core/scripts/ops/numo-eurc-depth.{service,timer} /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now numo-eurc-depth.timer
+systemctl list-timers numo-eurc-depth.timer   # next run 00:00 or 12:00 UTC
+# after 7 days (the script samples nothing past them, and says so)
+python3 scripts/ops/eurc_depth/depth.py --summary
+systemctl disable --now numo-eurc-depth.timer
+```
+
+Record the checkout, the units and the CSV path in `OPS_BOX_CHANGES.md` the same day.
+
+## EURC batch rehearsal (anvil only)
+
+`rehearse_eurc_batch.py` runs `propose_eurc_spot_batch.py`'s own propose loop on an anvil fork of Base. It is the same
+gates, the same createMarket market-id rule and the same landed-checks, with each MPCVault signing request replaced by a
+transaction from the impersonated vault. It refuses any RPC that does not answer `anvil_nodeInfo`. The commands are in
+its docstring: fork, broadcast `deploy-eurc-spot.s.sol` to the fork, rehearse `configure` then `enable`, and delete the
+fork's `deployments/8453/EURC_SPOT*.json` and broadcast records afterwards. Rehearsed 2026-10-21 at block 52898297:
+all 7 configure actions landed (heaviest 103k gas, against the proposer's 400k); market 1 untouched; the enable gate
+refused on markets-service and the keeper, as it should before step 3.
+
+**On deploy day, rerun it with the real cap, at that morning's deployer nonce,** immediately before step 1. The escrow
+and feed are CREATE addresses of the deployer (`0x2D72…E2D`), so they, every action digest and the batch hash all follow
+from its nonce and the cap. The rehearsal's sheet is the reference: MPCVault approvers check each request's digest
+against that run's sheet, and a digest that matches no line of it is not approved.
+
 ## Basis logger (evidence for the Sep-16 fixing)
 
 `log_cngn_basis.py` samples the competing cNGN reference prices into a CSV so the

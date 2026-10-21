@@ -50,7 +50,7 @@ const ADDRESS_WORD_PADDING = '0'.repeat(24);
 
 /**
  * `abi.encode(WithdrawalData{address asset; uint256 assetAmount})`: exactly two static words and nothing else.
- * `assetAmount` is in the token's native decimals (6 for both wrapped USDC and cNGN).
+ * `assetAmount` is in the token's native decimals (6 for wrapped USDC, cNGN and EURC).
  */
 export function decodeWithdrawalData(data: string): { asset: `0x${string}`; amount: bigint } {
   if (!WITHDRAWAL_DATA_PATTERN.test(data)) {

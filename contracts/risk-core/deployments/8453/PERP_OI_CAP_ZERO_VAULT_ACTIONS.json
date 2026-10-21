@@ -1,0 +1,9 @@
+[
+  {
+    "description": "PerpAsset.setTotalPositionCap(perp SRM, 0) [the perp is delisted: no new open interest on chain, closing unaffected]",
+    "to": "0xC74EfC8B4808803dBCF439E76Fde076d56625b8E",
+    "value": "0",
+    "data": "0x40a557bd000000000000000000000000de0423d0a1e15536265c9513d2e0c10dab5835d40000000000000000000000000000000000000000000000000000000000000000",
+    "digest": "0x6748a90e3ae19e4051f2c88f238a92b7539be2460495d354e0d39f5ff8922f68"
+  }
+]

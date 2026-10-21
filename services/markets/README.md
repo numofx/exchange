@@ -89,7 +89,8 @@ Every check fails closed: a signature or owner that cannot be read is refused, n
 | 503 | not configured, or the chain or signature could not be read |
 
 Env: `WITHDRAWAL_MODULE_ADDRESS` and `EXECUTOR_WITHDRAW_URL` (both required to enable),
-`WITHDRAWAL_ASSET_ADDRESSES` (default: the quote asset and `CNGN_SPOT_ASSET_ADDRESS`),
+`WITHDRAWAL_ASSET_ADDRESSES` (default: the quote asset, `CNGN_SPOT_ASSET_ADDRESS`, `EURC_SPOT_ASSET_ADDRESS` when set,
+and the perp's cash and cNGN collateral when configured),
 `EXECUTOR_WITHDRAW_TIMEOUT` (default 45s; must exceed execution-service's `WITHDRAWAL_RECEIPT_TIMEOUT_MS`).
 Also needs `CHAIN_ID`, `MATCHING_ADDRESS` and `CHAIN_RPC_URL`, whatever `ENFORCE_MATCHING_CUSTODY` says.
 
@@ -97,8 +98,18 @@ Also needs `CHAIN_ID`, `MATCHING_ADDRESS` and `CHAIN_RPC_URL`, whatever `ENFORCE
 
 A USDC-settled perpetual on its own stack: a CashAsset over real USDC, its own SRM, security module
 and auction (risk-core `CNGN_PERP_STACK.json`), traded through its own TradeModule quoted in that cash
-(execution `CNGN_PERP_TRADE_MODULE.json`). Enabled by four variables, all or none — a partial set
-refuses to boot:
+(execution `CNGN_PERP_TRADE_MODULE.json`). Configured by four variables. The TradeModule, CashAsset
+and SRM are the venue's shared stack: spot and the future trade through that module and settle in
+that cash, and USDC deposits default to it. The asset is the perp's listing alone. Three sets boot:
+all four (the perp listed), the shared three without the asset (the perp delisted), or none; any
+other set refuses to boot.
+
+**Delisted since 2026-10-21** (production leaves `CNGN_PERP_ASSET_ADDRESS` empty): `/v1/markets` does
+not list it, `cNGN-PERP` and `USDCcNGN-PERP` are a `400 unknown_market`, and perp state, funding,
+the perp margin check and the position indexer are off. The shared stack runs as before, including
+the USDC withdrawal ledger check on its cash and the quote-asset guard on its module.
+`CNGN_PERP_CLOSE_ONLY` and `CNGN_PERP_CLOSE_ONLY_MANAGER` describe a listed perp and refuse to boot
+without one.
 
 | Env | Source |
 | --- | --- |
@@ -182,8 +193,8 @@ A cash-settled cNGN future: a `FutureAsset` series under the MarginEngine (risk-
 `MARGIN_ENGINE.json`), quoted in cNGN per USDC, one contract 1,000 USDC, traded on the perp's
 TradeModule and settled in the perp's cash. Listed as `USDC-cNGN-<DDMONYY>` (for example
 `USDC-cNGN-31DEC26`) under `(asset_address, sub_id)`, where the sub id is the expiry. Enabled by three
-variables, all or none, and only beside the perp stack and `CHAIN_RPC_URL` — anything else refuses to
-boot:
+variables, all or none, and only beside the shared stack (the perp's TradeModule, CashAsset and SRM;
+the perp itself may be delisted) and `CHAIN_RPC_URL` — anything else refuses to boot:
 
 | Env | Source |
 | --- | --- |
@@ -237,6 +248,8 @@ Important values:
 - `MATCHING_ADDRESS`
 - `TRADE_MODULE_ADDRESS`
 - `CNGN_SPOT_ASSET_ADDRESS`
+- `EURC_SPOT_ASSET_ADDRESS` — the EURC-USDC escrow; empty (the default) leaves EURC-USDC unlisted
+- `SPOT_MARGIN_MANAGER_ADDRESS` — the manager both spot markets' accounts live under (the MarginEngine)
 - `CASH_ASSET_ADDRESS` — CashAsset contract, for the pre-trade funding check
 - `ENFORCE_FUNDING_CHECK` — default `true`
 
@@ -260,15 +273,36 @@ fields such as `display_name` and `display_label`.
 Every endpoint that takes a `symbol`, `market` or `ticker_id` resolves it through one exact-match
 lookup (`instruments.Registry.Resolve`): the canonical symbol, a deprecated alias, or
 `asset_address:sub_id`. Anything else is a `400 unknown_market` naming the accepted identifiers;
-nothing falls back to another market. The identifiers the markets were listed under before the
-rename, `USDCcNGN-SPOT` and `USDCcNGN-PERP`, are accepted as deprecated aliases: the response names
-the market canonically and carries `Deprecation: true` and `X-Canonical-Market`.
+nothing falls back to another market. Spot's identifier before the rename, `USDCcNGN-SPOT`, is
+accepted as a deprecated alias: the response names the market canonically and carries
+`Deprecation: true` and `X-Canonical-Market`. The perp's, `USDCcNGN-PERP`, is no longer an alias
+(removed with the perp's delisting) and is an unknown market like any other.
 
 - `contract_type=spot`
 - `settlement_type=spot`
 - `base_asset_symbol=cNGN`
 - `quote_asset_symbol=USDC`
 - `order_entry_spec=cngn_usdc_spot_v1`: prices in USDC per cNGN, sizes in cNGN, buy = buy cNGN
+
+### EURC-USDC
+
+A second spot market, listed only when `EURC_SPOT_ASSET_ADDRESS` is set (set it on the API **and** the
+matcher). EURC (Base `0x60a3…db42`, a Circle FiatToken, 6 decimals) is held in its own
+WrappedERC20Asset escrow (18dp internal balances) under the same MarginEngine
+(`SPOT_MARGIN_MANAGER_ADDRESS`), traded through the same `TRADE_MODULE_ADDRESS` against the same
+quote asset as cNGN-USDC, so the funding check and the pause gate apply to it unchanged.
+
+- `contract_type=spot`, `settlement_type=spot`, `base_asset_symbol=EURC`, `quote_asset_symbol=USDC`
+- Prices in USDC per EURC (~1.12), sizes in whole EURC: `amount_scale` 1e18 (`desired_amount` 1 = 1 EURC),
+  tick 1e-18, `min_size` / `amount_step` 1. Direct and linear: a UI buy is an engine buy, nothing inverts.
+- **No `order_entry_spec`.** Orders are taken in engine units only; a `ui_intent` is refused, and
+  orders, fills and trades carry no `spot_contract` echo. `ui_price_decimals` 5 / `ui_size_decimals` 6
+  are the places the integrations endpoints round to (cNGN-USDC: 10 / 6, the echo's).
+- Fees from the registry like every market: 5 bps taker, 0 maker (cNGN-USDC stays at 25).
+- Deposits are a `DEPOSIT_ASSETS` entry (`<escrow>:EURC:<minimum in 6-decimal units>`); withdrawals
+  default to including the escrow. EURC has no permit path here: approve the DepositModule on chain.
+- `EURC_SPOT_ASSET_ADDRESS` must be an address of its own; the service refuses to start if it is
+  another market's asset or the quote asset.
 
 If `EXPECTED_ORDER_OWNER` or `EXPECTED_ORDER_SIGNER` are set, the API rejects orders whose declared owner/signer do not match those configured addresses. The API also validates that `action_json.owner`, `action_json.signer`, `action_json.subaccount_id`, and `action_json.nonce` match the stored order fields.
 With `ENFORCE_ACTION_DATA_INVARIANTS=true` (default), the API also rejects orders unless:

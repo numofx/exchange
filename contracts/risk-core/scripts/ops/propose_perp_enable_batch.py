@@ -4,10 +4,15 @@
 The perp deploys closed twice over: its OI cap is 0 (closed to every path, including accounts that
 move perp between themselves with SubAccounts.submitTransfers) and its TradeModule is not allowlisted
 on Matching (closed to the venue). Neither deploy batch changes that. This is the one action that
-opens the market:
+opened the market at go-live:
 
-  0. perp.setTotalPositionCap(srm, launchOICap)     every path, bounded
+  0. perp.setTotalPositionCap(srm, launchOICap)     every path, bounded       REFUSED: never proposed again
   1. matching.setAllowedModule(perpTradeModule, true)   the venue
+
+The perp is delisted (exchange #251, 2026-10-21) and its cap is back at 0 (tx 0x77efbb84…). Action 0 is refused
+twice over: REFUSED skips it, and every send goes through perp_cap_guard, which refuses a nonzero perp cap by its
+calldata. Neither depends on the custody gate (which today fails anyway: the module is the shared TradeModule spot
+and the future trade through, so it is allowed), so emptying REFUSED or skipping the gates still sends nothing.
 
 Gates, all read live and all required (re-checked before EACH action is proposed):
 
@@ -53,6 +58,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import perp_cap_guard  # noqa: E402  the check every proposer shares
 from check_feed_staleness import diff_feed_age, feed_age  # noqa: E402
 from propose_cngn_spot_batch import (  # noqa: E402  single implementation of the MPCVault transport
   CONFIRM_POLL_SEC,
@@ -74,6 +80,10 @@ OUT_ARTIFACT = ROOT / "deployments" / "8453" / "CNGN_PERP_ENABLE_VAULT_ACTIONS.j
 
 SUB_ACCOUNTS = "0x7019244E25FA416e6Ca2ed2F3cA25277aef72843"
 FEED_MAX_AGE_SEC = 600
+
+# Actions in OUT_ARTIFACT that are never proposed, and why. Not the only guard: propose_actions sends only through
+# perp_cap_guard, which refuses a nonzero perp cap whatever this table says.
+REFUSED = {0: "the perp is delisted (exchange #251): its cap under the SRM stays 0"}
 QUOTE_BAND = 0.02
 
 SIGNATURES = {
@@ -428,7 +438,45 @@ def self_test() -> int:
     gate = run(**kwargs)
     assert not gate.ok and why in gate.detail, f"{name}: {gate.detail}"
 
-  print("self-test ok: selectors match their `cast sig` values; seed rule sized; pager gate; keeper gate refuses each way")
+  # Action 0, the perp's cap under its SRM, is refused by content: with REFUSED emptied and no gate run, the send
+  # path stops it before the transport; with the guard switched off, the same path reaches the transport.
+  global REFUSED
+  venue = load_venue(STACK_ARTIFACT, MODULE_ARTIFACT)
+  actions = build_actions(venue)
+  assert [a["data"] for a in actions] == [a["data"] for a in json.loads(OUT_ARTIFACT.read_text())], "go-live batch"
+  assert perp_cap_guard.opens_a_perp_cap(actions[0], venue.perp) and not perp_cap_guard.opens_a_perp_cap(actions[1])
+
+  class Reached(Exception):
+    pass
+
+  def transport(_token, _uuid, _vault, action):
+    raise Reached(action["data"])
+
+  def send_all() -> str:
+    try:
+      propose_actions("http://rpc", venue, None, EXPECTED_VAULT, actions, "t", "v", send=transport)
+    except Reached as reached:
+      return f"reached {reached}"
+    except SystemExit as refused:
+      return f"refused {refused}"
+    return "nothing sent"
+
+  assert send_all() == f"reached {actions[1]['data']}", "with REFUSED in place, only action 1 reaches the transport"
+  saved, guard = REFUSED, perp_cap_guard.opens_a_perp_cap
+  try:
+    REFUSED = {}
+    outcome = send_all()
+    assert outcome.startswith("refused") and "#251" in outcome, f"emptying REFUSED released the perp's cap: {outcome}"
+    perp_cap_guard.opens_a_perp_cap = lambda *_a, **_k: False
+    assert send_all() == f"reached {actions[0]['data']}", "with the guard off the cap reaches the transport"
+  finally:
+    REFUSED, perp_cap_guard.opens_a_perp_cap = saved, guard
+  assert 0 in REFUSED and "#251" in REFUSED[0]
+  import inspect
+  assert "propose(token" not in inspect.getsource(main) + inspect.getsource(propose_actions), "a send around the guard"
+
+  print("self-test ok: selectors match their `cast sig` values; seed rule sized; pager gate; keeper gate refuses each way; "
+        "the perp's cap (action 0) is refused by content")
   return 0
 
 
@@ -474,7 +522,7 @@ def main() -> int:
   passed = report(run_gates(rpc_url, venue, args, vault))
   print()
   for i, a in enumerate(actions):
-    print(f"  {i}  {a['to']}  {a['digest']}  {a['description']}")
+    print(f"  {i}  {a['to']}  {a['digest']}  {a['description']}{'  [REFUSED]' if i in REFUSED else ''}")
   if not passed:
     print("\nGATES FAILED: nothing written, nothing proposed.")
     return 1
@@ -489,12 +537,26 @@ def main() -> int:
   token, vault_uuid = os.environ.get("MPCVAULT_TOKEN", ""), os.environ.get("MPCVAULT_VAULT", "")
   if not token or not vault_uuid:
     raise SystemExit("MPCVAULT_TOKEN and MPCVAULT_VAULT are required (run via run-with-ssm-mark.sh)")
+  propose_actions(rpc_url, venue, args, vault, actions, token, vault_uuid)
+  print("\nevery proposed action approved and mined.")
+  return 0
+
+
+def propose_actions(rpc_url: str, v: Venue, args, vault: str, actions: list[dict], token: str, vault_uuid: str,
+                    send=None) -> None:
+  """Each action not REFUSED, one at a time; the only way this script reaches MPCVault, and always through
+  perp_cap_guard."""
+  sent = 0
   for i, a in enumerate(actions):
-    # Gates are re-read before each action: the first can take a while to be approved, and a keeper
-    # or feed that died in the meantime must stop the second.
-    if i > 0 and not report(gates_after_mining(lambda: run_gates_after_cap(rpc_url, venue, args, vault))):
-      raise SystemExit(f"a gate failed before action {i}; the cap is raised but the venue is not open. Stop and investigate.")
-    uuid = propose(token, vault_uuid, vault, a)
+    if i in REFUSED:
+      print(f"  [{i}] not proposed: {REFUSED[i]}")
+      continue
+    # Gates are re-read before each later action: an earlier one can take a while to be approved, and a keeper
+    # or feed that died in the meantime must stop the next.
+    if sent and not report(gates_after_mining(lambda: run_gates(rpc_url, v, args, vault))):
+      raise SystemExit(f"a gate failed before action {i}. Stop and investigate.")
+    uuid = perp_cap_guard.propose_checked(token, vault_uuid, vault, a, send or propose, perp=v.perp)
+    sent += 1
     print(f"  [{i}] proposed uuid={uuid}\n       {a['description']}\n       digest {a['digest']}\n       -> approve in MPCVault now")
     deadline, tx_hash = time.time() + CONFIRM_TIMEOUT_SEC, None
     while time.time() < deadline and not tx_hash:
@@ -503,16 +565,6 @@ def main() -> int:
     if not tx_hash:
       raise SystemExit(f"action {i} not approved within the timeout")
     confirm_on_chain(rpc_url, tx_hash)
-  print("\ncNGN-PERP enabled. markets-service will report trading_enabled within 30s.")
-  return 0
-
-
-def run_gates_after_cap(rpc_url: str, v: Venue, args, vault: str) -> list[Gate]:
-  """The gates between the two actions: custody now expects the cap raised and the module still off."""
-  allowed = uint_at(call(rpc_url, v.matching, selector("allowedModules") + word_address(v.module)))
-  cap = uint_at(call(rpc_url, v.perp, selector("totalPositionCap") + word_address(v.srm)))
-  custody = Gate("custody", cap == v.launch_cap and not allowed, f"cap={cap} module allowed={bool(allowed)}")
-  return [custody, *run_gates(rpc_url, v, args, vault)[1:]]
 
 
 if __name__ == "__main__":
