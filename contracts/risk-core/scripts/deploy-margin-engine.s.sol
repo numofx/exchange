@@ -54,8 +54,12 @@ interface ITradeModuleQuote {
  *   INITIAL_MARK=<cNGN per USDC, 18dp> CARRY=<annual carry, 18dp> FORWARD_SIGNER=<forward key> \
  *     forge script scripts/deploy-margin-engine.s.sol --rpc-url $BASE_RPC_URL --account numo-deployer --broadcast
  *
- * Optional env: EXPIRY, LAST_TRADE_TIME, CONTRACT_SIZE, FUTURE_OI_CAP, ENGINE_CNGN_CAP, PERP_OI_CAP,
- *   INITIAL_MARK_TOLERANCE.
+ * Required env also: PERP_OI_CAP, the cap the ENABLE batch would open the perp to under the engine (NGN, 18dp). It
+ *   has no default: it was read from the perp's cap under the SRM until that was zeroed at the perp's delisting
+ *   (exchange #251, tx 0x77efbb84…, 2026-10-21). The 2026-10-13 deploy used 50,000,000e18. The enable batch never
+ *   proposes it (propose_margin_engine_batch.py REFUSED); the value only fills the artifact.
+ *
+ * Optional env: EXPIRY, LAST_TRADE_TIME, CONTRACT_SIZE, FUTURE_OI_CAP, ENGINE_CNGN_CAP, INITIAL_MARK_TOLERANCE.
  */
 contract DeployMarginEngine is Utils {
   string internal constant ARTIFACT_NAME = "MARGIN_ENGINE";
@@ -189,8 +193,8 @@ contract DeployMarginEngine is Utils {
     params.carry = vm.envUint("CARRY");
     params.initialMarkTolerance = vm.envOr("INITIAL_MARK_TOLERANCE", DEFAULT_INITIAL_MARK_TOLERANCE);
     params.futureOICap = vm.envOr("FUTURE_OI_CAP", DEFAULT_FUTURE_OI_CAP);
-    // the engine takes over the perp at the cap it has under the SRM, unless told otherwise
-    params.perpOICap = vm.envOr("PERP_OI_CAP", PerpAsset(params.perp).totalPositionCap(StandardManager(params.srm)));
+    // Explicit, never read from chain: the SRM's perp cap is 0 since the delisting. 2026-10-13: 50,000,000e18.
+    params.perpOICap = vm.envUint("PERP_OI_CAP");
     params.engineCngnCap = vm.envOr("ENGINE_CNGN_CAP", DEFAULT_ENGINE_CNGN_CAP);
     params.forwardSigner = vm.envAddress("FORWARD_SIGNER");
 
