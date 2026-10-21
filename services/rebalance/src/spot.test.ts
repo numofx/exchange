@@ -54,3 +54,10 @@ test('no spot market, or more than one, is refused rather than guessed', async (
   await assert.rejects(resolveSpotVenue('http://venue', 26n, chain(), markets(perp)), /found 0/);
   await assert.rejects(resolveSpotVenue('http://venue', 26n, chain(), markets(spot, spot)), /found 2/);
 });
+
+// EURC-USDC is a second spot market under the same manager: the cNGN rebalance must still find exactly cNGN's escrow.
+test('EURC-USDC listed beside cNGN spot does not count as a second cNGN spot market', async () => {
+  const eurc = { contract_type: 'spot', base_asset_symbol: 'EURC', asset_address: '0x00000000000000000000000000000000000E0dC0', quote_asset_address: CASH, margin_manager_address: MANAGER };
+  const v = await resolveSpotVenue('http://venue', 26n, chain(), markets(eurc, perp, spot));
+  assert.deepEqual(v, { cngnEscrow: ESCROW, quoteAsset: CASH, manager: MANAGER });
+});

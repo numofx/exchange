@@ -16,6 +16,8 @@ export type TokenControl = { symbol: string; blacklist: `0x${string}`; fn: 'isBl
 export const TOKEN_CONTROLS: Record<string, TokenControl> = {
   '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913': { symbol: 'USDC', blacklist: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', fn: 'isBlacklisted' },
   '0x46c85152bfe9f96829aa94755d9f915f9b10ef5f': { symbol: 'cNGN', blacklist: '0x2a7483194a651b398582c9a935f793ec2dee2fa7', fn: 'isBlackListed' },
+  // EURC is a Circle FiatToken like USDC: its own paused() and isBlacklisted(address) (read on Base 2026-10-21).
+  '0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42': { symbol: 'EURC', blacklist: '0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42', fn: 'isBlacklisted' },
 };
 
 export const TOKEN_CONTROLS_ABI = [
