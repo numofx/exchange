@@ -262,7 +262,14 @@ async function main() {
     ['script', 'scripts/deploy-margin-engine.s.sol', '--rpc-url', RPC, '--private-key', KEYS.deployer, '--broadcast'],
     {
       cwd: RISK_CORE,
-      env: { ...process.env, INITIAL_MARK: initialMark.toString(), CARRY: CARRY.toString(), FORWARD_SIGNER: addr(KEYS.forward) },
+      // PERP_OI_CAP has no default since the perp's delisting: the 2026-10-13 deploy's 50M.
+      env: {
+        ...process.env,
+        INITIAL_MARK: initialMark.toString(),
+        CARRY: CARRY.toString(),
+        FORWARD_SIGNER: addr(KEYS.forward),
+        PERP_OI_CAP: (50_000_000n * 10n ** 18n).toString(),
+      },
       encoding: 'utf8',
       maxBuffer: 64 * 1024 * 1024,
     },
