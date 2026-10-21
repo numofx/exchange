@@ -171,7 +171,19 @@ Steps, in order:
    start, leaving cNGN-USDC unquoted. Deployed and read back (the running task's image) before step 2, so it is in
    place well before step 3, where markets-service starts listing EURC-USDC.
 1. `forge script scripts/deploy-eurc-spot.s.sol` (keystore) — writes `deployments/8453/EURC_SPOT.json`,
-   `EURC_SPOT_VAULT_ACTIONS.json` (7 actions) and `EURC_SPOT_ENABLE_VAULT_ACTIONS.json` (1).
+   `EURC_SPOT_VAULT_ACTIONS.json` (7 actions) and `EURC_SPOT_ENABLE_VAULT_ACTIONS.json` (1). Immediately before it,
+   rerun `scripts/ops/rehearse_eurc_batch.py` on a fork with the real cap (scripts/ops/README.md); its sheet is what the
+   MPCVault approvers check digests against in step 2.
+
+   **The deployer (`0x2D724867d3AeD4A9F09c096B87F939285DD3AE2D`) sends no transactions before step 1.** At nonce 334
+   (2026-10-21) the escrow is `0xfD2AFbF4eF6E7a7f34A04D16Ff6da249Ca086cD9` and the feed
+   `0xaaE62Ae5df3747B8f43F895561043FB77D97C435`, both CREATE addresses of that nonce. Any transaction first moves both,
+   every action digest, and the batch hash (`0x256285d8…` at the 5M default; the real cap changes it in any case).
+   Check `cast nonce` on deploy morning and rehearse at whatever it reads.
+
+   **Nothing hard-codes the escrow address.** It is known only once step 1 lands. markets-service takes it from
+   `EURC_SPOT_ASSET_ADDRESS`, the keeper from `EURC_ESCROW`, the maker and the trading app from `/v1/markets`
+   (`asset_address` of `EURC-USDC`) or their own config, never from a constant copied out of this file.
 2. `scripts/ops/propose_eurc_spot_batch.py --propose` from the ops box — configure. Refuses unless the engine has
    exactly one market before `createMarket` and exactly two after it.
 3. Services live with the escrow: markets-service (`EURC_SPOT_ASSET_ADDRESS`), the engine keeper (`EURC_ESCROW`,
