@@ -63,17 +63,34 @@ ends at the account's maintenance margin, so the module paid close to the step's
 not just the part past bankruptcy. Whether v2's linear payoff does the same is unmeasured: #245's
 `testSecurityModuleCoverageAgainstTheFork`, run against v2, settles which column the cap should come from.
 
+What `propose_margin_engine_v2_batch.py` enforces at `enable` and `cap`, re-read at the cap being opened and today's mark:
+
+- **`sm`** (refuses): the SecurityModule covers the whole of a 15% step (`SM_MOVE`, the pager's) on one side,
+  `check_perp_pager.sm_required_usd_linear`. v1's rule pays nothing until a side at MM is insolvent; a linear side at
+  MM 15% is insolvent at exactly 15%, so that rule would read nothing at all and the whole step is the safe reading
+  until the fork measures v2. $3,250 covers 58 contracts at 0.000743.
+- **`gaps`** (informational, never refuses): this table at today's mark and cash, naming each gap the cap is not
+  covered at. The cap itself is a decision; the deploy default of 30 is not covered at a 40% gap at 0.000743.
+
 ## Migration
 
 There is no `changeManager` in SubAccounts. Holders move by opening a v2 account and withdrawing and re-depositing.
 `test/fork/MarginEngineV2DeployFork.t.sol` proves a v1 account and a v2 account trade spot cNGN against USDC directly,
 each held to its own engine, so `cNGN-USDC` and `EURC-USDC` keep one book through the move.
 
-Order:
+Order (`scripts/ops/propose_margin_engine_v2_batch.py` proposes every vault step; each is gated and re-read):
 
 1. Deploy v2 (`scripts/deploy-margin-engine-v2.s.sol`): closed, nothing reused wired.
-2. `MARGIN_ENGINE_V2_VAULT_ACTIONS`: accept, wire the cash, every escrow at v1's cap, and the auction; v1's guardian.
-3. `MARGIN_ENGINE_V2_ENABLE_VAULT_ACTIONS`: open the future and register it on the TradeModule.
-4. markets-service lists `cNGN-31DEC26`; new spot deposits default to v2 accounts.
-5. v1 close-only: caps **at** live open interest, never below (a cap below OI freezes holders).
+2. `setup` (`MARGIN_ENGINE_V2_VAULT_ACTIONS`): accept, wire the cash, every escrow at v1's cap, and the auction; v1's
+   guardian. Re-reads parity once the vault owns everything.
+3. `enable` (`MARGIN_ENGINE_V2_ENABLE_VAULT_ACTIONS`): open the future and register it on the TradeModule. Refused until
+   v2 has its own forward keeper, liquidation keeper and pager watch (#258) and markets-service lists `cNGN-31DEC26`
+   with the chain's band in USDC per cNGN (#228).
+4. markets-service: new spot deposits default to v2 accounts (no listing's `margin_manager_address` is v1), and v1's
+   future is listed close-only (`future.close_only`).
+5. `v1-close-only`: every cap v1 holds (each escrow, the future) set **at** live open interest, never a raise. Refused
+   until 3 and 4 hold. A cap that lands under open interest, because it rose between the read and the approval, is the
+   same close-only and not a freeze: the deployed viewer checks only the assets a transfer touched.
+   `test/fork/MarginEngineV1CloseOnlyFork.t.sol` proves holders still close, settle VM, withdraw and sell cNGN to v2,
+   that nothing opens, and that under the SRM's cap check the same cap freezes them.
 6. 30NOV26 fixes and closes out on v1; holders withdraw and re-deposit under v2.

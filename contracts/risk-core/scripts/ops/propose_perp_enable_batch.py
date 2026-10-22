@@ -328,7 +328,8 @@ def gate_pager(state_file: Path, now: float | None = None, future_manager: str |
     return Gate("pager", False, f"PAGER_PROVIDER is {state.get('provider')!r}: nothing can page your phone")
   if not state.get("heartbeatConfigured"):
     return Gate("pager", False, "no dead-man's switch (PAGER_HEARTBEAT_URL): a dead pager would go unnoticed")
-  if future_manager and str(state.get("futureManager", "")).lower() != future_manager.lower():
+  read = [str(m).lower() for m in state.get("futureManagers") or [state.get("futureManager", "")]]
+  if future_manager and future_manager.lower() not in read:
     return Gate("pager", False, f"the pager's last run read the future under {state.get('futureManager') or 'no manager'}, "
                 f"not {future_manager}: it would not page on the future (an old pager copy, or no artifact?)")
   watching = f", watching the future under {future_manager}" if future_manager else ""
@@ -399,6 +400,11 @@ def self_test() -> int:
     assert not gate_pager(state, now=1_060, future_manager=engine).ok, "another manager's future"
     state.write_text(json.dumps({**good, "futureManager": engine.lower()}))
     assert gate_pager(state, now=1_060, future_manager=engine).ok
+    # A pager reading both engines' futures reports them all: either engine's gate passes, a third does not.
+    v2 = "0x" + "22" * 20
+    state.write_text(json.dumps({**good, "futureManagers": [engine.lower(), v2]}))
+    assert gate_pager(state, now=1_060, future_manager=engine).ok and gate_pager(state, now=1_060, future_manager=v2).ok
+    assert not gate_pager(state, now=1_060, future_manager="0x" + "33" * 20).ok
   # keeper_gate, each refusal: the health and the chain stubbed, everything else real.
   g = globals()
   saved = {k: g[k] for k in ("http_json", "call", "rpc")}
