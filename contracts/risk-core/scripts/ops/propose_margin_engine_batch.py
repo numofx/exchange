@@ -475,8 +475,8 @@ def gate_rfq(chain: Chain, d: dict) -> Gate:
   return Gate("rfq", True, f"the RfqModule is not allowed on Matching {matching}")
 
 
-def fills_gate(listing: dict | None, chain_low: float, chain_high: float) -> Gate:
-  """markets-service's fill band for the future (its /v1/markets entry) against the chain's."""
+def fills_gate(listing: dict | None, chain_low: float, chain_high: float, unit: str = "cNGN per USDC") -> Gate:
+  """markets-service's fill band for the future (its /v1/markets entry) against the chain's, in `unit`."""
   if listing is None:
     return Gate("fills", False, "the future is not on markets-service /v1/markets: the listing must ship with its fill-band check")
   if listing.get("fill_band_enforced") is not True:
@@ -489,7 +489,7 @@ def fills_gate(listing: dict | None, chain_low: float, chain_high: float) -> Gat
   if off > FILL_BAND_TOLERANCE:
     return Gate("fills", False, f"markets-service enforces {low:,.4f}-{high:,.4f}, the chain {chain_low:,.4f}-{chain_high:,.4f} "
                 f"({off * 1e4:.1f} bps apart, limit {FILL_BAND_TOLERANCE * 1e4:.0f})")
-  return Gate("fills", True, f"markets-service enforces the chain's fill band, {low:,.4f}-{high:,.4f} cNGN per USDC")
+  return Gate("fills", True, f"markets-service enforces the chain's fill band, {low:,.4g}-{high:,.4g} {unit}")
 
 
 def chain_fill_band(spot_word: int, band_word: int) -> tuple[float, float]:
@@ -931,7 +931,7 @@ def self_test() -> int:
                          send=lambda *_: "sent") == "sent"
   # No flag reaches MPCVault around the check: main sends only through propose_checked.
   import inspect
-  for path in (main, run_pool_withdraw):
+  for path in (main, run_pool_withdraw, run_single):
     assert "propose(token" not in inspect.getsource(path), f"{path.__name__} calls propose() directly"
   assert expected_actions("enable", deployed)[0][1].startswith(selector("setTotalPositionCap")) and \
     expected_actions("enable", deployed)[0][0].lower() == deployed["perp"].lower(), "action 0 is the perp's cap"
@@ -1130,7 +1130,7 @@ def run_single(args, action: dict, gates: list[Gate], rpc_url: str, landed_now, 
   token, vault_uuid = os.environ.get("MPCVAULT_TOKEN", ""), os.environ.get("MPCVAULT_VAULT", "")
   if not token or not vault_uuid:
     raise SystemExit("MPCVAULT_TOKEN and MPCVAULT_VAULT are required (run via run-with-ssm-mark.sh on the ops box)")
-  uuid = propose(token, vault_uuid, EXPECTED_VAULT, action)
+  uuid = perp_cap_guard.propose_checked(token, vault_uuid, EXPECTED_VAULT, action, propose)
   print(f"  proposed uuid={uuid}\n       {action['description']}\n       digest {action['digest']}\n       -> approve in MPCVault now")
   deadline, tx_hash = time.time() + CONFIRM_TIMEOUT_SEC, None
   while time.time() < deadline and not tx_hash:

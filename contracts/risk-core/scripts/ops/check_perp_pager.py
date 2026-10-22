@@ -334,6 +334,17 @@ def sm_required_usd(one_side_usd: float, mm: float, premium: float, move: float 
   return loss if loss > one_side_usd * mm else 0.0
 
 
+def sm_required_usd_linear(one_side_usd: float, move: float = SM_MOVE) -> float:
+  """MarginEngine v2's future (USDC VM, linear in price): what the SecurityModule pays if one whole side is liquidated
+  after a `move` against it, taken as the whole step, one_side x move. An upper bound until #245's coverage test runs
+  against v2 (docs/margin-engine-v2.md): on v1 the fork found the module paid close to the whole step once a side was
+  insolvent, and a linear side at MM 15% is insolvent at exactly a 15% move, where sm_required_usd's "0 until
+  insolvent" would read nothing at all."""
+  if one_side_usd <= 0 or not 0 < move < 1:
+    return 0.0
+  return one_side_usd * move
+
+
 def sm_future_condition(one_side_usd: float, mm: float, premium: float, sm_cash_usd: float) -> Condition | None:
   """sm-coverage for the future: pages at 1.2x of what the module holds."""
   required = sm_required_usd(one_side_usd, mm, premium)
@@ -930,6 +941,9 @@ def self_test() -> int:
   assert sm_required_usd(15_000, 0.15, 0.923) > 0 and sm_required_usd(15_000, 0.15, 0.922) == 0.0
   # 14% sat on the edge: half a percent under the index was enough.
   assert sm_required_usd(15_000, 0.15, 0.995, 0.14) > 0 and sm_required_usd(15_000, 0.15, 0.994, 0.14) == 0.0
+  # v2's linear rule: the whole step. A 30-contract cap at 0.000743 is a $11,145 side, $1,671.75 at 15%; nothing for no side.
+  assert sm_required_usd_linear(15 * 1_000_000 * 0.000743) == 15 * 1_000_000 * 0.000743 * 0.15
+  assert sm_required_usd_linear(0) == 0.0 and sm_required_usd_linear(11_145, 0.40) == 11_145 * 0.40
   # Slack past coverage, page at 1.2x of it.
   assert "2,468" in sm_future_warning(15_000, 0.15, 1.0124, 2_100) and sm_future_condition(15_000, 0.15, 1.0124, 2_100) is None
   assert sm_future_condition(15_000, 0.15, 1.0124, 2_000).key == "sm-coverage"
