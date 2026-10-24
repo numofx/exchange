@@ -3,7 +3,8 @@
 
 The cap was set on 2026-10-24 at 50% of the LATEST 2% sell depth (50,000 EURC from 112,052), not 50% of the median the
 first plan used: over the first 7 readings depth fell 590k -> 112k, and a falling market makes the median overstate
-today. (Fell overall, not at every reading: 205k -> 264k between the third and the fourth.) The engine keeper's
+today. (Fell overall, not at every reading: 205k -> 264k between the third and the fourth.) Lowered to 40,000 on
+2026-10-25 to pass the stress check below (43,101: 50% of 86,202 without the largest LP). The engine keeper's
 MAX_EURC_INVENTORY stays at or below the cap. Sell depth is what a liquidator unwinding EURC meets. --summary prints
 both, so a later change to the cap can be read off the same data.
 
