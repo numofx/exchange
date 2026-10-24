@@ -5,6 +5,23 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-24 18:40 UTC: depth checkout `exchange-eurc-depth` moved to `0dd2050` (#261: stress check and its alert)
+
+`/home/ec2-user/exchange-eurc-depth` fetched `origin/main` and detached at `0dd205096cfe8e9ea6f0d9e9bf1de9f906146164`
+(was `a2e48721…`), clean before and after. The units are unchanged: the installed `numo-eurc-depth.service` and `.timer`
+hash the same as the repo's (`ca4faac4…`, `e6373f03…`), so no copy and no `daemon-reload`. `depth.py` imports on the box
+(cap 50,000, 31 columns). SSM `bf4319bb-…`, Success.
+
+- **What it changes.** From the 00:00 UTC 2026-10-25 reading, each reading also computes the 2% sell depth without the
+  main pool's largest LP and the stress check (50% of it against the cap), and posts to `ALERT_WEBHOOK_URL` on the
+  first evaluation and on every change of state. The first reading rewrites `/home/ec2-user/numo-eurc-depth.csv` in
+  place with five new columns, empty for the earlier rows. Expected first alert: `first evaluation -> HOLD`.
+- **Before this, one trial reading** (SSM `0db9ddda-…`, 18:1x UTC) ran the branch at `084c788` from a throwaway
+  checkout with copies of the CSV and state file and the webhook blanked; all three were removed afterwards. Block
+  53037169: 107,498 EURC total, 86,202 without the largest LP, stress hold; nothing posted.
+- **Undo.** `git -C /home/ec2-user/exchange-eurc-depth checkout --detach a2e48721758d21c3fd69e818913126fee5b9a075`. The
+  rewritten CSV still reads under the old code only after dropping the five trailing columns.
+
 ## 2026-10-21 19:50–20:10 UTC: proposer checkout `exchange-ops` at `223b829` (#254, #255: perp-cap refusals)
 
 New checkout `/home/ec2-user/exchange-ops`, owned by ec2-user, cloned from GitHub, detached at
