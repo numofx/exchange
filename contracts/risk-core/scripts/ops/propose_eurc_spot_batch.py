@@ -65,7 +65,10 @@ CONFIGURE_ACTIONS = DEPLOYMENTS / "EURC_SPOT_VAULT_ACTIONS.json"
 ENABLE_ACTIONS = DEPLOYMENTS / "EURC_SPOT_ENABLE_VAULT_ACTIONS.json"
 CHAIN_ID = 8453
 EURC = "0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42"
-EURC_USD_AGGREGATOR = "0xdae398520e2b67cd3f27aef9cf14d93d927f8250"
+EURC_USD_AGGREGATOR = "0x9867186e52d2f1c2c565cda6e747101fa56501e0"  # the 1h feed
+# deploy-eurc-spot.s.sol FEED_HEARTBEAT. Not in any digest (the batch hash covers to/data only, and the feed's address
+# is the same whatever it was built with), so it is checked here, in the artifact and on chain.
+FEED_HEARTBEAT_SEC = 3 * 3600
 MARKET_ID = 2
 MARKET_NAME = "EUR"
 BASE = 3  # IMarginEngine.AssetType.Base
@@ -146,7 +149,9 @@ def report(gates: list[Gate]) -> bool:
 
 def check_artifact(art: dict) -> None:
   if art["eurcToken"].lower() != EURC or art["aggregator"].lower() != EURC_USD_AGGREGATOR:
-    raise SystemExit("REFUSED: the artifact is not EURC over Chainlink EURC/USD")
+    raise SystemExit("REFUSED: the artifact is not EURC over Chainlink EURC/USD (the 1h feed)")
+  if int(art["feedHeartbeat"]) != FEED_HEARTBEAT_SEC:
+    raise SystemExit(f"REFUSED: the artifact's feed heartbeat is {art['feedHeartbeat']}s, not {FEED_HEARTBEAT_SEC}s")
   if int(art["marketId"]) != MARKET_ID:
     raise SystemExit(f"REFUSED: the artifact's market is {art['marketId']}, not {MARKET_ID}")
   if not 0 < int(art["marginFactor"]) <= SIZED_MARGIN_FACTOR or not 0 < int(art["imScale"]) <= SIZED_IM_SCALE:
@@ -241,6 +246,7 @@ def gate_escrow(rpc_url: str, art: dict, vault: str) -> Gate:
 def gate_feed(rpc_url: str, art: dict, vault: str) -> Gate:
   feed = art["spotFeed"]
   aggregator = address_at(read_fn(rpc_url, feed, "aggregator()"))
+  heartbeat = uint_at(read_fn(rpc_url, feed, "heartbeat()"))
   owner = address_at(read_fn(rpc_url, feed, "owner()"))
   pending = address_at(read_fn(rpc_url, feed, "pendingOwner()"))
   try:
@@ -248,9 +254,10 @@ def gate_feed(rpc_url: str, art: dict, vault: str) -> Gate:
     spot, confidence = uint_at(raw, 0), uint_at(raw, 1)
   except RuntimeError as error:  # CLF_DataTooOld or CLF_InvalidPrice
     return Gate("feed", False, f"getSpot reverts: {error}")
-  ok = aggregator == EURC_USD_AGGREGATOR and vault.lower() in (owner, pending) and 0.8e18 <= spot <= 1.6e18 \
-    and confidence == 10**18
-  return Gate("feed", ok, f"Chainlink {aggregator}, {spot / 1e18:.5f} USD per EURC, owner {owner}, pending {pending}")
+  ok = aggregator == EURC_USD_AGGREGATOR and heartbeat == FEED_HEARTBEAT_SEC and vault.lower() in (owner, pending) \
+    and 0.8e18 <= spot <= 1.6e18 and confidence == 10**18
+  return Gate("feed", ok, f"Chainlink {aggregator}, staleness limit {heartbeat}s, {spot / 1e18:.5f} USD per EURC, "
+                          f"owner {owner}, pending {pending}")
 
 
 def http_json(url: str) -> dict | list:
@@ -368,7 +375,7 @@ def print_sheet(actions: list[dict]) -> None:
 def _synthetic() -> tuple[dict, list[dict], list[dict]]:
   art = {
     "escrow": "0x" + "e1" * 20, "spotFeed": "0x" + "f1" * 20, "engine": "0xa19e296021c9df25b90d96c2a0793cc3d0800758",
-    "eurcToken": EURC, "aggregator": EURC_USD_AGGREGATOR, "marketId": MARKET_ID,
+    "eurcToken": EURC, "aggregator": EURC_USD_AGGREGATOR, "feedHeartbeat": FEED_HEARTBEAT_SEC, "marketId": MARKET_ID,
     "marginFactor": SIZED_MARGIN_FACTOR, "imScale": SIZED_IM_SCALE, "cap": MAX_CAP,
   }
   e, f, g = art["escrow"], art["spotFeed"], art["engine"]
@@ -439,6 +446,8 @@ def self_test() -> int:
   _refuses({**art, "marginFactor": SIZED_MARGIN_FACTOR + 1}, configure, CONFIGURE_ORDER, "more generous")
   _refuses({**art, "cap": MAX_CAP + 1}, configure, CONFIGURE_ORDER, "cap is outside")
   _refuses({**art, "marketId": 1}, configure, CONFIGURE_ORDER, "not 2")
+  _refuses({**art, "aggregator": "0xdae398520e2b67cd3f27aef9cf14d93d927f8250"}, configure, CONFIGURE_ORDER, "1h feed")
+  _refuses({**art, "feedHeartbeat": 25 * 3600}, configure, CONFIGURE_ORDER, "heartbeat")
   # The enable gate's keeper check: the engine's keeper, live, not dry, on this escrow.
   cap = 250_000 * 10**18
   live = {"manager": g, "lastPassOk": True, "dryRun": False, "eurcEscrow": e, "maxEurcInventory": str(cap)}
