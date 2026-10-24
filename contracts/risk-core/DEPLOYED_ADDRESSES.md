@@ -152,16 +152,18 @@ Nothing below exists on chain yet. Market 2 on the MarginEngine `0xA19E296021c9D
 market rather than a slot in market 1, whose Base slot is the cNGN escrow every live market margins through.
 
 - `baseAsset`: a new `WrappedERC20Asset` over Circle EURC `0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42` (6 dec, 18dp in the ledger)
-- `spotFeed`: a new `ChainlinkSpotFeed` over Chainlink EURC/USD `0xDAe398520e2B67cd3f27aeF9Cf14D93D927f8250`, 25h staleness
-  limit (Chainlink's directory: 0.3% deviation, 24h heartbeat). Stale: every account **holding EURC** fails closed;
-  nobody else reads it. Base also has a 1h EURC/USD feed, `0x9867186e52d2F1C2c565CDA6E747101Fa56501e0` (0.1%,
-  3,600s), which the maker bands its quotes with; it tracks the market more closely (2026-10-21: ~2 bps from the
-  pools, the 24h feed ~15 bps) but would fail EURC holders closed after a ~2h gap instead of 25h. Not switched.
-  Measured 2026-10-17 → 10-24 (169 hourly samples against the main pool): the 24h feed is 8 / 24 / 29 bps from the
-  pool (median / p95 / max) and its longest gap between rounds was 24.006h, 59 minutes inside the 25h limit; the 1h feed
-  is 2 / 7 / 11 bps, longest gap 1.010h. Switching means `EURC_USD_AGGREGATOR` and `FEED_HEARTBEAT` (to ~2h) in
-  `deploy-eurc-spot.s.sol`, the proposer's aggregator constant, and the fork test; the freshness check itself is
-  unchanged (it compares against `FEED_HEARTBEAT`).
+- `spotFeed`: a new `ChainlinkSpotFeed` over Chainlink EURC/USD **1h feed** `0x9867186e52d2F1C2c565CDA6E747101Fa56501e0`
+  (0.1% deviation, 3,600s heartbeat), **3h staleness limit** (`FEED_HEARTBEAT`: two missed rounds still price). Stale:
+  every account **holding EURC** fails closed (no trade, withdrawal or liquidation) until Chainlink posts; nobody else
+  reads it. Switched 2026-10-24 from the 24h feed `0xDAe398520e2B67cd3f27aeF9Cf14D93D927f8250` (0.3%, 25h limit) on a
+  week of measurement (2026-10-17 → 10-24, 169 hourly samples against the main pool): the 24h feed sat 8 / 24 / 29 bps
+  from the pool (median / p95 / max) and its longest gap was 24.006h, 59 minutes inside its 25h limit; the 1h feed sat
+  2 / 7 / 11 bps, longest gap 1.010h, 2 hours inside 3h. The maker bands its quotes against the same feed, so the band
+  is no longer an independent second oracle; it is still a check on the pool TWAP the maker quotes around.
+  **The switch changes no digest:** the batch covers each action's target and calldata, and the feed's address is a
+  CREATE address of the nonce, whatever it is built over (rehearsed both ways at nonce 334, block 53038900: identical
+  actions, batch hash unchanged). The aggregator and limit are checked instead in `EURC_SPOT.json`
+  (`aggregator`, `feedHeartbeat` 10800) and on chain by the proposer's feed gate.
 - Fees: 5 bps taker / 0 maker (`services/markets/internal/instruments/registry.go`).
 - Margin: factor `0.9`, IM scale `0.8` — 90% of oracle value at maintenance, 72% at initial. Borrowing is **on** under
   the engine, so this is also a loan book: an account can withdraw USDC against EURC down to IM. From the IM limit a
@@ -206,9 +208,9 @@ Steps, in order:
    - **The engine has exactly one market** (`lastMarketId() == 1`), so `createMarket` returns 2. Any market created
      first (MarginEngine v2's setup does not create one on v1) changes every action after it; the proposer re-checks
      before each engine action.
-   - **Chainlink EURC/USD (24h feed) has posted within 25h** (`FEED_HEARTBEAT`): the adapter's `getSpot`, which the
-     batch's preconditions and the proposer's feed gate both read, reverts past it. With a 24h heartbeat a quiet
-     market can sit near the edge: check `updatedAt` on deploy morning.
+   - **Chainlink EURC/USD (1h feed) has posted within 3h** (`FEED_HEARTBEAT`): the adapter's `getSpot`, which the
+     batch's preconditions and the proposer's feed gate both read, reverts past it. Hourly rounds keep it well inside;
+     a refusal here means Chainlink has missed two rounds, which is a reason to stop, not to retry.
 
    **Nothing hard-codes the escrow address.** It is known only once step 1 lands. markets-service takes it from
    `EURC_SPOT_ASSET_ADDRESS`, the keeper from `EURC_ESCROW`, the maker and the trading app from `/v1/markets`

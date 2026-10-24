@@ -30,7 +30,7 @@ import {EURCSpotBatch} from "./eurc-spot-batch.sol";
  *     --account numo-deployer --sender 0x2D724867d3AeD4A9F09c096B87F939285DD3AE2D --broadcast
  *
  * Valid only while: the deployer is at EURC_DEPLOYER_NONCE, the engine has exactly one market (createMarket must
- * return 2), and Chainlink EURC/USD has posted within FEED_HEARTBEAT (25h). Each is refused here before broadcast.
+ * return 2), and Chainlink EURC/USD has posted within FEED_HEARTBEAT (3h). Each is refused here before broadcast.
  */
 contract DeployEurcSpot is Utils {
   string internal constant ARTIFACT_NAME = "EURC_SPOT";
@@ -41,11 +41,14 @@ contract DeployEurcSpot is Utils {
   address internal constant FORGE_DEFAULT_SENDER = 0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38;
   /// @dev Circle EURC on Base.
   address public constant EURC = 0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42;
-  /// @dev Chainlink EURC / USD on Base (8 decimals; 24h heartbeat or deviation).
-  address public constant EURC_USD_AGGREGATOR = 0xDAe398520e2B67cd3f27aeF9Cf14D93D927f8250;
+  /// @dev Chainlink EURC / USD on Base, the 1h feed (8 decimals; 1h heartbeat or 0.1% deviation). Not the 24h feed
+  ///      0xDAe3…8250: measured 2026-10-17 → 10-24 it sat up to 29 bps from the market (this one 11) and its longest gap
+  ///      was 24.006h, 59 minutes inside a 25h limit. DEPLOYED_ADDRESSES.md has the comparison.
+  address public constant EURC_USD_AGGREGATOR = 0x9867186e52d2F1C2c565CDA6E747101Fa56501e0;
 
-  /// @dev Chainlink's 24h heartbeat plus an hour for a late round. Past it, accounts holding EURC fail closed.
-  uint64 public constant FEED_HEARTBEAT = 25 hours;
+  /// @dev The feed's 1h heartbeat, three times over: two missed rounds still price (longest gap measured: 1.010h).
+  ///      Past it, accounts holding EURC fail closed until Chainlink posts.
+  uint64 public constant FEED_HEARTBEAT = 3 hours;
   /// @dev 90% of oracle value counts as maintenance margin (a 10% EURC/USD move from MM to insolvency).
   uint public constant SIZED_MARGIN_FACTOR = 0.9e18;
   /// @dev Initial margin credits 0.9 x 0.8 = 72%: what an account can borrow USDC against.
