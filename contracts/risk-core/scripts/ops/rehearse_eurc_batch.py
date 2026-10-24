@@ -12,7 +12,8 @@ it refuses any RPC that does not answer anvil_nodeInfo: pointed at Base it would
 
   anvil --fork-url https://mainnet.base.org --port 8546
   cast rpc anvil_impersonateAccount 0x2D724867d3AeD4A9F09c096B87F939285DD3AE2D --rpc-url http://127.0.0.1:8546
-  forge script scripts/deploy-eurc-spot.s.sol --rpc-url http://127.0.0.1:8546 \\
+  EURC_DEPLOYER_NONCE=$(cast nonce 0x2D724867d3AeD4A9F09c096B87F939285DD3AE2D --rpc-url https://mainnet.base.org) \\
+    forge script scripts/deploy-eurc-spot.s.sol --rpc-url http://127.0.0.1:8546 \\
     --sender 0x2D724867d3AeD4A9F09c096B87F939285DD3AE2D --unlocked --broadcast   # writes deployments/8453/EURC_SPOT*.json
   python3 scripts/ops/rehearse_eurc_batch.py                  # the 7 configure actions
   python3 scripts/ops/rehearse_eurc_batch.py --batch enable   # the enable gate (refuses until the services are live)
@@ -23,7 +24,8 @@ The deploy writes the fork's artifacts where the real ones go: delete them after
 deploy's dry run and anyone reading deployments/ sees addresses that exist only on a dead fork.
 
 On deploy day rerun it with the real cap, at that morning's deployer nonce: the escrow and feed addresses, and so every
-digest, follow from the nonce. MPCVault approvers check each digest against the sheet of that run (README.md).
+digest, follow from the nonce. MPCVault approvers check each digest against the sheet of that run (README.md), and the
+real deploy is run with the same EURC_DEPLOYER_NONCE, which it refuses to broadcast at any other.
 """
 from __future__ import annotations
 

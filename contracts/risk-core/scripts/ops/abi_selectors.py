@@ -58,6 +58,10 @@ NOT_COMPILED: dict[str, dict[str, str]] = {
     "getPool(address,address,uint24)": "Uniswap v3 factory",
     "getPool(address,address,bool)": "Aerodrome v2 PoolFactory",
     "getPool(address,address,int24)": "Aerodrome Slipstream CLFactory",
+    "tickSpacing()": "Aerodrome Slipstream CLPool (the local swap without the largest LP)",
+    "fee()": "Aerodrome Slipstream CLPool (the local swap without the largest LP)",
+    "tickBitmap(int16)": "Aerodrome Slipstream CLPool (the local swap without the largest LP)",
+    "ticks(int24)": "Aerodrome Slipstream CLPool (the local swap without the largest LP)",
   },
   "depth.py": {
     "quoteExactInputSingle((address,address,uint256,uint24,uint160))": "Uniswap v3 QuoterV2",
@@ -65,6 +69,10 @@ NOT_COMPILED: dict[str, dict[str, str]] = {
     "quoteExactInputSingle(((address,address,uint24,int24,address),bool,uint128,bytes))": "Uniswap v4 V4Quoter",
     "getAmountsOut(uint256,(address,address,bool,address)[])": "Aerodrome v2 Router",
     "stakedLiquidity()": "Aerodrome Slipstream CLPool",
+    "ticks(int24)": "Aerodrome Slipstream CLPool",
+    "tickBitmap(int16)": "Aerodrome Slipstream CLPool",
+    "fee()": "Aerodrome Slipstream CLPool",
+    "tickSpacing()": "Aerodrome Slipstream CLPool",
   },
 }
 

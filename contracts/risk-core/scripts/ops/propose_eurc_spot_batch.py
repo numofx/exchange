@@ -279,8 +279,35 @@ def keeper_gate(art: dict, health: dict, cap18: int) -> Gate:
                                    f"MAX_EURC_INVENTORY {limit} vs on-chain cap {cap18 / 1e18:,.0f} EURC")
 
 
+def _depth():
+  """eurc_depth/depth.py, imported on use: it imports this module for MAX_CAP."""
+  sys.path.insert(0, str(Path(__file__).resolve().parent / "eurc_depth"))
+  import depth
+  return depth
+
+
+def depth_stress_gate(row: dict, cap18: int) -> Gate:
+  """50% of the 2% sell depth without the main pool's largest LP must be at least the on-chain cap. `unknown` (the
+  simulation could not reproduce the pool's quoter, or no LP was attributed) holds like a failure. The largest LP's share
+  is shown as context; it is not a condition."""
+  depth = _depth()
+  verdict, why = depth.stress(row, cap18 / 1e18)
+  return Gate("depth stress", verdict == "pass", f"{verdict}: {why}; {depth.share_context(row)}; block {row.get('block')}")
+
+
+def gate_depth_stress(rpc_url: str, cap18: int) -> Gate:
+  """A fresh reading, not the timer's last row: the timer stops after its 7 days, and the enable may come later."""
+  try:
+    depth = _depth()
+    rpc = depth.P.Rpc(rpc_url)
+    return depth_stress_gate(depth.reading(rpc, rpc.head() - 2), cap18)
+  except Exception as exc:  # noqa: BLE001
+    return Gate("depth stress", False, f"unreadable: {exc}")
+
+
 def gate_services(rpc_url: str, art: dict, markets_url: str, keeper_health_url: str) -> list[Gate]:
-  """Enable only: the services that handle EURC must be live with this escrow."""
+  """Enable only: the services that handle EURC must be live with this escrow, and the market deep enough for the cap
+  without its largest LP."""
   gates = []
   try:
     markets = http_json(markets_url.rstrip("/") + "/v1/markets")
@@ -292,11 +319,14 @@ def gate_services(rpc_url: str, art: dict, markets_url: str, keeper_health_url: 
   except Exception as exc:  # noqa: BLE001
     gates.append(Gate("markets-service", False, f"unreadable: {exc}"))
   try:
-    health = http_json(keeper_health_url)
     cap18 = uint_at(read_fn(rpc_url, art["escrow"], "totalPositionCap(address)", word_address(art["engine"])))
-    gates.append(keeper_gate(art, health, cap18))
+  except Exception as exc:  # noqa: BLE001
+    return gates + [Gate("engine keeper", False, f"cap unreadable: {exc}"), Gate("depth stress", False, f"cap unreadable: {exc}")]
+  try:
+    gates.append(keeper_gate(art, http_json(keeper_health_url), cap18))
   except Exception as exc:  # noqa: BLE001
     gates.append(Gate("engine keeper", False, f"unreadable: {exc}"))
+  gates.append(gate_depth_stress(rpc_url, cap18))
   return gates
 
 
@@ -419,8 +449,17 @@ def self_test() -> int:
                  {**live, "maxEurcInventory": str(cap + 1)}, {**live, "maxEurcInventory": None},
                  {k: v for k, v in live.items() if k != "maxEurcInventory"}, {**live, "maxEurcInventory": "0"}]:
     assert not keeper_gate(art, broken, cap).ok, broken
+  # The enable gate's depth check: 50% of the depth without the largest LP against the on-chain cap. The LP's share is
+  # context only: a 90% share passes when the depth without them is enough, and an unknown depth holds.
+  cap = MAX_CAP
+  deep = {"block": 1, "total_sell_eurc_ex_largest_lp": "100000", "main_pool_largest_lp_share": "0.9"}
+  assert depth_stress_gate(deep, cap).ok and "90.0%" in depth_stress_gate(deep, cap).detail
+  assert not depth_stress_gate({**deep, "total_sell_eurc_ex_largest_lp": "99998"}, cap).ok
+  assert depth_stress_gate({**deep, "total_sell_eurc_ex_largest_lp": "99998"}, cap - 10**18).ok, "the cap is the bar"
+  assert not depth_stress_gate({**deep, "total_sell_eurc_ex_largest_lp": "", "sim_check": "x"}, cap).ok
+  assert not gate_depth_stress("not-a-url", cap).ok, "an unreadable RPC holds the enable"
   print("self-test ok: selectors name compiled functions; a reordered, retargeted, market-1, over-generous, "
-        "over-cap, wrong-digest or value-carrying batch is refused")
+        "over-cap, wrong-digest or value-carrying batch is refused; the keeper and depth-stress enable gates")
   return 0
 
 

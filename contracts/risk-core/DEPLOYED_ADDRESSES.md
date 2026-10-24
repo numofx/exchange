@@ -157,14 +157,19 @@ market rather than a slot in market 1, whose Base slot is the cNGN escrow every 
   nobody else reads it. Base also has a 1h EURC/USD feed, `0x9867186e52d2F1C2c565CDA6E747101Fa56501e0` (0.1%,
   3,600s), which the maker bands its quotes with; it tracks the market more closely (2026-10-21: ~2 bps from the
   pools, the 24h feed ~15 bps) but would fail EURC holders closed after a ~2h gap instead of 25h. Not switched.
+  Measured 2026-10-17 → 10-24 (169 hourly samples against the main pool): the 24h feed is 8 / 24 / 29 bps from the
+  pool (median / p95 / max) and its longest gap between rounds was 24.006h, 59 minutes inside the 25h limit; the 1h feed
+  is 2 / 7 / 11 bps, longest gap 1.010h. Switching means `EURC_USD_AGGREGATOR` and `FEED_HEARTBEAT` (to ~2h) in
+  `deploy-eurc-spot.s.sol`, the proposer's aggregator constant, and the fork test; the freshness check itself is
+  unchanged (it compares against `FEED_HEARTBEAT`).
 - Fees: 5 bps taker / 0 maker (`services/markets/internal/instruments/registry.go`).
 - Margin: factor `0.9`, IM scale `0.8` — 90% of oracle value at maintenance, 72% at initial. Borrowing is **on** under
   the engine, so this is also a loan book: an account can withdraw USDC against EURC down to IM. From the IM limit a
   ~20% EURC drop reaches maintenance and ~28% insolvency (`test/fork/EurcSpotFork.t.sol`).
 - Cap: 50,000 EURC, summed across the engine (the maker's inventory included); bounds the on-chain loan book near
   $40k at the IM credit. Set 2026-10-24: 50% of the latest 2% sell depth (112,052 EURC at 12:00 UTC), not 50% of the
-  7-reading median (205,411), because depth fell 590k -> 112k over 3 days while the main pool's largest LP rose to 50% of
-  its in-range liquidity. The engine keeper's `MAX_EURC_INVENTORY` is 50,000 (at most the cap; the enable gate refuses
+  7-reading median (205,411), because depth fell 590k -> 112k over 3 days (overall, not at every reading: 205k -> 264k
+  between the third and fourth) while the main pool's largest LP rose to 50% of its in-range liquidity. The engine keeper's `MAX_EURC_INVENTORY` is 50,000 (at most the cap; the enable gate refuses
   more). Raise by vault action (`setTotalPositionCap`) if the readings recover; MarginEngine v2 copies it ("every
   escrow at v1's cap").
 - Trades through the live TradeModule `0xDea9…699f` against USDC cash `0xA74E…4272`; no per-asset registration.
@@ -186,7 +191,24 @@ Steps, in order:
    every action digest, and the batch hash: `0x0a433c9f7bfb822a05a73219092e7208dc21998f722fe53281bec67428b5f0d8` at the
    50,000 EURC cap and nonce 334 (simulated against Base 2026-10-24; the 2026-10-21 rehearsal's `0x256285d8…` was at the
    old 5M default).
-   Check `cast nonce` on deploy morning and rehearse at whatever it reads.
+   Check `cast nonce` on deploy morning and rehearse at whatever it reads; the deploy then runs with
+   `EURC_DEPLOYER_NONCE=<that nonce>` and refuses to broadcast at any other.
+
+   **The batch is valid only while all three hold**, and `deploy-eurc-spot.s.sol` refuses before broadcasting if any
+   does not:
+   - **The deployer is at the rehearsed nonce** (334 as of 2026-10-24; last transaction 2026-10-03, the cNGN perp
+     collateral deploy). Nothing automated signs with this key. What would move it, and so must not run before step 1:
+     any `forge script ... --account numo-deployer` (`deploy-margin-engine.s.sol`, `deploy-cngn-perp-stack.s.sol`,
+     `deploy-cngn-perp-collateral.s.sol`, `contracts/execution/scripts/deploy-cngn-perp-trade-module.s.sol`, the
+     commands in `docs/cngn-perp-go-live.md`), a `cast send` from it, or the address used as a wallet (a deposit,
+     approval or order signed with it in the trading app). `deploy-margin-engine-v2.s.sol` cannot: it refuses any key
+     that has sent a transaction (nonce > 1), and runs from a fresh one.
+   - **The engine has exactly one market** (`lastMarketId() == 1`), so `createMarket` returns 2. Any market created
+     first (MarginEngine v2's setup does not create one on v1) changes every action after it; the proposer re-checks
+     before each engine action.
+   - **Chainlink EURC/USD (24h feed) has posted within 25h** (`FEED_HEARTBEAT`): the adapter's `getSpot`, which the
+     batch's preconditions and the proposer's feed gate both read, reverts past it. With a 24h heartbeat a quiet
+     market can sit near the edge: check `updatedAt` on deploy morning.
 
    **Nothing hard-codes the escrow address.** It is known only once step 1 lands. markets-service takes it from
    `EURC_SPOT_ASSET_ADDRESS`, the keeper from `EURC_ESCROW`, the maker and the trading app from `/v1/markets`
@@ -196,6 +218,13 @@ Steps, in order:
 3. Services live with the escrow: markets-service (`EURC_SPOT_ASSET_ADDRESS`), the engine keeper (`EURC_ESCROW`,
    `EURC_SPOT_FEED` in `scripts/ops/engine-keeper.env`), the maker (`infra/aws/market-maker-eurc.tf`).
 4. `--batch enable --rehearsed --propose` — `setWhitelistManager(engine, true)`, the switch that opens deposits.
+   **Depth stress gate:** the proposer takes a fresh `eurc_depth` reading and refuses unless 50% of the 2% sell depth
+   *without the main pool's largest LP* is at least the on-chain cap. That depth is the main pool re-swapped locally
+   with that LP's staked positions withdrawn, after the same simulation with nothing withdrawn has reproduced the
+   pool's quoter; if it cannot, the check is `unknown` and holds. The LP's share is printed as context, not a
+   condition. At the cap of 50,000 the bar is 100,000 EURC of 2% sell depth without that LP. If it holds, the
+   decision at enable time is to wait or lower the cap (`setTotalPositionCap`, and `MAX_EURC_INVENTORY` with it).
+   The timer alerts the webhook when the check changes state, until its 7 days end (2026-10-28 12:00 UTC).
 
 **Ordering against MarginEngine v2** (`docs/margin-engine-v2.md`): steps 1–2 must land on v1 (`0xA19E…0758`) **before**
 `deploy-margin-engine-v2.s.sol` runs. v2 copies only the base markets v1 already lists, each escrow at v1's cap, and
