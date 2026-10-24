@@ -343,4 +343,160 @@ def main_pool_lps(rpc: Rpc, block: int, state_path: Path) -> dict:
   for token_id, raw in zip(ids, raws):
     w = words(raw) if raw else [0] * 12
     positions[token_id] = (signed(w[5], 24), signed(w[6], 24), w[7])  # tickLower, tickUpper, liquidity
-  return concentration(state["staked"], positions, tick, pool_liquidity, pool_staked)
+  out = concentration(state["staked"], positions, tick, pool_liquidity, pool_staked)
+  if out.get("lp_check") == "ok" and out["main_pool_largest_lp"]:
+    lp = out["main_pool_largest_lp"]
+    out["_largest_lp_positions"] = [positions[i] for i, who in state["staked"].items() if who == lp and positions[i][2]]
+  return out
+
+
+# --- the main pool without its largest LP --------------------------------------------------------
+#
+# Depth if the largest LP withdrew: the pool's initialized ticks around the price, with that LP's staked positions taken
+# out of liquidityNet (and out of the active liquidity where in range), swapped through locally with Uniswap v3's swap
+# math (Slipstream's is the same). The same simulation with nothing removed must agree with the pool's own quoter, or the
+# reading reports the mismatch instead of a number: a local swap is only evidence while it reproduces the real one.
+
+Q96 = 1 << 96
+MIN_TICK, MAX_TICK = -887272, 887272
+SIM_WINDOW_TICKS = 1_000  # ~10% either side: past 2% the marginal test has already failed, so nothing further is needed
+
+_TICK_FACTORS = [
+  (0x2, 0xfff97272373d413259a46990580e213a), (0x4, 0xfff2e50f5f656932ef12357cf3c7fdcc),
+  (0x8, 0xffe5caca7e10e4e61c3624eaa0941cd0), (0x10, 0xffcb9843d60f6159c9db58835c926644),
+  (0x20, 0xff973b41fa98c081472e6896dfb254c0), (0x40, 0xff2ea16466c96a3843ec78b326b52861),
+  (0x80, 0xfe5dee046a99a2a811c461f1969c3053), (0x100, 0xfcbe86c7900a88aedcffc83b479aa3a4),
+  (0x200, 0xf987a7253ac413176f2b074cf7815e54), (0x400, 0xf3392b0822b70005940c7a398e4b70f3),
+  (0x800, 0xe7159475a2c29b7443b29c7fa6e889d9), (0x1000, 0xd097f3bdfd2022b8845ad8f792aa5825),
+  (0x2000, 0xa9f746462d870fdf8a65dc1f90e061e5), (0x4000, 0x70d869a156d2a1b890bb3df62baf32f7),
+  (0x8000, 0x31be135f97d08fd981231505542fcfa6), (0x10000, 0x9aa508b5b7a84e1c677de54f3e99bc9),
+  (0x20000, 0x5d6af8dedb81196699c329225ee604), (0x40000, 0x2216e584f5fa1ea926041bedfe98),
+  (0x80000, 0x48a170391f7dc42444e8fa2),
+]
+
+
+def sqrt_ratio_at_tick(tick: int) -> int:
+  """TickMath.getSqrtRatioAtTick."""
+  a = abs(tick)
+  ratio = 0xfffcb933bd6fad37aa2d162d1a594001 if a & 1 else 1 << 128
+  for bit, factor in _TICK_FACTORS:
+    if a & bit:
+      ratio = (ratio * factor) >> 128
+  if tick > 0:
+    ratio = ((1 << 256) - 1) // ratio
+  return (ratio >> 32) + (1 if ratio % (1 << 32) else 0)
+
+
+def _div_up(a: int, b: int) -> int:
+  return -(-a // b)
+
+
+def _amount0(sa: int, sb: int, liq: int, up: bool) -> int:
+  sa, sb = min(sa, sb), max(sa, sb)
+  num1, num2 = liq << 96, sb - sa
+  return _div_up(_div_up(num1 * num2, sb), sa) if up else num1 * num2 // sb // sa
+
+
+def _amount1(sa: int, sb: int, liq: int, up: bool) -> int:
+  sa, sb = min(sa, sb), max(sa, sb)
+  return _div_up(liq * (sb - sa), Q96) if up else liq * (sb - sa) // Q96
+
+
+def _next_sqrt_from_input(sp: int, liq: int, amount: int, zero_for_one: bool) -> int:
+  if zero_for_one:  # SqrtPriceMath.getNextSqrtPriceFromAmount0RoundingUp, adding
+    num1, product = liq << 96, amount * sp
+    if product < (1 << 256) and num1 + product < (1 << 256):
+      return _div_up(num1 * sp, num1 + product)
+    return _div_up(num1, num1 // sp + amount)
+  return sp + (amount << 96) // liq  # getNextSqrtPriceFromAmount1RoundingDown, adding
+
+
+def _swap_step(cur: int, target: int, liq: int, remaining: int, fee: int) -> tuple[int, int, int, int]:
+  """SwapMath.computeSwapStep, exact input: (next sqrt price, amount in, amount out, fee amount)."""
+  zero_for_one = cur >= target
+  less_fee = remaining * (10**6 - fee) // 10**6
+  amount_in = _amount0(target, cur, liq, True) if zero_for_one else _amount1(cur, target, liq, True)
+  nxt = target if less_fee >= amount_in else _next_sqrt_from_input(cur, liq, less_fee, zero_for_one)
+  reached = nxt == target
+  if zero_for_one:
+    amount_in = amount_in if reached else _amount0(nxt, cur, liq, True)
+    amount_out = _amount1(nxt, cur, liq, False)
+  else:
+    amount_in = amount_in if reached else _amount1(cur, nxt, liq, True)
+    amount_out = _amount0(cur, nxt, liq, False)
+  fee_amount = _div_up(amount_in * fee, 10**6 - fee) if reached else remaining - amount_in
+  return nxt, amount_in, amount_out, fee_amount
+
+
+def cl_swap_out(state: dict, zero_for_one: bool, amount_in: int, liquidity_net: dict[int, int] | None = None,
+                liquidity: int | None = None) -> int:
+  """Exact-input output of a swap through `state` (cl_state), optionally with other liquidity. Stops at the window's
+  edge: output stays flat past it, which the 2% search reads as no more depth."""
+  net = state["liquidity_net"] if liquidity_net is None else liquidity_net
+  liq = state["liquidity"] if liquidity is None else liquidity
+  sp, tick, fee = state["sqrt_price"], state["tick"], state["fee"]
+  lo, hi = state["window"]
+  initialized = sorted(net)
+  remaining, out = amount_in, 0
+  while remaining > 0:
+    if zero_for_one:
+      below = [t for t in initialized if lo <= t <= tick]
+      tick_next, edge = (below[-1], False) if below else (lo, True)
+    else:
+      above = [t for t in initialized if tick < t <= hi]
+      tick_next, edge = (above[0], False) if above else (hi, True)
+    target = sqrt_ratio_at_tick(tick_next)
+    if liq == 0:
+      nxt, step_in, step_out, step_fee = target, 0, 0, 0
+    else:
+      nxt, step_in, step_out, step_fee = _swap_step(sp, target, liq, remaining, fee)
+    remaining -= step_in + step_fee
+    out += step_out
+    sp = nxt
+    if sp != target:
+      break  # the input ran out inside this range
+    if edge:
+      break  # past the window: no more output
+    liq += -net[tick_next] if zero_for_one else net[tick_next]
+    tick = tick_next - 1 if zero_for_one else tick_next
+  return out
+
+
+def cl_state(rpc: Rpc, pool: str, block: int) -> dict:
+  """slot0, liquidity, fee and every initialized tick within SIM_WINDOW_TICKS, at `block`."""
+  raw = words(rpc.call(pool, calldata("slot0()"), block))
+  sqrt_price, tick = raw[0], signed(raw[1], 24)
+  spacing = signed(words(rpc.call(pool, calldata("tickSpacing()"), block))[0], 24)
+  fee = words(rpc.call(pool, calldata("fee()"), block))[0]
+  liquidity = words(rpc.call(pool, calldata("liquidity()"), block))[0]
+  lo = (tick - SIM_WINDOW_TICKS) // spacing * spacing
+  hi = (tick + SIM_WINDOW_TICKS) // spacing * spacing + spacing
+  word_ids = list(range((lo // spacing) >> 8, ((hi // spacing) >> 8) + 1))
+  bitmaps = multicall(rpc, [(pool, calldata("tickBitmap(int16)", w)) for w in word_ids], block)
+  ticks = []
+  for w, raw_word in zip(word_ids, bitmaps):
+    bits = words(raw_word)[0] if raw_word else 0
+    ticks += [(w * 256 + b) * spacing for b in range(256) if bits >> b & 1]
+  ticks = [t for t in ticks if lo <= t <= hi]
+  nets = multicall(rpc, [(pool, calldata("ticks(int24)", t)) for t in ticks], block)
+  liquidity_net = {t: signed(words(r)[1], 128) for t, r in zip(ticks, nets) if r}
+  if len(liquidity_net) != len(ticks):
+    raise RpcError("ticks", {"message": "a ticks() read failed"})
+  return {"sqrt_price": sqrt_price, "tick": tick, "fee": fee, "liquidity": liquidity, "liquidity_net": liquidity_net,
+          "window": (lo, hi)}
+
+
+def without_positions(state: dict, positions: list[tuple[int, int, int]]) -> tuple[dict[int, int], int]:
+  """liquidityNet and active liquidity with `positions` ((tickLower, tickUpper, liquidity)) withdrawn."""
+  net, liq = dict(state["liquidity_net"]), state["liquidity"]
+  lo, hi = state["window"]
+  for lower, upper, amount in positions:
+    if lo <= lower <= hi:
+      net[lower] = net.get(lower, 0) - amount
+    if lo <= upper <= hi:
+      net[upper] = net.get(upper, 0) + amount
+    if lower <= state["tick"] < upper:
+      liq -= amount
+  if liq < 0:
+    raise ValueError("withdrawing more active liquidity than the pool has")
+  return net, liq
