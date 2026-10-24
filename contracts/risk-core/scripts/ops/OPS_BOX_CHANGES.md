@@ -5,6 +5,18 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-24 23:51 UTC: depth checkout `exchange-eurc-depth` moved to `8c5e60a` (#263 1h feed, #264 cap 40,000)
+
+`/home/ec2-user/exchange-eurc-depth` fetched `origin/main` and detached at `8c5e60a6089d07d26b987cfe5977db30ba4c6c61`
+(was `0dd20509…`), clean before and after. The units are unchanged (`ca4faac4…`, `e6373f03…`, the same as the repo's), so
+no copy and no `daemon-reload`. `depth.py` imports on the box with cap 40,000, 31 columns. SSM `f59f7d7b-…`, Success.
+
+- **What it changes.** The stress check's bar drops from 100,000 to 80,000 EURC of 2% sell depth without the largest
+  LP, because `depth.py` takes the cap from the proposer's `MAX_CAP`. The 00:00 UTC 2026-10-25 reading is still the
+  stress check's first evaluation, so it alerts whichever state it finds, judged against 40,000 rather than the 50,000
+  the entry below expected (the last reading, 86,202, would pass).
+- **Undo.** `git -C /home/ec2-user/exchange-eurc-depth checkout --detach 0dd205096cfe8e9ea6f0d9e9bf1de9f906146164`.
+
 ## 2026-10-24 18:40 UTC: depth checkout `exchange-eurc-depth` moved to `0dd2050` (#261: stress check and its alert)
 
 `/home/ec2-user/exchange-eurc-depth` fetched `origin/main` and detached at `0dd205096cfe8e9ea6f0d9e9bf1de9f906146164`
