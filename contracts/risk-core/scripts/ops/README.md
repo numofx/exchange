@@ -49,9 +49,10 @@ past the warn age, confirm the page, then restart it.
 ## EURC depth readings (evidence for the EURC deposit cap)
 
 `eurc_depth/depth.py --once` measures EURC/USDC depth within 2% on Base (every pool, both directions, one block) and
-the main pool's LP concentration, and appends one row to a CSV. The EURC cap is to be set at ~50% of the median 2%
-sell depth over 7 days of readings, and the engine keeper's `MAX_EURC_INVENTORY` at or below it (exchange #247; the
-EURC enable gate refuses a larger or unset limit). Read-only, through `run-with-ssm-readonly.sh` for the provider RPC.
+the main pool's LP concentration, and appends one row to a CSV. The EURC cap was set on 2026-10-24 at 50% of the
+latest 2% sell depth: 50,000 EURC from 112,052, not 50% of the 205,411 median, because depth fell 590k -> 112k over
+the first 7 readings. The engine keeper's `MAX_EURC_INVENTORY` is at or below it (the EURC enable gate refuses a larger
+or unset limit). `--summary` prints both the median and the latest; the timer keeps sampling to its 7 days. Read-only, through `run-with-ssm-readonly.sh` for the provider RPC.
 Twice a day, from its own checkout (the box's `~/exchange` is pinned at `bf9da89` and has no `eurc_depth/`):
 
 ```bash

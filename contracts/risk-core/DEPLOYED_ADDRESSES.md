@@ -161,7 +161,12 @@ market rather than a slot in market 1, whose Base slot is the cNGN escrow every 
 - Margin: factor `0.9`, IM scale `0.8` — 90% of oracle value at maintenance, 72% at initial. Borrowing is **on** under
   the engine, so this is also a loan book: an account can withdraw USDC against EURC down to IM. From the IM limit a
   ~20% EURC drop reaches maintenance and ~28% insolvency (`test/fork/EurcSpotFork.t.sol`).
-- Cap: 5,000,000 EURC, summed across the engine; bounds the on-chain loan book near $4M at the IM credit.
+- Cap: 50,000 EURC, summed across the engine (the maker's inventory included); bounds the on-chain loan book near
+  $40k at the IM credit. Set 2026-10-24: 50% of the latest 2% sell depth (112,052 EURC at 12:00 UTC), not 50% of the
+  7-reading median (205,411), because depth fell 590k -> 112k over 3 days while the main pool's largest LP rose to 50% of
+  its in-range liquidity. The engine keeper's `MAX_EURC_INVENTORY` is 50,000 (at most the cap; the enable gate refuses
+  more). Raise by vault action (`setTotalPositionCap`) if the readings recover; MarginEngine v2 copies it ("every
+  escrow at v1's cap").
 - Trades through the live TradeModule `0xDea9…699f` against USDC cash `0xA74E…4272`; no per-asset registration.
 
 Steps, in order:
@@ -178,7 +183,9 @@ Steps, in order:
    **The deployer (`0x2D724867d3AeD4A9F09c096B87F939285DD3AE2D`) sends no transactions before step 1.** At nonce 334
    (2026-10-21) the escrow is `0xfD2AFbF4eF6E7a7f34A04D16Ff6da249Ca086cD9` and the feed
    `0xaaE62Ae5df3747B8f43F895561043FB77D97C435`, both CREATE addresses of that nonce. Any transaction first moves both,
-   every action digest, and the batch hash (`0x256285d8…` at the 5M default; the real cap changes it in any case).
+   every action digest, and the batch hash: `0x0a433c9f7bfb822a05a73219092e7208dc21998f722fe53281bec67428b5f0d8` at the
+   50,000 EURC cap and nonce 334 (simulated against Base 2026-10-24; the 2026-10-21 rehearsal's `0x256285d8…` was at the
+   old 5M default).
    Check `cast nonce` on deploy morning and rehearse at whatever it reads.
 
    **Nothing hard-codes the escrow address.** It is known only once step 1 lands. markets-service takes it from
@@ -189,6 +196,12 @@ Steps, in order:
 3. Services live with the escrow: markets-service (`EURC_SPOT_ASSET_ADDRESS`), the engine keeper (`EURC_ESCROW`,
    `EURC_SPOT_FEED` in `scripts/ops/engine-keeper.env`), the maker (`infra/aws/market-maker-eurc.tf`).
 4. `--batch enable --rehearsed --propose` — `setWhitelistManager(engine, true)`, the switch that opens deposits.
+
+**Ordering against MarginEngine v2** (`docs/margin-engine-v2.md`): steps 1–2 must land on v1 (`0xA19E…0758`) **before**
+`deploy-margin-engine-v2.s.sol` runs. v2 copies only the base markets v1 already lists, each escrow at v1's cap, and
+refuses an escrow that is closed under v1. If v2 deploys first it has no EUR market, and this batch (written for v1)
+would list EURC on an engine about to go close-only. After v2's `v1-close-only`, EURC's v1 cap is set at its open
+interest like every other escrow, and new EURC deposits go to v2 accounts.
 
 ## Base — ABANDONED deployment (pre-2026-07)
 
