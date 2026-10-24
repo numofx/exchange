@@ -224,13 +224,16 @@ contract EurcSpotFork is Test {
     IERC20Metadata(USDC).approve(address(cash), 100e6);
     cash.deposit(usdcOnly, 100e6);
 
+    // The 1h feed with a 3h limit, not the 24h feed with 25h.
+    assertEq(address(d.spotFeed.aggregator()), 0x9867186e52d2F1C2c565CDA6E747101Fa56501e0);
+    assertEq(d.spotFeed.heartbeat(), 3 hours);
     (uint spot,) = d.spotFeed.getSpot();
-    _mockRound(int(spot / 1e10), block.timestamp - 25 hours - 1);
+    _mockRound(int(spot / 1e10), block.timestamp - script.FEED_HEARTBEAT() - 1);
     vm.expectRevert(ChainlinkSpotFeed.CLF_DataTooOld.selector);
     d.escrow.withdraw(holder, 1e6, address(this));
     cash.withdraw(usdcOnly, 50e6, address(this));
 
-    _mockRound(int(spot / 1e10), block.timestamp - 25 hours + 60);
+    _mockRound(int(spot / 1e10), block.timestamp - script.FEED_HEARTBEAT() + 60);
     d.escrow.withdraw(holder, 1e6, address(this));
   }
 
