@@ -45,8 +45,10 @@ contract DeployEurcSpot is Utils {
   uint public constant SIZED_MARGIN_FACTOR = 0.9e18;
   /// @dev Initial margin credits 0.9 x 0.8 = 72%: what an account can borrow USDC against.
   uint public constant SIZED_IM_SCALE = 0.8e18;
-  /// @dev 5,000,000 EURC (about 10% of Base supply at listing), summed over every account under the engine.
-  uint public constant DEFAULT_CAP = 5_000_000e18;
+  /// @dev 50,000 EURC, summed over every account under the engine (the maker's inventory included): 50% of the 2%
+  ///      sell depth on Base at the latest reading, 112,052 EURC on 2026-10-24 12:00 UTC (scripts/ops/eurc_depth). Not
+  ///      50% of the 7-reading median (205,411): depth fell from 590k to 112k over 3 days, so the median overstated it.
+  uint public constant DEFAULT_CAP = 50_000e18;
 
   struct Params {
     address subAccounts;
@@ -119,7 +121,7 @@ contract DeployEurcSpot is Utils {
     if (params.imScale == 0 || params.imScale > SIZED_IM_SCALE) {
       revert("EURC_IM_SCALE above the sized scale: re-size in EurcSpotFork.t.sol first");
     }
-    if (params.cap == 0 || params.cap > DEFAULT_CAP) revert("EURC_CAP outside (0, 5M EURC]");
+    if (params.cap == 0 || params.cap > DEFAULT_CAP) revert("EURC_CAP outside (0, 50,000 EURC]");
     if (params.marketId != 2) revert("the engine does not have exactly one market: re-read MARGIN_ENGINE.json");
     if (params.engine.code.length == 0) revert("engine has no code - wrong chain?");
     if (MarginEngine(params.engine).owner() != params.vault) revert("engine owner is not the recorded vault");

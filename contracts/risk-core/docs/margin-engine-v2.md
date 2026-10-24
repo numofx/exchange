@@ -80,7 +80,9 @@ each held to its own engine, so `cNGN-USDC` and `EURC-USDC` keep one book throug
 
 Order (`scripts/ops/propose_margin_engine_v2_batch.py` proposes every vault step; each is gated and re-read):
 
-1. Deploy v2 (`scripts/deploy-margin-engine-v2.s.sol`): closed, nothing reused wired.
+1. Deploy v2 (`scripts/deploy-margin-engine-v2.s.sol`): closed, nothing reused wired. **Not before EURC-USDC is listed
+   on v1** (`DEPLOYED_ADDRESSES.md`, EURC steps 1–2): v2 copies only the markets v1 lists, so a v2 deployed first has no
+   EUR market, and the EURC batch is written for v1.
 2. `setup` (`MARGIN_ENGINE_V2_VAULT_ACTIONS`): accept, wire the cash, every escrow at v1's cap, and the auction; v1's
    guardian. Re-reads parity once the vault owns everything.
 3. `enable` (`MARGIN_ENGINE_V2_ENABLE_VAULT_ACTIONS`): open the future and register it on the TradeModule. Refused until
