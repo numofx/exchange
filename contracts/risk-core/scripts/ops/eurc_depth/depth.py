@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """EURC/USDC depth on Base within 2%, sampled into a CSV to size the EURC deposit cap on evidence.
 
-The cap is to be set at ~50% of the MEDIAN 2% sell depth over 7 days of readings (exchange #247), and the engine
-keeper's MAX_EURC_INVENTORY at or below the cap. Sell depth is what a liquidator unwinding EURC meets.
+The cap was set on 2026-10-24 at 50% of the LATEST 2% sell depth (50,000 EURC from 112,052), not 50% of the median the
+first plan used: over the first 7 readings depth fell 590k -> 112k, and a falling market makes the median overstate
+today. The engine keeper's MAX_EURC_INVENTORY stays at or below the cap. Sell depth is what a liquidator unwinding EURC
+meets. --summary prints both, so a later change to the cap can be read off the same data.
 
 Depth at 2%, per pool and direction: the input size whose MARGINAL execution price (fee included) is 2% worse than a
 $10 trade's in the same pool and direction, marginal = (out(1.002x) - out(x)) / 0.002x, found by doubling then
@@ -163,7 +165,9 @@ def summary(rows: list[dict]) -> dict:
   median = statistics.median(sells)
   return {"readings": len(sells), "first": rows[0]["timestamp_utc"], "last": rows[-1]["timestamp_utc"],
           "median_sell_eurc": round(median), "min_sell_eurc": round(min(sells)), "max_sell_eurc": round(max(sells)),
-          "cap_at_50pct_of_median_eurc": round(median * CAP_FRACTION)}
+          "latest_sell_eurc": round(sells[-1]),
+          "cap_at_50pct_of_median_eurc": round(median * CAP_FRACTION),
+          "cap_at_50pct_of_latest_eurc": round(sells[-1] * CAP_FRACTION)}
 
 
 def once() -> int:
@@ -290,6 +294,7 @@ def self_test() -> int:
     start = datetime(2026, 10, 21, 12, tzinfo=timezone.utc).timestamp()
     assert not window_closed(rows, start + 7 * 86400 - 1) and window_closed(rows, start + 7 * 86400)
     assert summary(rows)["median_sell_eurc"] == 499500 and summary(rows)["cap_at_50pct_of_median_eurc"] == 249750
+    assert summary(rows)["latest_sell_eurc"] == 480000 and summary(rows)["cap_at_50pct_of_latest_eurc"] == 240000
     other = Path(d) / "other.csv"
     other.write_text("timestamp_utc,block\n")
     try:

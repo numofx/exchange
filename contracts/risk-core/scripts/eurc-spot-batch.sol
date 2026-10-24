@@ -44,7 +44,7 @@ interface IEurcOwned {
  * @dev The haircut. Borrowing is ON under the engine, so EURC credit is a loan book as well as margin: an account can
  *      withdraw USDC against EURC down to initial margin. Maintenance credits 90% of oracle value (a 10% EURC/USD move
  *      before an account at maintenance is insolvent; the largest one-day EUR/USD move since 1999 is under 3%), initial
- *      credits 72% (0.9 x 0.8): at the 5M cap that bounds the on-chain loan book to about $4M, which is why the cap is
+ *      credits 72% (0.9 x 0.8): at the 50,000 EURC cap that bounds the on-chain loan book to about $40k, which is why the cap is
  *      the number to move carefully. test/fork/EurcSpotFork.t.sol pins both.
  *
  * @dev Ordering of build() (seven separate transactions from the vault; every prefix is a safe place to stop, since the
