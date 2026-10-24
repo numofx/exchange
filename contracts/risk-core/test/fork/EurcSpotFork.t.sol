@@ -114,7 +114,7 @@ contract EurcSpotFork is Test {
     IMarginEngine.AssetDetail memory detail = engine.assetDetails(d.escrow);
     assertTrue(detail.isWhitelisted);
     assertEq(detail.marketId, 2);
-    assertEq(d.escrow.totalPositionCap(IManager(address(engine))), 50_000e18);
+    assertEq(d.escrow.totalPositionCap(IManager(address(engine))), 40_000e18);
     assertEq(d.escrow.owner(), VAULT);
     assertEq(d.spotFeed.owner(), VAULT);
 
@@ -162,11 +162,11 @@ contract EurcSpotFork is Test {
     _configure();
     _enable();
     uint acc = subAccounts.createAccount(address(this), IManager(address(engine)));
-    deal(EURC, address(this), 50_001e6);
-    IERC20Metadata(EURC).approve(address(d.escrow), 50_001e6);
+    deal(EURC, address(this), 40_001e6);
+    IERC20Metadata(EURC).approve(address(d.escrow), 40_001e6);
     vm.expectRevert();
-    d.escrow.deposit(acc, 50_001e6);
-    d.escrow.deposit(acc, 50_000e6);
+    d.escrow.deposit(acc, 40_001e6);
+    d.escrow.deposit(acc, 40_000e6);
   }
 
   // ---------------------------------------------------------------------------------------------

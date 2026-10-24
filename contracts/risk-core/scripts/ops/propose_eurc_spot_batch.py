@@ -8,7 +8,7 @@ Configure (deployments/8453/EURC_SPOT_VAULT_ACTIONS.json, written by scripts/dep
   3 engine.setOraclesForMarket(2, eurcSpotFeed, 0, 0)     Chainlink EURC/USD
   4 engine.setBaseAssetMarginFactor(2, 0.9, 0.8)          the haircut: 90% at maintenance, 72% at initial
   5 engine.whitelistAsset(eurcEscrow, 2, Base)            the engine side of the gate
-  6 eurcEscrow.setTotalPositionCap(engine, 50k EURC)      the deposit cap
+  6 eurcEscrow.setTotalPositionCap(engine, 40k EURC)      the deposit cap
 None of these lets EURC in.
 
 Enable (EURC_SPOT_ENABLE_VAULT_ACTIONS.json, `--batch enable`):
@@ -90,7 +90,7 @@ ENABLE_ORDER = ["setWhitelistManager(address,bool)"]
 # The deploy script's sized constants; anything more generous is refused here too.
 SIZED_MARGIN_FACTOR = 9 * 10**17
 SIZED_IM_SCALE = 8 * 10**17
-MAX_CAP = 50_000 * 10**18  # 50% of the 2% sell depth at the 2026-10-24 12:00 UTC reading
+MAX_CAP = 40_000 * 10**18  # under 50% of the 2% sell depth without the largest LP (86,202 EURC, 2026-10-24)
 
 
 def sel(sig: str) -> str:
@@ -152,7 +152,7 @@ def check_artifact(art: dict) -> None:
   if not 0 < int(art["marginFactor"]) <= SIZED_MARGIN_FACTOR or not 0 < int(art["imScale"]) <= SIZED_IM_SCALE:
     raise SystemExit("REFUSED: the artifact's haircut is more generous than the sized 0.9 / 0.8")
   if not 0 < int(art["cap"]) <= MAX_CAP:
-    raise SystemExit("REFUSED: the artifact's cap is outside (0, 50,000 EURC]")
+    raise SystemExit("REFUSED: the artifact's cap is outside (0, 40,000 EURC]")
 
 
 def load_actions(path: Path, art: dict, order: list[str]) -> list[dict]:
@@ -452,10 +452,11 @@ def self_test() -> int:
   # The enable gate's depth check: 50% of the depth without the largest LP against the on-chain cap. The LP's share is
   # context only: a 90% share passes when the depth without them is enough, and an unknown depth holds.
   cap = MAX_CAP
-  deep = {"block": 1, "total_sell_eurc_ex_largest_lp": "100000", "main_pool_largest_lp_share": "0.9"}
+  bar = 2 * cap // 10**18
+  deep = {"block": 1, "total_sell_eurc_ex_largest_lp": str(bar), "main_pool_largest_lp_share": "0.9"}
   assert depth_stress_gate(deep, cap).ok and "90.0%" in depth_stress_gate(deep, cap).detail
-  assert not depth_stress_gate({**deep, "total_sell_eurc_ex_largest_lp": "99998"}, cap).ok
-  assert depth_stress_gate({**deep, "total_sell_eurc_ex_largest_lp": "99998"}, cap - 10**18).ok, "the cap is the bar"
+  assert not depth_stress_gate({**deep, "total_sell_eurc_ex_largest_lp": str(bar - 2)}, cap).ok
+  assert depth_stress_gate({**deep, "total_sell_eurc_ex_largest_lp": str(bar - 2)}, cap - 10**18).ok, "the cap is the bar"
   assert not depth_stress_gate({**deep, "total_sell_eurc_ex_largest_lp": "", "sim_check": "x"}, cap).ok
   assert not gate_depth_stress("not-a-url", cap).ok, "an unreadable RPC holds the enable"
   print("self-test ok: selectors name compiled functions; a reordered, retargeted, market-1, over-generous, "

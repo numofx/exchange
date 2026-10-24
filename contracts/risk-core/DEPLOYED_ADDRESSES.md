@@ -166,11 +166,13 @@ market rather than a slot in market 1, whose Base slot is the cNGN escrow every 
 - Margin: factor `0.9`, IM scale `0.8` — 90% of oracle value at maintenance, 72% at initial. Borrowing is **on** under
   the engine, so this is also a loan book: an account can withdraw USDC against EURC down to IM. From the IM limit a
   ~20% EURC drop reaches maintenance and ~28% insolvency (`test/fork/EurcSpotFork.t.sol`).
-- Cap: 50,000 EURC, summed across the engine (the maker's inventory included); bounds the on-chain loan book near
-  $40k at the IM credit. Set 2026-10-24: 50% of the latest 2% sell depth (112,052 EURC at 12:00 UTC), not 50% of the
-  7-reading median (205,411), because depth fell 590k -> 112k over 3 days (overall, not at every reading: 205k -> 264k
-  between the third and fourth) while the main pool's largest LP rose to 50% of its in-range liquidity. The engine keeper's `MAX_EURC_INVENTORY` is 50,000 (at most the cap; the enable gate refuses
-  more). Raise by vault action (`setTotalPositionCap`) if the readings recover; MarginEngine v2 copies it ("every
+- Cap: 40,000 EURC, summed across the engine (the maker's inventory included); bounds the on-chain loan book near
+  $32k at the IM credit. Set 2026-10-25 to pass the enable's depth stress gate: 50% of the 2% sell depth without the
+  main pool's largest LP was 43,101 EURC (86,202 at block 53037169, 2026-10-24, the first reading that computed it), a
+  margin of ~7%. The 2026-10-24 cap of 50,000 (50% of the latest 2% sell depth with that LP, 112,052 EURC at 12:00 UTC,
+  after depth fell 590k -> 112k over 3 days; overall, not at every reading: 205k -> 264k between the third and fourth)
+  failed it. The engine keeper's `MAX_EURC_INVENTORY` is 40,000 (at most the cap; the enable gate refuses more).
+  The maker is held to 20% of it (`infra/aws/market-maker-eurc.tf`: ±8,960 USDC, 4,294 USDC a side). Raise by vault action (`setTotalPositionCap`) if the readings recover; MarginEngine v2 copies it ("every
   escrow at v1's cap").
 - Trades through the live TradeModule `0xDea9…699f` against USDC cash `0xA74E…4272`; no per-asset registration.
 
@@ -188,9 +190,11 @@ Steps, in order:
    **The deployer (`0x2D724867d3AeD4A9F09c096B87F939285DD3AE2D`) sends no transactions before step 1.** At nonce 334
    (2026-10-21) the escrow is `0xfD2AFbF4eF6E7a7f34A04D16Ff6da249Ca086cD9` and the feed
    `0xaaE62Ae5df3747B8f43F895561043FB77D97C435`, both CREATE addresses of that nonce. Any transaction first moves both,
-   every action digest, and the batch hash: `0x0a433c9f7bfb822a05a73219092e7208dc21998f722fe53281bec67428b5f0d8` at the
-   50,000 EURC cap and nonce 334 (simulated against Base 2026-10-24; the 2026-10-21 rehearsal's `0x256285d8…` was at the
-   old 5M default).
+   every action digest, and the batch hash: `0xd62326327d3f13f1e15f8417237a17e98a35694291e79b0bc008b2b172561ea9` at the
+   40,000 EURC cap and nonce 334 (rehearsed on a fork of Base block 53047629, 2026-10-25: all 7 actions landed, the cap
+   reads back 40,000). Against the 50,000 cap's `0x0a433c9f…f0d8` only action 6 (`setTotalPositionCap`) changed,
+   to `0x1f03c93a2c43b9f1a4b923774f023169252f5b0c49decbca1d0f8e9fb7b67794`; the 2026-10-21 rehearsal's
+   `0x256285d8…` was at the old 5M default.
    Check `cast nonce` on deploy morning and rehearse at whatever it reads; the deploy then runs with
    `EURC_DEPLOYER_NONCE=<that nonce>` and refuses to broadcast at any other.
 
@@ -222,7 +226,7 @@ Steps, in order:
    *without the main pool's largest LP* is at least the on-chain cap. That depth is the main pool re-swapped locally
    with that LP's staked positions withdrawn, after the same simulation with nothing withdrawn has reproduced the
    pool's quoter; if it cannot, the check is `unknown` and holds. The LP's share is printed as context, not a
-   condition. At the cap of 50,000 the bar is 100,000 EURC of 2% sell depth without that LP. If it holds, the
+   condition. At the cap of 40,000 the bar is 80,000 EURC of 2% sell depth without that LP (86,202 on 2026-10-24). If it holds, the
    decision at enable time is to wait or lower the cap (`setTotalPositionCap`, and `MAX_EURC_INVENTORY` with it).
    The timer alerts the webhook when the check changes state, until its 7 days end (2026-10-28 12:00 UTC).
 

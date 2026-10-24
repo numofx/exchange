@@ -96,29 +96,29 @@ resource "aws_ecs_task_definition" "market_maker_eurc" {
       # itself is MM_ANCHOR_CHAINLINK_MAX_AGE_SECONDS, which halts at once.
       { name = "MM_STALE_ANCHOR_TIMEOUT_SECONDS", value = "300" },
 
-      # Launch size, inside the 50,000 EURC escrow cap (set 2026-10-24), which is summed over every account under the
+      # Launch size, inside the 40,000 EURC escrow cap (set 2026-10-25), which is summed over every account under the
       # engine: the EURC this maker holds counts against it, so the maker is held to ~20% of it and users keep the
       # rest. Units as the bot reads them for EURC-USDC (market-maker README, EURC-USDC units): MM_ORDER_SIZE and the
       # inventory limits in USDC (EURC valued at the reference), MM_MAX_NOTIONAL_PER_SIDE in EURC. Four rungs a side
-      # from 1,000 USDC, 1.2x outward: 1,000 + 1,200 + 1,440 + 1,728 = 5,368 USDC a side, ~4,800 EURC at 1.12. 5 bps
+      # from 800 USDC, 1.2x outward: 800 + 960 + 1,152 + 1,382 = 4,294 USDC a side, ~3,830 EURC at 1.12. 5 bps
       # out and 3 bps further each, so the outer rung is 14 bps out: with the live reference the inner rung sits
       # inside the 1 h feed's 10 bps deviation threshold, which a Chainlink-only anchor could not do without quoting
       # a stale price.
-      { name = "MM_ORDER_SIZE", value = "1000" },
+      { name = "MM_ORDER_SIZE", value = "800" },
       { name = "MM_QUOTE_LEVELS", value = "4" },
       { name = "MM_LEVEL_SIZE_MULT", value = "1.2" },
       { name = "MM_HALF_SPREAD_BPS", value = "5" },
       { name = "MM_LEVEL_SPREAD_STEP_BPS", value = "3" },
       # A halt, not a soft cap (it cancels the ladder), so it covers the worst case: every bid rung fills on top of
-      # the EURC held. 11,200 USDC is ~10,000 EURC at 1.12 (20% of the escrow cap): that worst case for up to ~5,200
+      # the EURC held. 8,960 USDC is ~8,000 EURC at 1.12 (20% of the escrow cap): that worst case for up to ~4,160
       # EURC of funding. Raise it only with the cap. LONG/SHORT default to +/-1,000 USDC and NET only tightens them,
       # so all three are set: with NET alone the bot halts past ~890 EURC.
-      { name = "MM_MAX_NET_INVENTORY", value = "11200" },
-      { name = "MM_MAX_LONG_INVENTORY", value = "11200" },
-      { name = "MM_MAX_SHORT_INVENTORY", value = "-11200" },
-      # Per side and per order, in EURC: above the ~4,800 EURC ladder and its largest rung (~1,540 EURC), so the
+      { name = "MM_MAX_NET_INVENTORY", value = "8960" },
+      { name = "MM_MAX_LONG_INVENTORY", value = "8960" },
+      { name = "MM_MAX_SHORT_INVENTORY", value = "-8960" },
+      # Per side and per order, in EURC: above the ~3,830 EURC ladder and its largest rung (~1,230 EURC), so the
       # ladder rather than this binds.
-      { name = "MM_MAX_NOTIONAL_PER_SIDE", value = "6000" },
+      { name = "MM_MAX_NOTIONAL_PER_SIDE", value = "4800" },
 
       # 8 resting quotes; 300 s keeps replacements far inside the cancel cap, as on the other makers.
       { name = "MM_ORDER_EXPIRY_SECONDS", value = "300" },
