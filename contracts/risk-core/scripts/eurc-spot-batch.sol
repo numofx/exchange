@@ -36,8 +36,8 @@ interface IEurcOwned {
  *      the engine has exactly one market: createMarket must return 2, and checkPreconditions refuses any other world.
  *
  * @dev The feed is Chainlink EURC/USD (the token, not the EUR/USD rate, so a EURC depeg is priced), adapted to 18dp USD
- *      per EURC with confidence fixed at 1e18. It updates on a 24h heartbeat or a deviation, so the adapter's staleness
- *      limit is 25h; past it getSpot reverts and every account HOLDING EURC fails closed (no trade, no withdrawal, no
+ *      per EURC with confidence fixed at 1e18. It is the 1h feed (1h heartbeat or 0.1% deviation), so the adapter's
+ *      staleness limit is 3h; past it getSpot reverts and every account HOLDING EURC fails closed (no trade, no withdrawal, no
  *      liquidation) until Chainlink posts. Accounts without EURC never read it: _getMarketMargin runs per market held.
  *      Oracle contingency is left zero: with a fixed confidence there is nothing for it to act on.
  *
