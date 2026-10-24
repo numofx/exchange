@@ -24,8 +24,13 @@ import {EURCSpotBatch} from "./eurc-spot-batch.sol";
  *
  * Usage (mainnet, from a keystore; the key never touches a command line). Needs no signer env; set BASE_RPC_URL.
  * `--sender` is required alongside `--account` (forge simulates with its placeholder sender otherwise).
- *   forge script scripts/deploy-eurc-spot.s.sol --rpc-url $BASE_RPC_URL \
+ * EURC_DEPLOYER_NONCE is the nonce the deploy-day rehearsal ran at (its sheet is what approvers check); the script
+ * refuses any other.
+ *   EURC_DEPLOYER_NONCE=<rehearsed nonce> forge script scripts/deploy-eurc-spot.s.sol --rpc-url $BASE_RPC_URL \
  *     --account numo-deployer --sender 0x2D724867d3AeD4A9F09c096B87F939285DD3AE2D --broadcast
+ *
+ * Valid only while: the deployer is at EURC_DEPLOYER_NONCE, the engine has exactly one market (createMarket must
+ * return 2), and Chainlink EURC/USD has posted within FEED_HEARTBEAT (25h). Each is refused here before broadcast.
  */
 contract DeployEurcSpot is Utils {
   string internal constant ARTIFACT_NAME = "EURC_SPOT";
@@ -71,6 +76,16 @@ contract DeployEurcSpot is Utils {
     Params memory params = loadParams();
     address deployer = msg.sender;
     if (deployer == FORGE_DEFAULT_SENDER) revert("run with --account <keystore> (or --private-key): no sender given");
+    // The escrow and the feed are CREATE addresses of (deployer, nonce), and every digest on the rehearsal's sheet
+    // follows from them. A nonce other than the rehearsed one deploys to addresses no approver has checked.
+    uint expectedNonce = vm.envUint("EURC_DEPLOYER_NONCE");
+    if (vm.getNonce(deployer) != expectedNonce) {
+      revert("deployer nonce is not EURC_DEPLOYER_NONCE: rehearse again at the current nonce");
+    }
+    // checkPreconditions reads getSpot, which reverts past the adapter's limit. Refuse here, before anything is sent,
+    // with a reason rather than CLF_DataTooOld.
+    (,,, uint updatedAt,) = IAggregatorV3(params.aggregator).latestRoundData();
+    if (updatedAt + FEED_HEARTBEAT < block.timestamp) revert("Chainlink EURC/USD is older than FEED_HEARTBEAT");
 
     vm.startBroadcast();
     Deployed memory deployed = deploy(params);

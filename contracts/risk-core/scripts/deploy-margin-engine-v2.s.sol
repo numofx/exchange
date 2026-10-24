@@ -47,9 +47,10 @@ interface ITradeModuleQuote {
  *      a positive rate against USD, so cNGN trades at a discount forward: fair forward = index / (1 + carry x tau), and
  *      the forward feed's signed difference is negative.
  *
- * Usage (a fresh keystore account, used for this deploy only):
+ * Usage (a fresh keystore account, used for this deploy only; never numo-deployer, whose nonce the EURC batch rests on
+ * and which the single-use check refuses anyway):
  *   INITIAL_MARK=<USDC per cNGN, 18dp> CARRY=<annual carry, 18dp> FORWARD_SIGNER=<forward key> \
- *     forge script scripts/deploy-margin-engine-v2.s.sol --rpc-url $BASE_RPC_URL --account numo-deployer --broadcast
+ *     forge script scripts/deploy-margin-engine-v2.s.sol --rpc-url $BASE_RPC_URL --account <fresh keystore> --broadcast
  *
  * Optional env: EXPIRY, LAST_TRADE_TIME, CONTRACT_SIZE, FUTURE_OI_CAP, INITIAL_MARK_TOLERANCE.
  */
