@@ -157,6 +157,11 @@ market rather than a slot in market 1, whose Base slot is the cNGN escrow every 
   nobody else reads it. Base also has a 1h EURC/USD feed, `0x9867186e52d2F1C2c565CDA6E747101Fa56501e0` (0.1%,
   3,600s), which the maker bands its quotes with; it tracks the market more closely (2026-10-21: ~2 bps from the
   pools, the 24h feed ~15 bps) but would fail EURC holders closed after a ~2h gap instead of 25h. Not switched.
+  Measured 2026-10-17 → 10-24 (169 hourly samples against the main pool): the 24h feed is 8 / 24 / 29 bps from the
+  pool (median / p95 / max) and its longest gap between rounds was 24.006h, 59 minutes inside the 25h limit; the 1h feed
+  is 2 / 7 / 11 bps, longest gap 1.010h. Switching means `EURC_USD_AGGREGATOR` and `FEED_HEARTBEAT` (to ~2h) in
+  `deploy-eurc-spot.s.sol`, the proposer's aggregator constant, and the fork test; the freshness check itself is
+  unchanged (it compares against `FEED_HEARTBEAT`).
 - Fees: 5 bps taker / 0 maker (`services/markets/internal/instruments/registry.go`).
 - Margin: factor `0.9`, IM scale `0.8` — 90% of oracle value at maintenance, 72% at initial. Borrowing is **on** under
   the engine, so this is also a loan book: an account can withdraw USDC against EURC down to IM. From the IM limit a
