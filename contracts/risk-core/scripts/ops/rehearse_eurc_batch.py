@@ -109,9 +109,9 @@ def rehearse(url: str, batch: str, markets_url: str, keeper_health_url: str) -> 
   print(f"batch {batch}: {len(actions)} action(s); gates:")
   if not P.report(gates(P.last_market_id(url, art) >= P.MARKET_ID)):
     print("\nGATES FAILED: nothing sent, as the proposer would stop here.")
-    P.print_sheet(actions)
+    P.print_sheet(actions, art)
     return 1
-  P.print_sheet(actions)
+  P.print_sheet(actions, art)
   for i, a in enumerate(actions):
     if P.landed(url, art, i, a, P.EXPECTED_VAULT):
       print(f"  [{i}] already landed; skipping")
