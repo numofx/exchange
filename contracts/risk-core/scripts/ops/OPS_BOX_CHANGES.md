@@ -5,6 +5,17 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-25 00:08 UTC: HOLD alert test, from a throwaway checkout (nothing left on the box)
+
+The stress check's state-change alert had only ever posted its first evaluation (PASS, 00:00 UTC). To see a HOLD reach
+the channel without touching the live timer: a clone of `exchange-eurc-depth` at `8c5e60a` in
+`/home/ec2-user/eurc-depth-holdtest`, with copies of the CSV and state file, ran `depth.once()` through
+`run-with-ssm-readonly.sh` with the cap forced to 1,000,000 EURC and every message prefixed
+`[TEST, ignore: forced HOLD …]`. A real reading (block 53048776, 95,410 EURC without the largest LP), judged against the
+forced cap: the copy's last delivered state was PASS, so PASS -> HOLD posted at 00:08:33 UTC, the webhook accepted it, and it
+arrived in the channel (confirmed by eye). The live CSV and state file hash the same before and after (`45c37859…`, `bb0bc570…`); the
+timer did not run (next 12:00 UTC); the directory was deleted. SSM `7b0c8973-…`, Success.
+
 ## 2026-10-24 23:51 UTC: depth checkout `exchange-eurc-depth` moved to `8c5e60a` (#263 1h feed, #264 cap 40,000)
 
 `/home/ec2-user/exchange-eurc-depth` fetched `origin/main` and detached at `8c5e60a6089d07d26b987cfe5977db30ba4c6c61`
