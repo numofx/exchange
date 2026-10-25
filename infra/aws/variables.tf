@@ -194,7 +194,9 @@ variable "cngn_spot_asset_address" {
 variable "eurc_spot_asset_address" {
   description = "The EURC-USDC spot market's EURC escrow (risk-core deployments/8453/EURC_SPOT.json .escrow once deployed). Empty: the market is not listed and EURC is not a deposit or withdrawal asset."
   type        = string
-  default     = ""
+  # 2026-10-25: deployed at Base block 53068641 and configured as engine market 2 (#268, #269); applied as -var
+  # the same day and written back here.
+  default = "0xfD2AFbF4eF6E7a7f34A04D16Ff6da249Ca086cD9"
 }
 
 # cNGN-PERP's stack, on Base since 2026-09-30 (risk-core deployments/8453/CNGN_PERP_STACK.json,
