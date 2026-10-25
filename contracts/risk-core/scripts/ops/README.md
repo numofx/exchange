@@ -94,7 +94,9 @@ refused on markets-service and the keeper, as it should before step 3.
 **On deploy day, rerun it with the real cap, at that morning's deployer nonce,** immediately before step 1. The escrow
 and feed are CREATE addresses of the deployer (`0x2D72…E2D`), so they, every action digest and the batch hash all follow
 from its nonce and the cap. The rehearsal's sheet is the reference: MPCVault approvers check each request's digest
-against that run's sheet, and a digest that matches no line of it is not approved.
+against that run's sheet, and a digest that matches no line of it is not approved. The sheet ends with the collateral
+feed, which no digest covers (action 3 names the feed by address only): the 1h EURC/USD aggregator `0x9867…01e0` and the
+3h staleness limit, with the `cast call`s that read both off the deployed feed. Approvers run them before action 3.
 
 ## Basis logger (evidence for the Sep-16 fixing)
 
