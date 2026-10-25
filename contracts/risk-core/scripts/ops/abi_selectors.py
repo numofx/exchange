@@ -74,6 +74,8 @@ NOT_COMPILED: dict[str, dict[str, str]] = {
     "fee()": "Aerodrome Slipstream CLPool",
     "tickSpacing()": "Aerodrome Slipstream CLPool",
   },
+  # The approvers' sheet prints a cast call on Chainlink's EURC/USD aggregator, which IAggregatorV3 does not declare.
+  "propose_eurc_spot_batch.py": {"description()": "Chainlink EURC/USD aggregator (the sheet's cast call)"},
 }
 
 
