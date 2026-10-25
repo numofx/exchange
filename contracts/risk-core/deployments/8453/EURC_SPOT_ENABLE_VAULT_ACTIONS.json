@@ -1,0 +1,9 @@
+[
+  {
+    "description": "eurcEscrow.setWhitelistManager(engine, true) [THE ENABLING SWITCH - EURC deposits open here]",
+    "to": "0xfD2AFbF4eF6E7a7f34A04D16Ff6da249Ca086cD9",
+    "value": "0",
+    "data": "0xe64cc9da000000000000000000000000a19e296021c9df25b90d96c2a0793cc3d08007580000000000000000000000000000000000000000000000000000000000000001",
+    "digest": "0x9a282c384479497e11c7bdb14a1055525abd00e086f0dfa520c86c970540e1ab"
+  }
+]
