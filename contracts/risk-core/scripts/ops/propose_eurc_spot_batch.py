@@ -363,10 +363,22 @@ def landed(rpc_url: str, art: dict, i: int, action: dict, vault: str) -> bool:
   raise AssertionError(sig)
 
 
-def print_sheet(actions: list[dict]) -> None:
+def print_sheet(actions: list[dict], art: dict) -> None:
+  """The approvers' sheet: each action's digest, then the collateral feed, which no digest covers. Action 3 names the
+  feed by address only; what it reads (the aggregator) and how stale it may be (the heartbeat) are the feed's own
+  state, so the approver checks them with the cast calls printed here."""
   print()
   for i, a in enumerate(actions):
     print(f"  [{i}] to {a['to']}\n      data {a['data']}\n      digest {a['digest']}\n      {a['description']}")
+  from refresh_deployment_artifacts import to_checksum  # as cast prints them, so the approver compares like with like
+  feed, aggregator = to_checksum(art["spotFeed"]), to_checksum(EURC_USD_AGGREGATOR)
+  print(f"\n  collateral feed (in no digest: check before approving action 3)\n"
+        f"      eurcSpotFeed {feed}\n"
+        f"      aggregator   {aggregator} (Chainlink EURC / USD, 1h heartbeat)\n"
+        f"      staleness    {FEED_HEARTBEAT_SEC} s ({FEED_HEARTBEAT_SEC // 3600}h)\n"
+        f"      cast call {feed} \"aggregator()(address)\" --rpc-url https://mainnet.base.org   # {aggregator}\n"
+        f"      cast call {feed} \"heartbeat()(uint64)\" --rpc-url https://mainnet.base.org     # {FEED_HEARTBEAT_SEC}\n"
+        f"      cast call {aggregator} \"description()(string)\" --rpc-url https://mainnet.base.org   # \"EURC / USD\"")
   print()
 
 
@@ -468,6 +480,19 @@ def self_test() -> int:
   assert depth_stress_gate({**deep, "total_sell_eurc_ex_largest_lp": str(bar - 2)}, cap - 10**18).ok, "the cap is the bar"
   assert not depth_stress_gate({**deep, "total_sell_eurc_ex_largest_lp": "", "sim_check": "x"}, cap).ok
   assert not gate_depth_stress("not-a-url", cap).ok, "an unreadable RPC holds the enable"
+  # The sheet carries the collateral feed, which no digest covers: its address, the 1h aggregator, the 3h limit, and
+  # the cast calls an approver runs to read them off the feed.
+  import contextlib, io
+  out = io.StringIO()
+  with contextlib.redirect_stdout(out):
+    print_sheet(configure, art)
+  sheet = out.getvalue()
+  from refresh_deployment_artifacts import to_checksum
+  for line in [f'cast call {to_checksum(art["spotFeed"])} "aggregator()(address)" --rpc-url https://mainnet.base.org   # '
+               "0x9867186e52d2F1C2c565CDA6E747101Fa56501e0",
+               f'cast call {to_checksum(art["spotFeed"])} "heartbeat()(uint64)" --rpc-url https://mainnet.base.org     # 10800',
+               'cast call 0x9867186e52d2F1C2c565CDA6E747101Fa56501e0 "description()(string)"', "staleness    10800 s (3h)"]:
+    assert line in sheet, (line, sheet)
   print("self-test ok: selectors name compiled functions; a reordered, retargeted, market-1, over-generous, "
         "over-cap, wrong-digest or value-carrying batch is refused; the keeper and depth-stress enable gates")
   return 0
@@ -515,9 +540,9 @@ def main() -> int:
   print(f"batch {args.batch}: {len(actions)} action(s); gates:")
   if not report(gates(created())):
     print("\nGATES FAILED: nothing proposed.")
-    print_sheet(actions)
+    print_sheet(actions, art)
     return 1
-  print_sheet(actions)
+  print_sheet(actions, art)
   if not args.propose:
     print("dry run: nothing proposed. Re-run with --propose; compare each digest with MPCVault before approving.")
     return 0
