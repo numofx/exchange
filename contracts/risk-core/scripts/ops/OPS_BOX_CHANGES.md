@@ -5,6 +5,21 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-25 11:36–11:53 UTC: EURC step 2 (configure) proposed from `exchange-ops` at `539ae00`
+
+- **`/home/ec2-user/exchange-ops`** fetched and detached at `539ae00edca8a912660c57472e396fc3578cfe57` (#268, the EURC
+  step-1 artifacts; was `223b8292`), clean before and after. `EURC_SPOT.json`, both `EURC_SPOT_*VAULT_ACTIONS.json` and
+  `propose_eurc_spot_batch.py` matched the laptop's sha256; the proposer's self-test passed with the ABI-name step
+  skipped (no forge build on the box; it passed in CI on this commit); the dry run's gates all passed and its 7 digests
+  were the deploy-day rehearsal's. SSM `635ba670-…`, Success.
+- **`numo-eurc-configure`**, a transient unit (`systemd-run --uid=ec2-user`, nothing written under `/etc`), ran
+  `run-with-ssm-mark.sh python3 propose_eurc_spot_batch.py --propose` from 11:41 UTC so the SSM command's timeout could
+  not end it mid-batch. All 7 actions were approved in MPCVault and landed 11:51:18–11:52:27; the unit exited 0 and is
+  gone. SSM `c01ed919-…`. (A first attempt, `81a34e58-…`, failed before starting: `systemd-run` needs an absolute
+  path. Nothing ran.)
+- **Undo.** None on chain: the vault owns what landed. The checkout: `git -C /home/ec2-user/exchange-ops checkout --detach
+  223b8292775d7cf872f66a7d690bde2dfb7f14d8`.
+
 ## 2026-10-25 00:08 UTC: HOLD alert test, from a throwaway checkout (nothing left on the box)
 
 The stress check's state-change alert had only ever posted its first evaluation (PASS, 00:00 UTC). To see a HOLD reach
