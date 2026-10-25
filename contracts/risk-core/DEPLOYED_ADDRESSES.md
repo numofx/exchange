@@ -146,10 +146,22 @@ delta is negative, so `_assessRisk` — and every feed read — is skipped. Fund
 book is halted; only balance-reducing paths (trades, withdrawals) surface a stale feed. That is why
 the six-day feed outage was invisible.
 
-### EURC-USDC spot on the MarginEngine — PREPARED, not deployed
+### EURC-USDC spot on the MarginEngine — CONFIGURED 2026-10-25, deposits shut until enable (step 4)
 
-Nothing below exists on chain yet. Market 2 on the MarginEngine `0xA19E296021c9DF25b90D96C2A0793CC3D0800758`, its own
-market rather than a slot in market 1, whose Base slot is the cNGN escrow every live market margins through.
+Market 2 on the MarginEngine `0xA19E296021c9DF25b90D96C2A0793CC3D0800758`, its own market rather than a slot in market 1,
+whose Base slot is the cNGN escrow every live market margins through.
+
+- **Step 1, deployed 2026-10-25** at Base block 53068641 by `numo-deployer` at nonce 334 (now 338): escrow
+  `0xfD2AFbF4eF6E7a7f34A04D16Ff6da249Ca086cD9`, feed `0xaaE62Ae5df3747B8f43F895561043FB77D97C435`, batch hash
+  `0xd62326327d3f13f1e15f8417237a17e98a35694291e79b0bc008b2b172561ea9`, the deploy-day rehearsal's (fork of block
+  53050959). Artifacts in #268.
+- **Step 2, configured 2026-10-25 11:51–11:52 UTC** from `exchange-ops` at `539ae00` (`OPS_BOX_CHANGES.md`): all 7
+  actions approved in MPCVault against the rehearsal sheet's digests and landed, txs `0x16e40e20…3a7d`,
+  `0x914f32ca…fae2`, `0x8496bff2…2997`, `0x62fd4c0a…c5b1`, `0xe1405631…eb40`, `0x20a6f051…a6c`, `0xab2ebf98…a925`.
+  Read back: the vault owns the escrow and the feed; `lastMarketId` 2; market 2's spot feed is the EURC feed, factor
+  0.9 / IM scale 0.8, Base asset the escrow; the escrow's cap under the engine 40,000 EURC; the escrow does **not**
+  whitelist the engine (that is step 4). Market 1 unchanged (the cNGN escrow, 0.5 / 1.0).
+- **Next:** step 3 (services), then step 4 (enable, behind the depth gate).
 
 - `baseAsset`: a new `WrappedERC20Asset` over Circle EURC `0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42` (6 dec, 18dp in the ledger)
 - `spotFeed`: a new `ChainlinkSpotFeed` over Chainlink EURC/USD **1h feed** `0x9867186e52d2F1C2c565CDA6E747101Fa56501e0`
