@@ -5,6 +5,24 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-25 12:13–12:33 UTC: engine keeper moved to `exchange-engine-keeper` (EURC); EURC step 4 proposed
+
+- **`/home/ec2-user/exchange-engine-keeper`**: a new clone of numofx/exchange, detached at `76a3ec0` (#269), owned by
+  ec2-user; `pnpm install --frozen-lockfile --filter perp-keeper...` and `pnpm --filter perp-keeper build` (`tsc` only;
+  no forge). Its own checkout so the build could not touch `exchange-future`, which still runs `numo-future-feeds`.
+- **Proof before the switch** (SSM `a96bd6d0-…`, and again inside `c34e170c-…`): the new build ran 45 s with the live
+  env plus the EURC lines, `DRY_RUN=true` on port 9475, beside the live keeper: two clean passes, health reporting the
+  EURC escrow, feed, 200 bps and `maxEurcInventory` 4e22.
+- **`numo-engine-keeper`** (SSM `c34e170c-…`, 12:21 UTC): `/etc/numo/engine-keeper.env` backed up to
+  `engine-keeper.env.bak-202610251221` and given the four EURC lines of the repo's `engine-keeper.env` (#269); drop-in
+  `/etc/systemd/system/numo-engine-keeper.service.d/checkout.conf` sets `WorkingDirectory` to the new checkout's
+  `services/perp-keeper`; `daemon-reload`, restart. Live on 9465: first pass ok, not dry run, EURC reported.
+- **EURC step 4** (SSM `0eda4936-…` read-only gates, then `6c986435-…`): `propose_eurc_spot_batch.py --batch enable
+  --rehearsed --propose` from `exchange-ops` at `539ae00`; approved in MPCVault, landed 12:32:07 UTC (block 53071090).
+- **Undo, keeper.** `rm /etc/systemd/system/numo-engine-keeper.service.d/checkout.conf`; `cp -p
+  /etc/numo/engine-keeper.env.bak-202610251221 /etc/numo/engine-keeper.env`; `systemctl daemon-reload`; `systemctl
+  restart numo-engine-keeper`. Not while anyone holds EURC: the old build bids those accounts without a EURC haircut.
+
 ## 2026-10-25 11:36–11:53 UTC: EURC step 2 (configure) proposed from `exchange-ops` at `539ae00`
 
 - **`/home/ec2-user/exchange-ops`** fetched and detached at `539ae00edca8a912660c57472e396fc3578cfe57` (#268, the EURC
