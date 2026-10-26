@@ -20,13 +20,15 @@
 variable "image_market_maker_eurc" {
   description = "The EURC-USDC market maker's mm-bot image, tagged by git SHA: the first market-maker build with MM_ANCHOR_SOURCE_TYPE=chainlink, or later. Empty creates nothing."
   type        = string
-  default     = ""
+  # market-maker main with #43 (the chainlink anchor); quoting since 2026-10-26.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:54d7ae630278"
 }
 
 variable "mm_eurc_subaccount_id" {
   description = "The EURC-USDC maker's account under the MarginEngine, held by Matching, owned by mm_address, funded with EURC and USDC. Empty keeps the maker at zero replicas and out of the settlement canary."
   type        = string
-  default     = ""
+  # Opened 2026-10-25, funded 2026-10-26 with 3,291.44 EURC + 4,300 USDC.
+  default = "36"
 }
 
 variable "desired_count_market_maker_eurc" {
