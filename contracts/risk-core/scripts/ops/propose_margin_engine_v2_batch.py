@@ -13,7 +13,9 @@
           open interest (it rose between the read and the approval) is the same close-only, not a freeze: the deployed
           viewer checks only the assets a transfer touched (test/fork/MarginEngineV1CloseOnlyFork.t.sol proves both,
           and that under the SRM's check the same cap freezes holders). The perp's cap under v1 is already 0 and is not
-          touched. A re-run proposes again wherever closing has left a cap above open interest.
+          touched. A re-run proposes again wherever closing has left a cap above open interest. Close-only stops every
+          v1 account buying base, so a v1 maker could only sell: refused while any v1 account rests a spot bid, and
+          while the makers' accounts are under v1.
   eurc-cap  eurcEscrow.setTotalPositionCap(v2, N EURC): open EURC on v2. The cap is per manager, so the venue's EURC is
           v1's cap plus v2's, and v1's 40,000 was sized to depth for the whole venue: gated on that total, not on N.
           After v1-close-only, when v1's cap is its open interest.
@@ -49,6 +51,10 @@ v1-close-only gates:
             TradeModule): holders have somewhere to go
   venue     markets-service lists v1's future close-only (future.close_only: true) and no listing still sends accounts
             to v1 (margin_manager_address): new spot deposits default to v2
+  bids      no account under v1 (SubAccounts.manager) rests a buy on a spot book (/v1/book of each spot listing): its
+            fill would raise the escrow's position under v1 over the new cap and revert. The makers' accounts
+            (MM_SUBACCOUNT_IDS, default #34 and #36) are refused under v1 even while they rest nothing: a paused maker
+            resumes. The makers move to v2 accounts first
   caps      each new cap is open interest, read now, and no higher than the cap it replaces
   (EURC's escrow need only be whitelisted for v2: its cap there is eurc-cap's, which comes after)
 
@@ -130,8 +136,11 @@ V1_MARKETS = ("NGN", "EUR")
 # setup opens EURC's escrow on v2 at 0: its cap is per manager, and v1's was sized to depth for the whole venue
 EURC_INDEX = eurc.MARKET_ID - 1
 
-SIGNATURES = {**v1p.SIGNATURES, "lastMarketId": "lastMarketId()"}
-PINNED = {**v1p.PINNED, "lastMarketId": "0x565eb87c"}
+SIGNATURES = {**v1p.SIGNATURES, "lastMarketId": "lastMarketId()", "manager": "manager(uint256)"}
+PINNED = {**v1p.PINNED, "lastMarketId": "0x565eb87c", "manager": "0x52981457"}
+# The spot makers' accounts under v1: #34 quotes cNGN-USDC, #36 EURC-USDC (the MM wallet 0x3448ac0A…7B, via Matching).
+# Set MM_SUBACCOUNT_IDS to their v2 accounts once they move.
+DEFAULT_MM_SUBACCOUNT_IDS = "34,36"
 
 
 def selector(name: str) -> str:
@@ -464,6 +473,44 @@ def venue_gate(entries: list[dict], v1d: dict) -> Gate:
   return Gate("venue", not problems, "; ".join(problems) or "v1's future is close-only on the venue; no listing sends accounts to v1")
 
 
+def maker_accounts() -> list[str]:
+  """The spot makers' accounts, checked whether or not they rest a bid at the read: a paused maker resumes."""
+  return [s.strip() for s in os.environ.get("MM_SUBACCOUNT_IDS", DEFAULT_MM_SUBACCOUNT_IDS).split(",") if s.strip()]
+
+
+def v1_bids_gate(bids: list[tuple[str, str, str]], makers: list[str], managers: dict[str, str], v1: str) -> Gate:
+  """(market, account, order id) for each resting spot buy, and each account's manager. A v1 account buying base raises
+  the escrow's position under v1 over its close-only cap, so its fill reverts: the bid is frozen
+  (MarginEngineV1CloseOnlyFork.testAV1HolderSellsCngnToV2ButCannotBuyIt)."""
+  v1 = v1.lower()
+  frozen = sorted({f"#{acc} on {market}" + (" (maker)" if oid.startswith("mm:") else "")
+                   for market, acc, oid in bids if managers.get(acc, "").lower() == v1})
+  idle = [f"#{acc}" for acc in makers if managers.get(acc, "").lower() == v1 and acc not in {b[1] for b in bids}]
+  problems = ([f"v1 accounts rest base bids that would freeze: {', '.join(frozen)}"] if frozen else []) + \
+             ([f"maker accounts {', '.join(idle)} are under v1 (MM_SUBACCOUNT_IDS)"] if idle else [])
+  if problems:
+    return Gate("bids", False, "; ".join(problems) + ". Move the makers to v2 accounts first")
+  return Gate("bids", True, f"no v1 account rests a spot bid ({len(bids)} read); makers {', '.join(makers) or 'none'} not on v1")
+
+
+def resting_buys(market: str, book: dict) -> list[tuple[str, str, str]]:
+  """(market, account, order id) for each active buy of base in a /v1/book, by its side, not the list it sits in."""
+  return [(market, str(o["subaccount_id"]), str(o.get("order_id", ""))) for o in (book.get("bids") or []) + (book.get("asks") or [])
+          if o.get("side") == "buy" and o.get("status", "active") == "active"]
+
+
+def gate_v1_bids(chain: Chain, v1d: dict, entries: list[dict], markets_url: str) -> Gate:
+  bids = []
+  for e in entries:
+    if e.get("contract_type") != "spot":
+      continue
+    bids += resting_buys(e["market"], http_json(f"{markets_url.rstrip('/')}/v1/book?symbol={e['market']}"))
+  makers = maker_accounts()
+  managers = {acc: "0x" + chain.call(v1p.SUB_ACCOUNTS, selector("manager") + word_uint(int(acc)))[24:64]
+              for acc in {*makers, *(b[1] for b in bids)}}
+  return v1_bids_gate(bids, makers, managers, v1d["manager"])
+
+
 def gate_close_only(chain: Chain, d: dict, v1d: dict, vault: str) -> list[Gate]:
   v1, v2 = word_address(v1d["manager"]), word_address(d["manager"])
   assets = v1_capped_assets(chain, v1d)
@@ -484,10 +531,18 @@ def gate_close_only(chain: Chain, d: dict, v1d: dict, vault: str) -> list[Gate]:
     missing.append("v2's future (not enabled)")
   gates.append(Gate("v2", not missing, f"v2 does not yet take {', '.join(missing)}" if missing
                     else "v2 takes every escrow v1 lists (EURC's at eurc-cap) and the cash, and its future is open"))
+  markets_url = os.environ.get("MARKETS_URL", "https://api.numofx.com")
   try:
-    gates.append(venue_gate(markets(os.environ.get("MARKETS_URL", "https://api.numofx.com")), v1d))
+    entries = markets(markets_url)
+    gates.append(venue_gate(entries, v1d))
   except Exception as exc:  # noqa: BLE001
+    entries = None
     gates.append(Gate("venue", False, f"markets-service /v1/markets unreadable: {str(exc)[:80]}"))
+  try:
+    gates.append(gate_v1_bids(chain, v1d, entries, markets_url) if entries is not None
+                 else Gate("bids", False, "markets-service /v1/markets unreadable"))
+  except Exception as exc:  # noqa: BLE001
+    gates.append(Gate("bids", False, f"spot books or their accounts unreadable: {str(exc)[:80]}"))
   gates.append(close_only_caps_gate([(what, chain.word(a, selector("totalPositionCap") + v1),
                                       chain.word(a, selector("totalPosition") + v1)) for a, what in assets]))
   return gates
@@ -668,6 +723,17 @@ def self_test() -> int:
   assert not venue_gate([{**fut, "future": {}}, spot], v1d).ok, "not close-only"
   assert not venue_gate([spot], v1d).ok, "v1's future delisted: holders could not close"
   assert "cNGN-USDC" in venue_gate([fut, {**spot, "margin_manager_address": v1.lower()}], v1d).detail, "spot still on v1"
+  # Bids: a v1 account's base buy would freeze under the new cap; a v2 account's would not; a v1 ask only reduces.
+  mgrs = {"34": v1.lower(), "36": v1, "40": a(1), "41": a(1)}
+  bid34 = ("cNGN-USDC", "34", "mm:cNGN-USDC:buy:1")
+  assert not v1_bids_gate([bid34], [], mgrs, v1).ok and "#34 on cNGN-USDC (maker)" in v1_bids_gate([bid34], [], mgrs, v1).detail
+  assert v1_bids_gate([("EURC-USDC", "40", "mm:EURC-USDC:buy:1")], ["40", "41"], mgrs, v1).ok, "the makers on v2"
+  book = {"bids": [], "asks": [{"subaccount_id": "34", "side": "sell", "status": "active", "order_id": "mm:cNGN-USDC:sell:1"}]}
+  assert resting_buys("cNGN-USDC", book) == [] and v1_bids_gate(resting_buys("cNGN-USDC", book), [], mgrs, v1).ok, "a v1 ask alone"
+  book["bids"] = [{"subaccount_id": 34, "side": "buy", "status": "active", "order_id": "mm:cNGN-USDC:buy:1"}]
+  assert resting_buys("cNGN-USDC", book) == [bid34]
+  assert "#36" in v1_bids_gate([], ["36", "40"], mgrs, v1).detail and not v1_bids_gate([], ["36"], mgrs, v1).ok, \
+    "a maker under v1 is refused while it rests nothing"
 
   # eurc-cap: the depth stress gate at v1 + N, not at N. At 86,202 EURC of depth without the largest LP the bar is
   # 43,101: with v1 at 40,000, v2 may take 3,000 and not 4,000; with v1 close-only at 5,000 open interest, 38,000.
@@ -693,8 +759,8 @@ def self_test() -> int:
   for fn in (main, run_batch, run_close_only, run_cap, run_eurc_cap):
     assert "propose(token" not in inspect.getsource(fn), f"{fn.__name__} calls propose() directly"
   print("self-test ok: selectors compiled and pinned; a wrong target, calldata, value, digest, count or order is refused; "
-        "coverage, gap, keeper and fill-band sized in USDC per cNGN; close-only caps at open interest, never a raise; "
-        "setup opens EURC at 0 and eurc-cap holds v1 + v2 to the depth bar")
+        "coverage, gap, keeper and fill-band sized in USDC per cNGN; close-only caps at open interest, never a raise, "
+        "and refused while a v1 account rests a spot bid; setup opens EURC at 0 and eurc-cap holds v1 + v2 to the depth bar")
   return 0
 
 
