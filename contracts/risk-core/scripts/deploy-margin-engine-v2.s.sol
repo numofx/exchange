@@ -32,7 +32,7 @@ interface ITradeModuleQuote {
  * @title DeployMarginEngineV2
  *
  * @dev MarginEngine v2 beside the live v1 engine (deployments/8453/MARGIN_ENGINE.json), hosting everything v1 hosts
- *      except the delisted perp: every base-asset market v1 lists (cNGN-USDC, and EURC-USDC once listed there), and on
+ *      except the delisted perp: every base-asset market v1 lists (cNGN-USDC and EURC-USDC, and no other), and on
  *      market 1 the first American-terms future, cNGN-<expiry>: USDC per cNGN, one contract CONTRACT_SIZE cNGN, VM in
  *      USDC cash. v1 is read, never called: every setting v2 shares with it is copied from it and asserted equal.
  *      Reused: SubAccounts, the USDC cash, the escrows, the index and spot feeds, the DutchAuction (and so the
@@ -90,6 +90,10 @@ contract DeployMarginEngineV2 is Utils {
 
   uint internal constant DEFAULT_INITIAL_MARK_TOLERANCE = 0.02e18;
   uint internal constant MAX_CARRY = 1e18;
+
+  /// @dev The markets v2 copies: exactly these two. v2 lists only what v1 lists at deploy, so a v2 deployed before
+  ///      EURC-USDC is listed on v1 has no EUR market (docs/margin-engine-v2.md, Migration step 1).
+  uint internal constant V1_MARKETS = 2;
 
   /// @dev v1's market names, by id: the chain keeps them only in MarketCreated. Market 1 from deploy-margin-engine.s.sol,
   ///      market 2 from eurc-spot-batch.sol.
@@ -234,7 +238,9 @@ contract DeployMarginEngineV2 is Utils {
     if (v1.owner() != params.vault) revert("v1 engine is not owned by the vault");
     if (CashAsset(params.cash).owner() != params.vault) revert("cash is not owned by the vault");
     if (DutchAuction(params.auction).owner() != params.vault) revert("auction is not owned by the vault");
-    if (params.escrows.length == 0) revert("v1 lists no market");
+    if (params.escrows.length != V1_MARKETS) {
+      revert("v1 must list exactly NGN and EUR: deploy v2 only once EURC-USDC is listed on v1");
+    }
     for (uint i = 0; i < params.escrows.length; ++i) {
       BaseMarket memory m = _market(params, i);
       if (m.escrow == address(0)) revert("a v1 market has no base asset");
