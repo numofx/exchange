@@ -5,6 +5,31 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-25 12:40 – 2026-10-26 14:58 UTC: EURC maker account #36 opened, funded and quoting
+
+- **MM-key grant, applied then revoked.** `ops_box_mm_key_read` (a one-off Allow on `/numo/exchange/mm_private_key` for
+  the box role, with the key carved out of `ops_box_ssm_deny_outside_paths`) was applied from the laptop on 2026-10-25 so
+  the box could open the maker's account. The 2026-10-26 apply from main removed both (4 added, 2 changed, 2 destroyed).
+- **Account #36** opened 2026-10-25 12:46 UTC by `run-with-ssm-mm.sh engine-account 5000000 --execute` from
+  `exchange-perp` (bundle `66da52db3cca`): approve then `createAndDepositSubAccount` (block 53071521), 5 USDC, manager
+  the MarginEngine, held by Matching for the MM wallet `0x3448…B47B`. SSM `784b9a87-…` failed on IAM propagation
+  (AccessDenied, nothing ran), `f81d75ea-…` dry run, `17b424d2-…` execute.
+- **Funding**, 2026-10-26, from MPCVault wallet "Market-Maker EURC-USDC" `0x8f4951f57Fcc4A7dcF99cF066FD35b1AB63D1B7a`,
+  entered by hand in the MPCVault app: EURC approve `0x704925c3…` (14:47:03), EURC deposit(36, 3,291.439616)
+  `0x1c096230…` (14:49:19), USDC approve `0xcc932167…` (14:51:55), USDC deposit(36, 4,300) `0xeb7520e7…` (14:56:21).
+  A first USDC deposit `0x2d4bd6fb…` (14:52:53) reverted, wrongly encoded for 4,700 USDC against a 4,300 allowance;
+  nothing moved. #36 then held 3,291.44 EURC and 4,305 USDC.
+- **Box: two failed proposer runs.** `numo-mm36-fund` (transient unit, `run-with-ssm-mark.sh python3
+  /home/ec2-user/fund_mm36.py --propose`) tried to post the four calls for approval. MPCVault refused both
+  (`createSigningRequest` HTTP 403, `code 7 Permission denied`): the box's token has no access to the vault holding
+  `0x8f49…`. Nothing was posted; the unit exited and is gone. SSM `101f3a8f-…`, `f8bd6495-…`.
+  `/home/ec2-user/fund_mm36.py` was deleted afterwards (SSM `61abd8b7-…`, Success); nothing is left on the box.
+- **ECS**, 2026-10-26 14:58 UTC: `market-maker-eurc` created (image `market-maker:54d7ae630278`, 1 replica, account 36)
+  and the execution task def replaced to add 36 to `SETTLEMENT_CANARY_ACCOUNTS` (`34,32,36`). Applied with `-var`;
+  these are the defaults in `market-maker-eurc.tf` from this change.
+- **Undo.** `desired_count_market_maker_eurc = 0` in `counts.auto.tfvars` and apply: the maker's orders expire within
+  300 s. #36's balances withdraw by the MM wallet.
+
 ## 2026-10-25 12:13–12:33 UTC: engine keeper moved to `exchange-engine-keeper` (EURC); EURC step 4 proposed
 
 - **`/home/ec2-user/exchange-engine-keeper`**: a new clone of numofx/exchange, detached at `76a3ec0` (#269), owned by
