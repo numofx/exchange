@@ -124,6 +124,9 @@ ENGINE_KEEPER_MIN_ETH = v1p.ENGINE_KEEPER_MIN_ETH
 PERP, BASE, FUTURE = 2, 3, 4
 # The overnight devaluation gaps docs/margin-engine-v2.md sizes the cap against
 GAPS = (0.30, 0.40, 0.50)
+# The markets v2 copies from v1, by id - 1, as deploy-margin-engine-v2.s.sol's V1_MARKETS: v2 deploys only once v1
+# lists EURC-USDC (docs/margin-engine-v2.md, Migration step 1)
+V1_MARKETS = ("NGN", "EUR")
 # setup opens EURC's escrow on v2 at 0: its cap is per manager, and v1's was sized to depth for the whole venue
 EURC_INDEX = eurc.MARKET_ID - 1
 
@@ -196,6 +199,14 @@ def verify_actions(batch: str, d: dict, actions: list[dict]) -> None:
 # gates: setup and enable
 # ---------------------------------------------------------------------------------------------
 
+def markets_gate(escrows: list, v1_markets: int) -> Gate:
+  """v2 lists exactly NGN and EUR, and v1 still lists those two: a v2 deployed before EURC-USDC has no EUR market."""
+  ok = len(escrows) == len(V1_MARKETS) and v1_markets == len(V1_MARKETS)
+  return Gate("markets", ok, f"v2 lists {len(escrows)} market(s), v1 {v1_markets}; both must be {len(V1_MARKETS)} "
+              f"({', '.join(V1_MARKETS)}): redeploy v2 once v1 lists EURC-USDC" if not ok
+              else f"v2 and v1 both list {', '.join(V1_MARKETS)}")
+
+
 def gate_setup(chain: Chain, d: dict, vault: str) -> list[Gate]:
   pending = [c for c in owned(d) if vault.lower() not in
              (chain.address(c, "owner").lower(), chain.address(c, "pendingOwner").lower())]
@@ -205,6 +216,7 @@ def gate_setup(chain: Chain, d: dict, vault: str) -> list[Gate]:
          else "all four nominated to or owned by the vault"),
     Gate("reused", not reused, f"vault does not own {', '.join(reused)}" if reused
          else f"vault owns the cash, {len(d['escrows'])} escrow(s) and the auction"),
+    markets_gate(d["escrows"], chain.word(d["v1"], selector("lastMarketId"))),
   ]
 
 
@@ -610,6 +622,10 @@ def self_test() -> int:
   else:
     raise AssertionError("setup at v1's EURC cap was accepted")
   assert setup[-1] == (a(1), selector("setGuardian") + word_address(a(10)))
+  # A v2 deployed before v1 listed EURC-USDC has no EUR market: setup refuses it.
+  assert markets_gate(d["escrows"], 2).ok
+  assert not markets_gate([a(6)], 1).ok, "v2 without EUR"
+  assert not markets_gate([a(6)], 2).ok, "v1 listed EUR after the deploy"
   enable = expected_actions("enable", d)
   assert enable == [(a(3), "0x40a557bd" + word_address(a(1)) + word_uint(30 * 10**18)),
                     (a(9), "0x0ddd8a04" + word_address(a(3)) + word_uint(1))], enable
