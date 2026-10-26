@@ -198,8 +198,9 @@ whose Base slot is the cNGN escrow every live market margins through.
   margin of ~7%. The 2026-10-24 cap of 50,000 (50% of the latest 2% sell depth with that LP, 112,052 EURC at 12:00 UTC,
   after depth fell 590k -> 112k over 3 days; overall, not at every reading: 205k -> 264k between the third and fourth)
   failed it. The engine keeper's `MAX_EURC_INVENTORY` is 40,000 (at most the cap; the enable gate refuses more).
-  The maker is held to 20% of it (`infra/aws/market-maker-eurc.tf`: ±8,960 USDC, 4,294 USDC a side). Raise by vault action (`setTotalPositionCap`) if the readings recover; MarginEngine v2 copies it ("every
-  escrow at v1's cap").
+  The maker is held to 20% of it (`infra/aws/market-maker-eurc.tf`: ±8,960 USDC, 4,294 USDC a side). Raise by vault action (`setTotalPositionCap`) if the readings recover. MarginEngine v2 does **not** copy it:
+  the cap is per manager, so its `setup` opens the escrow to v2 at 0, and `propose_margin_engine_v2_batch.py eurc-cap`
+  raises it behind the same depth stress gate at v1's cap + v2's (`docs/margin-engine-v2.md`, Migration).
 - Trades through the live TradeModule `0xDea9…699f` against USDC cash `0xA74E…4272`; no per-asset registration.
 
 Steps, in order:
@@ -257,10 +258,10 @@ Steps, in order:
    The timer alerts the webhook when the check changes state, until its 7 days end (2026-10-28 12:00 UTC).
 
 **Ordering against MarginEngine v2** (`docs/margin-engine-v2.md`): steps 1–2 must land on v1 (`0xA19E…0758`) **before**
-`deploy-margin-engine-v2.s.sol` runs. v2 copies only the base markets v1 already lists, each escrow at v1's cap, and
-refuses an escrow that is closed under v1. If v2 deploys first it has no EUR market, and this batch (written for v1)
-would list EURC on an engine about to go close-only. After v2's `v1-close-only`, EURC's v1 cap is set at its open
-interest like every other escrow, and new EURC deposits go to v2 accounts.
+`deploy-margin-engine-v2.s.sol` runs. v2 copies only the base markets v1 already lists, each escrow at v1's cap
+(EURC's at 0), and refuses an escrow that is closed under v1. If v2 deploys first it has no EUR market, and this batch
+(written for v1) would list EURC on an engine about to go close-only. After v2's `v1-close-only`, EURC's v1 cap is set
+at its open interest like every other escrow, and new EURC deposits go to v2 accounts once `eurc-cap` opens v2's cap.
 
 ## Base — ABANDONED deployment (pre-2026-07)
 
