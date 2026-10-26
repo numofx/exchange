@@ -119,6 +119,23 @@ contract MarginEngineV2DeployFork is Test {
     script.checkParams(p);
   }
 
+  function testAUsedDeployerIsRefusedUnlessNamed() public {
+    DeployMarginEngineV2.Params memory params = script.loadChainParams();
+    address used = makeAddr("used deployer");
+    script.checkDeployer(params, used, 1, address(0));
+    vm.expectRevert(
+      bytes("deployer key must be single use: it has sent transactions before (name it in USED_DEPLOYER to accept)")
+    );
+    script.checkDeployer(params, used, 38, address(0));
+    vm.expectRevert(
+      bytes("deployer key must be single use: it has sent transactions before (name it in USED_DEPLOYER to accept)")
+    );
+    script.checkDeployer(params, used, 38, makeAddr("another key"));
+    script.checkDeployer(params, used, 38, used);
+    vm.expectRevert(bytes("deployer is the vault"));
+    script.checkDeployer(params, params.vault, 38, params.vault);
+  }
+
   function testTheContractIsAMillionCngn() public view {
     assertEq(d.future.contractSize(), 1_000_000e18);
   }

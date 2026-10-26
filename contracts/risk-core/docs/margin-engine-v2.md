@@ -83,7 +83,8 @@ Order (`scripts/ops/propose_margin_engine_v2_batch.py` proposes every vault step
 1. Deploy v2 (`scripts/deploy-margin-engine-v2.s.sol`): closed, nothing reused wired. **Not before EURC-USDC is listed
    on v1** (`DEPLOYED_ADDRESSES.md`, EURC steps 1–2): v2 copies only the markets v1 lists, so a v2 deployed first has no
    EUR market, and the EURC batch is written for v1. Enforced: the deploy reverts unless v1 lists exactly NGN and EUR
-   (`lastMarketId == 2`), and `setup` refuses a v2 that does not list both.
+   (`lastMarketId == 2`), and `setup` refuses a v2 that does not list both. The deployer is a fresh key, or a used one
+   named in `USED_DEPLOYER`; either way it sends nothing more until `setup` lands, which refuses if it has.
 2. `setup` (`MARGIN_ENGINE_V2_VAULT_ACTIONS`): accept, wire the cash, every escrow at v1's cap except EURC's, and the
    auction; v1's guardian. Re-reads parity once the vault owns everything. EURC's escrow is whitelisted for v2 at cap
    **0**: a cap is per manager, and v1's 40,000 EURC was sized to on-chain sell depth for the whole venue
