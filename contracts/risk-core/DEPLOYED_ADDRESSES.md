@@ -146,7 +146,7 @@ delta is negative, so `_assessRisk` — and every feed read — is skipped. Fund
 book is halted; only balance-reducing paths (trades, withdrawals) surface a stale feed. That is why
 the six-day feed outage was invisible.
 
-### EURC-USDC spot on the MarginEngine — LIVE 2026-10-25 (deposits open; maker not yet running)
+### EURC-USDC spot on the MarginEngine — LIVE 2026-10-25, maker quoting since 2026-10-26
 
 Market 2 on the MarginEngine `0xA19E296021c9DF25b90D96C2A0793CC3D0800758`, its own market rather than a slot in market 1,
 whose Base slot is the cNGN escrow every live market margins through.
@@ -170,8 +170,10 @@ whose Base slot is the cNGN escrow every live market margins through.
   true)`, digest `0x9a282c38…e1ab`, proposed with every gate passing: depth stress 59,274 EURC (50% of the 2% sell depth
   without the main pool's largest LP, which held 49.7% of in-range liquidity) against the 40,000 cap, block 53070799.
   The escrow now whitelists the engine: EURC deposits and trading are open.
-- **Next:** the maker (`infra/aws/market-maker-eurc.tf`, operator steps 2–4: image with the chainlink anchor, its
-  funded engine account, then one replica). Until it runs the book is empty.
+- **Maker, quoting since 2026-10-26 14:58 UTC:** ECS `market-maker-eurc`, image `market-maker:54d7ae630278` (chainlink
+  anchor), engine account **#36** (MM wallet `0x3448…B47B`), funded with 3,291.44 EURC + 4,300 USDC from MPCVault wallet
+  `0x8f4951f57Fcc4A7dcF99cF066FD35b1AB63D1B7a`. First book: 4 bids and 4 asks, ~10 bps inside. Defaults in #272;
+  `OPS_BOX_CHANGES.md` has the transactions.
 
 - `baseAsset`: a new `WrappedERC20Asset` over Circle EURC `0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42` (6 dec, 18dp in the ledger)
 - `spotFeed`: a new `ChainlinkSpotFeed` over Chainlink EURC/USD **1h feed** `0x9867186e52d2F1C2c565CDA6E747101Fa56501e0`
