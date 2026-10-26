@@ -146,7 +146,7 @@ delta is negative, so `_assessRisk` — and every feed read — is skipped. Fund
 book is halted; only balance-reducing paths (trades, withdrawals) surface a stale feed. That is why
 the six-day feed outage was invisible.
 
-### EURC-USDC spot on the MarginEngine — CONFIGURED 2026-10-25, deposits shut until enable (step 4)
+### EURC-USDC spot on the MarginEngine — LIVE 2026-10-25, maker quoting since 2026-10-26
 
 Market 2 on the MarginEngine `0xA19E296021c9DF25b90D96C2A0793CC3D0800758`, its own market rather than a slot in market 1,
 whose Base slot is the cNGN escrow every live market margins through.
@@ -161,7 +161,19 @@ whose Base slot is the cNGN escrow every live market margins through.
   Read back: the vault owns the escrow and the feed; `lastMarketId` 2; market 2's spot feed is the EURC feed, factor
   0.9 / IM scale 0.8, Base asset the escrow; the escrow's cap under the engine 40,000 EURC; the escrow does **not**
   whitelist the engine (that is step 4). Market 1 unchanged (the cNGN escrow, 0.5 / 1.0).
-- **Next:** step 3 (services), then step 4 (enable, behind the depth gate).
+- **Step 3, services, 2026-10-25:** markets-service lists EURC-USDC (terraform `eurc_spot_asset_address`, markets td
+  :45, matcher :44, execution :35; default written back in #270); the trading app's `NEXT_PUBLIC_EURC_ASSET_ADDRESS`
+  set on Vercel production and redeployed (its build check matched the served escrow); the engine keeper moved to its
+  own checkout at `76a3ec0` with `EURC_ESCROW`, `EURC_SPOT_FEED`, 2% haircut, `MAX_EURC_INVENTORY` 40,000
+  (`OPS_BOX_CHANGES.md`). `test/fork/EurcSpotFork.t.sol` passed 14/14 against Base the same morning (`--rehearsed`).
+- **Step 4, enabled 2026-10-25 12:32:07 UTC** (block 53071090, tx `0x1dcedbad…e0f7`): `setWhitelistManager(engine,
+  true)`, digest `0x9a282c38…e1ab`, proposed with every gate passing: depth stress 59,274 EURC (50% of the 2% sell depth
+  without the main pool's largest LP, which held 49.7% of in-range liquidity) against the 40,000 cap, block 53070799.
+  The escrow now whitelists the engine: EURC deposits and trading are open.
+- **Maker, quoting since 2026-10-26 14:58 UTC:** ECS `market-maker-eurc`, image `market-maker:54d7ae630278` (chainlink
+  anchor), engine account **#36** (MM wallet `0x3448…B47B`), funded with 3,291.44 EURC + 4,300 USDC from MPCVault wallet
+  `0x8f4951f57Fcc4A7dcF99cF066FD35b1AB63D1B7a`. First book: 4 bids and 4 asks, ~10 bps inside. Defaults in #272;
+  `OPS_BOX_CHANGES.md` has the transactions.
 
 - `baseAsset`: a new `WrappedERC20Asset` over Circle EURC `0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42` (6 dec, 18dp in the ledger)
 - `spotFeed`: a new `ChainlinkSpotFeed` over Chainlink EURC/USD **1h feed** `0x9867186e52d2F1C2c565CDA6E747101Fa56501e0`
