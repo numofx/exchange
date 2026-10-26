@@ -93,10 +93,14 @@ Order (`scripts/ops/propose_margin_engine_v2_batch.py` proposes every vault step
    v2 has its own forward keeper, liquidation keeper and pager watch (#258) and markets-service lists `cNGN-31DEC26`
    with the chain's band in USDC per cNGN (#228).
 4. markets-service: new spot deposits default to v2 accounts (no listing's `margin_manager_address` is v1), and v1's
-   future is listed close-only (`future.close_only`).
+   future is listed close-only (`future.close_only`). The spot makers (#34 cNGN-USDC, #36 EURC-USDC, both v1 accounts
+   of the MM wallet) quote from v2 accounts: close-only stops a v1 account buying base, so a v1 maker's bids would fill
+   into reverting settlements and leave the books one-sided.
 5. `v1-close-only`: every cap v1 holds (each escrow, the future) set **at** live open interest, never a raise. Refused
-   until 3 and 4 hold. A cap that lands under open interest, because it rose between the read and the approval, is the
-   same close-only and not a freeze: the deployed viewer checks only the assets a transfer touched.
+   until 3 and 4 hold, and while any v1 account rests a buy on a spot book or a maker account (`MM_SUBACCOUNT_IDS`,
+   default `34,36`) is under v1, resting or not. A cap that lands under open interest, because it rose between the read
+   and the approval, is the same close-only and not a freeze: the deployed viewer checks only the assets a transfer
+   touched.
    `test/fork/MarginEngineV1CloseOnlyFork.t.sol` proves holders still close, settle VM, withdraw and sell cNGN to v2,
    that nothing opens, and that under the SRM's cap check the same cap freezes them. EURC's escrow need only be
    whitelisted for v2 here, not open: from this step until 6 lands, neither engine takes new EURC.
