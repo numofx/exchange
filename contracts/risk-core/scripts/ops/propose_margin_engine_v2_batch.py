@@ -3,7 +3,7 @@
 
   setup   MARGIN_ENGINE_V2_VAULT_ACTIONS.json, from deploy-margin-engine-v2.s.sol: accept the four contracts the deployer
           nominated (engine, viewer, future, forward feed), wire v2 into the USDC cash, every base escrow v1 lists (at
-          v1's cap) and the auction, and grant it v1's guardian. Opens nothing.
+          v1's cap, except EURC's at 0: see eurc-cap) and the auction, and grant it v1's guardian. Opens nothing new.
   enable  MARGIN_ENGINE_V2_ENABLE_VAULT_ACTIONS.json: the future's cap under v2, then the future on the TradeModule. The
           only actions that open v2's future. Proposed only while every gate below passes, re-read before each action.
   cap     future.setTotalPositionCap(v2, N): resize the open future, gated as enable at the NEW cap.
@@ -14,6 +14,9 @@
           viewer checks only the assets a transfer touched (test/fork/MarginEngineV1CloseOnlyFork.t.sol proves both,
           and that under the SRM's check the same cap freezes holders). The perp's cap under v1 is already 0 and is not
           touched. A re-run proposes again wherever closing has left a cap above open interest.
+  eurc-cap  eurcEscrow.setTotalPositionCap(v2, N EURC): open EURC on v2. The cap is per manager, so the venue's EURC is
+          v1's cap plus v2's, and v1's 40,000 was sized to depth for the whole venue: gated on that total, not on N.
+          After v1-close-only, when v1's cap is its open interest.
 
 Every artifact action is rebuilt here from MARGIN_ENGINE_V2.json and must match the file exactly (to, calldata,
 value), its digest recomputed (keccak(to || keccak(data)), deploy-margin-engine-v2.s.sol's convention). An action whose
@@ -47,6 +50,15 @@ v1-close-only gates:
   venue     markets-service lists v1's future close-only (future.close_only: true) and no listing still sends accounts
             to v1 (margin_manager_address): new spot deposits default to v2
   caps      each new cap is open interest, read now, and no higher than the cap it replaces
+  (EURC's escrow need only be whitelisted for v2: its cap there is eurc-cap's, which comes after)
+
+eurc-cap gates (each read live):
+  custody   the vault owns the EURC escrow, it wraps EURC, and v2 is whitelisted on it (setup landed)
+  cap       N is not v2's cap already, and not under v2's EURC open interest (that is close-only, not a cap)
+  depth     propose_eurc_spot_batch's depth stress gate (a fresh eurc_depth reading: 50% of the 2% sell depth without
+            the main pool's largest LP) at the venue's total, v1's cap (or its open interest, if higher) + N
+  keeper    the engine keeper's MAX_EURC_INVENTORY (ENGINE_KEEPER_HEALTH_URL /health maxEurcInventory) is set and at
+            least that total
 
 It NEVER signs, executes or broadcasts. Without --propose it prints the gates and the sheet. With --propose each action
 goes to the MPCVault app for a human to approve, one at a time, from the vault, through perp_cap_guard.
@@ -59,6 +71,7 @@ Env (or ~/.numo-mark-keeper.env): MPCVAULT_TOKEN, MPCVAULT_VAULT, VAULT_ADDRESS,
   python3 scripts/ops/propose_margin_engine_v2_batch.py cap --contracts 28
   python3 scripts/ops/propose_margin_engine_v2_batch.py v1-close-only     # gates + the caps at today's open interest
   python3 scripts/ops/propose_margin_engine_v2_batch.py v1-close-only --propose
+  python3 scripts/ops/propose_margin_engine_v2_batch.py eurc-cap --eurc 30000   # gates + the action, proposes nothing
   python3 scripts/ops/propose_margin_engine_v2_batch.py --self-test
   python3 scripts/ops/propose_margin_engine_v2_batch.py enable --local --dir deployments/31337 --json   # a fork only
 """
@@ -93,6 +106,7 @@ from propose_cngn_spot_batch import (  # noqa: E402  one implementation of the M
   request_tx_hash,
   rpc,
 )
+import propose_eurc_spot_batch as eurc  # noqa: E402  the EURC listing's depth stress gate, one implementation
 from propose_perp_enable_batch import gate_pager, http_json, keeper_gate  # noqa: E402
 from resolve_cngn_action6 import keccak  # noqa: E402
 
@@ -110,6 +124,8 @@ ENGINE_KEEPER_MIN_ETH = v1p.ENGINE_KEEPER_MIN_ETH
 PERP, BASE, FUTURE = 2, 3, 4
 # The overnight devaluation gaps docs/margin-engine-v2.md sizes the cap against
 GAPS = (0.30, 0.40, 0.50)
+# setup opens EURC's escrow on v2 at 0: its cap is per manager, and v1's was sized to depth for the whole venue
+EURC_INDEX = eurc.MARKET_ID - 1
 
 SIGNATURES = {**v1p.SIGNATURES, "lastMarketId": "lastMarketId()"}
 PINNED = {**v1p.PINNED, "lastMarketId": "0x565eb87c"}
@@ -127,13 +143,18 @@ def owned(d: dict) -> list[str]:
 # the artifact batches
 # ---------------------------------------------------------------------------------------------
 
+def setup_caps(d: dict) -> list[int]:
+  """v2's cap on each escrow after setup: the artifact's, but EURC's 0 whatever the artifact says (eurc-cap opens it)."""
+  return [0 if i == EURC_INDEX else int(cap) for i, cap in enumerate(d["escrowCaps"])]
+
+
 def expected_actions(batch: str, d: dict) -> list[tuple[str, str]]:
   """(to, calldata) for each action, in order, as deploy-margin-engine-v2.s.sol writes them."""
   m = word_address(d["manager"])
   whitelist = selector("setWhitelistManager") + m + word_uint(1)
   if batch == "setup":
-    escrows = [a for e, cap in zip(d["escrows"], d["escrowCaps"])
-               for a in ((e, whitelist), (e, selector("setTotalPositionCap") + m + word_uint(int(cap))))]
+    escrows = [a for e, cap in zip(d["escrows"], setup_caps(d))
+               for a in ((e, whitelist), (e, selector("setTotalPositionCap") + m + word_uint(cap)))]
     return [*[(c, selector("acceptOwnership")) for c in owned(d)], (d["cash"], whitelist), *escrows,
             (d["auction"], whitelist), (d["manager"], selector("setGuardian") + word_address(d["guardian"]))]
   return [(d["future"], selector("setTotalPositionCap") + m + word_uint(int(d["futureOICap"]))),
@@ -145,9 +166,9 @@ def postconditions(chain: Chain, batch: str, d: dict, vault: str) -> list:
   m = word_address(d["manager"])
   w = lambda to, name, *args: chain.word(to, selector(name) + "".join(args))  # noqa: E731
   if batch == "setup":
-    escrows = [p for e, cap in zip(d["escrows"], d["escrowCaps"])
+    escrows = [p for e, cap in zip(d["escrows"], setup_caps(d))
                for p in ((lambda e=e: w(e, "whitelistedManager", m) == 1),
-                         (lambda e=e, cap=cap: w(e, "totalPositionCap", m) == int(cap)))]
+                         (lambda e=e, cap=cap: w(e, "totalPositionCap", m) == cap))]
     return [*[(lambda c=c: chain.address(c, "owner").lower() == vault.lower()) for c in owned(d)],
             lambda: w(d["cash"], "whitelistedManager", m) == 1, *escrows,
             lambda: w(d["auction"], "managerWhitelisted", m) == 1,
@@ -439,8 +460,10 @@ def gate_close_only(chain: Chain, d: dict, v1d: dict, vault: str) -> list[Gate]:
                 else f"vault owns all {len(assets)} assets v1 holds caps on")]
   perp_cap = chain.word(v1d["perp"], selector("totalPositionCap") + v1)
   gates.append(Gate("perp", perp_cap == 0, f"v1's perp cap is {perp_cap}" + (", closed" if perp_cap == 0 else ": it should be 0 (#251)")))
-  missing = [what for a, what in assets[:-1] if not (chain.word(a, selector("whitelistedManager") + v2) == 1
-                                                      and chain.word(a, selector("totalPositionCap") + v2) > 0)]
+  # EURC's escrow is wired for v2 at cap 0 until eurc-cap, which runs after this (v1's cap is then its open interest)
+  missing = [what for i, (a, what) in enumerate(assets[:-1])
+             if not (chain.word(a, selector("whitelistedManager") + v2) == 1
+                     and (i == EURC_INDEX or chain.word(a, selector("totalPositionCap") + v2) > 0))]
   if chain.word(d["cash"], selector("whitelistedManager") + v2) != 1:
     missing.append("the cash")
   future_open = (chain.word(d["future"], selector("totalPositionCap") + v2) > 0
@@ -448,7 +471,7 @@ def gate_close_only(chain: Chain, d: dict, v1d: dict, vault: str) -> list[Gate]:
   if not future_open:
     missing.append("v2's future (not enabled)")
   gates.append(Gate("v2", not missing, f"v2 does not yet take {', '.join(missing)}" if missing
-                    else "v2 takes every escrow v1 lists and the cash, and its future is open"))
+                    else "v2 takes every escrow v1 lists (EURC's at eurc-cap) and the cash, and its future is open"))
   try:
     gates.append(venue_gate(markets(os.environ.get("MARKETS_URL", "https://api.numofx.com")), v1d))
   except Exception as exc:  # noqa: BLE001
@@ -462,6 +485,75 @@ def close_only_landed(chain: Chain, v1d: dict, asset: str) -> bool:
   """Close-only holds: no headroom over open interest under v1."""
   m = word_address(v1d["manager"])
   return chain.word(asset, selector("totalPositionCap") + m) <= chain.word(asset, selector("totalPosition") + m)
+
+
+# ---------------------------------------------------------------------------------------------
+# eurc-cap
+# ---------------------------------------------------------------------------------------------
+
+def eurc_cap_action(escrow: str, v2: str, cap18: int) -> dict:
+  """eurcEscrow.setTotalPositionCap(v2, cap): EURC on v2, on top of whatever v1 still holds."""
+  data = selector("setTotalPositionCap") + word_address(v2) + word_uint(cap18)
+  return {"description": f"eurcEscrow.setTotalPositionCap(v2, {cap18}) [EURC-USDC on v2: {cap18 / 1e18:,.0f} EURC]",
+          "to": escrow, "value": "0", "data": data, "digest": digest(escrow, data)}
+
+
+def eurc_cap_bounds_gate(cap18: int, current18: int, oi18: int) -> Gate:
+  if cap18 == current18:
+    return Gate("cap", False, f"v2's EURC cap is already {cap18 / 1e18:,.0f}")
+  if cap18 < oi18:
+    return Gate("cap", False, f"{cap18 / 1e18:,.0f} is under v2's EURC open interest {oi18 / 1e18:,.4f}: that is close-only, not a cap")
+  return Gate("cap", True, f"v2 {current18 / 1e18:,.0f} -> {cap18 / 1e18:,.0f} EURC (open interest {oi18 / 1e18:,.4f})")
+
+
+def eurc_total_depth_gate(row: dict, v1_18: int, cap18: int) -> Gate:
+  """The EURC enable's depth stress gate, at the venue's total: what v1 can hold plus v2's new cap."""
+  g = eurc.depth_stress_gate(row, v1_18 + cap18)
+  return Gate(g.name, g.ok, f"v1 {v1_18 / 1e18:,.0f} + v2 {cap18 / 1e18:,.0f} EURC; {g.detail}")
+
+
+def eurc_inventory_gate(health: dict, v1: str, total18: int) -> Gate:
+  """The engine keeper's MAX_EURC_INVENTORY was sized to the same depth: the venue's EURC may not exceed it. Unset is
+  refused, as at the EURC enable."""
+  raw = health.get("maxEurcInventory")
+  inventory = int(raw) if raw not in (None, "") else None
+  manager = str(health.get("manager") or "").lower()
+  ok = manager == v1.lower() and inventory is not None and total18 <= inventory
+  limit = "unset (no limit)" if inventory is None else f"{inventory / 1e18:,.0f} EURC"
+  return Gate("keeper inventory", ok, f"engine keeper (manager {manager or '(unset)'}) MAX_EURC_INVENTORY {limit} "
+                                      f"vs v1 + v2 {total18 / 1e18:,.0f} EURC")
+
+
+def v1_eurc_capacity(chain: Chain, d: dict, escrow: str) -> int:
+  """What v1 can hold on the EURC escrow: its cap, or its open interest where a close-only cap landed under it."""
+  v1 = word_address(d["v1"])
+  return max(chain.word(escrow, selector("totalPositionCap") + v1), chain.word(escrow, selector("totalPosition") + v1))
+
+
+def gate_eurc_cap(chain: Chain, d: dict, vault: str, cap18: int) -> list[Gate]:
+  escrow, v2 = d["escrows"][EURC_INDEX], word_address(d["manager"])
+  token = chain.address(escrow, "wrappedAsset").lower()
+  owner = chain.address(escrow, "owner").lower()
+  wired = chain.word(escrow, selector("whitelistedManager") + v2) == 1
+  problems = ([f"escrow wraps {token}, not EURC"] if token != eurc.EURC else []) + \
+             ([f"vault does not own the EURC escrow (owner {owner})"] if owner != vault.lower() else []) + \
+             ([] if wired else ["v2 is not whitelisted on it: setup has not landed"])
+  v1_18 = v1_eurc_capacity(chain, d, escrow)
+  gates = [Gate("custody", not problems, "; ".join(problems) or f"vault owns EURC escrow {escrow}; v2 is wired to it"),
+           eurc_cap_bounds_gate(cap18, chain.word(escrow, selector("totalPositionCap") + v2),
+                                chain.word(escrow, selector("totalPosition") + v2))]
+  try:  # a fresh reading, as the EURC enable takes: the depth timer's 7 days have ended
+    depth = eurc._depth()
+    reader = depth.P.Rpc(chain.url)
+    gates.append(eurc_total_depth_gate(depth.reading(reader, reader.head() - 2), v1_18, cap18))
+  except Exception as exc:  # noqa: BLE001 -- unreadable holds, as at the EURC enable
+    gates.append(Gate("depth stress", False, f"unreadable: {exc}"))
+  try:
+    health = http_json(os.environ.get("ENGINE_KEEPER_HEALTH_URL", "http://127.0.0.1:9465/health"))
+    gates.append(eurc_inventory_gate(health, d["v1"], v1_18 + cap18))
+  except Exception as exc:  # noqa: BLE001
+    gates.append(Gate("keeper inventory", False, f"engine keeper /health unreadable: {exc}"))
+  return gates
 
 
 # ---------------------------------------------------------------------------------------------
@@ -504,7 +596,19 @@ def self_test() -> int:
   # vaultActionCount: four accepts, the cash, two per escrow, the auction, the guardian
   assert len(setup) == 4 + 1 + 2 * 2 + 2, len(setup)
   assert setup[5] == (a(6), selector("setWhitelistManager") + word_address(a(1)) + word_uint(1))
-  assert setup[8] == (a(7), selector("setTotalPositionCap") + word_address(a(1)) + word_uint(2_000_000 * 10**18)), "EURC at v1's cap"
+  assert setup[6] == (a(6), selector("setTotalPositionCap") + word_address(a(1)) + word_uint(100_000_000 * 10**18)), "cNGN at v1's cap"
+  assert setup[8] == (a(7), selector("setTotalPositionCap") + word_address(a(1)) + word_uint(0)), "EURC at 0"
+  # An artifact still carrying v1's EURC cap does not reopen it: setup's EURC cap is 0 whatever the file says.
+  stale = [{"description": str(i), "to": to, "value": "0", "data": data, "digest": digest(to, data)}
+           for i, (to, data) in enumerate(expected_actions("setup", d))]
+  stale[8]["data"] = selector("setTotalPositionCap") + word_address(a(1)) + word_uint(2_000_000 * 10**18)
+  stale[8]["digest"] = digest(a(7), stale[8]["data"])
+  try:
+    verify_actions("setup", d, stale)
+  except SystemExit:
+    pass
+  else:
+    raise AssertionError("setup at v1's EURC cap was accepted")
   assert setup[-1] == (a(1), selector("setGuardian") + word_address(a(10)))
   enable = expected_actions("enable", d)
   assert enable == [(a(3), "0x40a557bd" + word_address(a(1)) + word_uint(30 * 10**18)),
@@ -549,12 +653,32 @@ def self_test() -> int:
   assert not venue_gate([spot], v1d).ok, "v1's future delisted: holders could not close"
   assert "cNGN-USDC" in venue_gate([fut, {**spot, "margin_manager_address": v1.lower()}], v1d).detail, "spot still on v1"
 
+  # eurc-cap: the depth stress gate at v1 + N, not at N. At 86,202 EURC of depth without the largest LP the bar is
+  # 43,101: with v1 at 40,000, v2 may take 3,000 and not 4,000; with v1 close-only at 5,000 open interest, 38,000.
+  row = {"block": 1, "total_sell_eurc_ex_largest_lp": "86202", "main_pool_largest_lp_share": "0.5"}
+  e18 = 10**18
+  assert eurc_total_depth_gate(row, 40_000 * e18, 3_000 * e18).ok
+  assert not eurc_total_depth_gate(row, 40_000 * e18, 4_000 * e18).ok, "v1's 40,000 + 4,000 is over the depth bar"
+  assert eurc_total_depth_gate(row, 0, 43_000 * e18).ok and not eurc_total_depth_gate(row, 0, 44_000 * e18).ok
+  assert eurc_total_depth_gate(row, 5_000 * e18, 38_000 * e18).ok and not eurc_total_depth_gate(row, 5_000 * e18, 39_000 * e18).ok
+  assert not eurc_total_depth_gate({**row, "total_sell_eurc_ex_largest_lp": ""}, 0, e18).ok, "unknown depth holds"
+  # The engine keeper's MAX_EURC_INVENTORY: v1's keeper, set, and at least the total.
+  health = {"manager": v1.lower(), "maxEurcInventory": str(40_000 * e18)}
+  assert eurc_inventory_gate(health, v1, 40_000 * e18).ok and not eurc_inventory_gate(health, v1, 40_001 * e18).ok
+  assert not eurc_inventory_gate({**health, "maxEurcInventory": None}, v1, e18).ok, "unset is refused"
+  assert not eurc_inventory_gate({**health, "manager": a(1)}, v1, e18).ok, "another manager's keeper"
+  assert eurc_cap_bounds_gate(3_000 * e18, 0, 0).ok
+  assert not eurc_cap_bounds_gate(0, 0, 0).ok and not eurc_cap_bounds_gate(e18, 0, 2 * e18).ok
+  act = eurc_cap_action(a(7), a(1), 3_000 * e18)
+  assert act["data"] == "0x40a557bd" + word_address(a(1)) + word_uint(3_000 * e18) and act["digest"] == digest(a(7), act["data"])
+
   # Every send goes through perp_cap_guard.
   import inspect
-  for fn in (main, run_batch, run_close_only, run_cap):
+  for fn in (main, run_batch, run_close_only, run_cap, run_eurc_cap):
     assert "propose(token" not in inspect.getsource(fn), f"{fn.__name__} calls propose() directly"
   print("self-test ok: selectors compiled and pinned; a wrong target, calldata, value, digest, count or order is refused; "
-        "coverage, gap, keeper and fill-band sized in USDC per cNGN; close-only caps at open interest, never a raise")
+        "coverage, gap, keeper and fill-band sized in USDC per cNGN; close-only caps at open interest, never a raise; "
+        "setup opens EURC at 0 and eurc-cap holds v1 + v2 to the depth bar")
   return 0
 
 
@@ -660,6 +784,29 @@ def run_cap(args, d: dict, stack: dict, chain: Chain, rpc_url: str, vault: str) 
   return 0
 
 
+def run_eurc_cap(args, d: dict, chain: Chain, rpc_url: str, vault: str) -> int:
+  if args.eurc is None or args.eurc < 0:
+    raise SystemExit("eurc-cap needs --eurc (v2's cap on the EURC escrow, whole EURC)")
+  cap18, escrow = args.eurc * 10**18, d["escrows"][EURC_INDEX]
+  action = eurc_cap_action(escrow, d["manager"], cap18)
+  gates = gate_eurc_cap(chain, d, vault, cap18)
+  passed = report(gates)
+  print(f"\n  {action['to']}  {action['digest']}  {action['description']}")
+  if args.json:
+    print(json.dumps({"gates": [asdict(g) for g in gates], "landed": [False]}))
+  if not passed:
+    print("\nGATES FAILED: nothing proposed.")
+    return 1
+  if not args.propose:
+    print("\ndry run: nothing proposed. Re-run with --propose; compare the digest with MPCVault before approving.")
+    return 0
+  m = word_address(d["manager"])
+  await_approval(*credentials(), vault, action, rpc_url,
+                 lambda: chain.word(escrow, selector("totalPositionCap") + m) == cap18)
+  print(f"eurc-cap: v2's EURC cap reads {args.eurc:,} EURC")
+  return 0
+
+
 def run_close_only(args, d: dict, v1d: dict, chain: Chain, rpc_url: str, vault: str) -> int:
   gates = gate_close_only(chain, d, v1d, vault)
   passed = report(gates)
@@ -701,8 +848,9 @@ def run_close_only(args, d: dict, v1d: dict, chain: Chain, rpc_url: str, vault: 
 
 def main() -> int:
   ap = argparse.ArgumentParser(description="Propose MarginEngine v2's vault batches and v1's close-only")
-  ap.add_argument("batch", nargs="?", choices=("setup", "enable", "cap", "v1-close-only"))
+  ap.add_argument("batch", nargs="?", choices=("setup", "enable", "cap", "v1-close-only", "eurc-cap"))
   ap.add_argument("--contracts", type=int, help="cap: the new total-position cap, both sides, in whole contracts")
+  ap.add_argument("--eurc", type=int, help="eurc-cap: v2's cap on the EURC escrow, in whole EURC")
   ap.add_argument("--propose", action="store_true", help="create MPCVault signing requests, one at a time")
   ap.add_argument("--self-test", action="store_true")
   ap.add_argument("--local", action="store_true", help="a fork (chain 31337) only; never proposes")
@@ -714,7 +862,7 @@ def main() -> int:
   if args.self_test:
     return self_test()
   if not args.batch:
-    ap.error("name a batch: setup, enable, cap or v1-close-only")
+    ap.error("name a batch: setup, enable, cap, v1-close-only or eurc-cap")
 
   load_env_file(Path.home() / ".numo-mark-keeper.env")
   load_env_file(Path("/etc/numo/perp-pager.env"))
@@ -737,6 +885,8 @@ def main() -> int:
   if d["v1"].lower() != json.loads((args.dir / f"{V1_NAME}.json").read_text())["manager"].lower():
     raise SystemExit("MARGIN_ENGINE_V2.json names a v1 that is not MARGIN_ENGINE.json's")
   chain = Chain(rpc_url)
+  if args.batch == "eurc-cap":
+    return run_eurc_cap(args, d, chain, rpc_url, vault)
   if args.batch == "v1-close-only":
     return run_close_only(args, d, json.loads((args.dir / f"{V1_NAME}.json").read_text()), chain, rpc_url, vault)
   stack = json.loads(args.stack.read_text())

@@ -39,7 +39,7 @@ interface ITradeModuleQuote {
  *      SecurityModule), the TradeModule.
  *
  * @dev DEPLOYED CLOSED. The future's cap under v2 is 0 and nothing reused is wired. VAULT_ACTIONS accepts the four
- *      contracts and wires v2 into the cash, every escrow (at v1's cap) and the auction; ENABLE_VAULT_ACTIONS opens the
+ *      contracts and wires v2 into the cash, every escrow (at v1's cap; EUR's at 0) and the auction; ENABLE_VAULT_ACTIONS opens the
  *      future and registers it on the TradeModule. Taking v1 close-only is propose_margin_engine_v2_batch.py's
  *      v1-close-only, at live open interest and never below it.
  *
@@ -97,6 +97,13 @@ contract DeployMarginEngineV2 is Utils {
     if (id == 1) return "NGN";
     if (id == 2) return "EUR";
     revert("v1 lists a market this script does not know: add its name");
+  }
+
+  /// @dev v2's cap on market `id`'s escrow after VAULT_ACTIONS: v1's, except EUR's, which opens at 0. A cap is per
+  ///      manager, and v1's 40,000 EURC was sized to on-chain sell depth for the whole venue, so copying it would double
+  ///      the venue's EURC. propose_margin_engine_v2_batch.py's eurc-cap opens it, gated on depth at v1's cap + v2's.
+  function v2EscrowCap(uint id, uint v1Cap) public pure returns (uint) {
+    return id == 2 ? 0 : v1Cap;
   }
 
   /// @dev one base-asset market of v1's, as v2 lists it (memory only: Params keeps them as parallel arrays, which a
@@ -505,7 +512,7 @@ contract DeployMarginEngineV2 is Utils {
     uint[] memory caps = new uint[](params.escrows.length);
     for (uint i = 0; i < params.escrows.length; ++i) {
       escrows[i] = params.escrows[i];
-      caps[i] = params.escrowCaps[i];
+      caps[i] = v2EscrowCap(i + 1, params.escrowCaps[i]);
     }
     vm.serializeAddress(obj, "escrows", escrows);
     vm.serializeUint(obj, "escrowCaps", caps);
@@ -516,8 +523,8 @@ contract DeployMarginEngineV2 is Utils {
     _writeToDeployments(ENABLE_ACTIONS_NAME, enableActionsJson(d, params));
   }
 
-  /// @dev Accept the four, wire v2 into the cash, every escrow at v1's cap, and the auction; grant v1's guardian.
-  ///      Opens nothing: the future's cap stays 0.
+  /// @dev Accept the four, wire v2 into the cash, every escrow at v1's cap (EUR's at 0: v2EscrowCap), and the auction;
+  ///      grant v1's guardian. Opens nothing new: the future's cap stays 0.
   function vaultActionsJson(Deployment memory d, Params memory params) public pure returns (string memory json) {
     address[] memory owned = ownedContracts(d);
     bytes memory accept = abi.encodeWithSignature("acceptOwnership()");
@@ -532,6 +539,7 @@ contract DeployMarginEngineV2 is Utils {
     );
     for (uint i = 0; i < params.escrows.length; ++i) {
       BaseMarket memory m = _market(params, i);
+      uint cap = v2EscrowCap(i + 1, m.escrowCap);
       json = string.concat(
         json,
         ",",
@@ -539,10 +547,14 @@ contract DeployMarginEngineV2 is Utils {
         ",",
         _action(
           string.concat(
-            "escrow.setTotalPositionCap(engineV2, ", vm.toString(m.escrowCap), ") [", m.name, ", v1's cap]"
+            "escrow.setTotalPositionCap(engineV2, ",
+            vm.toString(cap),
+            ") [",
+            m.name,
+            cap == m.escrowCap ? ", v1's cap]" : ", closed until eurc-cap]"
           ),
           m.escrow,
-          abi.encodeWithSignature("setTotalPositionCap(address,uint256)", engine, m.escrowCap)
+          abi.encodeWithSignature("setTotalPositionCap(address,uint256)", engine, cap)
         )
       );
     }

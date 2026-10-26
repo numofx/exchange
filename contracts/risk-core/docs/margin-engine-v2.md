@@ -83,8 +83,11 @@ Order (`scripts/ops/propose_margin_engine_v2_batch.py` proposes every vault step
 1. Deploy v2 (`scripts/deploy-margin-engine-v2.s.sol`): closed, nothing reused wired. **Not before EURC-USDC is listed
    on v1** (`DEPLOYED_ADDRESSES.md`, EURC steps 1–2): v2 copies only the markets v1 lists, so a v2 deployed first has no
    EUR market, and the EURC batch is written for v1.
-2. `setup` (`MARGIN_ENGINE_V2_VAULT_ACTIONS`): accept, wire the cash, every escrow at v1's cap, and the auction; v1's
-   guardian. Re-reads parity once the vault owns everything.
+2. `setup` (`MARGIN_ENGINE_V2_VAULT_ACTIONS`): accept, wire the cash, every escrow at v1's cap except EURC's, and the
+   auction; v1's guardian. Re-reads parity once the vault owns everything. EURC's escrow is whitelisted for v2 at cap
+   **0**: a cap is per manager, and v1's 40,000 EURC was sized to on-chain sell depth for the whole venue
+   (`DEPLOYED_ADDRESSES.md`, EURC), so a copy would double the venue's EURC to 80,000 with nothing re-checking depth.
+   Step 6 opens it.
 3. `enable` (`MARGIN_ENGINE_V2_ENABLE_VAULT_ACTIONS`): open the future and register it on the TradeModule. Refused until
    v2 has its own forward keeper, liquidation keeper and pager watch (#258) and markets-service lists `cNGN-31DEC26`
    with the chain's band in USDC per cNGN (#228).
@@ -94,5 +97,10 @@ Order (`scripts/ops/propose_margin_engine_v2_batch.py` proposes every vault step
    until 3 and 4 hold. A cap that lands under open interest, because it rose between the read and the approval, is the
    same close-only and not a freeze: the deployed viewer checks only the assets a transfer touched.
    `test/fork/MarginEngineV1CloseOnlyFork.t.sol` proves holders still close, settle VM, withdraw and sell cNGN to v2,
-   that nothing opens, and that under the SRM's cap check the same cap freezes them.
-6. 30NOV26 fixes and closes out on v1; holders withdraw and re-deposit under v2.
+   that nothing opens, and that under the SRM's cap check the same cap freezes them. EURC's escrow need only be
+   whitelisted for v2 here, not open: from this step until 6 lands, neither engine takes new EURC.
+6. `eurc-cap --eurc N`: `eurcEscrow.setTotalPositionCap(v2, N)`. Gated on the venue's total EURC, v1's cap (now its
+   open interest) + N: `propose_eurc_spot_batch.py`'s depth stress gate on a fresh `eurc_depth` reading (50% of the 2%
+   sell depth without the main pool's largest LP at least the total), and the engine keeper's `MAX_EURC_INVENTORY` at
+   least the total. After 5 because 5 pins v1's cap at its open interest; before it v1's 40,000 leaves v2 almost nothing.
+7. 30NOV26 fixes and closes out on v1; holders withdraw and re-deposit under v2.
