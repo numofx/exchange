@@ -23,7 +23,7 @@ the only place the box's real state is written down. Newest first.
   /home/ec2-user/fund_mm36.py --propose`) tried to post the four calls for approval. MPCVault refused both
   (`createSigningRequest` HTTP 403, `code 7 Permission denied`): the box's token has no access to the vault holding
   `0x8f49…`. Nothing was posted; the unit exited and is gone. SSM `101f3a8f-…`, `f8bd6495-…`.
-  `/home/ec2-user/fund_mm36.py` is left on the box, unreferenced: delete it (`rm /home/ec2-user/fund_mm36.py`).
+  `/home/ec2-user/fund_mm36.py` was deleted afterwards (SSM `61abd8b7-…`, Success); nothing is left on the box.
 - **ECS**, 2026-10-26 14:58 UTC: `market-maker-eurc` created (image `market-maker:54d7ae630278`, 1 replica, account 36)
   and the execution task def replaced to add 36 to `SETTLEMENT_CANARY_ACCOUNTS` (`34,32,36`). Applied with `-var`;
   these are the defaults in `market-maker-eurc.tf` from this change.
