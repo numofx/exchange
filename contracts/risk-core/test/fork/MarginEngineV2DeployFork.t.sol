@@ -108,6 +108,17 @@ contract MarginEngineV2DeployFork is Test {
     }
   }
 
+  /// @dev v1 as it stood before EURC-USDC was listed (lastMarketId 1): v2 would have no EUR market, so the deploy refuses.
+  function testItRefusesAV1WithoutEur() public {
+    vm.mockCall(address(v1), abi.encodeWithSignature("lastMarketId()"), abi.encode(uint(1)));
+    DeployMarginEngineV2.Params memory p = script.loadChainParams();
+    p.carry = params.carry;
+    p.initialMark = params.initialMark;
+    p.forwardSigner = params.forwardSigner;
+    vm.expectRevert(bytes("v1 must list exactly NGN and EUR: deploy v2 only once EURC-USDC is listed on v1"));
+    script.checkParams(p);
+  }
+
   function testTheContractIsAMillionCngn() public view {
     assertEq(d.future.contractSize(), 1_000_000e18);
   }
