@@ -157,7 +157,11 @@ contract MarginEngineV2DeployFork is Test {
     for (uint i = 0; i < params.escrows.length; ++i) {
       WrappedERC20Asset escrow = WrappedERC20Asset(params.escrows[i]);
       assertTrue(escrow.whitelistedManager(address(d.engine)), "escrow");
-      assertEq(escrow.totalPositionCap(IManager(address(d.engine))), params.escrowCaps[i], "v1's cap");
+      assertEq(
+        escrow.totalPositionCap(IManager(address(d.engine))),
+        i + 1 == 2 ? 0 : params.escrowCaps[i],
+        "v1's cap; EUR's 0 until eurc-cap (the venue's EURC is sized to depth)"
+      );
     }
     assertEq(d.engine.guardian(), params.guardian, "v1's guardian");
   }
