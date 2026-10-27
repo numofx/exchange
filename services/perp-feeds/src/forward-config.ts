@@ -6,12 +6,16 @@ import { getAddress } from 'viem';
 const address = z.string().regex(/^0x[0-9a-fA-F]{40}$/).transform((value) => getAddress(value));
 const privateKey = z.string().regex(/^0x[0-9a-fA-F]{64}$/);
 const uint = z.string().regex(/^[0-9]+$/).transform((value) => BigInt(value));
+const int = z.string().regex(/^-?[0-9]+$/).transform((value) => BigInt(value));
 const bool = z.union([z.literal('true'), z.literal('false')]).transform((value) => value === 'true');
 
 const BASE_MAINNET = 8453;
 
 /**
- * The forward publisher for a USDC/cNGN future (forward-main.ts). Its own process, signer and
+ * The forward publisher for a dated future (forward-main.ts), one process per series. FUTURE_VERSION
+ * says which contract: v1 (FutureAssetV1, USDC-cNGN-30NOV26, inverse) or v2 (FutureAsset, linear, any
+ * base quoted in USDC: cNGN-30NOV26, and EURC-30NOV26 once deployed). A v2 series is config only:
+ * its feed, future, index, carry and BASE_SYMBOL; its contract size is read from the chain. Its own process, signer and
  * relayer: the forward key must not be the index key (the index band is what bounds a bad forward),
  * and a relayer shared with perp-feeds would race it for nonces across processes.
  *
@@ -29,7 +33,12 @@ const envSchema = z
     ALERT_WEBHOOK_URL: z.string().url().optional().or(z.literal('')),
     DRY_RUN: bool.default('false'),
 
-    // From risk-core/deployments/8453/MARGIN_ENGINE.json and core.json.
+    /** v1: FutureAssetV1 (src/legacy/v1). v2: FutureAsset (src/assets), linear, VM in USDC cash. */
+    FUTURE_VERSION: z.enum(['v1', 'v2']).default('v1'),
+    /** The base the future is on, for log lines and alerts only: two series can share an expiry, so a sub id alone does not name one. */
+    BASE_SYMBOL: z.string().min(1).default('cNGN'),
+
+    // From risk-core/deployments/8453/MARGIN_ENGINE.json (v1) or MARGIN_ENGINE_V2.json (v2), and core.json.
     DATA_SUBMITTER: address,
     INDEX_FEED: address,
     FORWARD_FEED: address,
@@ -40,8 +49,11 @@ const envSchema = z
      * market's cNGN escrow and spot feed), so nothing else about the pool is configured.
      */
     FUTURE_MANAGER: address,
-    /** Annual NGN-over-USD carry, 18dp: the forward without a book is index * (1 + CARRY * tau). */
-    CARRY: uint,
+    /**
+     * Annual carry of the base's rate over USD's, 18dp. The forward without a book is index * (1 + CARRY * tau)
+     * on v1, index / (1 + CARRY * tau) on v2. Signed: EUR's is negative (a forward premium); v1 refuses that.
+     */
+    CARRY: int,
     MARKETS_SERVICE_URL: z.string().url().default('https://api.numofx.com'),
 
     /** How often to check. A mark is only pushed once FutureAsset.minMarkInterval has passed. */
@@ -49,6 +61,7 @@ const envSchema = z
     /**
      * Notional (USDC) each side of the futures book must fill before the book sets the mark: each
      * side's price is its depth-weighted average over this. Below it, the mark is the carry forward.
+     * A v1 contract's notional is its USDC size; a v2 contract's is contractSize of the base at the price.
      */
     FORWARD_MIN_BOOK_DEPTH_USDC: z.coerce.number().positive().default(2_000),
     /** Farthest the mark may sit from the carry forward, however the book reads. */
@@ -82,6 +95,9 @@ const envSchema = z
     const raw = env.FORWARD_SIGNER_KEY !== undefined;
     if (kms === raw) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'set exactly one of FORWARD_SIGNER_KMS_KEY_ID and FORWARD_SIGNER_KEY' });
+    }
+    if (env.FUTURE_VERSION === 'v1' && env.CARRY < 0n) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'CARRY must not be negative on v1' });
     }
     if (raw && env.CHAIN_ID === BASE_MAINNET) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'on Base mainnet the forward signer must be a KMS key, not FORWARD_SIGNER_KEY' });
