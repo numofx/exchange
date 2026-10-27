@@ -38,9 +38,20 @@ const envSchema = z.object({
   SRM: address.optional(),
   AUCTION: address,
   CASH: address,
-  PERP: address,
-  /** The cNGN future, under the MarginEngine: its cap is watched in /health alongside the perp's. */
-  FUTURE: address.optional(),
+  /**
+   * The perp: its cap and the keeper's inherited perp are watched, and with no CNGN_SPOT_FEED its index
+   * prices cNGN. Unset on an engine with no perp (MarginEngine v2): nothing perp is read.
+   */
+  PERP: address.optional(),
+  /**
+   * The engine's dated futures, comma-separated (v1: USDC-cNGN-30NOV26; v2: cNGN-30NOV26, and EURC-30NOV26
+   * once listed): each one's cap is watched in /health alongside the perp's. A series is only a line here.
+   */
+  FUTURE: z
+    .string()
+    .optional()
+    .transform((value) => (value ?? '').split(',').map((part) => part.trim()).filter((part) => part !== ''))
+    .pipe(z.array(address)),
   SECURITY_MODULE_ACCOUNT: z.coerce.bigint(),
   /** The MarginEngine's VM pool (MARGIN_ENGINE.json poolAccount): never auctioned, never a candidate. */
   POOL_ACCOUNT: z.coerce.bigint().optional(),
@@ -82,6 +93,12 @@ const envSchema = z.object({
    */
   CNGN_ESCROW: address.optional(),
   /**
+   * The engine's cNGN spot feed (getMarketFeeds(1)[0], USDC per cNGN). Set, it prices cNGN instead of the
+   * perp index, as on an engine with no perp (MarginEngine v2); a stale feed then holds back only accounts
+   * holding cNGN, as EURC's does.
+   */
+  CNGN_SPOT_FEED: address.optional(),
+  /**
    * Haircut the keeper takes on cNGN it is paid in, in bps of its index value: it bids an insolvent
    * auction once the payout covers the deficit plus this much of the cNGN, and reads a solvent
    * portfolio's value net of it. The SRM credits cNGN at 50%; a keeper that waited for THAT
@@ -122,21 +139,23 @@ const envSchema = z.object({
 });
 
 type Parsed = z.infer<typeof envSchema>;
-export type Config = Omit<Parsed, 'MANAGER' | 'SRM'> & {
+export type Config = Omit<Parsed, 'MANAGER' | 'SRM' | 'FUTURE'> & {
   MANAGER: Parsed['SUB_ACCOUNTS'];
+  /** FUTURE, as a list: none, one, or one per series. */
+  FUTURES: Parsed['FUTURE'];
   /** Every base collateral the keeper reads, prices and limits, from the *_ESCROW settings; empty for cash only. */
   COLLATERAL: CollateralConfig[];
 };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  const { SRM, MANAGER, ...rest } = envSchema.parse(env);
+  const { SRM, MANAGER, FUTURE, ...rest } = envSchema.parse(env);
   if (MANAGER && SRM && MANAGER !== SRM) throw new Error(`MANAGER ${MANAGER} and SRM ${SRM} disagree: set one`);
   const manager = MANAGER ?? SRM;
   if (!manager) throw new Error('MANAGER (or SRM) is required: the manager whose accounts this keeper liquidates');
-  return { ...rest, MANAGER: manager, COLLATERAL: collateral(rest) };
+  return { ...rest, MANAGER: manager, FUTURES: FUTURE, COLLATERAL: collateral(rest) };
 }
 
-function collateral(env: Omit<Parsed, 'MANAGER' | 'SRM'>): CollateralConfig[] {
+function collateral(env: Omit<Parsed, 'MANAGER' | 'SRM' | 'FUTURE'>): CollateralConfig[] {
   // Half an EURC setup is refused rather than run: an escrow without a price would bid on EURC
   // portfolios with no haircut, and a feed without an escrow reads nothing.
   if ((env.EURC_ESCROW === undefined) !== (env.EURC_SPOT_FEED === undefined)) {
@@ -150,10 +169,17 @@ function collateral(env: Omit<Parsed, 'MANAGER' | 'SRM'>): CollateralConfig[] {
   }
   const assets: CollateralConfig[] = [];
   if (env.CNGN_ESCROW !== undefined) {
+    // the engine's spot feed when set (v2 has no perp), else the perp index, as the perp SRM and v1 engine price it
+    const price = env.CNGN_SPOT_FEED !== undefined
+      ? { kind: 'spotFeed' as const, address: env.CNGN_SPOT_FEED }
+      : env.PERP !== undefined
+        ? { kind: 'perpIndex' as const, address: env.PERP }
+        : null;
+    if (price === null) throw new Error('CNGN_ESCROW needs a price: CNGN_SPOT_FEED, or PERP for its index');
     assets.push({
       asset: 'cNGN',
       escrow: env.CNGN_ESCROW,
-      price: { kind: 'perpIndex', address: env.PERP },
+      price,
       haircutBps: env.CNGN_HAIRCUT_BPS,
       maxInventory: env.MAX_CNGN_INVENTORY,
     });

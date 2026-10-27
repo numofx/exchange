@@ -364,8 +364,7 @@ describe('assessHealth', () => {
     keeperAccountsUnderMargin: [],
     totalPosition: 0n,
     totalPositionCap: 50_000_000n * E18,
-    futureTotalPosition: 0n,
-    futureTotalPositionCap: 0n,
+    futures: [],
   };
   const healthRules = { minSecurityModuleCash: 1_000n * E18, minKeeperCash: 1_000n * E18, minKeeperEthWei: E18 / 100n, capWarnBps: 8_000n, maxInventory: { cNGN: 10_000_000n * E18 } };
 
@@ -414,6 +413,17 @@ describe('assessHealth', () => {
       healthRules,
     ).map((alert) => alert.key);
     assert.deepEqual(keys, ['socialized-loss', 'withdraw-fee', 'sm-short', 'keeper-inventory', 'oi-cap']);
+  });
+
+  it('watches each future\'s cap on its own: one per series, keyed by its address', () => {
+    const futures = [
+      { future: '0x00000000000000000000000000000000000000F1', totalPosition: 25n * E18, totalPositionCap: 30n * E18 },
+      { future: '0x00000000000000000000000000000000000000F2', totalPosition: 1n * E18, totalPositionCap: 30n * E18 },
+      { future: '0x00000000000000000000000000000000000000F3', totalPosition: 0n, totalPositionCap: 0n },
+    ];
+    assert.deepEqual(assessHealth({ ...healthy, futures }, healthRules), [
+      { key: 'future-oi-cap-0x00000000000000000000000000000000000000f1', message: 'future 0x00000000000000000000000000000000000000F1 total position 25.0000 is 8333bps of its cap' },
+    ]);
   });
 
   it('formats 18dp amounts for humans', () => {

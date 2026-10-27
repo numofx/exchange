@@ -29,7 +29,7 @@ const engineAbi = parseAbi([
 ]);
 const spotFeedAbi = parseAbi(['function getSpot() view returns (uint256, uint256)']);
 /** IMarginEngine.AssetType.Base: the market's cNGN escrow. */
-const BASE_ASSET_TYPE = 3;
+const BASE_ASSET_TYPE = 3; // v1 only: v2's pool holds no base
 const ONE = 10n ** 18n;
 /**
  * A net within $1 of zero is covered. Settlement converts cNGN at the spot feed and rounds, and a pool holding
@@ -70,7 +70,9 @@ type Pool = { id: bigint; cash: Address; escrow: Address; spotFeed: Address };
 type Loser = { id: bigint; manager: Address; owedCngn: bigint; usdc: bigint };
 
 /**
- * Takes a USDC/cNGN future through expiry, with nothing but permissionless calls:
+ * Takes a dated future through expiry, with nothing but permissionless calls. v1 (USDC-cNGN, VM in
+ * cNGN) and v2 (any base, VM in USDC cash) differ only in the VM pool (0); the fixing and close-out
+ * calls are the same on both:
  *
  *  0. Every tick, keeps the VM pool's net at or above zero (coverPoolDeficit): while it is below,
  *     settles losers, those paying the most USDC first, up to SETTLE_PER_TICK a tick. Nothing else
@@ -263,6 +265,7 @@ export class ExpiryKeeper {
     const contract = await this.future<FutureContract>(futureAbi, 'futureContracts', [this.config.FUTURE_SUB_ID]);
     // after settlement, close-out realises every account's VM at the settlement price
     if (!contract.listed || contract.settled) return { netUsd: null, settled: 0, failed: 0, stranded: false };
+    if (this.config.FUTURE_VERSION === 'v2') return this.coverCashPool();
     const pool = await this.pool();
     const spot = await this.spot(pool);
     let net = await this.net(pool, spot);
@@ -294,6 +297,61 @@ export class ExpiryKeeper {
         await this.alert(`settle-failed-${loser.id}`, `settleAccount(${loser.id}) failed: ${(error as Error).message.slice(0, 300)}`);
       }
       net = await this.net(pool, spot);
+      if (net >= -POOL_NET_TOLERANCE) break;
+    }
+    console.log(`[pool] ${settled} settled, ${failed} failed, net ${net < 0n ? '-' : ''}${usd(net < 0n ? -net : net)}`);
+    return { netUsd: net, settled, failed, stranded: false };
+  }
+
+  /**
+   * coverPoolDeficit on v2 (MarginEngine v2, FutureVMLib): VM is USDC and moves as cash through the pool,
+   * nothing converted, so the pool's net is its cash and a loser's settlement pays the pool exactly what it
+   * owes. No escrow leg, no spot feed, no market lookup: the pool is the engine's accId, the cash its
+   * cashAsset, whatever the base. Losers go largest first, up to SETTLE_PER_TICK a tick.
+   *
+   * Every v2 series on an engine shares its pool, so each series' keeper sees the same net; each settles
+   * only its own series' losers (settleAccount realises every future the account holds).
+   */
+  private async coverCashPool(): Promise<DeficitOutcome> {
+    const engine = this.config.FUTURE_MANAGER;
+    const [poolId, cash] = await Promise.all([
+      this.chain.read<bigint>(engine, engineAbi, 'accId'),
+      this.chain.read<Address>(engine, engineAbi, 'cashAsset'),
+    ]);
+    let net = await this.balance(poolId, cash);
+    if (net >= -POOL_NET_TOLERANCE) {
+      if (this.stranded) console.log(`[pool] net back to ${usd(net)}`);
+      this.stranded = false;
+      return { netUsd: net, settled: 0, failed: 0, stranded: false };
+    }
+    const losers: { id: bigint; manager: Address; owed: bigint }[] = [];
+    for (const holder of await this.holders()) {
+      const vm = await this.future<bigint>(pendingAbi, 'getPendingVM', [holder.id, this.config.FUTURE_SUB_ID]);
+      if (vm < 0n) losers.push({ ...holder, owed: -vm });
+    }
+    losers.sort((a, b) => (a.owed > b.owed ? -1 : a.owed < b.owed ? 1 : 0));
+    if (losers.length === 0) {
+      if (!this.stranded) {
+        this.stranded = true;
+        await this.alert(
+          'future-pool-deficit-stranded',
+          `${this.config.BASE_SYMBOL} future VM pool #${poolId} is ${usd(-net)} below zero (cash) with no loser of ${this.config.FUTURE_SUB_ID} left to settle: top up the pool account`,
+        );
+      }
+      return { netUsd: net, settled: 0, failed: 0, stranded: true };
+    }
+    let settled = 0;
+    let failed = 0;
+    for (const loser of losers.slice(0, this.config.SETTLE_PER_TICK)) {
+      try {
+        const tx = await this.chain.write(loser.manager, managerAbi, 'settleAccount', [loser.id]);
+        settled++;
+        console.log(`[pool] settled loser ${loser.id} (owed ${usd(loser.owed)}) tx=${tx}`);
+      } catch (error) {
+        failed++;
+        await this.alert(`settle-failed-${loser.id}`, `settleAccount(${loser.id}) failed: ${(error as Error).message.slice(0, 300)}`);
+      }
+      net = await this.balance(poolId, cash);
       if (net >= -POOL_NET_TOLERANCE) break;
     }
     console.log(`[pool] ${settled} settled, ${failed} failed, net ${net < 0n ? '-' : ''}${usd(net < 0n ? -net : net)}`);
