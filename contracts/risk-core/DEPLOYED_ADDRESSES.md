@@ -146,7 +146,7 @@ delta is negative, so `_assessRisk` — and every feed read — is skipped. Fund
 book is halted; only balance-reducing paths (trades, withdrawals) surface a stale feed. That is why
 the six-day feed outage was invisible.
 
-### MarginEngine v2 — DEPLOYED 2026-10-27, closed (setup pending)
+### MarginEngine v2 — DEPLOYED 2026-10-27, set up 2026-10-27, closed (enable pending)
 
 `deploy-margin-engine-v2.s.sol` at e163099, broadcast 2026-10-27 16:13 UTC, blocks 53164124–53164160 (37 transactions).
 Artifacts: `deployments/8453/MARGIN_ENGINE_V2.json`, `MARGIN_ENGINE_V2_VAULT_ACTIONS.json` (setup),
@@ -161,14 +161,20 @@ Artifacts: `deployments/8453/MARGIN_ENGINE_V2.json`, `MARGIN_ENGINE_V2_VAULT_ACT
 | Pool account | #37 (owned and managed by v2) |
 
 - **Markets**: 1 NGN (cNGN escrow `0x37c9…7c98`, the future), 2 EUR (EURC escrow `0xfD2A…6cD9`); no perp. Same cash,
-  escrows, index, auction and TradeModule as v1; none is wired to v2 until `setup`.
+  escrows, index, auction and TradeModule as v1.
 - **The future**: cNGN-30NOV26, expiry 1796047200 (2026-11-30 14:00 UTC, v1's 30NOV26 expiry), last trade 13:00,
   1,000,000 cNGN a contract, VM in USDC, IM 25% / MM 15%, carry 11.8%, initial mark 0.000713260 USDC per cNGN. Cap 0
   until `enable` (30 contracts). Forward signer: v1's forward KMS key `0xd65F…3650` (each feed's EIP-712 domain binds
   its signatures to that feed).
-- **Owner**: the deployer `0x971Cd37fa58e4D5f6cd5FB3B7fE7DAAF735F2e9c` (a used key, accepted as `USED_DEPLOYER`, #276;
-  nonce 38 after the deploy), vault `0x1dcA…F435` nominated on all four. **Send nothing from the deployer until
-  `setup` lands**: setup's gate refuses if its nonce has moved from 38.
+- **Owner**: the vault `0x1dcA…F435`, on all four, since `setup`. Deployed by `0x971Cd37fa58e4D5f6cd5FB3B7fE7DAAF735F2e9c`
+  (a used key, accepted as `USED_DEPLOYER`, #276), which holds nothing.
+- **Setup, landed 2026-10-27 20:26–20:28 UTC** from `exchange-ops` at `fc6ef0a` (`OPS_BOX_CHANGES.md`): ownership
+  accepted on all four; the cash, the cNGN escrow (cap 100,000,000 cNGN), the EURC escrow (cap 0 until `eurc-cap`) and
+  the auction whitelist v2; guardian `0xDb7137Fc6e3437Bd6D8923A94b0af746Ea463C31`. v1 is whitelisted on all of them
+  still. Parity gate passed (63 settings).
+- **Next: `enable`** (`MARGIN_ENGINE_V2_ENABLE_VAULT_ACTIONS.json`), behind its gates: the v2 forward keeper (#258),
+  the liquidation keeper, the pager and SM coverage, and markets-service listing a second series (#228) under a
+  `cNGN-<expiry>` symbol, not `USDC-cNGN-30NOV26`, which v1's series holds.
 
 ### EURC-USDC spot on the MarginEngine — LIVE 2026-10-25, maker quoting since 2026-10-26
 
