@@ -9,7 +9,7 @@ a new engine, and the first v2 series lists as `cNGN-<expiry>` at the 30NOV26 ro
 
 | | v1 (`src/legacy/v1`, deployed) | v2 (`src/`) |
 |---|---|---|
-| symbol | `USDC-cNGN-30NOV26` | `cNGN-31DEC26` |
+| symbol | `USDC-cNGN-30NOV26` | `cNGN-30NOV26` (deployed 2026-10-27, `DEPLOYED_ADDRESSES.md`) |
 | price | cNGN per USDC (`1e36 / feed`) | USDC per cNGN (the feed as is) |
 | contract | 1,000 USDC | 1,000,000 cNGN (~743 USDC at 0.000743) |
 | long gains when | cNGN weakens | cNGN strengthens |
@@ -91,8 +91,10 @@ Order (`scripts/ops/propose_margin_engine_v2_batch.py` proposes every vault step
    (`DEPLOYED_ADDRESSES.md`, EURC), so a copy would double the venue's EURC to 80,000 with nothing re-checking depth.
    Step 6 opens it.
 3. `enable` (`MARGIN_ENGINE_V2_ENABLE_VAULT_ACTIONS`): open the future and register it on the TradeModule. Refused until
-   v2 has its own forward keeper, liquidation keeper and pager watch (#258) and markets-service lists `cNGN-31DEC26`
-   with the chain's band in USDC per cNGN (#228).
+   v2 has its own forward keeper, liquidation keeper and pager watch (#258) and markets-service lists `cNGN-30NOV26`
+   with the chain's band in USDC per cNGN (#228). Both 30NOV26 series then run to the same expiry, v1's close-only:
+   markets-service must list both, and under distinct symbols (today `FutureSymbol` names any series `USDC-cNGN-<expiry>`,
+   which would give v2's the v1 symbol).
 4. markets-service: new spot deposits default to v2 accounts (no listing's `margin_manager_address` is v1), and v1's
    future is listed close-only (`future.close_only`). The spot makers (#34 cNGN-USDC, #36 EURC-USDC, both v1 accounts
    of the MM wallet) quote from v2 accounts: close-only stops a v1 account buying base, so a v1 maker's bids would fill

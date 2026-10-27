@@ -146,6 +146,30 @@ delta is negative, so `_assessRisk` — and every feed read — is skipped. Fund
 book is halted; only balance-reducing paths (trades, withdrawals) surface a stale feed. That is why
 the six-day feed outage was invisible.
 
+### MarginEngine v2 — DEPLOYED 2026-10-27, closed (setup pending)
+
+`deploy-margin-engine-v2.s.sol` at e163099, broadcast 2026-10-27 16:13 UTC, blocks 53164124–53164160 (37 transactions).
+Artifacts: `deployments/8453/MARGIN_ENGINE_V2.json`, `MARGIN_ENGINE_V2_VAULT_ACTIONS.json` (setup),
+`MARGIN_ENGINE_V2_ENABLE_VAULT_ACTIONS.json` (enable). Runbook: `docs/margin-engine-v2.md`, Migration.
+
+| Contract | Address |
+| --- | --- |
+| MarginEngine v2 | `0x0705219a1594d5Fc5dC2573da4082cAf3e1B0950` |
+| MarginEnginePortfolioViewer | `0xD4CF97DE5E488322542c3CB202f3b23e67412d03` |
+| FutureAsset (cNGN-30NOV26) | `0xcACEe66ad41fD1472a47D7D5Fe372FFbFac9AA75` |
+| LyraForwardFeed | `0x24474D8A95EB8Be9070ede58E09405B410c277Df` |
+| Pool account | #37 (owned and managed by v2) |
+
+- **Markets**: 1 NGN (cNGN escrow `0x37c9…7c98`, the future), 2 EUR (EURC escrow `0xfD2A…6cD9`); no perp. Same cash,
+  escrows, index, auction and TradeModule as v1; none is wired to v2 until `setup`.
+- **The future**: cNGN-30NOV26, expiry 1796047200 (2026-11-30 14:00 UTC, v1's 30NOV26 expiry), last trade 13:00,
+  1,000,000 cNGN a contract, VM in USDC, IM 25% / MM 15%, carry 11.8%, initial mark 0.000713260 USDC per cNGN. Cap 0
+  until `enable` (30 contracts). Forward signer: v1's forward KMS key `0xd65F…3650` (each feed's EIP-712 domain binds
+  its signatures to that feed).
+- **Owner**: the deployer `0x971Cd37fa58e4D5f6cd5FB3B7fE7DAAF735F2e9c` (a used key, accepted as `USED_DEPLOYER`, #276;
+  nonce 38 after the deploy), vault `0x1dcA…F435` nominated on all four. **Send nothing from the deployer until
+  `setup` lands**: setup's gate refuses if its nonce has moved from 38.
+
 ### EURC-USDC spot on the MarginEngine — LIVE 2026-10-25, maker quoting since 2026-10-26
 
 Market 2 on the MarginEngine `0xA19E296021c9DF25b90D96C2A0793CC3D0800758`, its own market rather than a slot in market 1,
