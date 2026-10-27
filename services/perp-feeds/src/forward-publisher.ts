@@ -4,7 +4,7 @@ import type { Alerter } from './alert.js';
 import { fetchBook } from './book.js';
 import type { ContractChain } from './chain.js';
 import type { ForwardConfig } from './forward-config.js';
-import { computeForwardTarget } from './forward-targets.js';
+import { computeForwardTarget, invert } from './forward-targets.js';
 import { encodeForwardData, encodeManagerData, signFeedUpdate } from './feed-data.js';
 import type { RestingOrder } from './mark-targets.js';
 
@@ -42,7 +42,7 @@ export type ForwardOutcome =
   | 'misconfigured';
 
 /**
- * Marks a USDC/cNGN future from its forward: each tick, once the contract's minMarkInterval has
+ * Marks a dated future from its forward (v1 USDC-cNGN, or a v2 series on any base, FUTURE_VERSION): each tick, once the contract's minMarkInterval has
  * passed, it works out the forward (forward-targets.ts), signs it into the future's LyraForwardFeed
  * and calls FutureAsset.pullMark, which reads it back, checks it against the index band and move
  * limit, and accrues VM. Stops at last trade.
@@ -74,6 +74,31 @@ export class ForwardPublisher {
     if (this.config.FORWARD_MARK_LATE_MS <= earliestLateMs) {
       throw new Error(
         `FORWARD_MARK_LATE_MS (${this.config.FORWARD_MARK_LATE_MS}) must exceed minMarkInterval + FORWARD_TICK_MS (${earliestLateMs}ms)`,
+      );
+    }
+  }
+
+  /**
+   * Refuses a FUTURE_VERSION that does not match the contract, by where its mark sits against the
+   * index: a v1 mark is cNGN per USDC (about 1 / index), a v2 mark USDC per unit of the base (about the
+   * index). It refuses when the mark sits nearer the index read the other version's way: for cNGN the
+   * two are millions apart, for a base near a dollar (EURC) a third or so, and a stale mark is never
+   * that far off. The wrong version would only compute marks the contract refuses; this says why at
+   * startup. Skipped, with a warning, while the index cannot be read.
+   */
+  async checkUnits(): Promise<void> {
+    const contract = await this.read<FutureContract>('futureContracts', [this.config.FUTURE_SUB_ID]);
+    const indexUsdc = await this.chain.readIndex(this.config.INDEX_FEED);
+    if (!contract.listed || contract.markPrice === 0n || indexUsdc === null || indexUsdc === 0n) {
+      console.warn('[forward] units not checked: the contract is unlisted or the index is unreadable');
+      return;
+    }
+    const v2 = this.config.FUTURE_VERSION === 'v2';
+    const index = v2 ? indexUsdc : invert(indexUsdc);
+    const other = v2 ? invert(indexUsdc) : indexUsdc;
+    if (ratio(contract.markPrice, other) < ratio(contract.markPrice, index)) {
+      throw new Error(
+        `FUTURE_VERSION=${this.config.FUTURE_VERSION} does not match future ${this.config.FUTURE_ASSET}: its mark ${contract.markPrice} is nearer ${other} than the index in those units, ${index}`,
       );
     }
   }
@@ -126,6 +151,7 @@ export class ForwardPublisher {
       this.read<bigint>('contractSize'),
     ]);
     const target = computeForwardTarget({
+      version: this.config.FUTURE_VERSION,
       indexUsdc,
       carry: this.config.CARRY,
       secondsToExpiry: contract.expiry - head,
@@ -174,4 +200,9 @@ export class ForwardPublisher {
       return 'pull-failed';
     }
   }
+}
+
+/** max / min of two positive prices, 18dp: how far apart they are, whichever is larger. */
+function ratio(a: bigint, b: bigint): bigint {
+  return a > b ? (a * 10n ** 18n) / b : (b * 10n ** 18n) / a;
 }

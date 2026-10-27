@@ -1,0 +1,39 @@
+# The keeper for a MarginEngine v2 dated future (services/perp-feeds, dist/forward-main.js with FUTURE_VERSION=v2),
+# one instance per series: numo-future-feeds-v2@cngn-30nov26 reads /etc/numo/future-feeds-v2-cngn-30nov26.env
+# (future-feeds-v2-cngn-30nov26.env), and an EURC series is another instance and env file, no code.
+#
+# NOT INSTALLED (#258). v1's USDC-cNGN-30NOV26 keeps numo-future-feeds.service, unchanged, until it settles.
+#
+# Its own checkout, /home/ec2-user/exchange-future-v2: exchange-future is v1's keeper and the engine keeper's,
+# and building there would move their code on their next restart.
+#
+# Before starting an instance:
+#   - its env file in /etc/numo, with FORWARD_RELAYER_SSM_NAME naming a funded relayer of its own under
+#     /numo/feeds (watched by check_signer_balance.py);
+#   - the forward feed's signer is the KMS key the env names (v2 cNGN: v1's forward key);
+#   - a dry run first: DRY_RUN=true in the env file, then off.
+#
+# Install: git clone https://github.com/numofx/exchange /home/ec2-user/exchange-future-v2 && git -C ... checkout <sha>
+#          (cd /home/ec2-user/exchange-future-v2 && pnpm install --frozen-lockfile --filter perp-feeds... && pnpm --filter @numo/kms-signer build && pnpm --filter perp-feeds build)
+#          cp contracts/risk-core/scripts/ops/numo-future-feeds-v2@.service /etc/systemd/system/
+#          systemctl daemon-reload && systemctl enable --now numo-future-feeds-v2@cngn-30nov26
+# and record it in OPS_BOX_CHANGES.md the same day.
+[Unit]
+Description=Numo v2 future keeper %i: forward marks, fixing, close-out (Base mainnet, KMS signer, SSM relayer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/home/ec2-user/exchange-future-v2/services/perp-feeds
+EnvironmentFile=/etc/numo/future-feeds-v2-%i.env
+ExecStart=/home/ec2-user/exchange-future-v2/contracts/risk-core/scripts/ops/run-with-ssm-forward.sh /usr/bin/node dist/forward-main.js
+Environment=AWS_REGION=us-east-1
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
