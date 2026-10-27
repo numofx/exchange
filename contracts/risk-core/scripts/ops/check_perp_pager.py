@@ -561,6 +561,16 @@ def read_pool_cash(url: str, future: dict) -> float:
   return account_balance(url, int(future["poolAccount"]), future["cash"]) / 1e18
 
 
+def record_watched(state: dict, future: dict) -> None:
+  """Records in the state file a future this run read: its manager under futureManagers and its asset under futures,
+  which the enable gates read (propose_margin_engine_v2_batch.py the manager, propose_eurc_future_v2_batch.py the
+  asset). Called only after the read succeeded, so a future that failed to read is not listed as watched."""
+  for key, value in (("futureManagers", future["manager"]), ("futures", future["future"])):
+    watched = state.setdefault(key, [])
+    if value not in watched:
+      watched.append(value)
+
+
 def future_v2_artifacts() -> list[tuple[Path, dict]]:
   """Each v2 series' artifact that exists, with its path. A missing one (a series not yet deployed) is skipped."""
   raw = os.environ.get("FUTURE_V2_ARTIFACTS", "").strip()
@@ -895,10 +905,11 @@ def check_and_page(stack_path: Path, state: dict) -> int:
     # the engine's future (an old copy, a missing artifact, a failed read) must not pass it.
     state.pop("futureManager", None)
     state.pop("futureManagers", None)
+    state.pop("futures", None)
     if future is not None:
       f = read_future(url, future)
       state["futureManager"] = future["manager"]
-      state["futureManagers"] = [future["manager"]]
+      record_watched(state, future)
       override = os.environ.get("FUTURE_POOL_RESERVE_CNGN", "").strip()
       reserve = float(override) if override else f["reserve_target_cngn"]
       net = pool_net_usd(f["pool_cngn"], f["pool_cash_usd"], f["spot"])
@@ -929,7 +940,7 @@ def check_and_page(stack_path: Path, state: dict) -> int:
     for path, series in future_v2_artifacts():
       label = series_label(series)
       f2 = read_future_v2(url, series)
-      state.setdefault("futureManagers", []).append(series["manager"])
+      record_watched(state, series)
       need = sm_required_usd_linear(f2["one_side_usd"])
       coverage_parts[f"{label} one side ${f2['one_side_usd']:,.0f}"] = need
       futures_read = True
@@ -1108,6 +1119,12 @@ def self_test() -> int:
   assert abs(parts["EURC-30NOV26"] - 10 * 1_000 * 1.1625 * 0.15) < 1e-6
   assert series_label({"expiry": 1796047200}) == "cNGN-30NOV26"
   assert series_label({"expiry": 1796047200, "baseSymbol": "EURC"}) == "EURC-30NOV26"
+  # What the run read goes to the state file: each manager once, each future asset (v1's, then every v2 series).
+  watched: dict = {}
+  record_watched(watched, {"manager": "0xv1", "future": "0xf1"})
+  record_watched(watched, {"manager": "0xv2", "future": "0xcngn"})
+  record_watched(watched, {"manager": "0xv2", "future": "0xeurc"})
+  assert watched == {"futureManagers": ["0xv1", "0xv2"], "futures": ["0xf1", "0xcngn", "0xeurc"]}
   # v2's pool: cash only, no reserve, its own keys; the same $1 dust, $250 page and 75-minute stuck page as v1's.
   assert v2_pool_conditions("v2", 37, -1_000, open_=False) == ([], [])
   assert v2_pool_conditions("v2", 37, -1.0, open_=True, negative_for_sec=999_999) == ([], [])
