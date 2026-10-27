@@ -73,11 +73,8 @@ async function main() {
   const publisher = new ForwardPublisher(config, chain, alert);
   await publisher.checkLateThreshold();
   await publisher.checkUnits();
-  // TODO(#258): v2's VM pool is cash only and its VM is USDC; the v1 deficit cover would misread it.
-  // Until the v2 expiry keeper lands, a v2 instance only marks (nothing holds a v2 series before enable).
-  const expiry = config.FUTURE_VERSION === 'v1' ? new ExpiryKeeper(config, chain, alert) : null;
-  if (expiry) await expiry.checkSampleInterval();
-  else console.warn('[expiry] v2: the VM pool cover, fixing and close-out are not run by this build');
+  const expiry = new ExpiryKeeper(config, chain, alert);
+  await expiry.checkSampleInterval();
   console.log(
     `[forward] signer ${signer.address} (${config.FORWARD_SIGNER_KMS_KEY_ID ? 'KMS' : 'raw key'}), relayer ${chain.relayer.address}, ` +
       `${config.BASE_SYMBOL} future ${config.FUTURE_VERSION} ${config.FUTURE_ASSET} #${config.FUTURE_SUB_ID}${config.DRY_RUN ? ', DRY RUN' : ''}`,
@@ -92,15 +89,13 @@ async function main() {
     } catch (error) {
       await alert('forward-tick-error', `forward tick failed: ${(error as Error).message.slice(0, 300)}`);
     }
-    if (expiry) {
-      // Every tick, not only after a mark: a mark moves no money, a winner settling does, at any minute.
-      await coverDeficit(expiry, alert);
-      try {
-        const outcome = await expiry.tick();
-        if (outcome !== 'before-window' && outcome !== 'sample-not-due' && outcome !== 'done') console.log(`[expiry] ${outcome}`);
-      } catch (error) {
-        await alert('expiry-tick-error', `expiry tick failed: ${(error as Error).message.slice(0, 300)}`);
-      }
+    // Every tick, not only after a mark: a mark moves no money, a winner settling does, at any minute.
+    await coverDeficit(expiry, alert);
+    try {
+      const outcome = await expiry.tick();
+      if (outcome !== 'before-window' && outcome !== 'sample-not-due' && outcome !== 'done') console.log(`[expiry] ${outcome}`);
+    } catch (error) {
+      await alert('expiry-tick-error', `expiry tick failed: ${(error as Error).message.slice(0, 300)}`);
     }
     await new Promise((resolve) => setTimeout(resolve, config.FORWARD_TICK_MS));
   }

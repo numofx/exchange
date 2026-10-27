@@ -443,14 +443,16 @@ export function createKeeperChain(config: Config, transportOverride?: Transport)
      * finish or terminate its auction first. Run until both lists are empty.
      */
     async settleFrozenPositions(dryRun: boolean): Promise<{ settled: bigint[]; underLiquidation: bigint[] }> {
-      const disabled = await read({ address: config.PERP, abi: perpAbi, functionName: 'isDisabled' });
+      const perp = config.PERP;
+      if (perp === undefined) throw new Error('--settle-frozen needs PERP: this keeper is configured with no perp');
+      const disabled = await read({ address: perp, abi: perpAbi, functionName: 'isDisabled' });
       if (!disabled) throw new Error('the perp is not disabled: --settle-frozen only runs after the vault freezes it');
       const settled: bigint[] = [];
       const underLiquidation: bigint[] = [];
       // Every account under the SRM, the keeper's own bid accounts included: they hold positions too.
       const candidates = [...new Set([...(await this.discoverAccounts()), ...ownAccounts])];
       for (const accountId of candidates) {
-        if ((await balance(accountId, config.PERP)) === 0n) continue;
+        if ((await balance(accountId, perp)) === 0n) continue;
         const auction = await read({ address: config.AUCTION, abi: auctionAbi, functionName: 'getAuction', args: [accountId] });
         if (auction.ongoing) {
           underLiquidation.push(accountId);
@@ -484,8 +486,10 @@ export function createKeeperChain(config: Config, transportOverride?: Transport)
 
     async readHealth(): Promise<StackHealth> {
       const own = [...ownAccounts];
+      const perp = config.PERP;
       const [ownPerp, ownMargins] = await Promise.all([
-        Promise.all(own.map((id) => balance(id, config.PERP))),
+        // an engine with no perp (v2): nothing to inherit
+        Promise.all(own.map((id) => (perp === undefined ? Promise.resolve(0n) : balance(id, perp)))),
         Promise.all(
           own.map((id) =>
             optional(() =>
@@ -498,13 +502,15 @@ export function createKeeperChain(config: Config, transportOverride?: Transport)
         const margins = ownMargins[i];
         return margins !== null && margins !== undefined && margins[0] < 0n;
       });
-      const future = config.FUTURE;
-      const [futureTotalPosition, futureTotalPositionCap] = future
-        ? await Promise.all([
+      const futures = await Promise.all(
+        config.FUTURES.map(async (future) => {
+          const [totalPosition, totalPositionCap] = await Promise.all([
             read({ address: future, abi: perpAbi, functionName: 'totalPosition', args: [config.MANAGER] }),
             read({ address: future, abi: perpAbi, functionName: 'totalPositionCap', args: [config.MANAGER] }),
-          ])
-        : [0n, 0n];
+          ]);
+          return { future, totalPosition, totalPositionCap };
+        }),
+      );
       const [securityModuleCash, totalInsolventMM, cashExchangeRate, temporaryWithdrawFeeEnabled, keeperCash, keeperEthWei, totalPosition, totalPositionCap, keeperCollateral] =
         await Promise.all([
           balance(config.SECURITY_MODULE_ACCOUNT, config.CASH),
@@ -513,8 +519,8 @@ export function createKeeperChain(config: Config, transportOverride?: Transport)
           read({ address: config.CASH, abi: cashAbi, functionName: 'temporaryWithdrawFeeEnabled' }),
           balance(config.KEEPER_ACCOUNT, config.CASH),
           ethBalance(keeper.address),
-          read({ address: config.PERP, abi: perpAbi, functionName: 'totalPosition', args: [config.MANAGER] }),
-          read({ address: config.PERP, abi: perpAbi, functionName: 'totalPositionCap', args: [config.MANAGER] }),
+          perp === undefined ? Promise.resolve(0n) : read({ address: perp, abi: perpAbi, functionName: 'totalPosition', args: [config.MANAGER] }),
+          perp === undefined ? Promise.resolve(0n) : read({ address: perp, abi: perpAbi, functionName: 'totalPositionCap', args: [config.MANAGER] }),
           this.keeperCollateral(),
         ]);
       return {
@@ -529,8 +535,7 @@ export function createKeeperChain(config: Config, transportOverride?: Transport)
         keeperAccountsUnderMargin,
         totalPosition,
         totalPositionCap,
-        futureTotalPosition,
-        futureTotalPositionCap,
+        futures,
       };
     },
 

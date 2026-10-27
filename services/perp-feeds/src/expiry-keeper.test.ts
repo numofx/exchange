@@ -56,11 +56,13 @@ type State = {
   cngnHeld?: bigint[]; // each account's cNGN escrow balance, by account id - 1
   pool?: { cash: bigint; cngn: bigint }; // the VM pool's USDC cash (18dp USD) and cNGN
   failWrites?: Set<string>;
+  cashVm?: boolean; // v2: VM is USDC, paid into the pool's cash as is
 };
 
 function run(state: State, cfg = config) {
   const writes: { fn: string; args: readonly unknown[]; to: Address }[] = [];
   const readsFrom: Address[] = [];
+  const readFns: string[] = [];
   const alerts: string[] = [];
   const chain: ContractChain = {
     signer: privateKeyToAccount(keccak256(toHex('forward-signer'))),
@@ -72,6 +74,7 @@ function run(state: State, cfg = config) {
     submit: async () => '0x',
     read: async <T,>(address: Address, _abi: unknown, functionName: string, args: readonly unknown[] = []): Promise<T> => {
       readsFrom.push(address);
+      readFns.push(functionName);
       // thunks: each answer is computed only for the function asked, since some need args the others lack
       const values: Record<string, () => unknown> = {
         futureContracts: () => ({ listed: true, settled: state.settled, expiry: EXPIRY, lastTradeTime: EXPIRY - WINDOW }),
@@ -106,7 +109,7 @@ function run(state: State, cfg = config) {
     },
   };
   const keeper = new ExpiryKeeper(cfg, chain, async (key) => void alerts.push(key));
-  return { keeper, writes, alerts, readsFrom };
+  return { keeper, writes, alerts, readsFrom, readFns };
 }
 
 function balanceOf(state: State, id: bigint, asset: Address): bigint {
@@ -121,6 +124,12 @@ function settle(state: State, id: bigint) {
   const i = Number(id) - 1;
   const vm = state.pending?.[i] ?? 0n;
   if (vm >= 0n || !state.pending) return;
+  if (state.cashVm) {
+    state.pool ??= { cash: 0n, cngn: 0n };
+    state.pool.cash += -vm;
+    state.pending[i] = 0n;
+    return;
+  }
   const held = state.cngnHeld?.[i] ?? 0n;
   const owed = -vm;
   const fromCngn = owed < held ? owed : held;
@@ -316,6 +325,51 @@ describe('expiry keeper: VM pool deficit', () => {
     assert.deepEqual(await keeper.coverPoolDeficit(), { netUsd: null, settled: 0, failed: 0, stranded: false });
     assert.deepEqual(writes, []);
     assert.deepEqual([...new Set(readsFrom)], [FUTURE]);
+  });
+});
+
+describe('expiry keeper: v2 cash pool', () => {
+  // EURC-30NOV26 here, not cNGN: on v2 the keeper is the same for any base
+  const v2 = loadForwardConfig({ ...envOf(config), FUTURE_VERSION: 'v2', BASE_SYMBOL: 'EURC', CARRY: '-15000000000000000' });
+  const v2run = (overrides: Partial<State>) => run(state({ cashVm: true, ...overrides }), v2);
+
+  it('judges the pool by its cash alone: a base balance in it counts for nothing, and no escrow or feed is read', async () => {
+    // -$7 cash with base in the pool is a deficit on v2 (it would be net zero on v1)
+    const { keeper, writes, readFns } = v2run({ balances: [-1n], pending: [usd(-9)], pool: { cash: usd(-7), cngn: cngn(10_000) } });
+    const outcome = await keeper.coverPoolDeficit();
+    assert.deepEqual(writes.map((w) => [w.fn, w.args[0]]), [['settleAccount', 1n]]);
+    assert.deepEqual(outcome, { netUsd: usd(2), settled: 1, failed: 0, stranded: false });
+    for (const fn of ['assetDetails', 'assetMap', 'getMarketFeeds', 'getSpot']) assert.ok(!readFns.includes(fn), `read ${fn}`);
+  });
+
+  it('settles nobody at or above zero, nor within the $1 tolerance', async () => {
+    const { keeper, writes } = v2run({ balances: [1n], pending: [usd(-50)], pool: { cash: -usd(1), cngn: 0n } });
+    assert.equal((await keeper.coverPoolDeficit()).settled, 0);
+    assert.deepEqual(writes, []);
+  });
+
+  it('settles the largest USDC losers first, never a winner, and stops once the cash is back', async () => {
+    const s = state({ cashVm: true, balances: [1n, 1n, 1n, -3n], pending: [usd(-3), usd(-10), usd(-6), usd(19)], pool: { cash: usd(-12), cngn: 0n } });
+    const { keeper, writes } = run(s, v2);
+    const outcome = await keeper.coverPoolDeficit();
+    assert.deepEqual(writes.map((w) => w.args[0]), [2n, 3n]);
+    assert.deepEqual(outcome, { netUsd: usd(4), settled: 2, failed: 0, stranded: false });
+  });
+
+  it('alerts once, naming the base, when no loser is left', async () => {
+    const { keeper, alerts, writes } = v2run({ balances: [1n], pending: [usd(5)], pool: { cash: usd(-5), cngn: 0n } });
+    assert.equal((await keeper.coverPoolDeficit()).stranded, true);
+    assert.equal((await keeper.coverPoolDeficit()).stranded, true);
+    assert.deepEqual(alerts, ['future-pool-deficit-stranded']);
+    assert.deepEqual(writes, []);
+  });
+
+  it('fixes and closes out as on v1', async () => {
+    const fixed = run(state({ cashVm: true, head: EXPIRY, firstSampleTime: EXPIRY - WINDOW, lastSampleTime: EXPIRY - 60n, largestGap: 300n }), v2);
+    assert.equal(await fixed.keeper.tick(), 'fixed');
+    const closing = run(state({ cashVm: true, settled: true, balances: [0n, 5n] }), v2);
+    assert.equal(await closing.keeper.tick(), 'closed-out');
+    assert.deepEqual(closing.writes.map((w) => [w.fn, w.args[0], w.to]), [['closeOutExpired', 2n, MANAGER_OF(2n)]]);
   });
 });
 
