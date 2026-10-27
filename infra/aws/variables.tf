@@ -290,6 +290,41 @@ variable "cngn_future_manager_address" {
   default = "0xA19E296021c9DF25b90D96C2A0793CC3D0800758" # MarginEngine
 }
 
+# MarginEngine v2 step 4 (risk-core docs/margin-engine-v2.md): v1's series above is listed close-only
+# once v2's is open. Every order on it is then taken as reduce-only. Absent from the task definitions
+# while false, so adding the variable changes nothing deployed.
+variable "cngn_future_close_only" {
+  type    = bool
+  default = false
+}
+
+# Further futures series, listed beside the cngn_future_* one (markets-service FUTURE_SERIES, README
+# "More series"): MarginEngine v2's <BASE>-<DDMONYY>. Keyed by (asset_address, expiry); two series may
+# share an expiry. Empty lists nothing more, and leaves FUTURE_SERIES out of the task definitions.
+# v2's cNGN-30NOV26, when it is to be listed:
+#   { asset_address = "0xcACEe66ad41fD1472a47D7D5Fe372FFbFac9AA75", expiry = 1796047200,
+#     manager_address = "0x0705219a1594d5Fc5dC2573da4082cAf3e1B0950", kind = "linear",
+#     base_asset = "cNGN", contract_size = "1000000" }
+variable "future_series" {
+  type = list(object({
+    asset_address   = string
+    expiry          = number
+    manager_address = string
+    kind            = string # "inverse" (v1) or "linear" (v2)
+    base_asset      = string
+    contract_size   = string # whole units a contract: FutureAsset.contractSize() / 1e18
+    amount_scale    = optional(string)
+    symbol          = optional(string)
+    close_only      = optional(bool, false)
+  }))
+  default = []
+
+  validation {
+    condition     = alltrue([for s in var.future_series : contains(["inverse", "linear"], s.kind)])
+    error_message = "Each future_series entry's kind is \"inverse\" (MarginEngine v1) or \"linear\" (v2)."
+  }
+}
+
 # The index-lag gate (markets-service api/index_lag.go). The publisher reports every spot sample to
 # the api; with the gate on, a new perp order is refused while that sample is more than
 # index_lag_max_bps from the on-chain index, or while no fresh sample exists. On in production since
