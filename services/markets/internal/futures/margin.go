@@ -61,10 +61,10 @@ func (r *Reader) Position(ctx context.Context, account *big.Int) (*big.Int, erro
 	return signed(value), nil
 }
 
-// PendingVM is getPendingVM(account, series): the cNGN of variation margin the series owes the account
-// (negative: the account owes) that the manager has not yet moved into cash, 18dp, signed. It runs from
-// each fill's own price and includes what partial closes realised, so it is not a function of the
-// position and the mark alone. Not cached: it moves with every mark.
+// PendingVM is getPendingVM(account, series): the variation margin the series owes the account
+// (negative: the account owes) that the manager has not yet moved into cash, 18dp, signed: cNGN on an
+// inverse series, USDC on a linear one. It runs from each fill's own price and includes what partial
+// closes realised, so it is not a function of the position and the mark alone. Not cached: it moves with every mark.
 func (r *Reader) PendingVM(ctx context.Context, account *big.Int) (*big.Int, error) {
 	raw, err := r.call(ctx, r.future, sigGetPendingVM+uintWord(account)+uintWord(big.NewInt(r.expiry)))
 	if err != nil {

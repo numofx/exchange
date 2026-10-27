@@ -23,11 +23,11 @@ func TestFillVMIsTheGapToTheMarkTimesTheNotional(t *testing.T) {
 		{orders.SideBuy, "1381.417182", "500", "1381.417182", "0"},
 	}
 	for _, c := range cases {
-		if got := fillVMCNGN(meta, c.side, c.price, c.size, c.mark); got != c.want {
+		if got := fillVM(meta, c.side, c.price, c.size, c.mark); got != c.want {
 			t.Fatalf("%s %s at %s against %s: vm %q, want %q", c.side, c.size, c.price, c.mark, got, c.want)
 		}
 	}
-	if got := fillVMCNGN(meta, orders.SideBuy, "1381", "1", "not a number"); got != "" {
+	if got := fillVM(meta, orders.SideBuy, "1381", "1", "not a number"); got != "" {
 		t.Fatalf("an unparsable mark gives %q, want empty", got)
 	}
 }

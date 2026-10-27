@@ -566,14 +566,19 @@ func validateActionJSON(raw json.RawMessage, ownerAddress string, signerAddress 
 	return nil
 }
 
-// perpCloseOnlyOrder takes every perp order as reduce-only while CNGN_PERP_CLOSE_ONLY is set: the
-// reduce-only checks then refuse one that would open or add to a position, and the flag is stored so
-// the matcher holds its fills to the position. Any other market, or the switch off, is untouched.
-func (s *Server) perpCloseOnlyOrder(params orders.CreateOrderParams) orders.CreateOrderParams {
-	if !s.cfg.CNGNPerpCloseOnly {
+// closeOnlyOrder takes every perp order as reduce-only while CNGN_PERP_CLOSE_ONLY is set, and every
+// order on a close-only futures series (FutureSeries.CloseOnly): the reduce-only checks then refuse one
+// that would open or add to a position, and the flag is stored so the matcher holds its fills to the
+// position. Any other market, or the switch off, is untouched.
+func (s *Server) closeOnlyOrder(params orders.CreateOrderParams) orders.CreateOrderParams {
+	if s.instruments == nil {
 		return params
 	}
-	if instrument, ok := s.instruments.ByAssetAndSubID(strings.ToLower(params.AssetAddress), params.SubID); ok && instrument.IsPerpetual() {
+	instrument, ok := s.instruments.ByAssetAndSubID(strings.ToLower(params.AssetAddress), params.SubID)
+	if !ok {
+		return params
+	}
+	if (s.cfg.CNGNPerpCloseOnly && instrument.IsPerpetual()) || (instrument.IsFuture() && instrument.CloseOnly) {
 		params.ReduceOnly = true
 	}
 	return params
@@ -615,17 +620,18 @@ func (s *Server) admitReduceOnly(ctx context.Context, params orders.CreateOrderP
 var errPositionReaderMissing = errors.New("no chain reader for this market's positions")
 
 // reduceOnlyChainPosition is the account's signed position in the market, in chain units: the perp's
-// balance, or the future series' (FutureAsset at its expiry) through the futures reader.
+// balance, or the future series' (its own FutureAsset at its expiry) through that series' reader.
 func (s *Server) reduceOnlyChainPosition(ctx context.Context, instrument instruments.Metadata, subaccountID string) (*big.Int, error) {
 	if instrument.IsFuture() {
-		if s.future == nil {
+		reader := s.futureReader(instrument)
+		if reader == nil {
 			return nil, errPositionReaderMissing
 		}
 		account, ok := new(big.Int).SetString(strings.TrimSpace(subaccountID), 10)
 		if !ok {
 			return nil, fmt.Errorf("subaccount %q is not an integer", subaccountID)
 		}
-		return s.future.Position(ctx, account)
+		return reader.Position(ctx, account)
 	}
 	if s.perp == nil {
 		return nil, errPositionReaderMissing

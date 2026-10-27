@@ -27,11 +27,24 @@ const (
 // its fee on it, that is not the chain's.
 var ErrFutureContractSizeMismatch = errors.New("future contract size mismatch")
 
-func newFutureReader(cfg config.Config) *futures.Reader {
-	if !cfg.FutureEnabled() {
-		return nil
+// newFutureReaders gives every listed series its own reader, of its own kind, keyed by
+// futureSeriesKey. Two series may share an expiry (v1's and v2's 30NOV26), never an asset and expiry.
+func newFutureReaders(cfg config.Config) map[string]*futures.Reader {
+	readers := map[string]*futures.Reader{}
+	for _, series := range cfg.FutureSeriesList() {
+		readers[futureSeriesKey(series.AssetAddress, series.SubID())] = futures.NewSeriesReader(cfg.ChainRPCURL, series, futureBandTTL, futureStateTTL)
 	}
-	return futures.NewReader(cfg.ChainRPCURL, cfg.CNGNFutureAssetAddress, cfg.CNGNFutureExpiry, futureBandTTL, futureStateTTL)
+	return readers
+}
+
+// futureSeriesKey names a series by its FutureAsset and sub id (the expiry).
+func futureSeriesKey(asset, subID string) string {
+	return strings.ToLower(strings.TrimSpace(asset)) + ":" + strings.TrimSpace(subID)
+}
+
+// futureReader is the reader of the instrument's own series; nil when none is configured.
+func (e *Engine) futureReader(instrument instruments.Metadata) *futures.Reader {
+	return e.futures[futureSeriesKey(instrument.AssetAddress, instrument.SubID)]
 }
 
 // verifyFutureContractSize refuses to start when the registry's contract size is not the chain's.
@@ -52,7 +65,7 @@ func verifyFutureContractSize(ctx context.Context, reader *futures.Reader, instr
 	}
 	presented.Mul(presented, new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)))
 	if !presented.IsInt() || presented.Num().Cmp(onChain) != 0 {
-		return fmt.Errorf("%w: %s presents %s USDC a contract, FutureAsset.contractSize() is %s",
+		return fmt.Errorf("%w: %s presents %s a contract, FutureAsset.contractSize() is %s",
 			ErrFutureContractSizeMismatch, instrument.Symbol, instrument.ContractMultiplier, futures.Decimal(onChain))
 	}
 	slog.Info("future_contract_size_verified", "market", instrument.Symbol, "contract_size", futures.Decimal(onChain))
@@ -62,10 +75,11 @@ func verifyFutureContractSize(ctx context.Context, reader *futures.Reader, instr
 // futureOpen gates the tick: a series not yet enabled on chain is listed (so quotes can rest) but
 // never crossed, as the perp is before its gate opens. Unreadable is closed.
 func (e *Engine) futureOpen(ctx context.Context, instrument instruments.Metadata) bool {
-	if e.future == nil {
+	reader := e.futureReader(instrument)
+	if reader == nil {
 		return false
 	}
-	open, reason, err := e.future.TradingOpen(ctx, instrument.TradeModuleAddress, instrument.MarginManagerAddress)
+	open, reason, err := reader.TradingOpen(ctx, instrument.TradeModuleAddress, instrument.MarginManagerAddress)
 	if err != nil {
 		slog.Warn("future_gate_unreadable", "market", instrument.Symbol, "error", err.Error())
 		return false
@@ -89,7 +103,12 @@ func (e *Engine) futureFillInBand(ctx context.Context, instrument instruments.Me
 		e.noteMatchFailure(instrument.Symbol, candidate, "fill_price_unparseable", settlementRevert{})
 		return false
 	}
-	band, err := e.future.Band(ctx)
+	reader := e.futureReader(instrument)
+	if reader == nil {
+		e.noteMatchFailure(instrument.Symbol, candidate, "fill_band_unreadable", settlementRevert{})
+		return false
+	}
+	band, err := reader.Band(ctx)
 	if err != nil {
 		reason := "fill_band_unreadable"
 		if errors.Is(err, futures.ErrIndexStale) {
@@ -111,29 +130,36 @@ func (e *Engine) futureFillInBand(ctx context.Context, instrument instruments.Me
 }
 
 // feeNotionalPrice is the per-unit notional takerFillFee charges on, 18dp USDC. A perp or spot fill's
-// notional is price x amount; a future's is contracts x contract size, whatever its price in cNGN.
+// notional is price x amount; a v1 future's is contracts x contract size (USDC), whatever its price in
+// cNGN; a v2 future's is contracts x contract size (base units) x the fill price (USDC per base).
 func (e *Engine) feeNotionalPrice(ctx context.Context, instrument instruments.Metadata, fillPrice string) (string, error) {
 	if !instrument.IsFuture() {
 		return fillPrice, nil
 	}
-	if e.future == nil {
+	reader := e.futureReader(instrument)
+	if reader == nil {
 		return "", errors.New("no future reader configured")
 	}
-	size, err := e.future.ContractSize(ctx)
+	price, ok := new(big.Int).SetString(strings.TrimSpace(fillPrice), 10)
+	if !ok {
+		return "", fmt.Errorf("invalid fill price %q", fillPrice)
+	}
+	notional, err := reader.NotionalPerContract(ctx, price)
 	if err != nil {
 		return "", fmt.Errorf("contractSize unreadable: %w", err)
 	}
-	return size.String(), nil
+	return notional.String(), nil
 }
 
 // futureMarkAt is the mark a settled future fill was valued at, read from its transaction, recorded
 // with the fill so its variation margin can be reported. Empty when it cannot be read: the fill is
 // recorded either way, its VM unknown rather than wrong.
 func (e *Engine) futureMarkAt(ctx context.Context, instrument instruments.Metadata, txHash string) string {
-	if e.future == nil || strings.TrimSpace(txHash) == "" {
+	reader := e.futureReader(instrument)
+	if reader == nil || strings.TrimSpace(txHash) == "" {
 		return ""
 	}
-	mark, err := e.future.MarkAtFill(ctx, txHash)
+	mark, err := reader.MarkAtFill(ctx, txHash)
 	if err != nil {
 		slog.Warn("future_fill_mark_unread", "market", instrument.Symbol, "tx_hash", txHash, "error", err.Error())
 		return ""

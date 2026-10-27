@@ -130,7 +130,7 @@ func TestAFutureFillIsChargedOnItsContractSizeNotItsPrice(t *testing.T) {
 	srv := c.serve(t)
 	defer srv.Close()
 	cfg := config.Config{ChainRPCURL: srv.URL, CNGNFutureAssetAddress: c.future, CNGNFutureExpiry: 1798675200, CNGNFutureManagerAddress: "0x00000000000000000000000000000000000000e9"}
-	e := &Engine{future: newFutureReader(cfg)}
+	e := &Engine{futures: newFutureReaders(cfg)}
 	future := instruments.DefaultRegistry(cfg).Enabled()[0]
 	if !future.IsFuture() {
 		t.Fatalf("expected the future, got %s", future.Symbol)
@@ -146,11 +146,11 @@ func TestAFutureFillIsChargedOnItsContractSizeNotItsPrice(t *testing.T) {
 	if fee != "2500000000000000000" {
 		t.Fatalf("one contract's fee is %s, expected 2.5e18", fee)
 	}
-	if err := verifyFutureContractSize(context.Background(), e.future, future); err != nil {
+	if err := verifyFutureContractSize(context.Background(), e.futureReader(future), future); err != nil {
 		t.Fatalf("the registry's contract size is the chain's: %v", err)
 	}
 	c.size = new(big.Int).Mul(big.NewInt(100), wad)
-	if err := verifyFutureContractSize(context.Background(), newFutureReader(cfg), future); err == nil {
+	if err := verifyFutureContractSize(context.Background(), (&Engine{futures: newFutureReaders(cfg)}).futureReader(future), future); err == nil {
 		t.Fatal("a registry contract size that is not the chain's must stop the matcher")
 	}
 }

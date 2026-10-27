@@ -235,6 +235,41 @@ Set them on the API **and** the matcher.
   pair off and cancels nothing.
 - Not on `/v1/integrations/*`, which serve spot-style pairs.
 
+### More series: `FUTURE_SERIES` (MarginEngine v2)
+
+`FUTURE_SERIES` is a JSON array of further series, listed after the `CNGN_FUTURE_*` one; unset, the
+venue lists exactly what it did. Each series is keyed by `(asset_address, sub_id)`, never by expiry
+alone, and read through its own reader everywhere: `/v1/markets` (band, mark, contract state,
+`trading_open`), order admission (band, last trade time, settled, the engine), reduce-only, the
+matcher's gate, band, fee, margin pre-check and fill mark, and `/v1/positions`. v1's
+`USDC-cNGN-30NOV26` and v2's `cNGN-30NOV26` share an expiry on different assets and engines.
+
+```json
+[{"asset_address": "0xcACEe66ad41fD1472a47D7D5Fe372FFbFac9AA75", "expiry": 1796047200,
+  "manager_address": "0x0705219a1594d5Fc5dC2573da4082cAf3e1B0950", "kind": "linear",
+  "base_asset": "cNGN", "contract_size": "1000000"}]
+```
+
+| Field | |
+| --- | --- |
+| `asset_address`, `expiry`, `manager_address` | the FutureAsset, its series' expiry (the sub id), the engine whose accounts hold it |
+| `kind` | `inverse` (v1: cNGN per USDC, the index `1e36 / getSpot()`, a USDC contract, VM in cNGN) or `linear` (v2: USDC per base, the index `getSpot()`, a base contract, VM in USDC) |
+| `base_asset` | `cNGN`, `EURC`: a linear series is `<base_asset>-<DDMONYY>`; an inverse one is always cNGN, `USDC-cNGN-<DDMONYY>` |
+| `contract_size` | whole units a contract (`1000000` cNGN for `cNGN-30NOV26`); the matcher refuses to start if the chain's differs |
+| `amount_scale` | optional: the signed amount of one `desired_amount` unit. Default one whole unit of the contract's denomination, `1e18 / contract_size` (1e12, 1 cNGN, for `cNGN-30NOV26`; v1's 1e15 is 1 USDC by the same rule) |
+| `symbol` | optional override of the derived symbol |
+| `close_only` | optional: every order is taken as reduce-only, and resting orders are held to their position at match time |
+
+`CNGN_FUTURE_CLOSE_ONLY=true` makes the `CNGN_FUTURE_*` series close-only the same way. Two series may
+not share an `(asset, expiry)` or a symbol. On a linear series `/v1/markets` reports
+`future.contract_size` and `future.contract_size_asset` in place of `future.contract_size_usdc`,
+`/v1/positions` reports `pending_vm_usdc` in place of `pending_vm_cngn` and `notional_usdc` at the
+mark, and `/v1/fills` reports `vm_usdc` in place of `vm_cngn`; a close-only series shows
+`future.close_only: true`. The fee is 25 bps of contracts × contract size × the fill price. An account
+is under one manager, so `futures_account` is its margin under whichever listed engine it is under.
+Terraform: `future_series` and `cngn_future_close_only` (`infra/aws/variables.tf`), both absent from
+the task definitions until set.
+
 ## Configuration
 
 Copy `.env.example` into your own environment and set the required values.
