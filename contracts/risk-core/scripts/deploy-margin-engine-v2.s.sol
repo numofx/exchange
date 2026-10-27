@@ -48,11 +48,11 @@ interface ITradeModuleQuote {
  *      the forward feed's signed difference is negative.
  *
  * Usage (a fresh keystore account, used for this deploy only; never numo-deployer, whose nonce the EURC batch rests on
- * and which the single-use check refuses anyway):
+ * and which the single-use check refuses anyway; a used key only when named in USED_DEPLOYER, see checkDeployer):
  *   INITIAL_MARK=<USDC per cNGN, 18dp> CARRY=<annual carry, 18dp> FORWARD_SIGNER=<forward key> \
  *     forge script scripts/deploy-margin-engine-v2.s.sol --rpc-url $BASE_RPC_URL --account <fresh keystore> --broadcast
  *
- * Optional env: EXPIRY, LAST_TRADE_TIME, CONTRACT_SIZE, FUTURE_OI_CAP, INITIAL_MARK_TOLERANCE.
+ * Optional env: EXPIRY, LAST_TRADE_TIME, CONTRACT_SIZE, FUTURE_OI_CAP, INITIAL_MARK_TOLERANCE, USED_DEPLOYER.
  */
 contract DeployMarginEngineV2 is Utils {
   string internal constant ARTIFACT_NAME = "MARGIN_ENGINE_V2";
@@ -159,11 +159,7 @@ contract DeployMarginEngineV2 is Utils {
 
   function run() external {
     Params memory params = loadParams();
-    if (msg.sender == FORGE_DEFAULT_SENDER) {
-      revert("run with --account <keystore> (or --private-key): no sender given");
-    }
-    // Forge deploys the linked FutureVMLib from the deployer before run(): a fresh key arrives with nonce 1.
-    if (vm.getNonce(msg.sender) > 1) revert("deployer key must be single use: it has sent transactions before");
+    checkDeployer(params, msg.sender, vm.getNonce(msg.sender), vm.envOr("USED_DEPLOYER", address(0)));
 
     vm.startBroadcast();
     Deployment memory d = deploy(params);
@@ -229,6 +225,21 @@ contract DeployMarginEngineV2 is Utils {
     params.contractSize = DEFAULT_CONTRACT_SIZE;
     params.initialMarkTolerance = DEFAULT_INITIAL_MARK_TOLERANCE;
     params.futureOICap = DEFAULT_FUTURE_OI_CAP;
+  }
+
+  /**
+   * @dev The deployer owns the four contracts until the vault accepts them in setup. A fresh key arrives with nonce 1
+   *      (Forge deploys the linked FutureVMLib from it before run()). A key that has sent before is accepted only when
+   *      the operator names it in USED_DEPLOYER: its exposure in that window is theirs to accept. Setup's gate refuses
+   *      either way if the deployer sends anything between the deploy and the accept.
+   */
+  function checkDeployer(Params memory params, address deployer, uint nonce, address usedDeployer) public view {
+    if (deployer == FORGE_DEFAULT_SENDER) revert("run with --account <keystore> (or --private-key): no sender given");
+    if (nonce > 1 && deployer != usedDeployer) {
+      revert("deployer key must be single use: it has sent transactions before (name it in USED_DEPLOYER to accept)");
+    }
+    if (deployer == params.vault) revert("deployer is the vault");
+    if (LyraSpotFeed(params.indexFeed).isSigner(deployer)) revert("deployer signs the index");
   }
 
   /// @dev Each check is a way the deployment lands and then cannot be governed, trade, or settle.
