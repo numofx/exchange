@@ -78,10 +78,55 @@ describe('collateral configuration', () => {
   });
 });
 
+describe('an engine with no perp (MarginEngine v2)', () => {
+  const V2 = '0x0705219a1594d5Fc5dC2573da4082cAf3e1B0950';
+  const CNGN_SPOT_FEED = '0xFaC420d160C7c219A72DC676971670980bAC20a5';
+  const CNGN_FUTURE = '0xcACEe66ad41fD1472a47D7D5Fe372FFbFac9AA75';
+  const EURC_FUTURE = getAddress('0x00000000000000000000000000000000000e0f02'); // a placeholder: EURC-30NOV26 is not deployed
+  const { PERP: _perp, ...noPerp } = base;
+
+  test('takes no PERP, prices cNGN from the engine spot feed, and one FUTURE per series', () => {
+    const config = loadConfig({ ...noPerp, MANAGER: V2, CNGN_ESCROW, CNGN_SPOT_FEED, FUTURE: `${CNGN_FUTURE}, ${EURC_FUTURE}` });
+    assert.equal(config.PERP, undefined);
+    assert.deepEqual(config.FUTURES, [CNGN_FUTURE, EURC_FUTURE]);
+    assert.deepEqual(config.COLLATERAL[0]!.price, { kind: 'spotFeed', address: CNGN_SPOT_FEED });
+  });
+
+  test('refuses cNGN with nothing to price it by', () => {
+    assert.throws(() => loadConfig({ ...noPerp, MANAGER: V2, CNGN_ESCROW }), /CNGN_ESCROW needs a price/);
+  });
+
+  test('a v1 config reads as it did: one FUTURE, cNGN at the perp index', () => {
+    const config = loadConfig({ ...base, MANAGER: ENGINE, CNGN_ESCROW, FUTURE: CNGN_FUTURE });
+    assert.deepEqual(config.FUTURES, [CNGN_FUTURE]);
+    assert.deepEqual(config.COLLATERAL[0]!.price, { kind: 'perpIndex', address: base.PERP });
+    assert.deepEqual(loadConfig({ ...base, MANAGER: ENGINE }).FUTURES, []);
+  });
+
+  test('reads its health with no perp, each future\'s cap on its own, and never the perp index', async () => {
+    const { transport, indexReads } = staleEurcChain(V2);
+    const config = loadConfig({
+      ...noPerp, MANAGER: V2, CHAIN_ID: '31337', START_BLOCK: '900', CNGN_ESCROW, CNGN_SPOT_FEED, EURC_ESCROW, EURC_SPOT_FEED,
+      FUTURE: `${CNGN_FUTURE},${EURC_FUTURE}`,
+    });
+    const chain = createKeeperChain(config, transport);
+    const health = await chain.readHealth();
+    assert.equal(health.totalPosition, 0n);
+    assert.equal(health.totalPositionCap, 0n);
+    assert.equal(health.keeperPerpPosition, 0n);
+    assert.deepEqual(health.futures.map((f) => f.future), [CNGN_FUTURE, EURC_FUTURE]);
+    await assert.rejects(() => chain.settleFrozenPositions(true), /needs PERP/);
+    // a pass: #52 holds cNGN, whose feed is stale here, so it is held back like an EURC holder, not priced off a perp
+    const actions = await runOnce(config, chain, async () => {});
+    assert.deepEqual(actions.find((a) => a.accountId === 52n), { kind: 'none', accountId: 52n, note: 'cannot price cNGN (feed unreadable, stale?): no bid' });
+    assert.equal(indexReads.length, 0, 'the perp index is never read');
+  });
+});
+
 // A chain where the EURC feed is stale: getSpot reverts, and so does the engine's margin read for the one
 // account that holds EURC (#50). #51 holds nothing and is under maintenance; #52 holds cNGN. The keeper's
 // funding account #40 holds 300 EURC from an earlier liquidation.
-function staleEurcChain() {
+function staleEurcChain(manager: Address = ENGINE) {
   const keeperAddress = privateKeyToAccount(base.KEEPER_KEY).address;
   const abi = parseAbi([
     'function getBalance(uint256 accountId, address asset, uint256 subId) view returns (int256)',
@@ -100,6 +145,7 @@ function staleEurcChain() {
   ]);
   const E18 = 10n ** 18n;
   const spotReads: string[] = [];
+  const indexReads: string[] = [];
   const balances: Record<string, bigint> = { [`50:${EURC_ESCROW}`]: 1_000n * E18, [`52:${CNGN_ESCROW}`]: 1_000_000n * E18, [`40:${EURC_ESCROW}`]: 300n * E18 };
   const created = [50n, 51n, 52n].map((accountId) => ({
     address: base.SUB_ACCOUNTS, data: '0x', blockNumber: '0x64', transactionHash: keccak256('0x02'), transactionIndex: '0x0',
@@ -107,7 +153,7 @@ function staleEurcChain() {
     topics: encodeEventTopics({
       abi: parseAbi(['event AccountCreated(address indexed owner, uint256 indexed accountId, address indexed manager)']),
       eventName: 'AccountCreated',
-      args: { owner: '0x0000000000000000000000000000000000000001', accountId, manager: ENGINE },
+      args: { owner: '0x0000000000000000000000000000000000000001', accountId, manager },
     }),
   }));
   const result = (functionName: string, value: unknown) => encodeFunctionResult({ abi, functionName: functionName as never, result: value as never });
@@ -117,7 +163,7 @@ function staleEurcChain() {
     switch (functionName) {
       case 'getBalance': return result(functionName, balances[`${a[0]}:${getAddress(a[1] as string)}`] ?? 0n);
       case 'ownerOf': return result(functionName, keeperAddress);
-      case 'manager': return result(functionName, ENGINE);
+      case 'manager': return result(functionName, manager);
       case 'getMarginAndMarkToMarket':
         if (a[0] === 50n) throw new Error('execution reverted: CLF_DataTooOld()');
         return result(functionName, a[0] === 51n ? [-1n * E18, -2n * E18, 500n * E18] : [100n * E18, 50n * E18, 1_000n * E18]);
@@ -126,7 +172,7 @@ function staleEurcChain() {
       case 'totalInsolventMM': return result(functionName, 0n);
       case 'getCashToStableExchangeRate': return result(functionName, E18);
       case 'temporaryWithdrawFeeEnabled': return result(functionName, false);
-      case 'getIndexPrice': return result(functionName, [72n * E18 / 100_000n, E18]);
+      case 'getIndexPrice': indexReads.push(to); return result(functionName, [72n * E18 / 100_000n, E18]);
       case 'totalPosition': return result(functionName, 0n);
       case 'totalPositionCap': return result(functionName, 50_000_000n * E18);
       case 'getSpot':
@@ -151,7 +197,7 @@ function staleEurcChain() {
     }
   };
   // No retries: each revert is one logical read, so spotReads counts reads, not transport attempts.
-  return { transport: custom({ request } as never, { retryCount: 0 }), spotReads };
+  return { transport: custom({ request } as never, { retryCount: 0 }), spotReads, indexReads };
 }
 
 describe('a stale EURC feed', () => {
