@@ -119,7 +119,7 @@ func TestPositionsListsEverySeriesHeld(t *testing.T) {
 	second.Symbol, second.DisplayName = instruments.FutureSymbol(secondExpiry), instruments.FutureSymbol(secondExpiry)
 	second.SubID, second.ExpiryTimestamp = strconv.FormatInt(secondExpiry, 10), secondExpiry
 	server.instruments = instruments.NewRegistry(append(server.instruments.Enabled(), second))
-	server.futureSeries = newFutureSeriesReaders(server.cfg, server.instruments, server.future)
+	server.futureSeries = newFutureSeriesReaders(server.cfg, server.instruments)
 
 	body, raw := getPositions(t, server, "42")
 	if len(body.Futures) != 2 {
@@ -327,7 +327,6 @@ func perpAndFutureServer(t *testing.T, perpRPC, futureRPC string) *Server {
 	cfg.MatchingAddress = "0x1111111111111111111111111111111111111111"
 	cfg.CNGNPerpAssetAddress, cfg.CNGNPerpSRMAddress = testPerpAsset, testPerpSRM
 	registry := instruments.DefaultRegistry(cfg)
-	future := newFutureStateReader(cfg)
 	perpCfg := cfg
 	perpCfg.ChainRPCURL = perpRPC
 	perpListed := false
@@ -337,8 +336,8 @@ func perpAndFutureServer(t *testing.T, perpRPC, futureRPC string) *Server {
 	if !perpListed {
 		t.Fatal("the registry lists no perp, so its read is never attempted")
 	}
-	return &Server{cfg: cfg, instruments: registry, perp: newPerpStateReader(perpCfg), future: future,
-		futureSeries: newFutureSeriesReaders(cfg, registry, future)}
+	return &Server{cfg: cfg, instruments: registry, perp: newPerpStateReader(perpCfg),
+		futureSeries: newFutureSeriesReaders(cfg, registry)}
 }
 
 // An RPC URL carries its provider's API key (Alchemy: /v2/<key>), and Go's HTTP client puts the URL in

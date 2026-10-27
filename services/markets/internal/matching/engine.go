@@ -28,7 +28,9 @@ type Engine struct {
 	// perpCloseOnly (CNGN_PERP_CLOSE_ONLY): every perp leg is held to reducing its position.
 	perpCloseOnly bool
 	perpGate      *perpTradingGate
-	future        *futures.Reader
+	// futures reads each listed series, keyed by futureSeriesKey: every gate, band, fee, margin and
+	// reduce-only read of a series goes through its own reader.
+	futures map[string]*futures.Reader
 	// marginRefusals holds back, and in time cancels, futures orders whose own account cannot carry a fill.
 	marginRefusals *futureMarginRefusals
 	alerts         *settlementAlerter
@@ -50,7 +52,7 @@ func NewEngine(cfg config.Config, pool *pgxpool.Pool) *Engine {
 		margin:         newMarginChecker(cfg),
 		perpCloseOnly:  cfg.CNGNPerpCloseOnly,
 		perpGate:       newPerpTradingGate(cfg),
-		future:         newFutureReader(cfg),
+		futures:        newFutureReaders(cfg),
 		marginRefusals: newFutureMarginRefusals(),
 		alerts:         newSettlementAlerter(cfg.AlertWebhookURL),
 		parks:          newParkTracker(),
@@ -69,7 +71,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	}
 	for _, instrument := range e.registry.Enabled() {
 		if instrument.IsFuture() {
-			if err := verifyFutureContractSize(ctx, e.future, instrument); err != nil {
+			if err := verifyFutureContractSize(ctx, e.futureReader(instrument), instrument); err != nil {
 				return err
 			}
 		}

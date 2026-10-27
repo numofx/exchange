@@ -81,18 +81,19 @@ func ledgerSeries(instrument instruments.Metadata) string {
 }
 
 // chainPosition is the account's live position in the market, signed, in chain units: the perp's
-// balance through the margin checker, a future series' through the futures reader. Nil without a
+// balance through the margin checker, a future series' through its own reader. Nil without a
 // reader (no RPC), which leaves the clamp to the ledger alone.
 func (e *Engine) chainPosition(ctx context.Context, instrument instruments.Metadata, ledger *orders.PerpFillLedger, subaccountID string) (*big.Int, error) {
 	if instrument.IsFuture() {
-		if e.future == nil {
+		reader := e.futureReader(instrument)
+		if reader == nil {
 			return nil, nil
 		}
 		account, ok := new(big.Int).SetString(strings.TrimSpace(subaccountID), 10)
 		if !ok {
 			return nil, fmt.Errorf("subaccount %q is not an integer", subaccountID)
 		}
-		return e.future.Position(ctx, account)
+		return reader.Position(ctx, account)
 	}
 	if e.margin == nil {
 		return nil, nil
@@ -103,10 +104,11 @@ func (e *Engine) chainPosition(ctx context.Context, instrument instruments.Metad
 // errReduceOnlyCancelled: a reduce-only leg had nothing to reduce and was cancelled; the match is off.
 var errReduceOnlyCancelled = errors.New("reduce-only order cancelled")
 
-// reduceOnlyLeg: the order carries the flag, or the perp is close-only (CNGN_PERP_CLOSE_ONLY), which
-// holds every perp leg to its position, orders resting from before the switch included.
+// reduceOnlyLeg: the order carries the flag, or the perp is close-only (CNGN_PERP_CLOSE_ONLY), or the
+// order's futures series is (FutureSeries.CloseOnly): either holds every leg on that market to its
+// position, orders resting from before the switch included.
 func (e *Engine) reduceOnlyLeg(instrument instruments.Metadata, leg orders.Order) bool {
-	return leg.ReduceOnly || (e.perpCloseOnly && instrument.IsPerpetual())
+	return leg.ReduceOnly || (e.perpCloseOnly && instrument.IsPerpetual()) || (instrument.IsFuture() && instrument.CloseOnly)
 }
 
 // clampReduceOnly shrinks fillAmount (order units) to what each reduce-only leg's position allows,

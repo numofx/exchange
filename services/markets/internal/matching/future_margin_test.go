@@ -34,7 +34,7 @@ func TestFutureFillShortfallIsTheEngineIMTestOnTheFillAlone(t *testing.T) {
 		"a buy below the mark counts its gain at par": {open(200, 0, 1, 0), whole(1330), false}, // 1000 x 70 cNGN = 50 USD at 1,400
 		"a buy above the mark ignores its loss":       {open(250, 0, 1, 0), whole(1470), false},
 	} {
-		if short, _ := futureFillShortfall(tc.side, size, rate, tc.price, mark, index); short != tc.short {
+		if short, _ := futureFillShortfall(tc.side, false, size, rate, tc.price, mark, index); short != tc.short {
 			t.Errorf("%s: short=%v", name, short)
 		}
 	}

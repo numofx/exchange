@@ -1,6 +1,7 @@
 package instruments
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -295,5 +296,58 @@ func TestTwoSpotMarketsDoNotCollideInAnyLookup(t *testing.T) {
 	}
 	if spots != 2 {
 		t.Fatalf("enabled spot markets = %d, want 2", spots)
+	}
+}
+
+// v1's series and v2's cNGN and EURC series at one expiry are three markets: each found under its own
+// (asset, expiry) and its own symbol, v1's under the name the app and the makers route by.
+func TestSeriesAtOneExpiryAreDistinctMarkets(t *testing.T) {
+	const (
+		v1, v2CNGN, v2EURC = "0x00000000000000000000000000000000000000f1", "0x00000000000000000000000000000000000000f2", "0x00000000000000000000000000000000000000f3"
+		v2Engine           = "0x00000000000000000000000000000000000000e2"
+	)
+	cfg := config.Config{
+		CNGNPerpTradeModuleAddress: "0x2222222222222222222222222222222222222222",
+		CNGNPerpCashAddress:        "0x3333333333333333333333333333333333333333",
+		CNGNFutureAssetAddress:     v1, CNGNFutureExpiry: 1796047200, CNGNFutureManagerAddress: "0x00000000000000000000000000000000000000e1",
+		FutureSeries: []config.FutureSeries{
+			{AssetAddress: v2CNGN, Expiry: 1796047200, ManagerAddress: v2Engine, Kind: config.FutureKindLinear, BaseAsset: "cNGN", ContractSize: "1000000"},
+			{AssetAddress: v2EURC, Expiry: 1796047200, ManagerAddress: v2Engine, Kind: config.FutureKindLinear, BaseAsset: "EURC", ContractSize: "1000"},
+		},
+	}
+	registry := DefaultRegistry(cfg)
+	for asset, want := range map[string]struct{ symbol, base, quote, unit, scale string }{
+		v1:     {"USDC-cNGN-30NOV26", "USDC", "cNGN", "cNGN per USDC", FutureAmountScale},
+		v2CNGN: {"cNGN-30NOV26", "cNGN", "USDC", "USDC per cNGN", "1000000000000"},
+		v2EURC: {"EURC-30NOV26", "EURC", "USDC", "USDC per EURC", "1000000000000000"},
+	} {
+		byKey, ok := registry.ByAssetAndSubID(asset, "1796047200")
+		bySymbol, okSymbol := registry.BySymbol(want.symbol)
+		if !ok || !okSymbol || byKey.AssetAddress != bySymbol.AssetAddress || byKey.Symbol != want.symbol {
+			t.Fatalf("%s: by key %v %s, by symbol %v %s", want.symbol, ok, byKey.Symbol, okSymbol, bySymbol.AssetAddress)
+		}
+		if byKey.BaseAssetSymbol != want.base || byKey.QuoteAssetSymbol != want.quote || byKey.EnginePriceUnit != want.unit ||
+			byKey.AmountScale != want.scale || byKey.LinearFuture() != (asset != v1) {
+			t.Errorf("%s: %+v", want.symbol, byKey)
+		}
+	}
+}
+
+// The single-series envs and the same series written as a FUTURE_SERIES entry list the same market.
+func TestTheLegacySeriesIsTheSameMarketEitherWayItIsConfigured(t *testing.T) {
+	stack := config.Config{
+		CNGNPerpTradeModuleAddress: "0x2222222222222222222222222222222222222222",
+		CNGNPerpCashAddress:        "0x3333333333333333333333333333333333333333",
+	}
+	legacy := stack
+	legacy.CNGNFutureAssetAddress, legacy.CNGNFutureExpiry, legacy.CNGNFutureManagerAddress =
+		"0x5555555555555555555555555555555555555555", 1796047200, "0x6666666666666666666666666666666666666666"
+	listed := stack
+	listed.FutureSeries = []config.FutureSeries{{AssetAddress: "0x5555555555555555555555555555555555555555", Expiry: 1796047200,
+		ManagerAddress: "0x6666666666666666666666666666666666666666", Kind: config.FutureKindInverse, BaseAsset: "cNGN", ContractSize: "1000"}}
+	a, _ := DefaultRegistry(legacy).BySymbol("USDC-cNGN-30NOV26")
+	b, _ := DefaultRegistry(listed).BySymbol("USDC-cNGN-30NOV26")
+	if !reflect.DeepEqual(a, b) || a.Symbol == "" {
+		t.Fatalf("legacy %+v\nlisted %+v", a, b)
 	}
 }

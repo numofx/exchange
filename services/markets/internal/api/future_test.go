@@ -202,8 +202,7 @@ func futureServer(t *testing.T, rpc string) *Server {
 	t.Helper()
 	cfg := futureConfig(rpc)
 	registry := instruments.DefaultRegistry(cfg)
-	future := newFutureStateReader(cfg)
-	return &Server{cfg: cfg, instruments: registry, future: future, futureSeries: newFutureSeriesReaders(cfg, registry, future)}
+	return &Server{cfg: cfg, instruments: registry, futureSeries: newFutureSeriesReaders(cfg, registry)}
 }
 
 func futureEntry(t *testing.T, s *Server) map[string]any {

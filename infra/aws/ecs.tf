@@ -82,16 +82,27 @@ locals {
     { name = "CASH_ASSET_ADDRESS", value = var.cash_asset_address },
   ]
 
-  # The cNGN future, for the api and the matcher alike: one list, so the two cannot disagree on
-  # whether the series exists.
-  future_env = [
+  # The futures series, for the api and the matcher alike: one list, so the two cannot disagree on
+  # which series exist.
+  future_env = concat([
     { name = "CNGN_FUTURE_ASSET_ADDRESS", value = var.cngn_future_asset_address },
     { name = "CNGN_FUTURE_EXPIRY", value = var.cngn_future_expiry },
     { name = "CNGN_FUTURE_MANAGER_ADDRESS", value = var.cngn_future_manager_address },
     # The perp close-only, here so the api (intake) and the matcher (fills) cannot disagree on it.
     # It describes a listed perp: with the perp delisted (no asset) markets-service refuses it set.
     { name = "CNGN_PERP_CLOSE_ONLY", value = tostring(var.cngn_perp_asset_address != "" && var.cngn_perp_close_only) },
-  ]
+  ], local.future_series_env)
+
+  # CNGN_FUTURE_CLOSE_ONLY and FUTURE_SERIES are absent rather than false or empty while unused, so both
+  # task definitions stay as they are until they are set (a matcher redeploy is a ~70 s matching gap).
+  # Null fields are dropped from each series: markets-service reads an absent one as its default.
+  future_series_env = concat(
+    var.cngn_future_close_only ? [{ name = "CNGN_FUTURE_CLOSE_ONLY", value = "true" }] : [],
+    length(var.future_series) == 0 ? [] : [{
+      name  = "FUTURE_SERIES"
+      value = jsonencode([for s in var.future_series : { for k, v in s : k => v if v != null }])
+    }],
+  )
 
   # EURC-USDC spot, for the api and the matcher alike, and only once the escrow exists. Absent rather than
   # empty when unset: an EURC_SPOT_ASSET_ADDRESS="" entry would read the same to markets-service (not listed)
