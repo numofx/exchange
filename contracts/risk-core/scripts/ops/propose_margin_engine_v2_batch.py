@@ -30,7 +30,8 @@ Enable gates (all read live, all required unless marked):
   marks     v2's future was marked within 2h: its forward keeper is publishing
   sm        the SecurityModule's cash covers an SM_MOVE (15%) step on the future's one side at the cap being opened, at
             today's mark (check_perp_pager.sm_required_usd_linear: the whole step, an upper bound until #245's coverage
-            test runs against v2)
+            test runs against v2), on top of what the module covers for every other v2 series at its live cap
+            (OTHER_SERIES: EURC_FUTURE_V2.json beside this artifact, once deployed)
   gaps      informational: the cap the SecurityModule covers against an overnight devaluation gap of 30/40/50%, every
             contract a long opened at IM (the doc's table, at today's mark and cash)
   pager     check_perp_pager.py ran OK within 3 minutes with a provider and a dead-man's switch, and its last run read
@@ -238,12 +239,16 @@ def one_side_usd(cap_contracts: float, size_cngn: float, mark: float) -> float:
   return cap_contracts / 2 * size_cngn * mark
 
 
-def sm_gate(sm_cash: float, side_usd: float) -> Gate:
+def sm_gate(sm_cash: float, side_usd: float, reserved: float = 0.0, held_for: str = "") -> Gate:
+  """`reserved` is what the module already covers for another series at its live cap (the SecurityModule is one, and
+  every v2 future draws on it): this series gets what is left."""
   required = sm_required_usd_linear(side_usd)
   what = f"a {SM_MOVE * 100:.0f}% step on the future's one side ${side_usd:,.0f}"
-  if sm_cash < required:
-    return Gate("sm", False, f"SecurityModule ${sm_cash:,.0f} is under the ${required:,.0f} {what} costs: fund it, or open a lower cap")
-  return Gate("sm", True, f"SecurityModule ${sm_cash:,.0f} covers ${required:,.0f} for {what}")
+  also = f" + ${reserved:,.0f} held for {held_for}" if reserved else ""
+  if sm_cash < required + reserved:
+    return Gate("sm", False, f"SecurityModule ${sm_cash:,.0f} is under the ${required:,.0f} {what} costs{also}: fund it, "
+                             "or open a lower cap")
+  return Gate("sm", True, f"SecurityModule ${sm_cash:,.0f} covers ${required:,.0f} for {what}{also}")
 
 
 def gap_max_caps(sm_cash: float, contract_usd: float, im: float) -> list[tuple[float, int]]:
@@ -260,15 +265,43 @@ def gaps_gate(sm_cash: float, contract_usd: float, im: float, cap: float) -> Gat
               + f" (opening {cap:g}" + (f": NOT covered at {', '.join(over)})" if over else ")"))
 
 
-def gate_sm_at_cap(chain: Chain, d: dict, stack: dict, cap: float) -> list[Gate]:
+def gate_sm_at_cap(chain: Chain, d: dict, stack: dict, cap: float, reserved: tuple[float, str] = (0.0, "")) -> list[Gate]:
   try:
     sm_cash = chain.balance(int(stack["securityModuleAccount"]), d["cash"]) / 1e18
     size = chain.word(d["future"], selector("contractSize")) / 1e18
     mark = mark_usdc_per_cngn(chain, d)
     im = chain.word(d["manager"], selector("futureMarginRequirements") + word_uint(int(d["marketId"])), 1) / 1e18
-    return [sm_gate(sm_cash, one_side_usd(cap, size, mark)), gaps_gate(sm_cash, size * mark, im, cap)]
+    return [sm_gate(sm_cash, one_side_usd(cap, size, mark), *reserved), gaps_gate(sm_cash - reserved[0], size * mark, im, cap)]
   except Exception as exc:  # noqa: BLE001 -- unreadable is a failed gate
     return [Gate("sm", False, f"SecurityModule coverage unreadable: {str(exc)[:80]}")]
+
+
+# Other v2 series, by artifact: each one's SecurityModule draw at its live cap is held back from this one's (sm_gate)
+OTHER_SERIES = ("EURC_FUTURE_V2",)
+
+
+def series_sm_usd(chain: Chain, d: dict) -> float:
+  """What the SecurityModule covers for a v2 series at its live cap and mark: the whole SM_MOVE step on one side."""
+  m = word_address(d["manager"])
+  cap = chain.word(d["future"], selector("totalPositionCap") + m) / 1e18
+  size = chain.word(d["future"], selector("contractSize")) / 1e18
+  mark = chain.word(d["future"], selector("futureContracts") + word_uint(int(d["subId"])), 5) / 1e18
+  return sm_required_usd_linear(one_side_usd(cap, size, mark))
+
+
+def other_series_reserved(chain: Chain, artifact_dir: Path, names: tuple[str, ...] = OTHER_SERIES) -> tuple[float, str]:
+  """(USDC, what) the SecurityModule already covers for the other v2 series deployed in `artifact_dir`."""
+  total, held = 0.0, []
+  for name in names:
+    path = artifact_dir / f"{name}.json"
+    if not path.exists():
+      continue
+    other = json.loads(path.read_text())
+    usd = series_sm_usd(chain, other)
+    if usd:
+      total += usd
+      held.append(f"{other.get('symbol', name)} at its cap")
+  return total, ", ".join(held)
 
 
 def engine_keeper_min_cash(cap: float, size_cngn: float, mark: float, im: float) -> float:
@@ -395,7 +428,7 @@ def pager_state() -> Path:
   return Path(os.environ.get("PAGER_STATE_FILE", Path.home() / ".numo-perp-pager.json"))
 
 
-def gate_enable(chain: Chain, d: dict, stack: dict, vault: str) -> list[Gate]:
+def gate_enable(chain: Chain, d: dict, stack: dict, vault: str, reserved: tuple[float, str] = (0.0, "")) -> list[Gate]:
   m = word_address(d["manager"])
   not_owned = [c for c in owned(d) if chain.address(c, "owner").lower() != vault.lower()]
   unwired = [i for i, holds in enumerate(postconditions(chain, "setup", d, vault)) if not holds()]
@@ -406,19 +439,21 @@ def gate_enable(chain: Chain, d: dict, stack: dict, vault: str) -> list[Gate]:
              ([f"v2's future is not closed (cap {cap}, registered {bool(registered)})"] if cap or registered else [])
   oi_cap = int(d["futureOICap"]) / 1e18
   return [Gate("custody", not problems, "; ".join(problems) or "vault owns all four; setup landed; v2's future closed"),
-          *gate_live(chain, d), *gate_sm_at_cap(chain, d, stack, oi_cap),
+          *gate_live(chain, d), *gate_sm_at_cap(chain, d, stack, oi_cap, reserved),
           gate_pager(pager_state(), future_manager=d["manager"]), gate_engine_keeper(chain, d, oi_cap),
           gate_fills(chain, d, os.environ.get("MARKETS_URL", "https://api.numofx.com")),
           v1p.gate_rfq(chain, {"perpTradeModule": d["tradeModule"]}), gate_parity(chain, d, vault)]
 
 
-def gate_cap(chain: Chain, d: dict, stack: dict, vault: str, contracts: int) -> list[Gate]:
+def gate_cap(chain: Chain, d: dict, stack: dict, vault: str, contracts: int,
+             reserved: tuple[float, str] = (0.0, "")) -> list[Gate]:
   """What a larger cap changes, at the NEW cap: the SecurityModule and the keeper's cash; and that v2 is live."""
   m = word_address(d["manager"])
   current = chain.word(d["future"], selector("totalPositionCap") + m) / 1e18
   oi = chain.word(d["future"], selector("totalPosition") + m) / 1e18
   return [Gate("custody", chain.address(d["future"], "owner").lower() == vault.lower(), "vault owns v2's future"),
-          v1p.cap_bounds_gate(contracts, current, oi), *gate_live(chain, d), *gate_sm_at_cap(chain, d, stack, contracts),
+          v1p.cap_bounds_gate(contracts, current, oi), *gate_live(chain, d),
+          *gate_sm_at_cap(chain, d, stack, contracts, reserved),
           gate_pager(pager_state(), future_manager=d["manager"]), gate_engine_keeper(chain, d, contracts)]
 
 
@@ -693,6 +728,13 @@ def self_test() -> int:
   assert abs(one_side_usd(30, 1_000_000, 0.000743) - 11_145) < 1e-6
   assert sm_gate(1_672, one_side_usd(30, 1_000_000, 0.000743)).ok and not sm_gate(1_671, one_side_usd(30, 1_000_000, 0.000743)).ok
   assert sm_gate(3_250, one_side_usd(58, 1_000_000, 0.000743)).ok and not sm_gate(3_250, one_side_usd(60, 1_000_000, 0.000743)).ok
+  # One SecurityModule for every v2 series: with EURC-30NOV26 at 18 contracts ($1,503.63 at 1.1138), 30 cNGN still fits
+  # ($1,671.75; $3,175.38 of $3,250) and 32 does not ($1,783.20).
+  eurc_held = sm_required_usd_linear(one_side_usd(18, 1_000, 1.1138))
+  assert abs(eurc_held - 1_503.63) < 0.01, eurc_held
+  assert sm_gate(3_250, one_side_usd(30, 1_000_000, 0.000743), eurc_held, "EURC-30NOV26").ok
+  assert not sm_gate(3_250, one_side_usd(32, 1_000_000, 0.000743), eurc_held, "EURC-30NOV26").ok
+  assert "held for EURC-30NOV26" in sm_gate(3_250, one_side_usd(30, 1_000_000, 0.000743), eurc_held, "EURC-30NOV26").detail
   # The gap table, as docs/margin-engine-v2.md: $3,250 against $743 contracts at IM 25% covers 87 / 29 / 17.
   assert [c for _, c in gap_max_caps(3_250, 743, 0.25)] == [87, 29, 17], gap_max_caps(3_250, 743, 0.25)
   assert gaps_gate(3_250, 743, 0.25, 30).ok and "NOT covered at 40%, 50%" in gaps_gate(3_250, 743, 0.25, 30).detail
@@ -794,7 +836,9 @@ def run_batch(args, d: dict, stack: dict, chain: Chain, rpc_url: str, vault: str
   verify_actions(args.batch, d, actions)
 
   def gates() -> list[Gate]:
-    return gate_setup(chain, d, vault) if args.batch == "setup" else gate_enable(chain, d, stack, vault)
+    if args.batch == "setup":
+      return gate_setup(chain, d, vault)
+    return gate_enable(chain, d, stack, vault, other_series_reserved(chain, args.dir))
 
   current = gates()
   passed = report(current)
@@ -848,7 +892,7 @@ def run_cap(args, d: dict, stack: dict, chain: Chain, rpc_url: str, vault: str) 
   if args.contracts is None:
     raise SystemExit("cap needs --contracts (both sides, whole contracts)")
   action = v1p.cap_action(d, args.contracts)
-  gates = gate_cap(chain, d, stack, vault, args.contracts)
+  gates = gate_cap(chain, d, stack, vault, args.contracts, other_series_reserved(chain, args.dir))
   passed = report(gates)
   print(f"\n  {action['to']}  {action['digest']}  {action['description']}")
   if args.json:
