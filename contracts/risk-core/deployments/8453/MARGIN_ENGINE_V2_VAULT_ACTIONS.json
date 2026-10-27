@@ -1,0 +1,79 @@
+[
+  {
+    "description": "acceptOwnership() [margin engine v2]",
+    "to": "0x0705219a1594d5Fc5dC2573da4082cAf3e1B0950",
+    "value": "0",
+    "data": "0x79ba5097",
+    "digest": "0x1f9a7eed2e20bb5e2d05bf9a8c61f7eea825de5a091b1f633933807d567c1f5b"
+  },
+  {
+    "description": "acceptOwnership() [margin engine v2]",
+    "to": "0xD4CF97DE5E488322542c3CB202f3b23e67412d03",
+    "value": "0",
+    "data": "0x79ba5097",
+    "digest": "0x6643fc17a9a60914a6536e4fd3a448b0d3ec876238e0750aa57d8ddc7688964f"
+  },
+  {
+    "description": "acceptOwnership() [margin engine v2]",
+    "to": "0xcACEe66ad41fD1472a47D7D5Fe372FFbFac9AA75",
+    "value": "0",
+    "data": "0x79ba5097",
+    "digest": "0x568c0cffe42a4761afdf0300cf90d3b4d39fa0dec68ec9c64c97fa50b5ecf515"
+  },
+  {
+    "description": "acceptOwnership() [margin engine v2]",
+    "to": "0x24474D8A95EB8Be9070ede58E09405B410c277Df",
+    "value": "0",
+    "data": "0x79ba5097",
+    "digest": "0xbb2123e34982575d2ae2fe7385debde05ae1a9bd6f5f086228a0b7a931b45563"
+  },
+  {
+    "description": "cash.setWhitelistManager(engineV2, true) [margin and VM in USDC]",
+    "to": "0xA74E49b4Ed7cb176bc02ef4D8a1A3240C9aD4272",
+    "value": "0",
+    "data": "0xe64cc9da0000000000000000000000000705219a1594d5fc5dc2573da4082caf3e1b09500000000000000000000000000000000000000000000000000000000000000001",
+    "digest": "0xb4030f1659dea174bda1dd0244badd11cca0ab7e6eeaf42972ae8913ab2c4232"
+  },
+  {
+    "description": "escrow.setWhitelistManager(engineV2, true) [NGN spot]",
+    "to": "0x37c976bb5d4887a714ef19AF6B83e34fe2f37c98",
+    "value": "0",
+    "data": "0xe64cc9da0000000000000000000000000705219a1594d5fc5dc2573da4082caf3e1b09500000000000000000000000000000000000000000000000000000000000000001",
+    "digest": "0xff67dc6213ab2c63cf8bb62fe1c2c4eaf4f64632f960e98139060792c9ad3bcd"
+  },
+  {
+    "description": "escrow.setTotalPositionCap(engineV2, 100000000000000000000000000) [NGN, v1's cap]",
+    "to": "0x37c976bb5d4887a714ef19AF6B83e34fe2f37c98",
+    "value": "0",
+    "data": "0x40a557bd0000000000000000000000000705219a1594d5fc5dc2573da4082caf3e1b095000000000000000000000000000000000000000000052b7d2dcc80cd2e4000000",
+    "digest": "0x0309c164308b4b2220c72571babedded5d858e046103b014856e95f5afe9abed"
+  },
+  {
+    "description": "escrow.setWhitelistManager(engineV2, true) [EUR spot]",
+    "to": "0xfD2AFbF4eF6E7a7f34A04D16Ff6da249Ca086cD9",
+    "value": "0",
+    "data": "0xe64cc9da0000000000000000000000000705219a1594d5fc5dc2573da4082caf3e1b09500000000000000000000000000000000000000000000000000000000000000001",
+    "digest": "0x261392519c4fa02ab7eacd57c0fa0e51a2d40f8dab5211fc8b9abd5522efe4fc"
+  },
+  {
+    "description": "escrow.setTotalPositionCap(engineV2, 0) [EUR, closed until eurc-cap]",
+    "to": "0xfD2AFbF4eF6E7a7f34A04D16Ff6da249Ca086cD9",
+    "value": "0",
+    "data": "0x40a557bd0000000000000000000000000705219a1594d5fc5dc2573da4082caf3e1b09500000000000000000000000000000000000000000000000000000000000000000",
+    "digest": "0xafced5635e50145d5780045430d96e9205c58e72ed21517658740db4cb538f46"
+  },
+  {
+    "description": "auction.setWhitelistManager(engineV2, true) [liquidation, SecurityModule]",
+    "to": "0xd07176B006cE8246e930d37b8bc44B1154f8c4cE",
+    "value": "0",
+    "data": "0xe64cc9da0000000000000000000000000705219a1594d5fc5dc2573da4082caf3e1b09500000000000000000000000000000000000000000000000000000000000000001",
+    "digest": "0xda2644c6846b8a8c7d8fa71c481b4a8e60200e6fdfada1b89c2ab1db92a9357f"
+  },
+  {
+    "description": "engineV2.setGuardian(0xDb7137Fc6e3437Bd6D8923A94b0af746Ea463C31) [v1's guardian: pause/unpause]",
+    "to": "0x0705219a1594d5Fc5dC2573da4082cAf3e1B0950",
+    "value": "0",
+    "data": "0x8a0dac4a000000000000000000000000db7137fc6e3437bd6d8923a94b0af746ea463c31",
+    "digest": "0x631ac0a32c3bd3e039228c82937bee9c9682c66e9162bf91012ade4adc8a5b1d"
+  }
+]
