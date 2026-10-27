@@ -176,6 +176,27 @@ Artifacts: `deployments/8453/MARGIN_ENGINE_V2.json`, `MARGIN_ENGINE_V2_VAULT_ACT
   the liquidation keeper, the pager and SM coverage, and markets-service listing a second series (#228) under a
   `cNGN-<expiry>` symbol, not `USDC-cNGN-30NOV26`, which v1's series holds.
 
+### EURC-30NOV26 on MarginEngine v2 — PENDING (not deployed)
+
+A second v2 series, on v2's market 2 (EUR): USDC per EURC, 1,000 EURC a contract, VM in USDC through pool #37, expiry
+1796054400 (2026-11-30 16:00 UTC; last trade 15:00), IM 6% / MM 4%, carry -1.5% (an assumption), cap 0 until enable
+(18 contracts). Runbook and sizing: `docs/margin-engine-v2.md`, EURC-30NOV26. Needs no engine change: attaching it is
+two owner-only engine setters in the vault's setup batch.
+
+| Contract | Address |
+| --- | --- |
+| FutureAsset (EURC-30NOV26) | not deployed |
+| LyraForwardFeed (index: EURC feed `0xaaE6…C435`) | not deployed |
+| Pool account | #37, v2's, shared with cNGN-30NOV26 |
+
+1. `scripts/deploy-eurc-future-v2.s.sol` (fresh key or `USED_DEPLOYER`; `FORWARD_SIGNER` the forward KMS key
+   `0xd65F…3650`): writes `EURC_FUTURE_V2.json`, `EURC_FUTURE_V2_VAULT_ACTIONS.json`, `EURC_FUTURE_V2_ENABLE_VAULT_ACTIONS.json`.
+2. `scripts/ops/propose_eurc_future_v2_batch.py eurc-future-setup`: accept both; `engineV2.whitelistAsset(future, 2,
+   Future)`; `engineV2.setFutureMarginRequirements(2, 0.04e18, 0.06e18)`.
+3. Off chain: forward publisher for this feed, pager and v2 keeper reading the future, markets-service listing
+   `EURC-30NOV26`.
+4. `eurc-future-enable`: `future.setTotalPositionCap(v2, 18e18)`, `tradeModule.setDatedFutureAsset(future, true)`.
+
 ### EURC-USDC spot on the MarginEngine — LIVE 2026-10-25, maker quoting since 2026-10-26
 
 Market 2 on the MarginEngine `0xA19E296021c9DF25b90D96C2A0793CC3D0800758`, its own market rather than a slot in market 1,
