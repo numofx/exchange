@@ -641,8 +641,9 @@ func uiPriceString(price *big.Int) string {
 
 // handlePositions serves GET /v1/positions?subaccount_id=N, read from chain: the account's perp
 // positions and perp margin accounts under "positions" and "accounts", its dated-futures positions
-// under "futures", and its margin under the futures' engine under "futures_account" (absent when the
-// account is not under it). Positions are public on chain, so this needs no signature.
+// under "futures", and its margin under the futures engine it is under under "futures_account" (absent
+// when it is under none of the listed series' engines; an account has one manager, so with v1 and v2
+// series listed side by side this is whichever of the two holds it). Positions are public on chain, so this needs no signature.
 //
 // The perp and the futures are read independently, so one failing does not hide the other. A futures
 // read that fails leaves its field out (see presentedFuturePosition). A perp read that fails leaves

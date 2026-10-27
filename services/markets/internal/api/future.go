@@ -24,17 +24,9 @@ const (
 	futureAPIStateTTL = 30 * time.Second
 )
 
-// newFutureStateReader reads the configured series only. /v1/markets, order admission and reduce-only
-// use it for any future, which is right only while one series is listed (exchange #228).
-func newFutureStateReader(cfg config.Config) *futures.Reader {
-	if !cfg.FutureEnabled() {
-		return nil
-	}
-	return futures.NewReader(cfg.ChainRPCURL, cfg.CNGNFutureAssetAddress, cfg.CNGNFutureExpiry, futureAPIBandTTL, futureAPIStateTTL)
-}
-
-// futureMarketState is the series as the chain has it, on its /v1/markets entry. Prices are cNGN per
-// USDC. Absent fields were unreadable: a client must treat them as unknown, not as zero.
+// futureMarketState is the series as the chain has it, on its /v1/markets entry. Prices are in the
+// series' own unit: cNGN per USDC on a v1 series, USDC per base on a v2 one. Absent fields were
+// unreadable: a client must treat them as unknown, not as zero.
 type futureMarketState struct {
 	ExpiryTimestamp     int64  `json:"expiry_timestamp"`
 	LastTradeTime       *int64 `json:"last_trade_time,omitempty"`
@@ -48,9 +40,15 @@ type futureMarketState struct {
 	BandWidth string `json:"band_width,omitempty"`
 	// BandStatus is "ok", "index_stale" (the feed reverts BLF_DataTooOld: nothing can fill) or
 	// "unreadable".
-	BandStatus       string    `json:"band_status"`
-	ContractSizeUSDC string    `json:"contract_size_usdc,omitempty"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	BandStatus string `json:"band_status"`
+	// ContractSizeUSDC is a v1 contract, in USDC. A v2 contract is ContractSize of ContractSizeAsset
+	// (1000000 cNGN): its USDC value moves with the price.
+	ContractSizeUSDC  string `json:"contract_size_usdc,omitempty"`
+	ContractSize      string `json:"contract_size,omitempty"`
+	ContractSizeAsset string `json:"contract_size_asset,omitempty"`
+	// CloseOnly: every order on the series is taken as reduce-only (the engine is being run out).
+	CloseOnly bool      `json:"close_only,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // presentFuture fills the entry's fill band and future block. fill_band_enforced is true for every
@@ -59,12 +57,13 @@ type futureMarketState struct {
 func (s *Server) presentFuture(ctx context.Context, item instruments.Metadata, presentation *marketPresentation) {
 	enforced := true
 	presentation.FillBandEnforced = &enforced
-	state := &futureMarketState{ExpiryTimestamp: item.ExpiryTimestamp, BandStatus: "unreadable", UpdatedAt: time.Now().UTC()}
+	state := &futureMarketState{ExpiryTimestamp: item.ExpiryTimestamp, BandStatus: "unreadable", CloseOnly: item.CloseOnly, UpdatedAt: time.Now().UTC()}
 	presentation.Future = state
-	if s.future == nil {
+	reader := s.futureReader(item)
+	if reader == nil {
 		return
 	}
-	switch band, err := s.future.Band(ctx); {
+	switch band, err := reader.Band(ctx); {
 	case errors.Is(err, futures.ErrIndexStale):
 		state.BandStatus = "index_stale"
 	case err != nil:
@@ -76,16 +75,20 @@ func (s *Server) presentFuture(ctx context.Context, item instruments.Metadata, p
 		presentation.FillBandLow = futures.Decimal(band.Low())
 		presentation.FillBandHigh = futures.Decimal(band.High())
 	}
-	if contract, err := s.future.Contract(ctx); err != nil {
+	if contract, err := reader.Contract(ctx); err != nil {
 		slog.Warn("read future contract", "market", item.Symbol, "error", err)
 	} else {
 		state.Listed, state.Settled, state.LastTradeTime = &contract.Listed, &contract.Settled, &contract.LastTradeTime
 		state.MarkPrice = futures.Decimal(contract.MarkPrice)
 	}
-	if size, err := s.future.ContractSize(ctx); err == nil {
-		state.ContractSizeUSDC = futures.Decimal(size)
+	if size, err := reader.ContractSize(ctx); err == nil {
+		if reader.Linear() {
+			state.ContractSize, state.ContractSizeAsset = futures.Decimal(size), item.BaseAssetSymbol
+		} else {
+			state.ContractSizeUSDC = futures.Decimal(size)
+		}
 	}
-	if open, reason, err := s.future.TradingOpen(ctx, item.TradeModuleAddress, item.MarginManagerAddress); err == nil {
+	if open, reason, err := reader.TradingOpen(ctx, item.TradeModuleAddress, item.MarginManagerAddress); err == nil {
 		state.TradingOpen = &open
 		state.TradingClosedReason = reason
 	}
@@ -93,15 +96,16 @@ func (s *Server) presentFuture(ctx context.Context, item instruments.Metadata, p
 
 // admitFuture refuses a futures order that could never settle: one priced outside the band now, which
 // would rest as depth no fill can take (the chain reverts FA_FillOutsideIndexBand), one from an account
-// not under the MarginEngine (MW_UnknownManager), or one for a series that is settled or past its last
-// trade time. Unreadable refuses: the band is the guard, and an order
+// not under the series' own engine (MW_UnknownManager), or one for a series that is settled or past
+// its last trade time. Every check reads the order's own series, never another listed beside it. Unreadable refuses: the band is the guard, and an order
 // admitted blind is exactly the order it exists to stop. A series not yet enabled still takes resting
 // orders, as the perp does before its gate opens. Returns the status and message, or "" to admit.
 func (s *Server) admitFuture(ctx context.Context, instrument instruments.Metadata, params orders.CreateOrderParams) (int, string) {
-	if s.future == nil {
+	reader := s.futureReader(instrument)
+	if reader == nil {
 		return http.StatusServiceUnavailable, "this deployment cannot read the future's fill band"
 	}
-	contract, err := s.future.Contract(ctx)
+	contract, err := reader.Contract(ctx)
 	if err != nil {
 		slog.Warn("order_submit_future_unreadable", "order_id", params.OrderID, "error", err)
 		return http.StatusServiceUnavailable, "the future's state could not be read; retry shortly"
@@ -113,7 +117,7 @@ func (s *Server) admitFuture(ctx context.Context, instrument instruments.Metadat
 	if !ok {
 		return http.StatusBadRequest, "subaccount_id is not an integer"
 	}
-	manager, err := s.future.ManagerOf(ctx, account)
+	manager, err := reader.ManagerOf(ctx, account)
 	if err != nil {
 		slog.Warn("order_submit_future_manager_unreadable", "order_id", params.OrderID, "error", err)
 		return http.StatusServiceUnavailable, "the account's manager could not be read; retry shortly"
@@ -126,7 +130,7 @@ func (s *Server) admitFuture(ctx context.Context, instrument instruments.Metadat
 	if err != nil {
 		return http.StatusBadRequest, "action_json.data could not be decoded: " + err.Error()
 	}
-	band, err := s.future.Band(ctx)
+	band, err := reader.Band(ctx)
 	if errors.Is(err, futures.ErrIndexStale) {
 		return http.StatusServiceUnavailable, "the future's index is stale, so no fill can settle; retry once it updates"
 	}
@@ -136,7 +140,7 @@ func (s *Server) admitFuture(ctx context.Context, instrument instruments.Metadat
 	}
 	if !band.Allows(action.LimitPrice) {
 		return http.StatusUnprocessableEntity, "fill_band: limit price " + futures.Decimal(action.LimitPrice) +
-			" cNGN per USDC is outside the band " + futures.Decimal(band.Low()) + " to " + futures.Decimal(band.High()) +
+			" " + instrument.EnginePriceUnit + " is outside the band " + futures.Decimal(band.Low()) + " to " + futures.Decimal(band.High()) +
 			" (the index " + strings.TrimSpace(futures.Decimal(band.Index)) + " -/+ " + futures.Decimal(band.Width) + "); the chain refuses a fill there"
 	}
 	return 0, ""
@@ -147,9 +151,10 @@ func futureSeriesKey(asset, subID string) string {
 	return strings.ToLower(strings.TrimSpace(asset)) + ":" + strings.TrimSpace(subID)
 }
 
-// newFutureSeriesReaders gives every enabled future in the registry a reader, reusing primary for the
-// series it reads. Nil without a chain to read.
-func newFutureSeriesReaders(cfg config.Config, registry *instruments.Registry, primary *futures.Reader) map[string]*futures.Reader {
+// newFutureSeriesReaders gives every enabled future in the registry its own reader, of its own kind:
+// /v1/markets, order admission, reduce-only and /v1/positions all read a series through it. Nil without
+// a chain to read.
+func newFutureSeriesReaders(cfg config.Config, registry *instruments.Registry) map[string]*futures.Reader {
 	if registry == nil || strings.TrimSpace(cfg.ChainRPCURL) == "" {
 		return nil
 	}
@@ -158,14 +163,15 @@ func newFutureSeriesReaders(cfg config.Config, registry *instruments.Registry, p
 		if !market.IsFuture() {
 			continue
 		}
-		key := futureSeriesKey(market.AssetAddress, market.SubID)
-		if primary != nil && key == futureSeriesKey(cfg.CNGNFutureAssetAddress, cfg.FutureSubID()) {
-			readers[key] = primary
-			continue
-		}
-		readers[key] = futures.NewReader(cfg.ChainRPCURL, market.AssetAddress, market.ExpiryTimestamp, futureAPIBandTTL, futureAPIStateTTL)
+		series := config.FutureSeries{AssetAddress: market.AssetAddress, Expiry: market.ExpiryTimestamp, Kind: market.FutureKind}
+		readers[futureSeriesKey(market.AssetAddress, market.SubID)] = futures.NewSeriesReader(cfg.ChainRPCURL, series, futureAPIBandTTL, futureAPIStateTTL)
 	}
 	return readers
+}
+
+// futureReader is the reader of the instrument's own series; nil when there is none.
+func (s *Server) futureReader(instrument instruments.Metadata) *futures.Reader {
+	return s.futureSeries[futureSeriesKey(instrument.AssetAddress, instrument.SubID)]
 }
 
 // Series status on /v1/positions: trading until last trade time, closing from then until the
@@ -176,10 +182,11 @@ const (
 	futureStatusSettled = "settled"
 )
 
-// presentedFuturePosition is an account's position in one dated-futures series, on /v1/positions. The
-// series are USDC-cNGN, priced in cNGN per USDC: a long is long USDC, and gains when the naira weakens
-// (the price rises). Variation margin accrues at every mark and is realised into cash at each
-// settlement, when the manager next touches the account; PendingVMCNGN is what has accrued since.
+// presentedFuturePosition is an account's position in one dated-futures series, on /v1/positions. A v1
+// series is USDC-cNGN, priced in cNGN per USDC: a long is long USDC, and gains when the naira weakens
+// (the price rises). A v2 series is <BASE>-<expiry>, priced in USDC per base: a long is long the base.
+// Variation margin accrues at every mark and is realised into cash at each settlement, when the manager
+// next touches the account; PendingVMCNGN (v1) or PendingVMUSDC (v2) is what has accrued since.
 //
 // Every field but Market and SubID is read from chain, and is absent when its read failed: a client
 // must treat an absent field as unknown, not zero. An entry with no Contracts is a series whose
@@ -196,13 +203,17 @@ type presentedFuturePosition struct {
 	MarkPrice    string `json:"mark_price,omitempty"`
 	// MarkUpdatedAt is when the mark was set (the settlement's time, once settled).
 	MarkUpdatedAt *time.Time `json:"mark_updated_at,omitempty"`
-	// PendingVMCNGN is accrued, unsettled variation margin in cNGN: positive is owed to the account.
+	// PendingVMCNGN is a v1 series' accrued, unsettled variation margin in cNGN: positive is owed to the
+	// account. PendingVMUSDC is a v2 series', in USDC.
 	PendingVMCNGN string `json:"pending_vm_cngn,omitempty"`
+	PendingVMUSDC string `json:"pending_vm_usdc,omitempty"`
 }
 
-// presentedFuturesAccount is the account's margin under the futures' MarginEngine. It covers the whole
-// account (every series, and the cNGN it holds at its haircut), so it is reported once, not per
-// position. Surpluses are USD, below zero under that margin; absent when unreadable.
+// presentedFuturesAccount is the account's margin under a futures engine. It covers the whole account
+// (every series it holds, and the cNGN it holds at its haircut), so it is reported once, not per
+// position. Surpluses are USD, below zero under that margin; absent when unreadable. An account is
+// under exactly one manager, so only the engine it is under has its margin: v1 and v2 series listed
+// side by side are held by different accounts.
 type presentedFuturesAccount struct {
 	SubaccountID string `json:"subaccount_id"`
 	Manager      string `json:"manager"`
@@ -228,9 +239,11 @@ func (s *Server) futurePosition(ctx context.Context, market instruments.Metadata
 	if size.Sign() > 0 {
 		presented.Side = "long"
 	}
+	var mark *big.Int
 	if contract, err := reader.Contract(ctx); err != nil {
 		slog.Warn("read future contract", "market", market.Symbol, "error", err)
 	} else {
+		mark = contract.MarkPrice
 		switch {
 		case contract.Settled:
 			presented.Status = futureStatusSettled
@@ -243,32 +256,50 @@ func (s *Server) futurePosition(ctx context.Context, market instruments.Metadata
 		updated := time.Unix(contract.LastMarkTime, 0).UTC()
 		presented.MarkUpdatedAt = &updated
 	}
-	if contractSize, err := reader.ContractSize(ctx); err != nil {
-		slog.Warn("read future contract size", "market", market.Symbol, "error", err)
-	} else {
-		notional := new(big.Int).Mul(new(big.Int).Abs(size), contractSize)
-		presented.NotionalUSDC = futures.Decimal(notional.Div(notional, futureWad))
+	// A v2 contract's USDC notional is its base at the mark: unknown while the mark is.
+	if mark != nil || !reader.Linear() {
+		if perContract, err := reader.NotionalPerContract(ctx, mark); err != nil {
+			slog.Warn("read future contract size", "market", market.Symbol, "error", err)
+		} else {
+			notional := new(big.Int).Mul(new(big.Int).Abs(size), perContract)
+			presented.NotionalUSDC = futures.Decimal(notional.Div(notional, futureWad))
+		}
 	}
 	if vm, err := reader.PendingVM(ctx, account); err != nil {
 		slog.Warn("read future pending vm", "market", market.Symbol, "subaccount_id", account.String(), "error", err)
+	} else if reader.Linear() {
+		presented.PendingVMUSDC = futures.Decimal(vm)
 	} else {
 		presented.PendingVMCNGN = futures.Decimal(vm)
 	}
 	return presented
 }
 
-// futuresAccount reads the account's margin under the engine. Nil when the account is under another
-// manager: it holds no futures, and the engine's margin of it means nothing.
-func (s *Server) futuresAccount(ctx context.Context, reader *futures.Reader, engine string, account *big.Int) *presentedFuturesAccount {
-	presented := &presentedFuturesAccount{SubaccountID: account.String(), Manager: engine}
-	manager, err := reader.ManagerOf(ctx, account)
+// futuresAccount reads the account's margin under the engine it is under, when that is one of the
+// listed series' engines (engines, in listing order, each with a reader of one of its series). Nil when
+// the account is under another manager: it holds no futures, and an engine's margin of it means
+// nothing. When the manager cannot be read the account is reported with no surpluses under the only
+// engine, or not at all when several are listed: which one it is under is then unknown.
+func (s *Server) futuresAccount(ctx context.Context, engines []string, readers map[string]*futures.Reader, account *big.Int) *presentedFuturesAccount {
+	manager, err := readers[engines[0]].ManagerOf(ctx, account)
 	if err != nil {
 		slog.Warn("read futures account manager", "subaccount_id", account.String(), "error", err)
-		return presented
-	}
-	if !strings.EqualFold(manager, engine) {
+		if len(engines) == 1 {
+			return &presentedFuturesAccount{SubaccountID: account.String(), Manager: engines[0]}
+		}
 		return nil
 	}
+	var engine string
+	for _, candidate := range engines {
+		if strings.EqualFold(manager, candidate) {
+			engine = candidate
+		}
+	}
+	if engine == "" {
+		return nil
+	}
+	reader := readers[engine]
+	presented := &presentedFuturesAccount{SubaccountID: account.String(), Manager: engine}
 	if im, err := reader.IMSurplus(ctx, engine, account); err != nil {
 		slog.Warn("read futures im surplus", "subaccount_id", account.String(), "error", err)
 	} else {
@@ -282,34 +313,37 @@ func (s *Server) futuresAccount(ctx context.Context, reader *futures.Reader, eng
 	return presented
 }
 
-// futuresPositions is the account's position in every listed series, and its margin under their
-// engine. Never an error: a read that fails is an absent field.
+// futuresPositions is the account's position in every listed series, and its margin under the engine
+// it is under. Series may be on different engines (v1's and v2's 30NOV26): each is read through its own
+// reader, and the margin is the account's manager's. Never an error: a read that fails is an absent
+// field.
 func (s *Server) futuresPositions(ctx context.Context, subaccountID string) ([]presentedFuturePosition, *presentedFuturesAccount) {
 	positions := []presentedFuturePosition{}
 	account, ok := new(big.Int).SetString(subaccountID, 10)
 	if !ok || s.instruments == nil {
 		return positions, nil
 	}
-	var engine string
-	var engineReader *futures.Reader
+	var engines []string
+	engineReaders := map[string]*futures.Reader{}
 	now := time.Now()
 	for _, market := range s.instruments.Enabled() {
 		if !market.IsFuture() {
 			continue
 		}
-		reader := s.futureSeries[futureSeriesKey(market.AssetAddress, market.SubID)]
+		reader := s.futureReader(market)
 		if reader == nil {
 			continue
 		}
-		if engineReader == nil {
-			engine, engineReader = market.MarginManagerAddress, reader
+		if _, ok := engineReaders[market.MarginManagerAddress]; !ok {
+			engines = append(engines, market.MarginManagerAddress)
+			engineReaders[market.MarginManagerAddress] = reader
 		}
 		if position := s.futurePosition(ctx, market, reader, account, now); position != nil {
 			positions = append(positions, *position)
 		}
 	}
-	if engineReader == nil {
+	if len(engines) == 0 {
 		return positions, nil
 	}
-	return positions, s.futuresAccount(ctx, engineReader, engine, account)
+	return positions, s.futuresAccount(ctx, engines, engineReaders, account)
 }

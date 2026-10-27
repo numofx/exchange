@@ -37,19 +37,21 @@ type futureSide struct {
 // futureFillShortfall estimates the account's IM surplus after the fill and reports whether it is
 // below zero, the engine's own test for a trade that adds risk (SRM_PortfolioBelowMargin otherwise).
 //
-// Futures margin is gross (|position| x contractSize x imReq, no offsets against the perp or spot), so
-// the fill's effect is separable from the rest of the portfolio, which getMargin already prices. The
-// estimate is deliberately optimistic, so a refusal is one the engine would also make:
+// Futures margin is gross (|position| x notional x imReq, no offsets against the perp or spot), so the
+// fill's effect is separable from the rest of the portfolio, which getMargin already prices. A v1
+// contract's notional is its USDC contract size; a v2 (linear) contract's is its base contract size at
+// the mark, so it moves with the price. The estimate is deliberately optimistic, so a refusal is one the
+// engine would also make:
 //   - the IM rate without the engine's depeg penalty;
-//   - VM the fill realises against the mark counted at par if it is a gain (the engine discounts it
-//     by the base margin factor), and not at all if it is a loss;
+//   - VM the fill realises against the mark counted at par if it is a gain (v1 discounts its cNGN by
+//     the base margin factor; v2's is USDC at par), and not at all if it is a loss;
 //   - the fee, which is certain.
 //
 // Only a fill the engine treats as adding risk is checked: one that leaves a position on the side the
 // fill traded (MarginEngine.handleAdjustment: delta x position > 0). A reduction or a close-out is held
 // to maintenance margin there, so an account can always deleverage, and the chain decides. A flip adds
 // risk, with IM added only for the contracts beyond the old |position|.
-func futureFillShortfall(side futureSide, contractSize, imRate, fillPrice, mark, index *big.Int) (short bool, post *big.Int) {
+func futureFillShortfall(side futureSide, linear bool, contractSize, imRate, fillPrice, mark, index *big.Int) (short bool, post *big.Int) {
 	resulting := new(big.Int).Add(side.Position, side.Delta)
 	if resulting.Sign() == 0 || resulting.Sign() != side.Delta.Sign() {
 		return false, nil
@@ -58,20 +60,31 @@ func futureFillShortfall(side futureSide, contractSize, imRate, fillPrice, mark,
 	if added.Sign() < 0 {
 		added.SetInt64(0)
 	}
-	// added contracts x contract size (USDC) x imRate, each 18dp
+	// added contracts x contract size (USDC; v2: base units x the mark) x imRate, each 18dp
 	addedIM := new(big.Int).Mul(added, contractSize)
 	addedIM.Div(addedIM, feeQuoteScale)
+	if linear {
+		addedIM.Mul(addedIM, mark)
+		addedIM.Div(addedIM, feeQuoteScale)
+	}
 	addedIM.Mul(addedIM, imRate)
 	addedIM.Div(addedIM, feeQuoteScale)
 
 	post = new(big.Int).Sub(side.Surplus, addedIM)
 	post.Sub(post, side.Fee)
 
-	// VM at the fill, in cNGN: delta x contractSize x (mark - fill). A buyer below the mark gains.
+	// VM at the fill: delta x contractSize x (mark - fill), cNGN on v1 and USDC on v2. A buyer below the
+	// mark gains.
 	vm := new(big.Int).Mul(side.Delta, contractSize)
 	vm.Mul(vm, new(big.Int).Sub(mark, fillPrice))
 	vm.Quo(vm, feeQuoteScale)
 	vm.Quo(vm, feeQuoteScale)
+	if linear {
+		if vm.Sign() > 0 {
+			post.Add(post, vm)
+		}
+		return post.Sign() < 0, post
+	}
 	if vm.Sign() > 0 && index.Sign() > 0 {
 		// cNGN to USD at the index (cNGN per USDC)
 		post.Add(post, new(big.Int).Quo(new(big.Int).Mul(vm, feeQuoteScale), index))
@@ -155,7 +168,8 @@ func (e *Engine) matchGate(taker, maker orders.Order) bool {
 // unattributed SRM_PortfolioBelowMargin backs the pair off as before, with the next attempt pre-checked
 // against fresh reads.
 func (e *Engine) futureMarginAllows(ctx context.Context, instrument instruments.Metadata, candidate orders.MatchCandidate, fillPrice, fillAmount, takerFee string) bool {
-	if e.future == nil {
+	reader := e.futureReader(instrument)
+	if reader == nil {
 		return true
 	}
 	price, okPrice := new(big.Int).SetString(fillPrice, 10)
@@ -165,15 +179,15 @@ func (e *Engine) futureMarginAllows(ctx context.Context, instrument instruments.
 		return true
 	}
 	engine := instrument.MarginManagerAddress
-	size, err := e.future.ContractSize(ctx)
+	size, err := reader.ContractSize(ctx)
 	if err == nil {
 		var rate *big.Int
-		if rate, err = e.future.FutureIMRate(ctx, engine); err == nil {
+		if rate, err = reader.FutureIMRate(ctx, engine); err == nil {
 			var contract futures.Contract
-			if contract, err = e.future.Contract(ctx); err == nil {
+			if contract, err = reader.Contract(ctx); err == nil {
 				var band futures.Band
-				if band, err = e.future.Band(ctx); err == nil {
-					return e.futureSidesAllow(ctx, instrument, candidate, engine, size, rate, price, amount, fee, contract.MarkPrice, band.Index)
+				if band, err = reader.Band(ctx); err == nil {
+					return e.futureSidesAllow(ctx, instrument, reader, candidate, engine, size, rate, price, amount, fee, contract.MarkPrice, band.Index)
 				}
 			}
 		}
@@ -183,7 +197,7 @@ func (e *Engine) futureMarginAllows(ctx context.Context, instrument instruments.
 	return true
 }
 
-func (e *Engine) futureSidesAllow(ctx context.Context, instrument instruments.Metadata, candidate orders.MatchCandidate, engine string, size, rate, price, amount, fee, mark, index *big.Int) bool {
+func (e *Engine) futureSidesAllow(ctx context.Context, instrument instruments.Metadata, reader *futures.Reader, candidate orders.MatchCandidate, engine string, size, rate, price, amount, fee, mark, index *big.Int) bool {
 	allowed := true
 	for _, leg := range []struct {
 		order orders.Order
@@ -193,12 +207,12 @@ func (e *Engine) futureSidesAllow(ctx context.Context, instrument instruments.Me
 		if !ok {
 			continue
 		}
-		surplus, err := e.future.IMSurplus(ctx, engine, account)
+		surplus, err := reader.IMSurplus(ctx, engine, account)
 		if err != nil {
 			slog.Warn("future_margin_precheck_unreadable", "market", instrument.Symbol, "order_id", leg.order.OrderID, "error", err.Error())
 			continue
 		}
-		position, err := e.future.Position(ctx, account)
+		position, err := reader.Position(ctx, account)
 		if err != nil {
 			slog.Warn("future_margin_precheck_unreadable", "market", instrument.Symbol, "order_id", leg.order.OrderID, "error", err.Error())
 			continue
@@ -210,7 +224,7 @@ func (e *Engine) futureSidesAllow(ctx context.Context, instrument instruments.Me
 		if leg.role == "taker" {
 			side.Fee = fee
 		}
-		short, post := futureFillShortfall(side, size, rate, price, mark, index)
+		short, post := futureFillShortfall(side, reader.Linear(), size, rate, price, mark, index)
 		if !short {
 			e.marginRefusals.clear(leg.order)
 			continue

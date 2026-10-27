@@ -44,10 +44,9 @@ type Server struct {
 	deposits *depositService
 	// perp reads cNGN-PERP's chain state for /v1/markets and /v1/positions; nil without a perp.
 	perp *perpStateReader
-	// future reads the cNGN future's band and state; nil when no future is listed.
-	future *futures.Reader
-	// futureSeries reads each listed future series for /v1/positions, keyed by futureSeriesKey; the
-	// configured series shares future's reader and its caches.
+	// futureSeries reads each listed future series, keyed by futureSeriesKey (asset and sub id, never the
+	// expiry alone): /v1/markets, order admission, reduce-only and /v1/positions read a series only
+	// through its own reader. Nil without a chain to read.
 	futureSeries map[string]*futures.Reader
 	// indexLag is the index-lag gate; nil without INDEX_STATUS_TOKEN.
 	indexLag *indexLagGate
@@ -250,7 +249,6 @@ func NewServer(cfg config.Config, pool *pgxpool.Pool, registry *instruments.Regi
 
 	signatures := newSignatureChecker(cfg)
 
-	future := newFutureStateReader(cfg)
 	return &Server{
 		cfg:          cfg,
 		pool:         pool,
@@ -261,8 +259,7 @@ func NewServer(cfg config.Config, pool *pgxpool.Pool, registry *instruments.Regi
 		withdrawals:  newWithdrawalService(cfg, signatures),
 		deposits:     newDepositService(cfg, signatures, pool),
 		perp:         newPerpStateReader(cfg),
-		future:       future,
-		futureSeries: newFutureSeriesReaders(cfg, registry, future),
+		futureSeries: newFutureSeriesReaders(cfg, registry),
 		indexLag:     newIndexLagGate(cfg),
 		hub:          events.NewHub(pool, cfg, slog.Default()),
 		wsAuth:       wsauth.Verifier{Domain: cfg.WSAuthDomain, MaxTTL: cfg.WSAuthMaxTTL},
@@ -698,7 +695,7 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	params = s.perpCloseOnlyOrder(params)
+	params = s.closeOnlyOrder(params)
 	if params.ReduceOnly {
 		if status, msg := s.admitReduceOnly(r.Context(), params); msg != "" {
 			slog.Info("order_submit_rejected_reduce_only", "order_id", params.OrderID, "subaccount_id", params.SubaccountID, "error", msg)

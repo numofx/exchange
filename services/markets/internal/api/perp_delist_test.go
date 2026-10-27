@@ -53,8 +53,7 @@ func TestADelistedPerpHasNoStateAndTheMarketsListLeavesItOut(t *testing.T) {
 		t.Fatal("perp state (mark, index, funding) is read with the perp delisted")
 	}
 	registry := instruments.DefaultRegistry(cfg)
-	future := newFutureStateReader(cfg)
-	server := &Server{cfg: cfg, instruments: registry, future: future, futureSeries: newFutureSeriesReaders(cfg, registry, future)}
+	server := &Server{cfg: cfg, instruments: registry, futureSeries: newFutureSeriesReaders(cfg, registry)}
 	rec := httptest.NewRecorder()
 	server.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/v1/markets", nil))
 	var entries []map[string]any
@@ -86,8 +85,7 @@ func TestTheFutureAdmitsOrdersWithThePerpDelisted(t *testing.T) {
 	defer srv.Close()
 	cfg := delistedConfig(srv.URL)
 	registry := instruments.DefaultRegistry(cfg)
-	future := newFutureStateReader(cfg)
-	server := &Server{cfg: cfg, instruments: registry, future: future, futureSeries: newFutureSeriesReaders(cfg, registry, future)}
+	server := &Server{cfg: cfg, instruments: registry, futureSeries: newFutureSeriesReaders(cfg, registry)}
 	instrument, ok := registry.ByAssetAndSubID(testFuture, fmt.Sprint(testFutureExpiry))
 	if !ok {
 		t.Fatal("no future instrument")
