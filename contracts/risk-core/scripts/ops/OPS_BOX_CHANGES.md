@@ -5,6 +5,36 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-27 20:19–20:28 UTC: `exchange-ops` moved to `fc6ef0a`; MarginEngine v2 setup proposed and landed
+
+- **`/home/ec2-user/exchange-ops`** moved from `539ae00` (#268) to `fc6ef0a` (#277, the v2 artifacts), detached, by
+  `/root/box-16.sh` (SSM `26d0f727-…`): it refused unless the checkout was clean, `numo-v2-setup` inactive and the old
+  HEAD an ancestor of `fc6ef0a`. Read-only check before it: SSM `dd36632a-…`. `/root/box-16.sh` is still on the box.
+- **`numo-v2-setup`** (transient unit, `run-with-ssm-mark.sh python3 propose_margin_engine_v2_batch.py setup --propose`,
+  as ec2-user) started 20:20:20 and exited 0 at 20:28:13. It posted 9 requests to MPCVault one at a time, each approved
+  by hand against the dry run's digests, waiting for each to land and re-running the gates (nominated, reused,
+  markets) before the next. Action 8 (EURC escrow cap 0 under v2) was skipped: a cap never set reads 0.
+
+  | # | Action | Tx |
+  | --- | --- | --- |
+  | 0 | engine `acceptOwnership` | `0xe6bf1a40…6d39` |
+  | 1 | viewer `acceptOwnership` | `0xd9d8c3b5…0834` |
+  | 2 | future cNGN-30NOV26 `acceptOwnership` | `0x80d76c8d…9dff` |
+  | 3 | forward feed `acceptOwnership` | `0xc050963e…6fe2` |
+  | 4 | cash `setWhitelistManager(v2, true)` | `0x8443ccf9…cdde` |
+  | 5 | cNGN escrow `setWhitelistManager(v2, true)` | `0x2f46e68d…ed2b` |
+  | 6 | cNGN escrow `setTotalPositionCap(v2, 1e26)` | `0xd5e3fe17…1e06` |
+  | 7 | EURC escrow `setWhitelistManager(v2, true)` | `0x43e31d01…f882` |
+  | 9 | auction `setWhitelistManager(v2, true)` | `0x69799810…397e` |
+  | 10 | engine `setGuardian(0xDb71…3C31)` | `0x85ddbfb7…c650` |
+
+  The run's last gate, parity, passed: all 63 settings as deployed, the deployer `0x971C…2e9c` holding nothing (nonce
+  still 38). Journal read back with SSM `df6f8b67-…`.
+- **Read back from the laptop**: the vault owns all four v2 contracts; v2's guardian is `0xDb71…3C31`; cash, both
+  escrows and the auction (`managerWhitelisted`) whitelist v2 **and still v1**. Fork of block 53172401: a new v1
+  account deposits and withdraws 100 USDC through the cash asset, and a new v2 account deposits.
+- **Undo.** None needed for v1. v2 stays closed (future cap 0, EURC cap 0) until `enable`.
+
 ## 2026-10-25 12:40 – 2026-10-26 14:58 UTC: EURC maker account #36 opened, funded and quoting
 
 - **MM-key grant, applied then revoked.** `ops_box_mm_key_read` (a one-off Allow on `/numo/exchange/mm_private_key` for
