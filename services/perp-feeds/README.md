@@ -189,8 +189,12 @@ USDC-cNGN-30NOV26 keeps its unit and code path, unchanged, until it settles. Wha
 - **Relayer.** Its own, named by `FORWARD_RELAYER_SSM_NAME` under `/numo/feeds`. The signer is the
   same KMS key as v1's: each feed's EIP-712 domain binds a signature to that feed.
 
-The VM pool cover and the expiry keeper do not run in v2 mode yet (#258): v2's pool is cash only and
-its VM is in USDC. Nothing holds a v2 series before `enable`.
+- **The VM pool** (`coverPoolDeficit`): v2's VM is USDC and moves through the engine's pool (#37) as
+  cash, nothing converted, so the pool's net is its cash and a loser's settlement pays exactly what it
+  owes. Losers are settled largest first while the cash is below zero (the same $1 tolerance and
+  `SETTLE_PER_TICK`); no escrow leg, no spot feed, no `assetMap` read. Every series on an engine shares
+  its pool, so each series' keeper sees the same cash and settles its own series' losers.
+- **Expiry** is the same calls as v1's: fixing samples, `fixSettlementFromIndex`, `closeOutExpired`.
 
-`src/forward-v2.anvil.e2e.test.ts` runs it against the real v2 `FutureAsset` for a cNGN and an EURC
-series.
+`src/forward-v2.anvil.e2e.test.ts` and `src/expiry-v2.anvil.e2e.test.ts` run it against the real v2
+`FutureAsset` for a cNGN and an EURC series.

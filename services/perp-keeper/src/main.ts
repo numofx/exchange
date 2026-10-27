@@ -8,7 +8,8 @@ import { fmt } from './health.js';
 import { runOnce, type PassSummary } from './keeper.js';
 
 /**
- * USDCcNGN-PERP liquidation keeper: watches every account under the perp SRM, starts auctions on
+ * Liquidation keeper for one manager (the perp SRM, the MarginEngine, or MarginEngine v2, each its own
+ * instance): watches every account under it, starts auctions on
  * those below maintenance margin, bids on them (solvent at a discount, insolvent for the security
  * module's payout), converts and terminates auctions as they run out or recover, and alerts on the
  * stack's solvency. Dry run (simulate, never send) until DRY_RUN=false.
@@ -26,6 +27,7 @@ async function main() {
   }
 
   console.log(`[keeper] manager=${config.MANAGER} eoa=${chain.keeper.address} account=${config.KEEPER_ACCOUNT} dryRun=${config.DRY_RUN}`);
+  console.log(`[keeper] perp=${config.PERP ?? 'none'} futures=${config.FUTURES.join(',') || 'none'}`);
   // What it can be paid in, and how it prices each: a missing line here is a collateral bid unhaircut.
   console.log(`[keeper] collateral: ${config.COLLATERAL.length === 0 ? 'none (cash only)' : config.COLLATERAL.map(describeCollateral).join('; ')}`);
 
@@ -77,8 +79,12 @@ async function main() {
           keeperAddress: chain.keeper.address,
           maxBidUsd: config.MAX_BID_USD?.toString() ?? null,
           pollIntervalMs: config.POLL_INTERVAL_MS,
+          // The perp and futures it watches (null / none: an engine without them).
+          perp: config.PERP ?? null,
+          futures: config.FUTURES,
           // The cNGN escrow this keeper bids for (null: cash-only); the batch-5 gate reads it.
           cngnEscrow: config.CNGN_ESCROW ?? null,
+          cngnSpotFeed: config.CNGN_SPOT_FEED ?? null,
           cngnHaircutBps: config.CNGN_HAIRCUT_BPS.toString(),
           maxCngnInventory: config.MAX_CNGN_INVENTORY?.toString() ?? null,
           // The EURC escrow and spot feed (null: not configured), for the EURC enable gate to read.

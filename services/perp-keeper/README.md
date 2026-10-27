@@ -1,7 +1,8 @@
 # perp-keeper
 
 Liquidation keeper for one manager's accounts: `MANAGER` is the perp SRM (`numo-perp-keeper`, which still
-reads it as `SRM`) or the MarginEngine (`numo-engine-keeper`, the cNGN future's accounts). Nothing else is
+reads it as `SRM`), the MarginEngine (`numo-engine-keeper`, the cNGN future's accounts) or MarginEngine v2
+(`numo-engine-keeper-v2`, [below](#marginengine-v2)), one instance each. Nothing else is
 manager-specific: DutchAuction settles an account through its manager before an auction starts and before
 every bid (`settlePerpsWithIndex`, which on the engine also realises every future's VM), and reads its margin
 through the manager. The engine's VM pool (`POOL_ACCOUNT`) is never a candidate. Every 15 seconds it:
@@ -52,6 +53,15 @@ run to its most expensive second. `MAX_CNGN_INVENTORY` (whole cNGN) bounds what 
 across its accounts: a bid that would pass it is sized down to the room left, then stops
 (`keeper-cngn-over-limit`). Inherited cNGN is alerted (`keeper-cngn-inventory`) and left for an
 operator to sell on spot or hold, like inherited perp.
+
+## MarginEngine v2
+
+v2 is the same keeper with a different env (`contracts/risk-core/scripts/ops/engine-keeper-v2.env`): `MANAGER` v2,
+`POOL_ACCOUNT` 37, no `PERP` (v2 lists none: the perp cap, the keeper's inherited perp and `--settle-frozen` are
+skipped), `CNGN_SPOT_FEED` the engine's market-1 spot feed (cNGN is priced there, not at a perp index, and a stale
+feed holds back only the accounts holding cNGN, as EURC's does), and `FUTURE` a comma-separated list, one per
+series (cNGN-30NOV26 now, EURC-30NOV26 later): each future's cap is watched on its own (`future-oi-cap-<address>`).
+`/health` adds `perp`, `futures` and `cngnSpotFeed`. Its own key, funding account and port (9466).
 
 ## EURC collateral (MarginEngine market 2)
 
@@ -143,8 +153,8 @@ through `CashAsset.deposit`). Its cash bounds the largest auction it can take in
 ```bash
 pnpm test                               # every decision branch and health alarm
 BASE_RPC_URL=... ./scripts/e2e.sh       # the real stack on an anvil fork: deploy, crash, liquidate
-BASE_RPC_URL=... ./scripts/e2e-engine.sh  # the live MarginEngine on a fork: an engine account under
-                                          # maintenance auctioned and bought into from the engine
+BASE_RPC_URL=... ./scripts/e2e-engine.sh  # the live MarginEngine and MarginEngine v2 on a fork: an engine account
+                                          # under maintenance auctioned and bought into, on each engine
 ```
 
 The fork test is what found three bugs no unit test could: a start that ran out of gas one block after

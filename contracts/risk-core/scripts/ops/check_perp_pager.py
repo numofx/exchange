@@ -45,6 +45,17 @@ while it does not exist) liquidates through the same auction and SecurityModule,
                      zero (up to 10 a tick, and alerts future-pool-deficit-stranded if none are left), so
                      a deficit that lasts this long means it is not working or cannot: top the pool up.
 
+MarginEngine v2's futures (FUTURE_V2_ARTIFACTS, comma-separated, default deployments/8453/MARGIN_ENGINE_V2.json: one
+artifact per series, cNGN-30NOV26 now and EURC-30NOV26 once deployed; each skipped while missing). Linear, VM in USDC
+cash through the engine's pool, so no reserve target and no escrow cap: the pool is cash only.
+  sm-coverage        counts every future it reads, v1's and each v2 series' (sm_required_usd_linear, the whole
+                     SM_MOVE step on one side), against the one SecurityModule they share.
+  future-pool-borrowing-v2  v2's pool cash is below -FUTURE_POOL_BORROW_PAGE_USD (Slack at any negative cash), per engine:
+                     every series on it shares the pool.
+  future-pool-deficit-stuck-v2  that cash has stayed below zero for FUTURE_POOL_DEFICIT_STUCK_SEC, at any size.
+  keeper-unhealthy-v2 / insolvent-account-v2  v2's liquidation keeper (ENGINE_V2_KEEPER_HEALTH_URL, unset: not
+                     watched), as keeper-unhealthy and insolvent-account; armed once healthy or a v2 future is open.
+
 Pager (one of; secrets from SSM via run-with-ssm-pager.sh):
   PAGER_PROVIDER=pushover     PUSHOVER_TOKEN, PUSHOVER_USER. Emergency priority: repeats every 60s
                               until acknowledged in the app, and can be set to break through Do Not
@@ -166,6 +177,8 @@ NEGATIVE_CASH_PAGE_USD = 3_000.0
 NEGATIVE_CASH_WARN_REPEAT_SEC = 6 * 3600
 # The cNGN future. Its artifact exists only once it is deployed; until then none of this is read.
 FUTURE_ARTIFACT = ROOT / "deployments" / "8453" / "MARGIN_ENGINE.json"
+# MarginEngine v2's series, one artifact each (FUTURE_V2_ARTIFACTS overrides, comma-separated).
+FUTURE_V2_ARTIFACTS = [ROOT / "deployments" / "8453" / "MARGIN_ENGINE_V2.json"]
 SEL_CONTRACT_SIZE = "0x3d7cc610"  # contractSize() -- `cast sig`, pinned in --self-test
 SEL_FUTURE_MARGIN_REQUIREMENTS = "0x84033e5e"  # futureMarginRequirements(uint256) -> (mmReq, imReq) on MarginEngine
 SEL_FUTURE_CONTRACTS = "0xc3c74b34"  # futureContracts(uint256) -> FutureContract; markPrice is word 5 -- `cast sig`, pinned in --self-test
@@ -225,20 +238,22 @@ def feed_condition(ages: dict[str, int | None]) -> Condition | None:
   return Condition("feed-halt", f"cNGN-PERP feed halt: {', '.join(late)}. A stale index halts trading and liquidations.")
 
 
-def keeper_condition(health: dict | None, now: int, armed: bool = True) -> Condition | None:
+def keeper_condition(health: dict | None, now: int, armed: bool = True, name: str = "cNGN-PERP",
+                     key: str = "keeper-unhealthy") -> Condition | None:
   """`armed` is False until the keeper has ever reported healthy and the market is still closed:
   a keeper that is not installed yet, or running its DRY_RUN smoke (go-live steps 14-17), is not
-  a page. Once the market is open, no keeper at all is the loudest condition there is."""
+  a page. Once the market is open, no keeper at all is the loudest condition there is. `name` and `key`
+  tell a second keeper apart (v2's: "MarginEngine v2", keeper-unhealthy-v2)."""
   if not armed:
     return None
   if health is None:
-    return Condition("keeper-unhealthy", "cNGN-PERP keeper /health unreachable: nothing is liquidating.")
+    return Condition(key, f"{name} keeper /health unreachable: nothing is liquidating.")
   if health.get("dryRun", True):
-    return Condition("keeper-unhealthy", "cNGN-PERP keeper is in DRY_RUN: it decides but sends nothing.")
+    return Condition(key, f"{name} keeper is in DRY_RUN: it decides but sends nothing.")
   stale_after = 3 * max(int(health.get("pollIntervalMs", 15_000)) // 1000, 20)
   age = now - int(health.get("lastPassAt", 0))
   if not health.get("lastPassOk") or age > stale_after:
-    return Condition("keeper-unhealthy", f"cNGN-PERP keeper unhealthy: last pass ok={health.get('lastPassOk')} {age}s ago.")
+    return Condition(key, f"{name} keeper unhealthy: last pass ok={health.get('lastPassOk')} {age}s ago.")
   return None
 
 
@@ -345,22 +360,37 @@ def sm_required_usd_linear(one_side_usd: float, move: float = SM_MOVE) -> float:
   return one_side_usd * move
 
 
-def sm_future_condition(one_side_usd: float, mm: float, premium: float, sm_cash_usd: float) -> Condition | None:
-  """sm-coverage for the future: pages at 1.2x of what the module holds."""
-  required = sm_required_usd(one_side_usd, mm, premium)
+def sm_coverage_condition(required_by: dict[str, float], sm_cash_usd: float) -> Condition | None:
+  """sm-coverage across every future the one SecurityModule backs (v1's, each v2 series'): what each needs for an
+  SM_MOVE step against one side, summed, which is conservative across bases. Pages at 1.2x of what the module holds."""
+  required = sum(required_by.values())
   if required <= 0 or required < SM_COVERAGE_PAGE_X * sm_cash_usd:
     return None
+  parts = ", ".join(f"{label} ${need:,.0f}" for label, need in required_by.items() if need > 0)
   return Condition("sm-coverage", f"cNGN SecurityModule ${sm_cash_usd:,.0f} covers less than 1/{SM_COVERAGE_PAGE_X:.1f} of a "
-                   f"{SM_MOVE * 100:.0f}% move on the future's one side ${one_side_usd:,.0f} at MM {mm * 100:.0f}% "
-                   f"(needs ${required:,.0f}). Fund the SecurityModule, or set cap = current OI.")
+                   f"{SM_MOVE * 100:.0f}% move on the futures' one side (needs ${required:,.0f}: {parts}). "
+                   "Fund the SecurityModule, or set cap = current OI.")
+
+
+def sm_coverage_warning(required_by: dict[str, float], sm_cash_usd: float) -> str | None:
+  required = sum(required_by.values())
+  if required <= sm_cash_usd or required >= SM_COVERAGE_PAGE_X * sm_cash_usd:
+    return None
+  return (f"cNGN SecurityModule ${sm_cash_usd:,.0f} is short of the ${required:,.0f} a {SM_MOVE * 100:.0f}% move on the futures "
+          f"would cost (page at {SM_COVERAGE_PAGE_X:.1f}x): fund it.")
+
+
+def v1_coverage_label(one_side_usd: float, mm: float) -> str:
+  return f"USDC-cNGN one side ${one_side_usd:,.0f} at MM {mm * 100:.0f}%"
+
+
+def sm_future_condition(one_side_usd: float, mm: float, premium: float, sm_cash_usd: float) -> Condition | None:
+  """sm-coverage for v1's future alone."""
+  return sm_coverage_condition({v1_coverage_label(one_side_usd, mm): sm_required_usd(one_side_usd, mm, premium)}, sm_cash_usd)
 
 
 def sm_future_warning(one_side_usd: float, mm: float, premium: float, sm_cash_usd: float) -> str | None:
-  required = sm_required_usd(one_side_usd, mm, premium)
-  if required <= sm_cash_usd or required >= SM_COVERAGE_PAGE_X * sm_cash_usd:
-    return None
-  return (f"cNGN SecurityModule ${sm_cash_usd:,.0f} is short of the ${required:,.0f} a {SM_MOVE * 100:.0f}% move on the future "
-          f"would cost (page at {SM_COVERAGE_PAGE_X:.1f}x): fund it.")
+  return sm_coverage_warning({v1_coverage_label(one_side_usd, mm): sm_required_usd(one_side_usd, mm, premium)}, sm_cash_usd)
 
 
 def perp_oi_condition(one_side_usd: float) -> Condition | None:
@@ -408,13 +438,35 @@ def future_pool_conditions(pool_cngn: float, pool_net: float, reserve_cngn: floa
   return pages, warnings
 
 
-def pool_negative_for(state: dict, open_: bool, pool_net: float, now: float) -> float:
+def pool_negative_for(state: dict, open_: bool, pool_net: float, now: float, key: str = "futurePoolNegativeSince") -> float:
   """Seconds the future pool's net has been below zero without a break, kept across runs in `state`
-  (futurePoolNegativeSince): any run that reads it at or above zero, or the market closed, restarts it."""
+  (`key`: futurePoolNegativeSince for v1's pool, one per engine for v2's): any run that reads it at or above zero, or
+  the market closed, restarts it."""
   if open_ and pool_net < -FUTURE_POOL_DUST_USD:
-    return now - state.setdefault("futurePoolNegativeSince", now)
-  state.pop("futurePoolNegativeSince", None)
+    return now - state.setdefault(key, now)
+  state.pop(key, None)
   return 0.0
+
+
+def v2_pool_conditions(label: str, pool: int, cash_usd: float, open_: bool,
+                       negative_for_sec: float = 0) -> tuple[list[Condition], list[str]]:
+  """(pages, Slack warnings) for a MarginEngine v2 VM pool (`label`: the engine, "v2"). Cash only: VM is USDC, nothing
+  converted, so the net is the cash and there is no reserve to hold. Same thresholds as v1's pool. Nothing while no series
+  on the engine is open."""
+  if not open_ or cash_usd >= -FUTURE_POOL_DUST_USD:
+    return [], []
+  pages: list[Condition] = []
+  warnings: list[str] = []
+  if cash_usd < -FUTURE_POOL_BORROW_PAGE_USD:
+    pages.append(Condition(f"future-pool-borrowing-{label}", f"MarginEngine {label} VM pool #{pool} is ${-cash_usd:,.0f} below zero in "
+                           "cash: winners were paid before losers paid in. Check the v2 future keepers' deficit cover, and top the pool up."))
+  else:
+    warnings.append(f"MarginEngine {label} VM pool #{pool} is ${-cash_usd:,.2f} below zero in cash (page past ${FUTURE_POOL_BORROW_PAGE_USD:,.0f}).")
+  if negative_for_sec >= FUTURE_POOL_DEFICIT_STUCK_SEC:
+    pages.append(Condition(f"future-pool-deficit-stuck-{label}", f"MarginEngine {label} VM pool #{pool} has been ${-cash_usd:,.2f} below "
+                           f"zero for {negative_for_sec / 60:,.0f} min: its future keepers settle losers every minute while it is, so "
+                           "they are not working or have no loser left (future-pool-deficit-stranded): top up the pool account."))
+  return pages, warnings
 
 
 def future_escrow_conditions(used_cngn: float, cap_cngn: float, reserve_cngn: float | None,
@@ -479,6 +531,56 @@ def read_future(url: str, future: dict) -> dict:
     # the index feed is the engine's spot feed for the market (getMarketFeeds), the one settlement converts at
     "spot": spot,
   }
+
+
+def read_future_v2(url: str, future: dict) -> dict:
+  """A MarginEngine v2 series (USDC per unit of its base, a contract of the base): one side's notional at the mark, its
+  margin rates, whether it is open. The pool is the engine's, read once per engine (read_pool_cash)."""
+  manager_word = future["manager"].lower().removeprefix("0x").rjust(64, "0")
+  call = lambda to, data: rpc(url, "eth_call", [{"to": to, "data": data}, "latest"])[2:]  # noqa: E731
+  total = int(call(future["future"], SEL_TOTAL_POSITION + manager_word), 16) / 1e18
+  size = int(call(future["future"], SEL_CONTRACT_SIZE), 16) / 1e18
+  cap = int(call(future["future"], SEL_TOTAL_POSITION_CAP + manager_word), 16)
+  requirements = call(future["manager"], SEL_FUTURE_MARGIN_REQUIREMENTS + f"{int(future['marketId']):064x}")
+  mark = int(call(future["future"], SEL_FUTURE_CONTRACTS + f"{int(future['subId']):064x}")[5 * 64:6 * 64], 16) / 1e18
+  return {
+    "one_side_usd": v2_one_side_usd(total, size, mark),
+    "mm": int(requirements[:64], 16) / 1e18,
+    "im": int(requirements[64:128], 16) / 1e18,
+    "open": cap > 0,
+    "mark": mark,
+  }
+
+
+def v2_one_side_usd(total_contracts: float, contract_size: float, mark: float) -> float:
+  """One side's notional in USD: half the both-sides total, each contract contract_size of the base at the mark."""
+  return total_contracts / 2 * contract_size * mark
+
+
+def read_pool_cash(url: str, future: dict) -> float:
+  return account_balance(url, int(future["poolAccount"]), future["cash"]) / 1e18
+
+
+def record_watched(state: dict, future: dict) -> None:
+  """Records in the state file a future this run read: its manager under futureManagers and its asset under futures,
+  which the enable gates read (propose_margin_engine_v2_batch.py the manager, propose_eurc_future_v2_batch.py the
+  asset). Called only after the read succeeded, so a future that failed to read is not listed as watched."""
+  for key, value in (("futureManagers", future["manager"]), ("futures", future["future"])):
+    watched = state.setdefault(key, [])
+    if value not in watched:
+      watched.append(value)
+
+
+def future_v2_artifacts() -> list[tuple[Path, dict]]:
+  """Each v2 series' artifact that exists, with its path. A missing one (a series not yet deployed) is skipped."""
+  raw = os.environ.get("FUTURE_V2_ARTIFACTS", "").strip()
+  paths = [Path(p.strip()) for p in raw.split(",") if p.strip()] if raw else FUTURE_V2_ARTIFACTS
+  return [(path, json.loads(path.read_text())) for path in paths if path.exists()]
+
+
+def series_label(future: dict) -> str:
+  """cNGN-30NOV26-style, for messages: the artifact's base (default cNGN, MARGIN_ENGINE_V2.json names none) and expiry."""
+  return f"{future.get('baseSymbol', 'cNGN')}-{time.strftime('%d%b%y', time.gmtime(int(future['expiry']))).upper()}"
 
 
 def future_artifact() -> dict | None:
@@ -568,11 +670,11 @@ def market_open(url: str, stack: dict) -> bool:
   return int(raw, 16) > 0
 
 
-def insolvent_condition(health: dict | None) -> Condition | None:
+def insolvent_condition(health: dict | None, name: str = "cNGN-PERP", key: str = "insolvent-account") -> Condition | None:
   accounts = (health or {}).get("insolventAccounts") or []
   if not accounts:
     return None
-  return Condition("insolvent-account", f"cNGN-PERP insolvent account(s) {', '.join(accounts)}: the SecurityModule will pay.")
+  return Condition(key, f"{name} insolvent account(s) {', '.join(accounts)}: the SecurityModule will pay.")
 
 
 def peg_condition(status: dict | None, now_wall: float) -> Condition | None:
@@ -788,6 +890,9 @@ def check_and_page(stack_path: Path, state: dict) -> int:
   coverage = None
   perp_oi = None
   future_pages: list[Condition] = []
+  # What a SM_MOVE step on one side of each future would cost the SecurityModule they all share, by future.
+  coverage_parts: dict[str, float] = {}
+  futures_read = False
   try:
     perp_one_side = read_one_side_usd(url, stack)
     perp_oi = perp_oi_condition(perp_one_side)
@@ -799,9 +904,12 @@ def check_and_page(stack_path: Path, state: dict) -> int:
     # Which manager's future this run read, for the MarginEngine enable gate: a pager that does not read
     # the engine's future (an old copy, a missing artifact, a failed read) must not pass it.
     state.pop("futureManager", None)
+    state.pop("futureManagers", None)
+    state.pop("futures", None)
     if future is not None:
       f = read_future(url, future)
       state["futureManager"] = future["manager"]
+      record_watched(state, future)
       override = os.environ.get("FUTURE_POOL_RESERVE_CNGN", "").strip()
       reserve = float(override) if override else f["reserve_target_cngn"]
       net = pool_net_usd(f["pool_cngn"], f["pool_cash_usd"], f["spot"])
@@ -818,17 +926,66 @@ def check_and_page(stack_path: Path, state: dict) -> int:
             f"pool {f['pool_cngn']:,.0f} cNGN (reserve {'unreadable' if reserve is None else f'{reserve:,.0f}'}{' set' if override else ' at the cap'}), "
             f"${f['pool_cash_usd']:,.2f} cash, net ${net:,.2f}{f' (below zero {negative_for / 60:,.0f} min)' if negative_for else ''}; "
             f"escrow {f['escrow_used_cngn']:,.0f} of {f['escrow_cap_cngn']:,.0f} cNGN")
-      coverage = sm_future_condition(f["one_side_usd"], f["mm"], f["premium"], sm_cash)
-      warning = sm_future_warning(f["one_side_usd"], f["mm"], f["premium"], sm_cash)
-      if warning and time.time() - state.get("smCoverageWarnedAt", 0) >= SM_COVERAGE_WARN_REPEAT_SEC:
-        mirror(f"{os.environ.get('PAGE_PREFIX', '')}{warning}")
-        state["smCoverageWarnedAt"] = time.time()
-      print(f"sm coverage: ${sm_cash:,.0f} against ${sm_required_usd(f['one_side_usd'], f['mm'], f['premium']):,.0f} for a "
-            f"{SM_MOVE * 100:.0f}% move on the future's one side ${f['one_side_usd']:,.0f} (page at {SM_COVERAGE_PAGE_X:.1f}x)")
+      coverage_parts[v1_coverage_label(f["one_side_usd"], f["mm"])] = sm_required_usd(f["one_side_usd"], f["mm"], f["premium"])
+      futures_read = True
     else:
       print("future: not deployed (no artifact)")
   except Exception as exc:  # noqa: BLE001
-    print(f"sm coverage: unreadable ({str(exc)[:80]})")
+    print(f"future: unreadable ({str(exc)[:80]})")
+
+  # MarginEngine v2: each series' side for the SecurityModule, and each engine's cash-only pool, once.
+  v2_open: dict[str, bool] = {}
+  v2_pools: dict[str, dict] = {}
+  try:
+    for path, series in future_v2_artifacts():
+      label = series_label(series)
+      f2 = read_future_v2(url, series)
+      record_watched(state, series)
+      need = sm_required_usd_linear(f2["one_side_usd"])
+      coverage_parts[f"{label} one side ${f2['one_side_usd']:,.0f}"] = need
+      futures_read = True
+      engine = series["manager"].lower()
+      v2_open[engine] = v2_open.get(engine, False) or f2["open"]
+      v2_pools.setdefault(engine, series)
+      print(f"future {label} (v2, {path.name}): one side ${f2['one_side_usd']:,.0f} at mark {f2['mark']:.9f}, IM {f2['im'] * 100:.0f}%, "
+            f"{'open' if f2['open'] else 'closed'}; SM needs ${need:,.0f} for a {SM_MOVE * 100:.0f}% step")
+    v2_warnings: list[str] = []
+    for engine, series in v2_pools.items():
+      # one engine today ("v2"); a further engine would take its own label from its artifact
+      engine_label = series.get("engineLabel", "v2")
+      cash = read_pool_cash(url, series)
+      negative_for = pool_negative_for(state, v2_open[engine], cash, time.time(), f"futurePoolNegativeSince:{engine}")
+      pages, warnings = v2_pool_conditions(engine_label, int(series["poolAccount"]), cash, v2_open[engine], negative_for)
+      future_pages += pages
+      v2_warnings += warnings
+      print(f"pool {engine_label} #{series['poolAccount']}: ${cash:,.2f} cash{f' (below zero {negative_for / 60:,.0f} min)' if negative_for else ''}")
+    if v2_warnings and time.time() - state.get("futureV2WarnedAt", 0) >= FUTURE_WARN_REPEAT_SEC:
+      for warning in v2_warnings:
+        mirror(f"{os.environ.get('PAGE_PREFIX', '')}{warning}")
+      state["futureV2WarnedAt"] = time.time()
+  except Exception as exc:  # noqa: BLE001
+    print(f"v2 futures: unreadable ({str(exc)[:80]})")
+
+  if futures_read:
+    coverage = sm_coverage_condition(coverage_parts, sm_cash)
+    warning = sm_coverage_warning(coverage_parts, sm_cash)
+    if warning and time.time() - state.get("smCoverageWarnedAt", 0) >= SM_COVERAGE_WARN_REPEAT_SEC:
+      mirror(f"{os.environ.get('PAGE_PREFIX', '')}{warning}")
+      state["smCoverageWarnedAt"] = time.time()
+    print(f"sm coverage: ${sm_cash:,.0f} against ${sum(coverage_parts.values()):,.0f} for a {SM_MOVE * 100:.0f}% move on every "
+          f"future's one side ({'; '.join(f'{k}: ${v:,.0f}' for k, v in coverage_parts.items())}; page at {SM_COVERAGE_PAGE_X:.1f}x)")
+
+  # v2's liquidation keeper, when its health URL is set: armed once it has reported healthy, or a v2 future is open.
+  v2_keeper: list[Condition | None] = []
+  v2_health_url = os.environ.get("ENGINE_V2_KEEPER_HEALTH_URL", "").strip()
+  if v2_health_url:
+    v2_health = read_health(v2_health_url)
+    if keeper_healthy(v2_health, now):
+      state["keeperV2SeenAt"] = now
+    v2_armed = state.get("keeperV2SeenAt") is not None or any(v2_open.values())
+    v2_keeper = [keeper_condition(v2_health, now, v2_armed, "MarginEngine v2", "keeper-unhealthy-v2"),
+                 insolvent_condition(v2_health, "MarginEngine v2", "insolvent-account-v2")]
+    print(f"v2 keeper: {'unreachable' if v2_health is None else ('ok' if keeper_healthy(v2_health, now) else 'unhealthy')}")
 
   negative_cash = None
   try:
@@ -845,7 +1002,8 @@ def check_and_page(stack_path: Path, state: dict) -> int:
   previous_sm = state.get("smCash")
   active = [c for c in (feed_condition(ages), keeper_condition(health, now, armed), insolvent_condition(health),
                         sm_condition(previous_sm, sm_cash), unwatched_condition(heartbeat_urls()[0]),
-                        peg_condition(read_index_status(), time.time()), coverage, perp_oi, oi, negative_cash, *future_pages, *gas, *matcher) if c is not None]
+                        peg_condition(read_index_status(), time.time()), coverage, perp_oi, oi, negative_cash, *future_pages, *v2_keeper,
+                        *gas, *matcher) if c is not None]
   to_page, resolved = step_state(state, active, now)
   state["smCash"] = sm_cash
 
@@ -948,6 +1106,40 @@ def self_test() -> int:
   assert "2,468" in sm_future_warning(15_000, 0.15, 1.0124, 2_100) and sm_future_condition(15_000, 0.15, 1.0124, 2_100) is None
   assert sm_future_condition(15_000, 0.15, 1.0124, 2_000).key == "sm-coverage"
   assert sm_future_condition(15_000, 0.15, 1.0124, 2_469) is None and sm_future_warning(15_000, 0.15, 1.0124, 2_469) is None
+  # Across futures: one SecurityModule backs v1's and every v2 series', so their needs add up. Each alone is covered by
+  # $3,250 (v1 $2,468; v2 cNGN 15 contracts at 0.000743, $1,671.75); together they are not, and page at 1.2x.
+  v2_side = v2_one_side_usd(30, 1_000_000, 0.000743)
+  assert abs(v2_side - 11_145) < 1e-6
+  parts = {"USDC-cNGN": sm_required_usd(15_000, 0.15, 1.0124), "cNGN-30NOV26": sm_required_usd_linear(v2_side)}
+  assert sm_coverage_condition({"cNGN-30NOV26": parts["cNGN-30NOV26"]}, 3_250) is None
+  assert "4,140" in sm_coverage_warning(parts, 3_500) and sm_coverage_condition(parts, 3_500) is None
+  assert sm_coverage_condition(parts, 3_250).key == "sm-coverage" and "cNGN-30NOV26 $1,672" in sm_coverage_condition(parts, 3_250).message
+  # an EURC series (1,000 EURC at 1.1625, 20 contracts) is one more part, priced by its own mark
+  parts["EURC-30NOV26"] = sm_required_usd_linear(v2_one_side_usd(20, 1_000, 1.1625))
+  assert abs(parts["EURC-30NOV26"] - 10 * 1_000 * 1.1625 * 0.15) < 1e-6
+  assert series_label({"expiry": 1796047200}) == "cNGN-30NOV26"
+  assert series_label({"expiry": 1796047200, "baseSymbol": "EURC"}) == "EURC-30NOV26"
+  # What the run read goes to the state file: each manager once, each future asset (v1's, then every v2 series).
+  watched: dict = {}
+  record_watched(watched, {"manager": "0xv1", "future": "0xf1"})
+  record_watched(watched, {"manager": "0xv2", "future": "0xcngn"})
+  record_watched(watched, {"manager": "0xv2", "future": "0xeurc"})
+  assert watched == {"futureManagers": ["0xv1", "0xv2"], "futures": ["0xf1", "0xcngn", "0xeurc"]}
+  # v2's pool: cash only, no reserve, its own keys; the same $1 dust, $250 page and 75-minute stuck page as v1's.
+  assert v2_pool_conditions("v2", 37, -1_000, open_=False) == ([], [])
+  assert v2_pool_conditions("v2", 37, -1.0, open_=True, negative_for_sec=999_999) == ([], [])
+  pages, warns = v2_pool_conditions("v2", 37, -5, open_=True)
+  assert pages == [] and "#37 is $5.00 below zero in cash" in warns[0]
+  pages, warns = v2_pool_conditions("v2", 37, -300, open_=True, negative_for_sec=75 * 60)
+  assert [p.key for p in pages] == ["future-pool-borrowing-v2", "future-pool-deficit-stuck-v2"] and warns == []
+  # each engine's timer is its own, apart from v1's
+  st2: dict = {"futurePoolNegativeSince": 1}
+  assert pool_negative_for(st2, True, -5, 1_000, "futurePoolNegativeSince:0xv2") == 0
+  assert pool_negative_for(st2, True, -5, 1_600, "futurePoolNegativeSince:0xv2") == 600 and st2["futurePoolNegativeSince"] == 1
+  # v2's keeper pages under its own keys
+  assert keeper_condition(None, now, True, "MarginEngine v2", "keeper-unhealthy-v2").key == "keeper-unhealthy-v2"
+  assert keeper_condition(None, now, False, "MarginEngine v2", "keeper-unhealthy-v2") is None
+  assert insolvent_condition({"insolventAccounts": ["40"]}, "MarginEngine v2", "insolvent-account-v2").key == "insolvent-account-v2"
   # The perp is wound down: any open interest on it pages, rounding does not.
   assert perp_oi_condition(0.4) is None and perp_oi_condition(801).key == "perp-oi"
   # The future's pool: nothing while closed; reserve page under a quarter, Slack under half; an unreadable
