@@ -9,7 +9,8 @@ import { ForwardPublisher } from './forward-publisher.js';
 import { ExpiryKeeper } from './expiry-keeper.js';
 
 /**
- * The keeper for a USDC/cNGN future, run as its own unit (numo-future-feeds.service): its own signer,
+ * The keeper for a dated future, one unit per series (numo-future-feeds.service for v1's
+ * USDC-cNGN-30NOV26, numo-future-feeds-v2@<series>.service for each v2 series): its own signer,
  * held in KMS, and its own relayer. Each tick runs the forward publisher (forward-publisher.ts: marks
  * until last trade), then the VM pool's deficit cover and the expiry keeper (expiry-keeper.ts: losers
  * settled while the pool's net is below zero; fixing samples, the fixing, and close-out). Their writes
@@ -59,18 +60,27 @@ export async function coverDeficit(expiry: Pick<ExpiryKeeper, 'coverPoolDeficit'
   }
 }
 
+/** What heads this instance's alerts: v1 keeps the tag it always had, a v2 series names its base. */
+export function alertTag(config: Pick<ForwardConfig, 'FUTURE_VERSION' | 'BASE_SYMBOL'>): string {
+  return config.FUTURE_VERSION === 'v2' ? `future-feeds ${config.BASE_SYMBOL} v2` : 'perp-feeds';
+}
+
 async function main() {
   const config = loadForwardConfig();
-  const alert = createAlerter(config.ALERT_WEBHOOK_URL || undefined);
+  const alert = createAlerter(config.ALERT_WEBHOOK_URL || undefined, undefined, undefined, undefined, alertTag(config));
   const signer = await obtainSigner(config, alert);
   const chain = createChain(config, signer);
   const publisher = new ForwardPublisher(config, chain, alert);
   await publisher.checkLateThreshold();
-  const expiry = new ExpiryKeeper(config, chain, alert);
-  await expiry.checkSampleInterval();
+  await publisher.checkUnits();
+  // TODO(#258): v2's VM pool is cash only and its VM is USDC; the v1 deficit cover would misread it.
+  // Until the v2 expiry keeper lands, a v2 instance only marks (nothing holds a v2 series before enable).
+  const expiry = config.FUTURE_VERSION === 'v1' ? new ExpiryKeeper(config, chain, alert) : null;
+  if (expiry) await expiry.checkSampleInterval();
+  else console.warn('[expiry] v2: the VM pool cover, fixing and close-out are not run by this build');
   console.log(
     `[forward] signer ${signer.address} (${config.FORWARD_SIGNER_KMS_KEY_ID ? 'KMS' : 'raw key'}), relayer ${chain.relayer.address}, ` +
-      `future ${config.FUTURE_ASSET} #${config.FUTURE_SUB_ID}${config.DRY_RUN ? ', DRY RUN' : ''}`,
+      `${config.BASE_SYMBOL} future ${config.FUTURE_VERSION} ${config.FUTURE_ASSET} #${config.FUTURE_SUB_ID}${config.DRY_RUN ? ', DRY RUN' : ''}`,
   );
 
   for (;;) {
@@ -82,13 +92,15 @@ async function main() {
     } catch (error) {
       await alert('forward-tick-error', `forward tick failed: ${(error as Error).message.slice(0, 300)}`);
     }
-    // Every tick, not only after a mark: a mark moves no money, a winner settling does, at any minute.
-    await coverDeficit(expiry, alert);
-    try {
-      const outcome = await expiry.tick();
-      if (outcome !== 'before-window' && outcome !== 'sample-not-due' && outcome !== 'done') console.log(`[expiry] ${outcome}`);
-    } catch (error) {
-      await alert('expiry-tick-error', `expiry tick failed: ${(error as Error).message.slice(0, 300)}`);
+    if (expiry) {
+      // Every tick, not only after a mark: a mark moves no money, a winner settling does, at any minute.
+      await coverDeficit(expiry, alert);
+      try {
+        const outcome = await expiry.tick();
+        if (outcome !== 'before-window' && outcome !== 'sample-not-due' && outcome !== 'done') console.log(`[expiry] ${outcome}`);
+      } catch (error) {
+        await alert('expiry-tick-error', `expiry tick failed: ${(error as Error).message.slice(0, 300)}`);
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, config.FORWARD_TICK_MS));
   }

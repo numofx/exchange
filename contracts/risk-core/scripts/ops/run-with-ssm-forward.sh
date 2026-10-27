@@ -8,7 +8,9 @@
 #
 #   rpc_url              the same RPC the perp publishers use
 #   forward_relayer_key  a relayer of its OWN: sharing perp-feeds' relayer across two processes races
-#                        for nonces (the 2026-10-03 mark outage was one process doing that with itself)
+#                        for nonces (the 2026-10-03 mark outage was one process doing that with itself).
+#                        A second keeper (a v2 series, numo-future-feeds-v2@.service) names its own in
+#                        FORWARD_RELAYER_SSM_NAME, from its env file; unset, it is forward_relayer_key.
 #   alert_webhook_url    optional
 #
 # The forward SIGNER is not here: it is a KMS key, FORWARD_SIGNER_KMS_KEY_ID in the env file, signed
@@ -28,7 +30,7 @@ get_optional() {
 }
 
 export RPC_URL="$(get rpc_url)"
-export RELAYER_KEY="$(get forward_relayer_key)"
+export RELAYER_KEY="$(get "${FORWARD_RELAYER_SSM_NAME:-forward_relayer_key}")"
 export ALERT_WEBHOOK_URL="$(get_optional alert_webhook_url)"
 
 exec "$@"
