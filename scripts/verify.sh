@@ -101,12 +101,12 @@ step node . "cngn-rebalance check" pnpm --filter cngn-rebalance run check
 step node . "cngn-rebalance test" pnpm --filter cngn-rebalance test
 
 # ---- services-perp-feeds.yml -----------------------------------------------------------
-# The anvil suites deploy the real feed contracts and FutureAssetV1 (the live 30NOV26 series the keepers run), so they need forge and anvil, and
+# The anvil suites deploy the real feed contracts, FutureAssetV1 (the live 30NOV26 series) and the v2 FutureAsset, so they need forge and anvil, and
 # a fresh anvil on the port the tests read: started here, stopped however the tests end.
 perp_feeds_anvil_tests() {
   ( cd "$ROOT/contracts/risk-core" \
     && forge build src/feeds/LyraSpotFeed.sol src/feeds/LyraSpotDiffFeed.sol src/feeds/LyraForwardFeed.sol \
-      src/periphery/OracleDataSubmitter.sol src/legacy/v1/FutureAssetV1.sol src/SubAccounts.sol >/dev/null ) || return 1
+      src/periphery/OracleDataSubmitter.sol src/legacy/v1/FutureAssetV1.sol src/assets/FutureAsset.sol src/SubAccounts.sol >/dev/null ) || return 1
   anvil --port 8599 --silent &
   local anvil_pid=$!
   sleep 2

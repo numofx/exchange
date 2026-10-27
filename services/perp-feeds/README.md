@@ -168,3 +168,29 @@ the ops box since 2026-10-13 for USDC-cNGN-30NOV26, from its own checkout `/home
 on `FutureAsset`. The anvil suites share one chain clock, so `pnpm test` runs test files one at a time
 (`--test-concurrency=1`): concurrently, one suite's `evm_increaseTime` expires another's signatures or
 skips its fixing window.
+
+### v2 series (`FUTURE_VERSION=v2`)
+
+The same process marks a MarginEngine v2 future (`src/assets/FutureAsset.sol`: cNGN-30NOV26, and
+EURC-30NOV26 once deployed), one instance per series (`numo-future-feeds-v2@<series>.service`,
+`/etc/numo/future-feeds-v2-<series>.env`; `future-feeds-v2-cngn-30nov26.env` is the first). v1's
+USDC-cNGN-30NOV26 keeps its unit and code path, unchanged, until it settles. What v2 changes:
+
+- **Units.** Every price is USDC per unit of the base, the feeds' units and the contract's, so
+  nothing is inverted: the diff signed is `forward − index`, and `pullMark` reads `index + diff` as is.
+- **Carry.** The forward without a book is `index / (1 + CARRY × τ)`, as the v2 deploy script listed
+  it. `CARRY` is signed: positive for cNGN (a forward discount, a negative diff), negative for EURC
+  (a premium). v1 refuses a negative one.
+- **Depth.** A v2 contract is `contractSize` of the base (1,000,000 cNGN), so its notional is
+  `contracts × contractSize × price`; `FORWARD_MIN_BOOK_DEPTH_USDC` stays in USDC.
+- **Startup.** It refuses to start when the contract's mark sits nearer the index read the other
+  version's way (`checkUnits`), and its alerts are headed `[future-feeds <BASE_SYMBOL> v2]`: both
+  30NOV26 series have the same sub id.
+- **Relayer.** Its own, named by `FORWARD_RELAYER_SSM_NAME` under `/numo/feeds`. The signer is the
+  same KMS key as v1's: each feed's EIP-712 domain binds a signature to that feed.
+
+The VM pool cover and the expiry keeper do not run in v2 mode yet (#258): v2's pool is cash only and
+its VM is in USDC. Nothing holds a v2 series before `enable`.
+
+`src/forward-v2.anvil.e2e.test.ts` runs it against the real v2 `FutureAsset` for a cNGN and an EURC
+series.

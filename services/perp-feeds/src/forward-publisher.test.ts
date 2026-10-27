@@ -38,6 +38,7 @@ type State = {
   forwardFeed: Address;
   band: bigint;
   minMarkInterval?: bigint;
+  contractSize?: bigint;
 };
 
 function fakeChain(state: State) {
@@ -67,7 +68,7 @@ function fakeChain(state: State) {
           cumulativeVMPerContract: 0n,
         },
         minMarkInterval: state.minMarkInterval ?? 3_600n,
-        contractSize: 1_000n * ONE,
+        contractSize: state.contractSize ?? 1_000n * ONE,
         maxMarkDeviation: ONE / 20n,
         markIndexBand: state.band,
         forwardFeed: state.forwardFeed,
@@ -236,5 +237,46 @@ describe('forward publisher', () => {
     const publisher = new ForwardPublisher(config, fake.chain, async (key) => void alerts.push(key), async () => []);
     assert.equal(await publisher.tick(), 'pull-failed');
     assert.ok(alerts.includes('forward-pull-failed'));
+  });
+});
+
+describe('forward publisher, v2', () => {
+  // a v2 series on a base other than cNGN: USDC per EURC, a 1,000 EURC contract, EUR at a forward premium
+  const EURC_INDEX = 1_162_500_000_000_000_000n;
+  const v2Config = { ...config, FUTURE_VERSION: 'v2' as const, BASE_SYMBOL: 'EURC', CARRY: -(15n * ONE) / 1000n };
+  const v2State = (overrides: Partial<State> = {}) =>
+    base({ markPrice: EURC_INDEX, index: EURC_INDEX, contractSize: 1_000n * ONE, ...overrides });
+
+  function signedDiff(submitted: Hex): bigint {
+    const [updates] = decodeAbiParameters(
+      [{ type: 'tuple[]', components: [{ name: 'receiver', type: 'address' }, { name: 'data', type: 'bytes' }] }],
+      submitted,
+    );
+    const [feedData] = decodeAbiParameters(
+      [{ type: 'tuple', components: [{ name: 'data', type: 'bytes' }, { name: 'deadline', type: 'uint256' }, { name: 'timestamp', type: 'uint64' }, { name: 'signers', type: 'address[]' }, { name: 'signatures', type: 'bytes[]' }] }],
+      updates[0].data,
+    );
+    const [, , , diff] = decodeAbiParameters([{ type: 'uint64' }, { type: 'uint256' }, { type: 'uint256' }, { type: 'int96' }, { type: 'uint64' }], feedData.data);
+    return diff;
+  }
+
+  it('signs the forward less the index as is, uninverted: a premium on a negative carry', async () => {
+    const { publisher, calls, submitted } = run(v2State(), v2Config);
+    assert.equal(await publisher.tick(), 'published');
+    assert.deepEqual(calls, ['submit', 'pullMark']);
+    const diff = signedDiff(submitted[0]);
+    assert.ok(diff > 0n, `EUR at a forward premium: diff ${diff}`);
+    // 30 days at -1.5% is ~0.12%: a v1 inversion would have been a diff the size of the index
+    assert.ok(diff * 100n < EURC_INDEX, `diff ${diff} is a fraction of the index`);
+  });
+
+  it('checks the contract is in the units of its version at startup', async () => {
+    await run(v2State(), v2Config).publisher.checkUnits();
+    await run(base()).publisher.checkUnits();
+    // a v2 contract run as v1, and a v1 contract run as v2
+    await assert.rejects(() => run(v2State()).publisher.checkUnits(), /FUTURE_VERSION=v1 does not match/);
+    await assert.rejects(() => run(base(), v2Config).publisher.checkUnits(), /FUTURE_VERSION=v2 does not match/);
+    // no index: not checked, not refused
+    await run(v2State({ index: null }), { ...v2Config }).publisher.checkUnits();
   });
 });

@@ -37,6 +37,22 @@ describe('forward config', () => {
     assert.equal(loadForwardConfig(env({ CHAIN_ID: '84532', FORWARD_SIGNER_KEY: KEY })).CHAIN_ID, 84532);
   });
 
+  it('is v1 unless told otherwise, and refuses a negative carry there', () => {
+    const kms = { FORWARD_SIGNER_KMS_KEY_ID: 'k' };
+    const config = loadForwardConfig(env(kms));
+    assert.equal(config.FUTURE_VERSION, 'v1');
+    assert.equal(config.BASE_SYMBOL, 'cNGN');
+    assert.throws(() => loadForwardConfig(env({ ...kms, CARRY: '-15000000000000000' })), /must not be negative on v1/);
+  });
+
+  it('takes a v2 series on any base, with a signed carry (EUR at a forward premium)', () => {
+    const config = loadForwardConfig(env({ FORWARD_SIGNER_KMS_KEY_ID: 'k', FUTURE_VERSION: 'v2', BASE_SYMBOL: 'EURC', CARRY: '-15000000000000000' }));
+    assert.equal(config.FUTURE_VERSION, 'v2');
+    assert.equal(config.BASE_SYMBOL, 'EURC');
+    assert.equal(config.CARRY, -15000000000000000n);
+    assert.throws(() => loadForwardConfig(env({ FORWARD_SIGNER_KMS_KEY_ID: 'k', FUTURE_VERSION: 'v3' })));
+  });
+
   it('needs exactly one signer', () => {
     assert.throws(() => loadForwardConfig(env({ CHAIN_ID: '84532' })), /exactly one/);
     assert.throws(
