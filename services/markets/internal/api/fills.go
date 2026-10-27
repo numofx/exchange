@@ -36,11 +36,14 @@ type presentedFill struct {
 	// recorded fee for a taker. Absent when the fee is not known.
 	Fee    string `json:"fee,omitempty"`
 	TxHash string `json:"tx_hash,omitempty"`
-	// MarkPrice and VMCNGN are the future's only: the mark the fill settled against, cNGN per USDC, and
-	// the variation margin it settled at once, in cNGN to this order's account (negative when paid):
-	// side x USDC notional x (mark - price). Absent off the future and on fills recorded without a mark.
+	// MarkPrice and VMCNGN are the future's only: the mark the fill settled against, in the series'
+	// price unit, and the variation margin it settled at once, in cNGN to this order's account (negative
+	// when paid): side x USDC notional x (mark - price). Absent off the future and on fills recorded
+	// without a mark.
 	MarkPrice string `json:"mark_price,omitempty"`
 	VMCNGN    string `json:"vm_cngn,omitempty"`
+	// VMUSDC is VMCNGN on a v2 series, whose variation margin is USDC.
+	VMUSDC string `json:"vm_usdc,omitempty"`
 }
 
 type fillsResponse struct {
@@ -153,10 +156,13 @@ func (s *Server) presentFills(items []orders.OwnerFill) []presentedFill {
 		if item.TxHash != nil {
 			txHash = *item.TxHash
 		}
-		markPrice, vm := "", ""
+		markPrice, vm, vmUSDC := "", "", ""
 		if meta.IsFuture() && item.MarkPrice != nil {
 			markPrice = trimDecimalZeros(*item.MarkPrice)
-			vm = fillVMCNGN(meta, item.OrderSide, item.Price, item.Size, *item.MarkPrice)
+			vm = fillVM(meta, item.OrderSide, item.Price, item.Size, *item.MarkPrice)
+			if meta.LinearFuture() {
+				vm, vmUSDC = "", vm
+			}
 		}
 
 		out = append(out, presentedFill{
@@ -176,16 +182,18 @@ func (s *Server) presentFills(items []orders.OwnerFill) []presentedFill {
 			TxHash:       txHash,
 			MarkPrice:    markPrice,
 			VMCNGN:       vm,
+			VMUSDC:       vmUSDC,
 		})
 	}
 	return out
 }
 
-// fillVMCNGN is the variation margin a future fill settled at once, in cNGN to the order's account:
-// the gap between the mark and the fill price times the fill's USDC notional, gained by a buy below
-// the mark and a sell above it. The size is in the venue's units, each amount_scale / 1e18 of a
-// contract of contract_multiplier USDC. Empty when any figure does not parse.
-func fillVMCNGN(meta instruments.Metadata, side orders.Side, price, size, mark string) string {
+// fillVM is the variation margin a future fill settled at once, to the order's account: the gap between
+// the mark and the fill price times the fill's notional in contract units, gained by a buy below the
+// mark and a sell above it. The size is in the venue's units, each amount_scale / 1e18 of a contract of
+// contract_multiplier: USDC on a v1 series, so the VM is cNGN; base units on a v2 series, priced in
+// USDC per base, so the VM is USDC. Empty when any figure does not parse.
+func fillVM(meta instruments.Metadata, side orders.Side, price, size, mark string) string {
 	p, okP := new(big.Rat).SetString(strings.TrimSpace(price))
 	q, okQ := new(big.Rat).SetString(strings.TrimSpace(size))
 	m, okM := new(big.Rat).SetString(strings.TrimSpace(mark))

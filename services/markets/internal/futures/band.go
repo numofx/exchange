@@ -2,8 +2,9 @@
 // enforces, so the venue refuses an order or a fill exactly where the chain would revert one.
 //
 // The band is FutureAsset._checkFillInsideIndexBand: a fill at price p is refused when
-// |p - index| * 1e18 > index * markIndexBand(expiry), where index = 1e36 / indexFeed.getSpot() is the
-// index in cNGN per USDC (the feed is USDC per cNGN). A band of zero, or no index feed, is no check.
+// |p - index| * 1e18 > index * markIndexBand(expiry). The index is in the series' own price unit: on a
+// v1 (inverse) series 1e36 / indexFeed.getSpot(), cNGN per USDC, the feed being USDC per cNGN; on a v2
+// (linear) series the feed as is, USDC per base. A band of zero, or no index feed, is no check.
 // The order API and the matcher both use this package, so the band an order is admitted against is
 // the band its fill is checked against.
 package futures
@@ -20,6 +21,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/numofx/matching-backend/internal/config"
 )
 
 const (
@@ -54,7 +57,7 @@ var (
 
 // Band is the fill band at one moment: the index and the band's half-width, both 18dp.
 type Band struct {
-	Index  *big.Int // cNGN per USDC, 1e36 / getSpot(), as FutureAsset computes it
+	Index  *big.Int // the series' price unit, as FutureAsset computes it: 1e36 / getSpot() inverse, getSpot() linear
 	Width  *big.Int // markIndexBand(expiry): 0.10e18 is the index -/+ 10%
 	ReadAt time.Time
 }
@@ -70,7 +73,7 @@ func (b Band) Allows(price *big.Int) bool {
 	return new(big.Int).Mul(diff, one18).Cmp(new(big.Int).Mul(b.Index, b.Width)) <= 0
 }
 
-// Low and High are the band's edges, 18dp cNGN per USDC: the last prices Allows admits, index -/+
+// Low and High are the band's edges, 18dp in the series' price unit: the last prices Allows admits, index -/+
 // floor(index x width / 1e18). Not floor(index x (1 -/+ width)): when index x width is not a whole
 // number of wei that puts Low a wei below what the chain accepts. Informational: Allows is the test.
 func (b Band) Low() *big.Int {
@@ -100,9 +103,13 @@ type Contract struct {
 // Reader reads one series. Band is cached for bandTTL, the series and the trading switches for
 // stateTTL; the index feed and the contract size are immutable and read once.
 type Reader struct {
-	rpcURL   string
-	future   string
-	expiry   int64
+	rpcURL string
+	future string
+	expiry int64
+	// linear is a v2 FutureAsset: prices in USDC per base (the index is the feed as is), the contract
+	// size in base units, variation margin in USDC. A v1 series is inverse: cNGN per USDC, a USDC
+	// contract, VM in cNGN.
+	linear   bool
 	bandTTL  time.Duration
 	stateTTL time.Duration
 	http     *http.Client
@@ -126,6 +133,7 @@ type openState struct {
 	reason string
 }
 
+// NewReader reads a v1 (inverse) series: the CNGN_FUTURE_* one.
 func NewReader(rpcURL, future string, expiry int64, bandTTL, stateTTL time.Duration) *Reader {
 	return &Reader{
 		rpcURL:   strings.TrimSpace(rpcURL),
@@ -136,6 +144,18 @@ func NewReader(rpcURL, future string, expiry int64, bandTTL, stateTTL time.Durat
 		http:     &http.Client{Timeout: 5 * time.Second},
 		now:      time.Now,
 	}
+}
+
+// NewSeriesReader reads a configured series, of either kind, on its own asset and expiry.
+func NewSeriesReader(rpcURL string, series config.FutureSeries, bandTTL, stateTTL time.Duration) *Reader {
+	r := NewReader(rpcURL, series.AssetAddress, series.Expiry, bandTTL, stateTTL)
+	r.linear = series.Linear()
+	return r
+}
+
+// Linear reports whether the series is a v2 FutureAsset (USDC per base, VM in USDC).
+func (r *Reader) Linear() bool {
+	return r.linear
 }
 
 // Band is the band now. ErrIndexStale when the feed is stale; any other error is a read failure. Both
@@ -172,7 +192,11 @@ func (r *Reader) Band(ctx context.Context) (Band, error) {
 	if err != nil {
 		return Band{}, fmt.Errorf("markIndexBand: %w", err)
 	}
-	band := Band{Index: new(big.Int).Div(one36, spot), Width: width, ReadAt: r.now()}
+	index := new(big.Int).Div(one36, spot)
+	if r.linear {
+		index = spot
+	}
+	band := Band{Index: index, Width: width, ReadAt: r.now()}
 	r.mu.Lock()
 	r.band = &band
 	r.mu.Unlock()
@@ -214,7 +238,7 @@ func (r *Reader) Contract(ctx context.Context) (Contract, error) {
 	return contract, nil
 }
 
-// MarkAt is the series' mark (18dp, cNGN per USDC) as the chain held it at the end of a block, read
+// MarkAt is the series' mark (18dp, in its price unit) as the chain held it at the end of a block, read
 // past the cache.
 func (r *Reader) MarkAt(ctx context.Context, block uint64) (*big.Int, error) {
 	raw, err := r.callAt(ctx, r.future, sigFutureContracts+uintWord(big.NewInt(r.expiry)), "0x"+strconv.FormatUint(block, 16))
@@ -289,7 +313,21 @@ func (r *Reader) MarkAtFill(ctx context.Context, txHash string) (*big.Int, error
 	return r.MarkAt(ctx, block)
 }
 
-// ContractSize is FutureAsset.contractSize(), 18dp USDC per contract.
+// NotionalPerContract is one contract's USDC notional at price, 18dp: the contract size on an inverse
+// series (a USDC contract, whatever its price in cNGN), size x price on a linear one.
+func (r *Reader) NotionalPerContract(ctx context.Context, price *big.Int) (*big.Int, error) {
+	size, err := r.ContractSize(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !r.linear {
+		return size, nil
+	}
+	return new(big.Int).Div(new(big.Int).Mul(size, price), one18), nil
+}
+
+// ContractSize is FutureAsset.contractSize(), 18dp: USDC per contract on an inverse series, base units
+// (cNGN, EURC) on a linear one.
 func (r *Reader) ContractSize(ctx context.Context) (*big.Int, error) {
 	r.mu.Lock()
 	if r.contractSize != nil {

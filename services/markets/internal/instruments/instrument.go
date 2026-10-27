@@ -4,6 +4,8 @@ import (
 	"math/big"
 	"strings"
 	"time"
+
+	"github.com/numofx/matching-backend/internal/config"
 )
 
 const (
@@ -91,6 +93,16 @@ type Metadata struct {
 	// cNGN escrow); empty when margin is cash only.
 	CollateralAssetAddress string `json:"collateral_asset_address,omitempty"`
 	Enabled                bool   `json:"enabled"`
+	// FutureKind is a future's FutureAsset generation, config.FutureKindInverse (v1) or
+	// config.FutureKindLinear (v2): what its prices, contract size and VM are denominated in.
+	FutureKind string `json:"-"`
+	// CloseOnly takes every order on a future as reduce-only (config.FutureSeries.CloseOnly).
+	CloseOnly bool `json:"-"`
+}
+
+// LinearFuture reports whether the market is a v2 series: priced in USDC per base, VM in USDC.
+func (m Metadata) LinearFuture() bool {
+	return m.IsFuture() && m.FutureKind == config.FutureKindLinear
 }
 
 type Registry struct {

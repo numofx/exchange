@@ -137,8 +137,8 @@ func DefaultRegistry(cfg config.Config) *Registry {
 			UISizeDecimals:         6,
 		},
 	}
-	if cfg.FutureEnabled() {
-		items = append(items, futureMetadata(cfg))
+	for _, series := range cfg.FutureSeriesList() {
+		items = append(items, futureMetadata(cfg, series))
 	}
 
 	return NewRegistry(items)
@@ -195,25 +195,27 @@ func eurcSpotMetadata(cfg config.Config) Metadata {
 	}
 }
 
-// FutureSymbol names a series by its expiry: USDC-cNGN-31DEC26. USDC is the base, as the future is
-// quoted in cNGN per USDC.
+// FutureSymbol names a v1 series by its expiry: USDC-cNGN-31DEC26. USDC is the base, as the v1 future
+// is quoted in cNGN per USDC. A v2 series is <BASE>-<DDMONYY> (config.FutureSeries.MarketSymbol).
 func FutureSymbol(expiry int64) string {
-	return "USDC-cNGN-" + strings.ToUpper(time.Unix(expiry, 0).UTC().Format("02Jan06"))
+	return config.FutureSeries{Kind: config.FutureKindInverse, Expiry: expiry}.MarketSymbol()
 }
 
-// futureMetadata is the cNGN future: a FutureAsset series under the MarginEngine, on the perp's
-// TradeModule and cash. Orders are taken in engine units only (no order_entry_spec): the ui_intent
-// contract is USDC per cNGN sized in cNGN, and this market is quoted the other way round.
-func futureMetadata(cfg config.Config) Metadata {
+// futureMetadata is a FutureAsset series under its engine, on the perp's TradeModule and cash. Orders
+// are taken in engine units only (no order_entry_spec): there is no ui_intent contract for a future.
+func futureMetadata(cfg config.Config, series config.FutureSeries) Metadata {
+	if series.Linear() {
+		return linearFutureMetadata(cfg, series)
+	}
 	return Metadata{
-		Symbol:           FutureSymbol(cfg.CNGNFutureExpiry),
-		AssetAddress:     strings.ToLower(strings.TrimSpace(cfg.CNGNFutureAssetAddress)),
-		SubID:            cfg.FutureSubID(),
+		Symbol:           series.MarketSymbol(),
+		AssetAddress:     series.AssetAddress,
+		SubID:            series.SubID(),
 		ContractType:     ContractTypeFuture,
 		SettlementType:   "cash_settled_future",
 		BaseAssetSymbol:  "USDC",
 		QuoteAssetSymbol: "cNGN",
-		ExpiryTimestamp:  cfg.CNGNFutureExpiry,
+		ExpiryTimestamp:  series.Expiry,
 		TickSize:         "0.000000000000000001",
 		// 25 bps taker, 0 maker, of the notional: contracts x FutureContractSizeUSDC, charged in the
 		// perp's USDC cash and paid to the TradeModule's feeRecipient. 2.5 USDC a contract (0.0025 a
@@ -229,7 +231,7 @@ func futureMetadata(cfg config.Config) Metadata {
 		DisplayPriceKind:     DisplayPriceDirect,
 		DisplaySemantics:     DisplayPriceDirect,
 		DisplayLabel:         "cNGN per USDC",
-		DisplayName:          FutureSymbol(cfg.CNGNFutureExpiry),
+		DisplayName:          series.MarketSymbol(),
 		SettlementNote:       "Cash-settled cNGN future on Base, under the MarginEngine. One contract is 1,000 USDC, and orders are sized in whole USDC of notional (desired_amount 1 = 0.001 contract, signed as 1e15); variation margin accrues in cNGN at each mark, Δmark x contract size, and the series settles at a TWAP of the index over its fixing window. A fill carries its price and moves no quote leg; the chain refuses one outside the index band (fill_band_low to fill_band_high), and so does the venue.",
 		UIPriceUnit:          "cNGN per USDC",
 		UISizeUnit:           "USDC of notional (1,000 a contract)",
@@ -241,7 +243,72 @@ func futureMetadata(cfg config.Config) Metadata {
 		UISizeToEngine:       "engine_amount = ui_size (signed as ui_size x 1e15: ui_size / 1000 contracts)",
 		TradeModuleAddress:   strings.ToLower(strings.TrimSpace(cfg.CNGNPerpTradeModuleAddress)),
 		QuoteAssetAddress:    strings.ToLower(strings.TrimSpace(cfg.CNGNPerpCashAddress)),
-		MarginManagerAddress: strings.ToLower(strings.TrimSpace(cfg.CNGNFutureManagerAddress)),
+		MarginManagerAddress: series.ManagerAddress,
 		Enabled:              true,
+		FutureKind:           config.FutureKindInverse,
+		CloseOnly:            series.CloseOnly,
 	}
+}
+
+// linearFutureMetadata is a MarginEngine v2 series, <BASE>-<expiry>: priced in USDC per base as spot is,
+// one contract ContractSize base units, sized in whole base units of notional by default, VM in USDC.
+func linearFutureMetadata(cfg config.Config, series config.FutureSeries) Metadata {
+	base, size, scale := series.BaseAsset, series.ContractSize, series.ScaledAmount()
+	return Metadata{
+		Symbol:           series.MarketSymbol(),
+		AssetAddress:     series.AssetAddress,
+		SubID:            series.SubID(),
+		ContractType:     ContractTypeFuture,
+		SettlementType:   "cash_settled_future",
+		BaseAssetSymbol:  base,
+		QuoteAssetSymbol: "USDC",
+		ExpiryTimestamp:  series.Expiry,
+		TickSize:         "0.000000000000000001",
+		// 25 bps taker, 0 maker, of the notional: contracts x contract size x the fill price, in USDC,
+		// charged in the perp's USDC cash and paid to the TradeModule's feeRecipient.
+		TakerFeeBps:        25,
+		MakerFeeBps:        0,
+		MinSize:            AmountStep,
+		ContractMultiplier: size,
+		AmountScale:        scale,
+		QuotePrecision:     18,
+		PricingModel:       PricingModelLinear,
+		PriceSemantics:     PricingModelLinear,
+		DisplayPriceKind:   DisplayPriceDirect,
+		DisplaySemantics:   DisplayPriceDirect,
+		DisplayLabel:       "USDC per " + base,
+		DisplayName:        series.MarketSymbol(),
+		SettlementNote: "Cash-settled " + base + " future on Base, under MarginEngine v2. One contract is " + groupThousands(size) + " " + base +
+			", and orders are sized in " + base + " of notional (desired_amount 1 signed as " + scale + " of the FutureAsset's 1e18 a contract); variation margin accrues in USDC at each mark, Δmark x contract size, and the series settles at a TWAP of the index over its fixing window. A fill carries its price and moves no quote leg; the chain refuses one outside the index band (fill_band_low to fill_band_high), and so does the venue.",
+		UIPriceUnit:          "USDC per " + base,
+		UISizeUnit:           base + " of notional (" + groupThousands(size) + " a contract)",
+		UISideMeaning:        "BUY (long) gains when " + base + " strengthens against USD (more USDC per " + base + "); SELL (short) gains when it weakens.",
+		EnginePriceUnit:      "USDC per " + base,
+		EngineAmountUnit:     base + " of notional",
+		EngineSidePolicy:     "same_as_ui",
+		UIPriceToEngine:      "engine_price = ui_price",
+		UISizeToEngine:       "engine_amount = ui_size (signed as ui_size x " + scale + ": ui_size / " + size + " contracts)",
+		TradeModuleAddress:   strings.ToLower(strings.TrimSpace(cfg.CNGNPerpTradeModuleAddress)),
+		QuoteAssetAddress:    strings.ToLower(strings.TrimSpace(cfg.CNGNPerpCashAddress)),
+		MarginManagerAddress: series.ManagerAddress,
+		Enabled:              true,
+		FutureKind:           config.FutureKindLinear,
+		CloseOnly:            series.CloseOnly,
+	}
+}
+
+// groupThousands writes a whole number with thousands separators: 1000000 -> 1,000,000. Anything else
+// is returned as is.
+func groupThousands(value string) string {
+	if value == "" || strings.Trim(value, "0123456789") != "" {
+		return value
+	}
+	var out []byte
+	for i := range len(value) {
+		if i > 0 && (len(value)-i)%3 == 0 {
+			out = append(out, ',')
+		}
+		out = append(out, value[i])
+	}
+	return string(out)
 }
