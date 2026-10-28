@@ -93,8 +93,9 @@ Order (`scripts/ops/propose_margin_engine_v2_batch.py` proposes every vault step
 3. `enable` (`MARGIN_ENGINE_V2_ENABLE_VAULT_ACTIONS`): open the future and register it on the TradeModule. Refused until
    v2 has its own forward keeper, liquidation keeper and pager watch (#258) and markets-service lists `cNGN-30NOV26`
    with the chain's band in USDC per cNGN (#228). Both 30NOV26 series then run to the same expiry, v1's close-only:
-   markets-service must list both, and under distinct symbols (today `FutureSymbol` names any series `USDC-cNGN-<expiry>`,
-   which would give v2's the v1 symbol).
+   markets-service lists both under distinct symbols (#280: v1's stays `USDC-cNGN-30NOV26`, v2's is `cNGN-30NOV26`,
+   from `FUTURE_SERIES`). The keepers and the pager are on the box since 2026-10-28 (OPS_BOX_CHANGES.md); v1's engine
+   keeper moved to v2 that day, so v1's series has no liquidator until it settles.
 4. markets-service: new spot deposits default to v2 accounts (no listing's `margin_manager_address` is v1), and v1's
    future is listed close-only (`future.close_only`). The spot makers (#34 cNGN-USDC, #36 EURC-USDC, both v1 accounts
    of the MM wallet) quote from v2 accounts: close-only stops a v1 account buying base, so a v1 maker's bids would fill

@@ -3,7 +3,8 @@
 # the engine; DutchAuction settles each account through the engine first (settlePerpsWithIndex, which
 # realises the future's VM). The perp SRM's keeper (numo-perp-keeper-ssm.service) watches the SRM only.
 #
-# Installed 2026-10-13 in DRY_RUN, live (DRY_RUN=false) the same evening (OPS_BOX_CHANGES.md). The MarginEngine enable batch's
+# Installed 2026-10-13 in DRY_RUN, live (DRY_RUN=false) the same evening (OPS_BOX_CHANGES.md). DISABLED 2026-10-28: the
+# keeper, its key and its cash moved to MarginEngine v2 (numo-engine-keeper-v2.service). Never run both: one EOA. The MarginEngine enable batch's
 # keeper gate (propose_margin_engine_batch.py) refuses unless it is live with a funding account holding a full futures side's
 # IM (3,750 USDC).
 #

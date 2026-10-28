@@ -2,7 +2,8 @@
 # one instance per series: numo-future-feeds-v2@cngn-30nov26 reads /etc/numo/future-feeds-v2-cngn-30nov26.env
 # (future-feeds-v2-cngn-30nov26.env), and an EURC series is another instance and env file, no code.
 #
-# NOT INSTALLED (#258). v1's USDC-cNGN-30NOV26 keeps numo-future-feeds.service, unchanged, until it settles.
+# Installed 2026-10-28 for cngn-30nov26, live the same day (OPS_BOX_CHANGES.md). v1's USDC-cNGN-30NOV26 keeps
+# numo-future-feeds.service, unchanged, until it settles.
 #
 # Its own checkout, /home/ec2-user/exchange-future-v2: exchange-future is v1's keeper and the engine keeper's,
 # and building there would move their code on their next restart.

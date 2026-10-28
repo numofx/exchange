@@ -2,15 +2,17 @@
 # under v2, starts auctions on those under maintenance and bids from its own funding account under v2. v1's keeper
 # (numo-engine-keeper.service) is unchanged.
 #
-# NOT INSTALLED (#258). propose_margin_engine_v2_batch.py's keeper gate reads its /health (ENGINE_V2_KEEPER_HEALTH_URL,
-# http://127.0.0.1:9466/health) and refuses `enable` until it is live with a full side's IM in cash.
+# Installed 2026-10-28, live the same day (OPS_BOX_CHANGES.md). propose_margin_engine_v2_batch.py's keeper gate reads its
+# /health (ENGINE_V2_KEEPER_HEALTH_URL, http://127.0.0.1:9466/health) and refuses `enable` until it is live with a full
+# side's IM in cash.
 #
-# Its own key (/numo/keeper/engine_v2_keeper_key) and funding account: sharing v1's engine keeper EOA would race it for
-# nonces. Runs from /home/ec2-user/exchange-future-v2 (the v2 future keeper's checkout), never exchange-future (v1's).
+# v1's engine keeper MOVED here on 2026-10-28: the same key (/numo/keeper/engine_keeper_key, EOA 0x753f…f83b), its cash
+# moved from v1 #33 to v2 #38, and numo-engine-keeper (v1) disabled. Never run both units: one EOA, raced nonces.
+# Runs from /home/ec2-user/exchange-future-v2 (the v2 future keeper's checkout), never exchange-future (v1's).
 #
-# Before starting:
-#   - SSM /numo/keeper/engine_v2_keeper_key: a fresh key, its EOA funded with gas;
-#   - its funding account: SubAccounts.createAccount(v2 keeper EOA, v2) from that EOA, then a cash deposit;
+# Before starting (done 2026-10-28):
+#   - numo-engine-keeper stopped and disabled; #33's cash withdrawn to the EOA;
+#   - its funding account: SubAccounts.createAccount(EOA, v2) from that EOA, then a cash deposit;
 #   - /etc/numo/engine-keeper-v2.env from engine-keeper-v2.env with KEEPER_ACCOUNT filled in, DRY_RUN=true first.
 #
 # Install: (cd /home/ec2-user/exchange-future-v2 && pnpm install --frozen-lockfile --filter perp-keeper... && pnpm --filter perp-keeper build)
@@ -27,7 +29,7 @@ Type=simple
 User=ec2-user
 WorkingDirectory=/home/ec2-user/exchange-future-v2/services/perp-keeper
 EnvironmentFile=/etc/numo/engine-keeper-v2.env
-ExecStart=/bin/bash -c 'export KEEPER_KEY="$(aws ssm get-parameter --name /numo/keeper/engine_v2_keeper_key --with-decryption --query Parameter.Value --output text --region "$AWS_REGION")" RPC_URL="$(aws ssm get-parameter --name /numo/feeds/rpc_url --with-decryption --query Parameter.Value --output text --region "$AWS_REGION")" ALERT_WEBHOOK_URL="$(aws ssm get-parameter --name /numo/feeds/alert_webhook_url --with-decryption --query Parameter.Value --output text --region "$AWS_REGION" 2>/dev/null || true)" ALERT_PREFIX="[engine v2] " && exec /usr/bin/node dist/main.js'
+ExecStart=/bin/bash -c 'export KEEPER_KEY="$(aws ssm get-parameter --name /numo/keeper/engine_keeper_key --with-decryption --query Parameter.Value --output text --region "$AWS_REGION")" RPC_URL="$(aws ssm get-parameter --name /numo/feeds/rpc_url --with-decryption --query Parameter.Value --output text --region "$AWS_REGION")" ALERT_WEBHOOK_URL="$(aws ssm get-parameter --name /numo/feeds/alert_webhook_url --with-decryption --query Parameter.Value --output text --region "$AWS_REGION" 2>/dev/null || true)" ALERT_PREFIX="[engine v2] " && exec /usr/bin/node dist/main.js'
 Environment=AWS_REGION=us-east-1
 Restart=always
 RestartSec=5

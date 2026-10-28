@@ -5,11 +5,58 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-28 18:56–19:08 UTC: v2 keepers on the box; the engine keeper moved from v1 to v2
+
+MarginEngine v2's forward publisher, liquidation keeper and pager watch (#258), for `enable`. v2 stays closed: nothing
+here is a vault action. Run from the laptop's admin session and SSM scripts (`box-17` to `box-20`), each refusing to
+overwrite what it would install.
+
+- **Keys (laptop, 18:56 UTC).** Two fresh keys piped from `cast wallet new` into SSM (SecureString, `--no-overwrite`,
+  never printed or written to disk): `/numo/feeds/forward_relayer_key_v2_cngn` (relayer `0x3ACeFDe146161D1b9ca2fdB8a3B38122818d763f`)
+  and `/numo/keeper/engine_v2_keeper_key` (`0x2d9C…9aFd`). The second is **unused**: the keeper moved instead (below);
+  it holds nothing and is to be deleted. Both paths are under the box's existing grants.
+- **`/home/ec2-user/exchange-future-v2`** cloned at `840526a` (#281) by `box-17` (SSM `621f3270-…`); `pnpm install
+  --frozen-lockfile` for perp-feeds and perp-keeper, `@numo/kms-signer`, `perp-feeds` and `perp-keeper` built (tsc only).
+  No other checkout moved by it.
+- **v2 relayer funded from v1's forward relayer**, on the box: 0.003 ETH from `0xE5b8…e6de` to `0x3ACe…763f`
+  (tx `0x963cc9b03a919de9b341aa9ddb4f08b8988603b482638b36118ab386eb544efb`, block 53212235, 18:56:57), with
+  `numo-future-feeds` stopped for the send and restarted straight after. v1's relayer keeps 0.00167 ETH (~0.00002/day).
+- **`numo-future-feeds-v2@cngn-30nov26`**: `/etc/numo/future-feeds-v2-cngn-30nov26.env` from the repo's template plus
+  `DRY_RUN`, and the repo's `numo-future-feeds-v2@.service`. Dry run first (mark 0.00071530 from carry; one real
+  `forward-mark-late` alert, v2 unmarked since its deploy), then `DRY_RUN=false` by `box-19` (SSM `b7bac295-…`): first
+  mark tx `0x9fbc6cbb48fc6ac99f625a6cf835283d622f353ca6f4b8048f7e4381f3d803bf` (block 53212483, 19:05:13), 0.00071531
+  from carry. markets-service does not list the series yet, so the book read returns 400 and the mark is carry.
+- **The engine keeper moved v1 → v2** (`box-18`, SSM `51682451-…`, `adfc1bc7-…`, `e3e14bc8-…`), the operator's decision:
+  one keeper, one EOA, one balance. **v1's USDC-cNGN-30NOV26 (22.696 contracts open) has no liquidator until it settles
+  on 30 Nov.**
+  - `numo-engine-keeper` (v1, port 9465) stopped and disabled first: its last health, nothing liquidatable, no auctions.
+  - From its EOA `0x753fCC2342F180e1B9B0BfFFEb21f4E00741f83b`: `CashAsset.withdraw(#33, …)` (txs `0x4a4559e3…586f`,
+    18:59:53, and `0x876c0dc8…1aeb` for 0.0052 of interest, 19:01:59); `SubAccounts.createAccount(EOA, v2)` → **#38**
+    (tx `0x7238bbea…74c0`, 18:59:55); `USDC.approve` + `CashAsset.deposit(#38, 5,000.005198)` (txs `0x5e13a4c1…b221`,
+    `0x7dc19445…32be`, 19:03:35–37). After: #38 holds 5,000.005198 USDC cash under v2, #33 0.0000003, the EOA 0.00299 ETH.
+  - `numo-engine-keeper-v2`: `/etc/numo/engine-keeper-v2.env` (`KEEPER_ACCOUNT=38`), the repo's unit, and a drop-in
+    `numo-engine-keeper-v2.service.d/key.conf` pointing its key at `/numo/keeper/engine_keeper_key` (the box cannot
+    write SSM, so v1's key was not copied). Dry run, then `DRY_RUN=false` by `box-19`. This branch's unit names that key,
+    so the drop-in can go when the unit is next copied.
+  - Two failed runs first, both the box RPC answering a block behind: #38's manager read `0x0` right after its
+    `createAccount`, then a lagging node gave the approve the withdraw's nonce ("replacement transaction underpriced").
+    Nothing was lost; the script now retries reads and nonce rejections.
+- **Pager.** `/home/ec2-user/exchange-pager` moved from `4cbb7e77` to `840526a` (`box-19`); `ENGINE_V2_KEEPER_HEALTH_URL=
+  http://127.0.0.1:9466/health` appended to `/etc/numo/perp-pager.env` (backup `.bak-<stamp>`) by `box-20` (SSM
+  `dfb7f130-…`). `box-19` stopped at `--self-test`, which needs forge's `out/` (`abi_selectors`): this box never builds
+  with forge, so the self-test runs on a laptop. The run by hand after: ok, reads both engines (`futureManagers` v1 + v2,
+  `futures` v1's + cNGN-30NOV26), v2 one side $0, pool #37 $0, `v2 keeper: ok`, SM $3,250 against $1,858.
+- **Not watched:** neither forward relayer is in `check_signer_balance.py`'s single `SIGNER_ADDRESS`, and that timer runs
+  from the pinned `/home/ec2-user/exchange`, so a change here does not reach it.
+- **Undo.** `systemctl disable --now numo-future-feeds-v2@cngn-30nov26 numo-engine-keeper-v2`; to give v1 its keeper back,
+  move #38's cash to #33 from the EOA and `systemctl enable --now numo-engine-keeper` (stop v2's first: one EOA). Pager:
+  restore the env backup and `checkout --detach 4cbb7e77`.
+
 ## 2026-10-27 20:19–20:28 UTC: `exchange-ops` moved to `fc6ef0a`; MarginEngine v2 setup proposed and landed
 
 - **`/home/ec2-user/exchange-ops`** moved from `539ae00` (#268) to `fc6ef0a` (#277, the v2 artifacts), detached, by
   `/root/box-16.sh` (SSM `26d0f727-…`): it refused unless the checkout was clean, `numo-v2-setup` inactive and the old
-  HEAD an ancestor of `fc6ef0a`. Read-only check before it: SSM `dd36632a-…`. `/root/box-16.sh` is still on the box.
+  HEAD an ancestor of `fc6ef0a`. Read-only check before it: SSM `dd36632a-…`. `/root/box-16.sh` was removed the same day (SSM `7f0db571-…`).
 - **`numo-v2-setup`** (transient unit, `run-with-ssm-mark.sh python3 propose_margin_engine_v2_batch.py setup --propose`,
   as ec2-user) started 20:20:20 and exited 0 at 20:28:13. It posted 9 requests to MPCVault one at a time, each approved
   by hand against the dry run's digests, waiting for each to land and re-running the gates (nominated, reused,
