@@ -62,10 +62,9 @@ variable "acm_certificate_arn" {
 variable "image_markets" {
   description = "ECR image URI for the Go binary (serves both api and matcher modes)."
   type        = string
-  # 2026-10-21 13:59 UTC: main 06d35e16 (#251: the perp delisted, cngn_perp_asset_address ""; also carries the
-  # EURC-USDC listing, inert while EURC_SPOT_ASSET_ADDRESS is unset). markets td :44, matcher td :43. Rollback is
-  # 891fafb8713d AND cngn_perp_asset_address = the PerpAsset, in one apply: the older image refuses the empty asset.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:06d35e168f58"
+  # 2026-10-28 19:54 UTC: main befe85e6 (#280: FUTURE_SERIES, listing MarginEngine v2's cNGN-30NOV26 closed).
+  # markets td :46, matcher td :45. Rollback is 06d35e168f58 (td :45 / :44) with future_series = [], in one apply.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:befe85e61052"
 }
 
 variable "image_execution" {
@@ -301,10 +300,8 @@ variable "cngn_future_close_only" {
 # Further futures series, listed beside the cngn_future_* one (markets-service FUTURE_SERIES, README
 # "More series"): MarginEngine v2's <BASE>-<DDMONYY>. Keyed by (asset_address, expiry); two series may
 # share an expiry. Empty lists nothing more, and leaves FUTURE_SERIES out of the task definitions.
-# v2's cNGN-30NOV26, when it is to be listed:
-#   { asset_address = "0xcACEe66ad41fD1472a47D7D5Fe372FFbFac9AA75", expiry = 1796047200,
-#     manager_address = "0x0705219a1594d5Fc5dC2573da4082cAf3e1B0950", kind = "linear",
-#     base_asset = "cNGN", contract_size = "1000000" }
+# v2's cNGN-30NOV26 listed 2026-10-28 while v2 is closed (trading_open false until the enable batch): its forward
+# publisher reads its book. The app ignores it (cNGN over USDC) and no maker quotes it yet. Order unit 1,000 cNGN.
 variable "future_series" {
   type = list(object({
     asset_address   = string
@@ -317,7 +314,15 @@ variable "future_series" {
     symbol          = optional(string)
     close_only      = optional(bool, false)
   }))
-  default = []
+  default = [{
+    asset_address   = "0xcACEe66ad41fD1472a47D7D5Fe372FFbFac9AA75"
+    expiry          = 1796047200
+    manager_address = "0x0705219a1594d5Fc5dC2573da4082cAf3e1B0950"
+    kind            = "linear"
+    base_asset      = "cNGN"
+    contract_size   = "1000000"
+    amount_scale    = "1000000000000000" # 1,000 cNGN: 1e18 per 1,000,000 cNGN contract
+  }]
 
   validation {
     condition     = alltrue([for s in var.future_series : contains(["inverse", "linear"], s.kind)])
