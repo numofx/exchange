@@ -118,8 +118,12 @@ contract EurcFutureV2Fork is Test {
   uint nonce;
   IEMatching matching;
 
+  // The block before EURC-30NOV26's deploy (2026-10-30, 53273869): its setup has since landed, and the deploy refuses an
+  // engine whose EUR market already lists a future, so the suite rehearses from just before it.
+  uint constant FORK_BLOCK = 53_273_868;
+
   function setUp() public {
-    vm.createSelectFork(vm.envString("BASE_RPC_URL"));
+    vm.createSelectFork(vm.envString("BASE_RPC_URL"), FORK_BLOCK);
     script = new DeployEurcFutureV2();
     params = script.loadChainParams();
     params.forwardSigner = vm.addr(forwardPk);

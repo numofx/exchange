@@ -579,7 +579,10 @@ def future_v2_artifacts() -> list[tuple[Path, dict]]:
 
 
 def series_label(future: dict) -> str:
-  """cNGN-30NOV26-style, for messages: the artifact's base (default cNGN, MARGIN_ENGINE_V2.json names none) and expiry."""
+  """cNGN-30NOV26-style, for messages: the artifact's symbol (EURC_FUTURE_V2.json names one), else its base (default
+  cNGN, MARGIN_ENGINE_V2.json names none) and expiry."""
+  if future.get("symbol"):
+    return future["symbol"]
   return f"{future.get('baseSymbol', 'cNGN')}-{time.strftime('%d%b%y', time.gmtime(int(future['expiry']))).upper()}"
 
 
@@ -1119,6 +1122,8 @@ def self_test() -> int:
   assert abs(parts["EURC-30NOV26"] - 10 * 1_000 * 1.1625 * 0.15) < 1e-6
   assert series_label({"expiry": 1796047200}) == "cNGN-30NOV26"
   assert series_label({"expiry": 1796047200, "baseSymbol": "EURC"}) == "EURC-30NOV26"
+  # EURC_FUTURE_V2.json names its series in `symbol` and has no baseSymbol: read as cNGN it would share cNGN's label
+  assert series_label({"expiry": 1796054400, "symbol": "EURC-30NOV26"}) == "EURC-30NOV26"
   # What the run read goes to the state file: each manager once, each future asset (v1's, then every v2 series).
   watched: dict = {}
   record_watched(watched, {"manager": "0xv1", "future": "0xf1"})
