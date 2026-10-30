@@ -176,7 +176,7 @@ Artifacts: `deployments/8453/MARGIN_ENGINE_V2.json`, `MARGIN_ENGINE_V2_VAULT_ACT
   the liquidation keeper, the pager and SM coverage, and markets-service listing a second series (#228) under a
   `cNGN-<expiry>` symbol, not `USDC-cNGN-30NOV26`, which v1's series holds.
 
-### EURC-30NOV26 on MarginEngine v2 — PENDING (not deployed)
+### EURC-30NOV26 on MarginEngine v2 — DEPLOYED 2026-10-30 (closed), setup pending
 
 A second v2 series, on v2's market 2 (EUR): USDC per EURC, 1,000 EURC a contract, VM in USDC through pool #37, expiry
 1796054400 (2026-11-30 16:00 UTC; last trade 15:00), IM 6% / MM 4%, carry -1.5% (an assumption), cap 0 until enable
@@ -185,12 +185,15 @@ two owner-only engine setters in the vault's setup batch.
 
 | Contract | Address |
 | --- | --- |
-| FutureAsset (EURC-30NOV26) | not deployed |
-| LyraForwardFeed (index: EURC feed `0xaaE6…C435`) | not deployed |
+| FutureAsset (EURC-30NOV26) | `0x6Ff7084D6F1760a57b9475a41F54b12279cD7744` |
+| LyraForwardFeed (index: EURC feed `0xaaE6…C435`) | `0xB67fCd9A66efc3C12Be3Ea2bBB97385004394d14` |
 | Pool account | #37, v2's, shared with cNGN-30NOV26 |
 
-1. `scripts/deploy-eurc-future-v2.s.sol` (fresh key or `USED_DEPLOYER`; `FORWARD_SIGNER` the forward KMS key
-   `0xd65F…3650`): writes `EURC_FUTURE_V2.json`, `EURC_FUTURE_V2_VAULT_ACTIONS.json`, `EURC_FUTURE_V2_ENABLE_VAULT_ACTIONS.json`.
+1. **Deployed 2026-10-30 05:11 UTC**, Base blocks 53273869–53273881, at exchange 2a40c7b by the used deployer
+   `0x971C…2e9c` (`USED_DEPLOYER`) at nonce 38 (now 51). Initial mark 1.120367 against index 1.118919. Both contracts
+   are nominated to the vault (`pendingOwner`); the cap is 0. Artifacts: `EURC_FUTURE_V2.json`,
+   `EURC_FUTURE_V2_VAULT_ACTIONS.json`, `EURC_FUTURE_V2_ENABLE_VAULT_ACTIONS.json`. The deployer sends nothing else
+   until setup lands.
 2. `scripts/ops/propose_eurc_future_v2_batch.py eurc-future-setup`: accept both; `engineV2.whitelistAsset(future, 2,
    Future)`; `engineV2.setFutureMarginRequirements(2, 0.04e18, 0.06e18)`.
 3. Off chain: forward publisher for this feed, pager and v2 keeper reading the future, markets-service listing

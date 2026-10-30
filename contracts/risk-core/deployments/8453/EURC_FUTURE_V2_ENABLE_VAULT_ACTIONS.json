@@ -1,0 +1,16 @@
+[
+  {
+    "description": "eurcFuture.setTotalPositionCap(engineV2, 18000000000000000000) [opens EURC future]",
+    "to": "0x6Ff7084D6F1760a57b9475a41F54b12279cD7744",
+    "value": "0",
+    "data": "0x40a557bd0000000000000000000000000705219a1594d5fc5dc2573da4082caf3e1b0950000000000000000000000000000000000000000000000000f9ccd8a1c5080000",
+    "digest": "0x9a670a71ac3b8dac9b497841637ad77cbabc9034d700acbec39c8e2f9d4868c8"
+  },
+  {
+    "description": "tradeModule.setDatedFutureAsset(eurcFuture, true) [fills carry their price to the future, no quote leg]",
+    "to": "0xDea968188598BA0E3F58A56C0fdfF338C74F699f",
+    "value": "0",
+    "data": "0x0ddd8a040000000000000000000000006ff7084d6f1760a57b9475a41f54b12279cd77440000000000000000000000000000000000000000000000000000000000000001",
+    "digest": "0xd28dc41403d299fa19bfc6b92ba05eb5273a44c45bc6a084fee396661909ccbd"
+  }
+]
