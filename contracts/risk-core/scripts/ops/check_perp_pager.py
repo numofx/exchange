@@ -141,11 +141,12 @@ SEL_PERP_MARGIN_REQUIREMENTS = "0xbf270f9d"  # perpMarginRequirements(uint256) -
 OI_KEEPER_WARN_X = 2.0
 OI_KEEPER_PAGE_X = 3.0
 OI_WARN_REPEAT_SEC = 6 * 3600
-# Gas watch. Burn is measured as the balance 24h ago minus now (a top-up in between reads as no
-# burn, which then falls back to the floor). Floors are two days at the worst case measured in the
+# Gas watch. Burn is the median of the last day's four 6h balance drops, scaled to a day (burn_per_day): a send or
+# top-up moves one window and is ignored; with no burn measured it falls back to the floor. Floors are two days at the worst case measured in the
 # runbook: relayer 0.0013/day (a mark a minute), executor ~0.00001 per settlement, keeper ~100 full
 # liquidation cycles (3M gas ≈ 0.00002 ETH each). `GAS_WATCH` overrides: "name=0xaddr:floorEth,...". `KEEPER_EOA` adds the keeper.
 BLOCKS_PER_DAY = 43_200  # Base, 2s blocks
+GAS_WINDOWS = 4
 GAS_PAGE_DAYS = 2.0
 GAS_WARN_DAYS = 7.0
 GAS_WARN_REPEAT_SEC = 6 * 3600
@@ -661,11 +662,23 @@ def read_oi_and_keeper(url: str, stack: dict, keeper_account: int) -> tuple[floa
   return one_side_usd, cash / 1e18
 
 
+def burn_per_day(balances_wei: list[int]) -> float:
+  """ETH/day from balances oldest first, one per GAS_WINDOWS-th of a day: the median window's drop, scaled to a day. A
+  send or top-up moves one window only, so value moved between wallets does not read as burn (2026-10-30: a 0.001 ETH
+  send between relayers read as 0.00103/day and paged). A top-up's window counts as no burn."""
+  drops = sorted(max(a - b, 0) for a, b in zip(balances_wei, balances_wei[1:]))
+  mid = len(drops) // 2
+  median = drops[mid] if len(drops) % 2 else (drops[mid - 1] + drops[mid]) / 2
+  return median * len(drops) / 1e18
+
+
 def read_gas(url: str, head_block: int, address: str) -> tuple[float, float]:
-  """(balance ETH, burn ETH/day) from the balance now and ~24h of blocks ago."""
-  now_wei = int(rpc(url, "eth_getBalance", [address, "latest"]), 16)
-  then_wei = int(rpc(url, "eth_getBalance", [address, hex(max(head_block - BLOCKS_PER_DAY, 0))]), 16)
-  return now_wei / 1e18, max(then_wei - now_wei, 0) / 1e18
+  """(balance ETH, burn ETH/day) from the balance at GAS_WINDOWS + 1 points over the last ~24h of blocks."""
+  step = BLOCKS_PER_DAY // GAS_WINDOWS
+  blocks = [max(head_block - step * i, 0) for i in range(GAS_WINDOWS, 0, -1)]
+  balances = [int(rpc(url, "eth_getBalance", [address, hex(b)]), 16) for b in blocks]
+  balances.append(int(rpc(url, "eth_getBalance", [address, "latest"]), 16))
+  return balances[-1] / 1e18, burn_per_day(balances)
 
 
 def market_open(url: str, stack: dict) -> bool:
@@ -1085,6 +1098,11 @@ def self_test() -> int:
   # Gas: 2 days of burn, or the floor when burn is unmeasurable; Slack warning under 7 days.
   assert gas_condition("relayer", 0.015, 0.0013, 0.003) is None
   assert gas_condition("relayer", 0.0025, 0.0013, 0.003).key == "low-gas-relayer"
+  e = 10**18
+  assert burn_per_day([int(0.004 * e), int(0.003 * e), int(0.002 * e), int(0.001 * e), 0]) == 0.004, "steady: 0.001 a window"
+  sent = [int(x * e) for x in (0.00298, 0.002972, 0.001964, 0.001956, 0.001948)]  # 2026-10-30: 0.001 out in window 2
+  assert abs(burn_per_day(sent) - 0.000032) < 1e-9, "a send is one window: the median ignores it"
+  assert burn_per_day([e, e, 2 * e, 2 * e, 2 * e]) == 0, "a top-up is no burn"
   assert "stops publishing" in gas_condition("forward-relayer-v2-eurc", 0.0001, 0.00003, 0.0003).message
   assert gas_condition("executor", 0.0019, 0.0, 0.002) is not None and "unknown burn" in gas_condition("executor", 0.0019, 0.0, 0.002).message
   assert gas_condition("executor", 0.0079, 0.00003, 0.002) is None
