@@ -322,6 +322,16 @@ variable "future_series" {
     base_asset      = "cNGN"
     contract_size   = "1000000"
     amount_scale    = "1000000000000000" # 1,000 cNGN: 1e18 per 1,000,000 cNGN contract
+    }, {
+    # EURC-30NOV26 (risk-core EURC_FUTURE_V2.json), listed closed 2026-10-30: USDC per EURC, 1,000 EURC a contract,
+    # 16:00 UTC so its sub id is not cNGN's.
+    asset_address   = "0x6Ff7084D6F1760a57b9475a41F54b12279cD7744"
+    expiry          = 1796054400
+    manager_address = "0x0705219a1594d5Fc5dC2573da4082cAf3e1B0950"
+    kind            = "linear"
+    base_asset      = "EURC"
+    contract_size   = "1000"
+    amount_scale    = "1000000000000000" # 1 EURC: 1e18 per 1,000 EURC contract
   }]
 
   validation {
