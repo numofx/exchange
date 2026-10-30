@@ -5,6 +5,25 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-30 ~21:00 UTC: gas watch for the forward relayers and the v2 engine keeper; one false page
+
+From #288 (`cfbece9`), installed by SSM command `44c669f0`.
+
+- **Pager checkout.** `exchange-pager` moved from `e7a6137` to `cfbece9`, clean.
+- **`/etc/numo/perp-pager.env`.** #288's `GAS_WATCH` line was appended, with backup `perp-pager.env.bak-<stamp>`. It
+  watches the executor, the perp relayer, `forward-relayer-v1` `0xE5b8…e6de`, `forward-relayer-v2-cngn` `0x3ACe…763f`,
+  `forward-relayer-v2-eurc` `0xEEa4…5321` (floors 0.0003 ETH) and `engine-keeper-v2` `0x753f…f83b` (floor 0.002).
+  `KEEPER_EOA` still adds the perp keeper.
+- **False page.** The first run paged `low-gas-forward-relayer-v2-cngn`. The pager read burn as the 24h balance drop,
+  and that window held the morning's 0.001 ETH send to the EURC relayer, so it read 0.00103 ETH/day against a
+  balance of 0.00195.
+- **Cleared by a top-up.** The operator sent 0.00025 ETH to `0x3ACe…763f` from deployer `jason` `0x971C…2e9c` (tx
+  `0x07971b17cf14cd04a128b89c3bbc732815d0287b8500568b669c732fcdbc75cb`). The relayer then held 0.00220. The pager read
+  `ok: 0 active` from 21:16 UTC.
+- **The fix.** The follow-up PR changes how burn is measured, to the median of four 6h drops. It is not on the box
+  until the pager checkout moves to it.
+- **Rollback.** Restore the `.bak`, then `git -C /home/ec2-user/exchange-pager checkout --detach e7a6137`.
+
 ## 2026-10-30 05:30–12:52 UTC: EURC-30NOV26 setup proposed; its publisher, keeper and pager wiring
 
 EURC-30NOV26 on MarginEngine v2 (#282, deployed 05:11 UTC; #285, #286). The series stays closed (cap 0): the only vault
