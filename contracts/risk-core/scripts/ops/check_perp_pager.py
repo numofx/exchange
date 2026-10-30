@@ -330,7 +330,7 @@ def gas_condition(name: str, balance: float, burn_per_day: float, floor: float) 
     return None
   runway = f"{balance / burn_per_day:.1f} days" if burn_per_day > 0 else "unknown burn"
   return Condition(f"low-gas-{name}", f"cNGN-PERP {name} low on gas: {balance:.5f} ETH, burning {burn_per_day:.5f}/day "
-                   f"({runway}); needs {need:.5f}. Top it up before it stops {'settling' if name == 'executor' else 'publishing' if name == 'relayer' else 'liquidating'}.")
+                   f"({runway}); needs {need:.5f}. Top it up before it stops {'settling' if name == 'executor' else 'publishing' if 'relayer' in name else 'liquidating'}.")
 
 
 def gas_warning(name: str, balance: float, burn_per_day: float) -> str | None:
@@ -1085,6 +1085,7 @@ def self_test() -> int:
   # Gas: 2 days of burn, or the floor when burn is unmeasurable; Slack warning under 7 days.
   assert gas_condition("relayer", 0.015, 0.0013, 0.003) is None
   assert gas_condition("relayer", 0.0025, 0.0013, 0.003).key == "low-gas-relayer"
+  assert "stops publishing" in gas_condition("forward-relayer-v2-eurc", 0.0001, 0.00003, 0.0003).message
   assert gas_condition("executor", 0.0019, 0.0, 0.002) is not None and "unknown burn" in gas_condition("executor", 0.0019, 0.0, 0.002).message
   assert gas_condition("executor", 0.0079, 0.00003, 0.002) is None
   assert gas_warning("relayer", 0.015, 0.0013) is None and "runway 5.0 days" in gas_warning("relayer", 0.0065, 0.0013)
