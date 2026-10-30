@@ -5,6 +5,38 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-30 05:30–12:52 UTC: EURC-30NOV26 setup proposed; its publisher, keeper and pager wiring
+
+EURC-30NOV26 on MarginEngine v2 (#282, deployed 05:11 UTC; #285, #286). The series stays closed (cap 0): the only vault
+actions are its setup's four, approved by hand in MPCVault.
+
+- **`/home/ec2-user/exchange-ops`** moved from `fc6ef0a` to `23e5037` (#285, the EURC artifacts), detached, by `box-21`
+  (SSM `08fbaac2-…`). Transient unit `numo-eurc-future-setup` (`propose_eurc_future_v2_batch.py eurc-future-setup
+  --propose`) proposed the four actions one at a time; all landed 05:34–05:35 UTC and the unit exited 0.
+- **Key (laptop).** `/numo/feeds/forward_relayer_key_v2_eurc` (relayer `0xEEa45ea4f68cb62b5eDe84E1d9F82F6d253C5321`),
+  piped from `cast wallet new` into SSM as before. The unused `/numo/keeper/engine_v2_keeper_key` was deleted 2026-10-29.
+- **`box-22`** (SSM `699c578f-…`, 05:54 UTC):
+  - `/home/ec2-user/exchange-pager` moved from `840526a` to `e7a6137` (#286: the pager labels a series by its artifact's
+    `symbol`; before, EURC read as `cNGN-30NOV26`). `/etc/numo/perp-pager.env` gained `FUTURE_V2_ARTIFACTS` (both
+    series). The run after: `futures` lists v1's, cNGN-30NOV26 and EURC-30NOV26; SM $3,250 against $382.
+  - **EURC relayer funded from v2 cNGN's**: 0.001 ETH from `0x3ACe…763f` to `0xEEa4…5321` (tx
+    `0xcf633383eae5510b11706d798554f6a58efdf221e03a01608b6fc9cad96a8c85`, block 53275169), with
+    `numo-future-feeds-v2@cngn-30nov26` stopped for the send and restarted after. cNGN's relayer keeps 0.00196 ETH.
+  - **`numo-future-feeds-v2@eurc-30nov26`**: `/etc/numo/future-feeds-v2-eurc-30nov26.env` from the repo's template plus
+    `DRY_RUN=true`, on the existing `numo-future-feeds-v2@.service` and `/home/ec2-user/exchange-future-v2` at `840526a`
+    (no build). Dry-run marks were carry: 1.12082 on index 1.11939 (+0.128%, -1.5% over 31 days).
+  - `/etc/numo/engine-keeper-v2.env`: `FUTURE` gained `0x6Ff7…7744` (backup `.bak-<stamp>`); `numo-engine-keeper-v2`
+    restarted, `/health` lists both futures.
+- **markets-service (05:57 UTC)**: terraform apply of #286's `future_series` through `with-matcher-mute.sh` (markets and
+  matcher task definitions only, image unchanged). `/v1/markets` lists `EURC-30NOV26`, `trading_open` false.
+- **Live (`box-23`, SSM `2e4d3dc3-…`, 12:50 UTC)**: `DRY_RUN=false` (backup `.bak-<stamp>`). First mark tx
+  `0x00051390e4d829c1c82124cc2f4a90d8c1d944eb76df6d3c959dd7f7b47e1663` (12:51:32), 1.119695 on index 1.118263. Until
+  then, `forward-mark-late` fired each minute: the deploy's mark (05:11) was the only one. The first tick after the
+  restart also raised `expiry-tick-error` and `pool-deficit-error` ("Missing or invalid parameters", the box RPC), once.
+- **Not watched:** neither v2 relayer is in `check_signer_balance.py` (that timer runs from the pinned checkout).
+- **Undo.** `systemctl disable --now numo-future-feeds-v2@eurc-30nov26`; restore the two env backups and restart
+  `numo-engine-keeper-v2`; pager `checkout --detach 840526a`; exchange-ops `checkout --detach fc6ef0a`.
+
 ## 2026-10-28 18:56–19:08 UTC: v2 keepers on the box; the engine keeper moved from v1 to v2
 
 MarginEngine v2's forward publisher, liquidation keeper and pager watch (#258), for `enable`. v2 stays closed: nothing
