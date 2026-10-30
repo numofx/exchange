@@ -114,7 +114,7 @@ Order (`scripts/ops/propose_margin_engine_v2_batch.py` proposes every vault step
    least the total. After 5 because 5 pins v1's cap at its open interest; before it v1's 40,000 leaves v2 almost nothing.
 7. 30NOV26 fixes and closes out on v1; holders withdraw and re-deposit under v2.
 
-## EURC-30NOV26 (pending deploy)
+## EURC-30NOV26 (deployed 2026-10-30, closed)
 
 A second v2 series on market 2 (EUR): `EURC-30NOV26`, cash settled in USDC, quoted in USDC per EURC, one contract
 1,000 EURC (~$1,114 at 1.1138), a long gains as EUR strengthens. v1's futures are inverse with VM in base, so it is v2's
