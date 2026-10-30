@@ -113,3 +113,77 @@ Order (`scripts/ops/propose_margin_engine_v2_batch.py` proposes every vault step
    sell depth without the main pool's largest LP at least the total), and the engine keeper's `MAX_EURC_INVENTORY` at
    least the total. After 5 because 5 pins v1's cap at its open interest; before it v1's 40,000 leaves v2 almost nothing.
 7. 30NOV26 fixes and closes out on v1; holders withdraw and re-deposit under v2.
+
+## EURC-30NOV26 (pending deploy)
+
+A second v2 series on market 2 (EUR): `EURC-30NOV26`, cash settled in USDC, quoted in USDC per EURC, one contract
+1,000 EURC (~$1,114 at 1.1138), a long gains as EUR strengthens. v1's futures are inverse with VM in base, so it is v2's
+only. `scripts/deploy-eurc-future-v2.s.sol` deploys it, `scripts/ops/propose_eurc_future_v2_batch.py` proposes its
+batches, `test/fork/EurcFutureV2Fork.t.sol` proves it against the live engine.
+
+### What the deployed engine needs
+
+Nothing but the vault. The engine has no per-market future slot fixed at deploy: `whitelistAsset(future, 2, Future)` and
+`setFutureMarginRequirements(2, mm, im)` are owner-only setters, the viewer arranges futures per market
+(`assetDetails(asset).marketId`), and `FutureVMLib` margins a market's futures at that market's requirement. The pool is
+not per future: every future's VM moves through the engine's one account `accId` (#37), which only fronts cash between
+holders of a series and nets to zero once they settle, so EURC needs no pool of its own. On the TradeModule a future is
+one flag (`setDatedFutureAsset`). The fork suite runs the setup and enable batches as the vault against the engine as it
+stands and trades, marks, fixes and closes out on it.
+
+One thing the engine couples: a series is its subId, the expiry, and `closeOutExpired(account, subId)` closes it on
+every market that lists it, reverting `ME_NotSettled` while any of them is unsettled. At cNGN's 14:00 expiry an EURC
+fixing that missed samples (and so fell back to the owner, 24h after expiry) would hold every cNGN-30NOV26 close-out,
+and the settled notional stays margined until it closes (`testOneExpiryWouldCoupleTheCloseOuts`). EURC therefore
+expires at 16:00 UTC (1796054400, the WM/Reuters London fix; last trade 15:00), and the deploy refuses an expiry any
+market's future lists.
+
+### Parameters (decisions, with the deploy defaults)
+
+| | default | why |
+|---|---|---|
+| expiry / last trade | 2026-11-30 16:00 / 15:00 UTC | a subId of its own (above); the London 4pm fix |
+| contract | 1,000 EURC | ~$1,114: v2 cNGN's ~$743 and v1's $1,000 in the same range, so caps read in similar dollars |
+| IM / MM | 6% / 4% | below |
+| carry | -1.5% a year | an assumption, not a reading: EUR rates less USD rates (ECB deposit ~2% against fed funds ~3.5%). Negative carry puts EUR at a forward premium, `index / (1 + carry x tau)` above the index, +0.14% at 33 days |
+| initial mark | the fair forward at the deploy block | `INITIAL_MARK` overrides, held to 0.5% of it and 3% of the index |
+| mark move / index band | 2% a mark; 3% narrowing to 0.5% over 14 days | cNGN's 5% and 10% -> 1% are sized to NGN. The band is also the fill band: it bounds what two accounts move between them at an off-market fill |
+| cap at enable | 18 contracts (9 a side, ~$20k both sides) | the SecurityModule rule below |
+
+Unchanged from cNGN: 10-minute max mark delay, hourly pulls, 2h forward heartbeat, 1h fixing window sampled within
+15 minutes, 24h fallback within 2% (`FALLBACK_BAND`). The index is the EUR market's spot feed (Chainlink EURC/USD,
+hourly or 0.1% deviation, 3h limit). An account holding the future now reads that feed on every risk check, as EURC
+holders already do: if Chainlink misses two rounds it fails closed until Chainlink posts.
+
+**IM / MM.** By this doc's sizing, an account opened at exactly IM falls under MM at `(IM - MM) / (1 + MM)` for a short
+(EUR rallies) and `(IM - MM) / (1 - MM)` for a long, and is bankrupt at `IM`: at 6% / 4% that is 1.9% / 2.1% and 6%.
+EUR/USD runs at roughly 6-10% a year, 0.4-0.6% a day, and its largest daily moves on record are under 5%, so an account
+at IM is liquidated on a move several times a normal day's and is bankrupt only past any day on record; an account at
+MM is bankrupt on a further 4%, about the largest days on record. That is about two to three times the margin a listed EUR/USD
+future asks, which is the point: one SecurityModule of $3,250, a keeper that is not yet watching EUR, and an index on a
+stablecoin (EURC can trade away from EUR) rather than on the interbank rate. 5% / 3% (bankrupt at 5%, MM at 1.9%) is
+the next step once the keeper and pager have run a series; below that the band's 3% would be wider than the margin.
+
+**Cap.** The rule `enable` applies to cNGN, the SecurityModule covering the whole of an `SM_MOVE` (15%) step on one
+side, applied to both series together, since every v2 series draws on one module. At 2026-10-27 readings (module
+$3,250; cNGN 0.000713260 at its enable cap of 30, $1,604.84; EURC 1.1138): $1,645 is left, which covers a $10,968 side,
+9.8 contracts: **9 a side, a cap of 18**. With cNGN still closed it would be 38. 15% is an NGN devaluation step and is
+very conservative for EUR (a 6% step, the IM, would allow 24 a side on the same $1,645), but it is the rule the
+module is sized by until #245's coverage test runs against v2. `eurc-future-enable` re-reads it at the cap and today's
+marks, after cNGN's draw at its live cap; propose_margin_engine_v2_batch.py's `enable` and `cap` now hold back EURC's
+draw at its live cap the same way.
+
+### Order
+
+1. `forge script scripts/deploy-eurc-future-v2.s.sol` from a fresh key (or one named in `USED_DEPLOYER`), with
+   `FORWARD_SIGNER` the forward KMS key `0xd65F…3650` (each feed's EIP-712 domain binds its signatures to that feed, so
+   one key signs both). Writes `EURC_FUTURE_V2.json`, `EURC_FUTURE_V2_VAULT_ACTIONS.json` (4) and
+   `EURC_FUTURE_V2_ENABLE_VAULT_ACTIONS.json` (2). Closed: cap 0, not on the engine, not on the TradeModule.
+2. `eurc-future-setup`: accept both, `whitelistAsset(future, 2, Future)`, `setFutureMarginRequirements(2, 0.04, 0.06)`.
+   Opens nothing (the future's own cap is 0, which refuses any position before the engine is asked).
+3. Off chain, before enable: the forward publisher signs this feed (`marks` gate: a mark within 2h); the pager reads the
+   future (`futures` in its state); v2's liquidation keeper reports it among its `futures` and holds the IM for a full
+   side of each series; markets-service lists `EURC-30NOV26` (`asset_address`, `sub_id` 1796054400, `market`
+   `EURC-30NOV26`) with the chain's fill band in USDC per EURC.
+4. `eurc-future-enable`: the cap (18), then `setDatedFutureAsset(future, true)`.
+5. 30 Nov: fixing samples 15:00-16:00, `fixSettlementFromIndex` after 16:00, close-outs.
