@@ -65,8 +65,9 @@ eurc-cap gates (each read live):
   cap       N is not v2's cap already, and not under v2's EURC open interest (that is close-only, not a cap)
   depth     propose_eurc_spot_batch's depth stress gate (a fresh eurc_depth reading: 50% of the 2% sell depth without
             the main pool's largest LP) at the venue's total, v1's cap (or its open interest, if higher) + N
-  keeper    the engine keeper's MAX_EURC_INVENTORY (ENGINE_KEEPER_HEALTH_URL /health maxEurcInventory) is set and at
-            least that total
+  keeper    v2's engine keeper's MAX_EURC_INVENTORY (ENGINE_V2_KEEPER_HEALTH_URL, default 127.0.0.1:9466, /health
+            maxEurcInventory) is set and at least that total. v2's: v1's keeper moved to v2 on 2026-10-28, and v1 is
+            close-only by then, so the keeper that has to unwind the venue's EURC is v2's
 
 It NEVER signs, executes or broadcasts. Without --propose it prints the gates and the sheet. With --propose each action
 goes to the MPCVault app for a human to approve, one at a time, from the vault, through perp_cap_guard.
@@ -614,13 +615,14 @@ def eurc_total_depth_gate(row: dict, v1_18: int, cap18: int) -> Gate:
   return Gate(g.name, g.ok, f"v1 {v1_18 / 1e18:,.0f} + v2 {cap18 / 1e18:,.0f} EURC; {g.detail}")
 
 
-def eurc_inventory_gate(health: dict, v1: str, total18: int) -> Gate:
+def eurc_inventory_gate(health: dict, engine: str, total18: int) -> Gate:
   """The engine keeper's MAX_EURC_INVENTORY was sized to the same depth: the venue's EURC may not exceed it. Unset is
-  refused, as at the EURC enable."""
+  refused, as at the EURC enable. `engine` is the manager the keeper must report: v2, whose keeper liquidates since
+  2026-10-28 (v1's was stopped then)."""
   raw = health.get("maxEurcInventory")
   inventory = int(raw) if raw not in (None, "") else None
   manager = str(health.get("manager") or "").lower()
-  ok = manager == v1.lower() and inventory is not None and total18 <= inventory
+  ok = manager == engine.lower() and inventory is not None and total18 <= inventory
   limit = "unset (no limit)" if inventory is None else f"{inventory / 1e18:,.0f} EURC"
   return Gate("keeper inventory", ok, f"engine keeper (manager {manager or '(unset)'}) MAX_EURC_INVENTORY {limit} "
                                       f"vs v1 + v2 {total18 / 1e18:,.0f} EURC")
@@ -651,8 +653,8 @@ def gate_eurc_cap(chain: Chain, d: dict, vault: str, cap18: int) -> list[Gate]:
   except Exception as exc:  # noqa: BLE001 -- unreadable holds, as at the EURC enable
     gates.append(Gate("depth stress", False, f"unreadable: {exc}"))
   try:
-    health = http_json(os.environ.get("ENGINE_KEEPER_HEALTH_URL", "http://127.0.0.1:9465/health"))
-    gates.append(eurc_inventory_gate(health, d["v1"], v1_18 + cap18))
+    health = http_json(os.environ.get("ENGINE_V2_KEEPER_HEALTH_URL", "http://127.0.0.1:9466/health"))
+    gates.append(eurc_inventory_gate(health, d["manager"], v1_18 + cap18))
   except Exception as exc:  # noqa: BLE001
     gates.append(Gate("keeper inventory", False, f"engine keeper /health unreadable: {exc}"))
   return gates
@@ -823,11 +825,12 @@ def self_test() -> int:
   assert eurc_total_depth_gate(row, 0, 43_000 * e18).ok and not eurc_total_depth_gate(row, 0, 44_000 * e18).ok
   assert eurc_total_depth_gate(row, 5_000 * e18, 38_000 * e18).ok and not eurc_total_depth_gate(row, 5_000 * e18, 39_000 * e18).ok
   assert not eurc_total_depth_gate({**row, "total_sell_eurc_ex_largest_lp": ""}, 0, e18).ok, "unknown depth holds"
-  # The engine keeper's MAX_EURC_INVENTORY: v1's keeper, set, and at least the total.
-  health = {"manager": v1.lower(), "maxEurcInventory": str(40_000 * e18)}
-  assert eurc_inventory_gate(health, v1, 40_000 * e18).ok and not eurc_inventory_gate(health, v1, 40_001 * e18).ok
-  assert not eurc_inventory_gate({**health, "maxEurcInventory": None}, v1, e18).ok, "unset is refused"
-  assert not eurc_inventory_gate({**health, "manager": a(1)}, v1, e18).ok, "another manager's keeper"
+  # The engine keeper's MAX_EURC_INVENTORY: v2's keeper, set, and at least the total.
+  v2e = a(9)
+  health = {"manager": v2e.lower(), "maxEurcInventory": str(40_000 * e18)}
+  assert eurc_inventory_gate(health, v2e, 40_000 * e18).ok and not eurc_inventory_gate(health, v2e, 40_001 * e18).ok
+  assert not eurc_inventory_gate({**health, "maxEurcInventory": None}, v2e, e18).ok, "unset is refused"
+  assert not eurc_inventory_gate({**health, "manager": v1.lower()}, v2e, e18).ok, "v1's keeper, stopped since 2026-10-28"
   assert eurc_cap_bounds_gate(3_000 * e18, 0, 0).ok
   assert not eurc_cap_bounds_gate(0, 0, 0).ok and not eurc_cap_bounds_gate(e18, 0, 2 * e18).ok
   act = eurc_cap_action(a(7), a(1), 3_000 * e18)
