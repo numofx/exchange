@@ -61,9 +61,9 @@ func DefaultRegistry(cfg config.Config) *Registry {
 			BaseAssetSymbol:  "cNGN",
 			QuoteAssetSymbol: "USDC",
 			TickSize:         "0.000000000000000001",
-			// 25 bps taker, 0 maker. Charged in the trade module's quote asset -- wrapped USDC
-			// since the 2026-09-10 cutover -- and paid to the module's feeRecipient.
-			TakerFeeBps:        25,
+			// 15 bps taker since 2026-10-31 (25 from 2026-09-10), 0 maker. Charged in the trade module's
+			// quote asset, the perp's USDC cash, and paid to the module's feeRecipient.
+			TakerFeeBps:        15,
 			MakerFeeBps:        0,
 			MinSize:            AmountStep,
 			ContractMultiplier: "1",
@@ -264,9 +264,10 @@ func linearFutureMetadata(cfg config.Config, series config.FutureSeries) Metadat
 		QuoteAssetSymbol: "USDC",
 		ExpiryTimestamp:  series.Expiry,
 		TickSize:         "0.000000000000000001",
-		// 25 bps taker, 0 maker, of the notional: contracts x contract size x the fill price, in USDC,
-		// charged in the perp's USDC cash and paid to the TradeModule's feeRecipient.
-		TakerFeeBps:        25,
+		// The series' taker fee (its taker_fee_bps, else 25 bps), 0 maker, of the notional: contracts x
+		// contract size x the fill price, in USDC, charged in the perp's USDC cash and paid to the
+		// TradeModule's feeRecipient.
+		TakerFeeBps:        series.TakerFee(),
 		MakerFeeBps:        0,
 		MinSize:            AmountStep,
 		ContractMultiplier: size,

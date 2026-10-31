@@ -96,6 +96,8 @@ func TestAFutureSeriesListIsRefusedWhenAmbiguousOrPartial(t *testing.T) {
 		"base_asset is required":         `[{"asset_address":"` + testV2Future + `","expiry":1796047200,"manager_address":"` + testV2Engine + `","kind":"linear","contract_size":"1"}]`,
 		"an inverse series is cNGN's":    `[{"asset_address":"` + testV2Future + `","expiry":1796047200,"manager_address":"` + testV2Engine + `","kind":"inverse","base_asset":"EURC","contract_size":"1000"}]`,
 		"contract_size":                  `[{"asset_address":"` + testV2Future + `","expiry":1796047200,"manager_address":"` + testV2Engine + `","kind":"linear","base_asset":"cNGN"}]`,
+		"taker_fee_bps -1 is outside":    `[` + strings.Replace(v2, `"contract_size"`, `"taker_fee_bps":-1,"contract_size"`, 1) + `]`,
+		"taker_fee_bps 250 is outside":   `[` + strings.Replace(v2, `"contract_size"`, `"taker_fee_bps":250,"contract_size"`, 1) + `]`,
 		"1e18 / contract_size":           `[{"asset_address":"` + testV2Future + `","expiry":1796047200,"manager_address":"` + testV2Engine + `","kind":"linear","base_asset":"cNGN","contract_size":"3"}]`,
 		"two series are listed on":       `[` + v2 + `,` + strings.Replace(v2, `"base_asset":"cNGN"`, `"base_asset":"cNGN","symbol":"cNGN-B"`, 1) + `]`,
 		"two series are listed as":       `[` + v2 + `,` + strings.Replace(v2, testV2Future, testEURCFuture, 1) + `]`,
@@ -134,5 +136,29 @@ func TestFutureSeriesWithoutTheLegacySeries(t *testing.T) {
 	closeOnly.CNGNFutureCloseOnly = true
 	if err := closeOnly.validateFutureStack(); err == nil || !strings.Contains(err.Error(), "CNGN_FUTURE_CLOSE_ONLY") {
 		t.Fatalf("close-only with no v1 series: %v", err)
+	}
+}
+
+// A series' taker fee is its own when set, zero included, and DefaultFutureTakerFeeBps when absent.
+func TestFutureSeriesTakerFee(t *testing.T) {
+	setLegacyFutureEnv(t)
+	t.Setenv("FUTURE_SERIES", `[
+	  {"asset_address":"`+testV2Future+`","expiry":1796047200,"manager_address":"`+testV2Engine+`","kind":"linear","base_asset":"cNGN","contract_size":"1000000","taker_fee_bps":15},
+	  {"asset_address":"`+testEURCFuture+`","expiry":1796054400,"manager_address":"`+testV2Engine+`","kind":"linear","base_asset":"EURC","contract_size":"1000","taker_fee_bps":5}
+	]`)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fees := map[string]int{}
+	for _, s := range cfg.FutureSeriesList() {
+		fees[s.MarketSymbol()] = s.TakerFee()
+	}
+	if want := map[string]int{"USDC-cNGN-30NOV26": 25, "cNGN-30NOV26": 15, "EURC-30NOV26": 5}; !reflect.DeepEqual(fees, want) {
+		t.Fatalf("fees %v, want %v", fees, want)
+	}
+	zero := 0
+	if (FutureSeries{TakerFeeBps: &zero}).TakerFee() != 0 {
+		t.Fatal("a zero fee is the series' own, not the default")
 	}
 }

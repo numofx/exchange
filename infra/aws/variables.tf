@@ -317,6 +317,7 @@ variable "future_series" {
     amount_scale    = optional(string)
     symbol          = optional(string)
     close_only      = optional(bool, false)
+    taker_fee_bps   = optional(number) # absent: markets-service's default, 25
   }))
   default = [{
     asset_address   = "0xcACEe66ad41fD1472a47D7D5Fe372FFbFac9AA75"
@@ -326,6 +327,7 @@ variable "future_series" {
     base_asset      = "cNGN"
     contract_size   = "1000000"
     amount_scale    = "1000000000000000" # 1,000 cNGN: 1e18 per 1,000,000 cNGN contract
+    taker_fee_bps   = 15                 # 2026-10-31, from 25
     }, {
     # EURC-30NOV26 (risk-core EURC_FUTURE_V2.json), listed closed 2026-10-30: USDC per EURC, 1,000 EURC a contract,
     # 16:00 UTC so its sub id is not cNGN's.
@@ -336,6 +338,7 @@ variable "future_series" {
     base_asset      = "EURC"
     contract_size   = "1000"
     amount_scale    = "1000000000000000" # 1 EURC: 1e18 per 1,000 EURC contract
+    taker_fee_bps   = 5                  # 2026-10-31, from 25: EURC-USDC spot's 5
   }]
 
   validation {
