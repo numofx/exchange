@@ -9,7 +9,7 @@
 #   contracts/risk-core/scripts/ops/run-with-ssm-mm.sh cancel --execute
 #   contracts/risk-core/scripts/ops/run-with-ssm-mm.sh withdraw --execute
 #   contracts/risk-core/scripts/ops/run-with-ssm-mm.sh deposit --execute
-#   contracts/risk-core/scripts/ops/run-with-ssm-mm.sh engine-account 4000000000 --execute
+#   contracts/risk-core/scripts/ops/run-with-ssm-mm.sh engine-account 4000000000 --market=cNGN-30NOV26 --execute
 set -euo pipefail
 REGION="${AWS_REGION:-us-east-1}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
