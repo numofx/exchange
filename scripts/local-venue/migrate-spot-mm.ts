@@ -9,8 +9,9 @@
  * Phases, each idempotent and a dry run unless --execute is given:
  *   status     the MM's spot account, its balances and resting orders, and the perp stack's addresses
  *   cancel     cancel every resting order of the MM (the bot must be stopped first)
- *   withdraw   sign a WithdrawalModule action for the spot account's whole USDC and cNGN balances and
- *              submit each to the venue, which pays the tokens to the MM wallet. The escrows follow the
+ *   withdraw   sign a WithdrawalModule action for the spot account's whole USDC, cNGN and EURC balances and
+ *              submit each to the venue, which pays the tokens to the MM wallet (MM_SPOT_SUBACCOUNT_ID: 34 for
+ *              the cNGN-USDC maker, 36 for EURC-USDC's). The escrows follow the
  *              account's manager: the 2026-09-10 stack's under its retired SRM, the perp stack's cash and
  *              cNGN escrow under the perp SRM (the spot maker's #26, moving to the MarginEngine).
  *              Refused while any of the MM's spot orders rest: stop the bot and let them expire first.
@@ -19,6 +20,9 @@
  *              to set as MM_SUBACCOUNT_ID / MM_RECIPIENT_ID
  *   deposit-cngn <id>  escrow.deposit of the wallet's whole cNGN into an existing account of the MM's
  *              under the perp SRM or the MarginEngine (the second half of `deposit` or `engine-account`)
+ *   deposit-eurc <id>  the EURC-USDC escrow's deposit of the wallet's whole EURC into an existing account of
+ *              the MM's under a listed MarginEngine; refused while that engine's EURC cap has no room for it
+ *              (MarginEngine v2's is 0 until eurc-cap, docs/margin-engine-v2.md step 6)
  *   perp-cancel  cancel the perp maker's resting cNGN-PERP orders (stop market-maker-perp first: it does
  *              not cancel on shutdown). Spot orders, the other bot's, are not touched.
  *   perp-close <price> --against=<id>  buy back the perp maker's short on #MM_PERP_SUBACCOUNT_ID (24) at
@@ -81,12 +85,15 @@ const abi = parseAbi([
   'event DepositedSubAccount(uint256 indexed accountId, address indexed owner)',
   'function whitelistedManager(address) view returns (bool)',
   'function getMargin(uint256 accountId, bool isInitial) view returns (int256)',
+  'function wrappedAsset() view returns (address)',
+  'function totalPosition(address) view returns (uint256)',
+  'function totalPositionCap(address) view returns (uint256)',
 ]);
 
 const client = createPublicClient({ chain: base, transport: http(RPC) });
 const [phase, ...flags] = process.argv.slice(2);
 const execute = flags.includes('--execute');
-if (!phase) throw new Error('usage: migrate-spot-mm.ts <status|cancel|withdraw|deposit|deposit-cngn|perp-cancel|perp-close|perp-withdraw|engine-account|move-usdc> [--market=<symbol>] [--execute]');
+if (!phase) throw new Error('usage: migrate-spot-mm.ts <status|cancel|withdraw|deposit|deposit-cngn|deposit-eurc|perp-cancel|perp-close|perp-withdraw|engine-account|move-usdc> [--market=<symbol>] [--execute]');
 const MARKET = flags.find((f) => f.startsWith('--market='))?.slice('--market='.length);
 if (!KEY) throw new Error('MM_OWNER_PRIVATE_KEY is not in the environment (run through the SSM wrapper on the box)');
 // The relayer's lesson (perp-feeds): a load-balanced RPC can hand out a mined nonce again; viem's
@@ -160,17 +167,25 @@ async function restingOrders(market: string | null = SPOT_SYMBOL, account?: bigi
 
 /**
  * The USDC and cNGN escrows an account of the spot maker holds, by its manager: the 2026-09-10 stack's
- * under that stack's SRM, the perp stack's (also the MarginEngine's) under the perp SRM or the engine.
+ * under that stack's SRM, the perp stack's (also the MarginEngines') under the perp SRM or any engine the
+ * venue lists, v1 included: since MarginEngine v2 step 4 spot is listed under v2 while the makers' v1
+ * accounts still have to be emptied.
  */
 async function spotEscrows(account: bigint): Promise<{ manager: Address; usdc: Address; cngn: Address }> {
   const manager = await client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'manager', args: [account] });
   if (manager.toLowerCase() === LEGACY.srm.toLowerCase()) {
     return { manager, usdc: LEGACY.wrappedUsdc, cngn: LEGACY.cngnEscrow };
   }
+  if ((await listedEngines()).has(manager.toLowerCase())) {
+    // From the cNGN-USDC listing: the perp, whose block named them before, is delisted since 2026-10-21.
+    const markets = (await (await fetch(`${MARKETS}/v1/markets`)).json()) as Record<string, unknown>[];
+    const spot = markets.find((m) => m.contract_type === 'spot' && m.market === SPOT_SYMBOL);
+    if (!(spot?.quote_asset_address && spot.asset_address)) throw new Error(`the venue serves no ${SPOT_SYMBOL} with its escrows`);
+    return { manager, usdc: getAddress(spot.quote_asset_address as string), cngn: getAddress(spot.asset_address as string) };
+  }
   const stack = await perpStack();
-  const engine = await spotEngine();
-  if (manager.toLowerCase() !== stack.srm.toLowerCase() && manager.toLowerCase() !== engine.toLowerCase()) {
-    throw new Error(`#${account} is under ${manager}: neither the retired spot SRM, the perp SRM nor the MarginEngine`);
+  if (manager.toLowerCase() !== stack.srm.toLowerCase()) {
+    throw new Error(`#${account} is under ${manager}: neither the retired spot SRM, the perp SRM nor a listed MarginEngine`);
   }
   return { manager, usdc: stack.cash, cngn: stack.escrow };
 }
@@ -267,14 +282,65 @@ async function withdrawOne(escrow: Address, token: Address, decimals: number, ac
 }
 
 async function withdraw() {
-  const resting = await restingOrders();
+  // Any market: the EURC maker's #36 rests EURC-USDC orders, not SPOT_SYMBOL's.
+  const resting = await restingOrders(null, SPOT_ACCOUNT);
   if (resting.length > 0) {
-    throw new Error(`${resting.length} ${SPOT_SYMBOL} order(s) of the MM still rest: stop market-maker-spot (desired_count_market_maker = 0) and let them expire (60 s), then withdraw`);
+    throw new Error(`${resting.length} order(s) of the MM still rest on #${SPOT_ACCOUNT}: stop its maker and let them expire (60 s), then withdraw`);
   }
   const escrows = await spotEscrows(SPOT_ACCOUNT);
   console.log(`#${SPOT_ACCOUNT} is under ${escrows.manager}: withdrawing ${escrows.usdc} (USDC) and ${escrows.cngn} (cNGN)`);
   await withdrawOne(escrows.usdc, USDC, 6);
   await withdrawOne(escrows.cngn, CNGN, 6);
+  const eurc = await eurcEscrow();
+  if (eurc !== null && escrows.manager.toLowerCase() !== LEGACY.srm.toLowerCase()) {
+    console.log(`and ${eurc.escrow} (EURC)`);
+    await withdrawOne(eurc.escrow, eurc.token, 6);
+  }
+}
+
+/** The EURC-USDC escrow and the token it wraps, from the listing; null while the venue lists no EURC-USDC. */
+async function eurcEscrow(): Promise<{ escrow: Address; token: Address } | null> {
+  const markets = (await (await fetch(`${MARKETS}/v1/markets`)).json()) as Record<string, unknown>[];
+  const listing = markets.find((m) => m.contract_type === 'spot' && m.market === 'EURC-USDC');
+  if (!listing?.asset_address) return null;
+  const escrow = getAddress(listing.asset_address as string);
+  const token = await client.readContract({ address: escrow, abi, functionName: 'wrappedAsset' });
+  return { escrow, token };
+}
+
+async function depositEurc() {
+  const id = BigInt(flags.find((f) => /^[0-9]+$/.test(f)) ?? '0');
+  if (id === 0n) throw new Error('deposit-eurc needs the account id');
+  const eurc = await eurcEscrow();
+  if (eurc === null) throw new Error('the venue lists no EURC-USDC');
+  const mgr = await client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'manager', args: [id] });
+  if (!(await listedEngines()).has(mgr.toLowerCase())) throw new Error(`account #${id} is under ${mgr}, not a MarginEngine the venue lists`);
+  const custodian = await client.readContract({ address: MATCHING, abi, functionName: 'subAccountToOwner', args: [id] });
+  if (custodian.toLowerCase() !== owner.address.toLowerCase()) throw new Error(`account #${id} is not the MM's in Matching (owner ${custodian})`);
+  const units = await client.readContract({ address: eurc.token, abi, functionName: 'balanceOf', args: [owner.address] });
+  if (units === 0n) throw new Error('no EURC in the wallet');
+  // The cap is per manager: v2's is 0 until eurc-cap, and a deposit over it reverts.
+  const cap = await client.readContract({ address: eurc.escrow, abi, functionName: 'totalPositionCap', args: [mgr] });
+  const held = await client.readContract({ address: eurc.escrow, abi, functionName: 'totalPosition', args: [mgr] });
+  const amount18 = units * 10n ** 12n;
+  if (held + amount18 > cap) {
+    throw new Error(`${eurc.escrow} lets ${mgr} hold ${cap} (18dp), ${held} held: no room for ${amount18}. Land eurc-cap first`);
+  }
+  console.log(`wallet holds ${units} EURC units; depositing into #${id} via ${eurc.escrow} (cap ${cap}, held ${held}, 18dp)`);
+  if (!execute) {
+    console.log(`dry run: would approve ${eurc.escrow} for ${units} and call deposit(${id}, ${units})`);
+    return;
+  }
+  const send = async (address: Address, functionName: 'approve' | 'deposit', args: readonly unknown[]) => {
+    const hash = await wallet.writeContract({ address, abi, functionName, args } as never);
+    const receipt = await client.waitForTransactionReceipt({ hash });
+    if (receipt.status !== 'success') throw new Error(`${functionName} reverted (${hash})`);
+    return receipt;
+  };
+  await send(eurc.token, 'approve', [eurc.escrow, units]);
+  const deposited = await atBlock(() => send(eurc.escrow, 'deposit', [id, units]));
+  const after = await atBlock(() => ledger(id, eurc.escrow, deposited.blockNumber));
+  console.log(`ok: #${id} now holds ${after} (18dp) in ${eurc.escrow}`);
 }
 
 async function deposit() {
@@ -643,7 +709,7 @@ async function perpWithdraw() {
   await withdrawOne(perp.cash, USDC, 6, PERP_ACCOUNT, units);
 }
 
-const phases: Record<string, () => Promise<void>> = { status, cancel, withdraw, deposit, 'deposit-cngn': depositCngn,
+const phases: Record<string, () => Promise<void>> = { status, cancel, withdraw, deposit, 'deposit-cngn': depositCngn, 'deposit-eurc': depositEurc,
   'perp-cancel': perpCancel, 'perp-close': perpClose, 'perp-withdraw': perpWithdraw, 'engine-account': engineAccount, 'move-usdc': moveUsdc,
 };
 const run = phases[phase];
