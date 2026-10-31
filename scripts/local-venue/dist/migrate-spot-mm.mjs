@@ -18988,6 +18988,7 @@ var LEGACY = {
 };
 var abi2 = parseAbi([
   "function approve(address, uint256) returns (bool)",
+  "function allowance(address, address) view returns (uint256)",
   "function balanceOf(address) view returns (uint256)",
   "function getBalance(uint256 accountId, address asset, uint256 subId) view returns (int256)",
   "function manager(uint256 accountId) view returns (address)",
@@ -19347,14 +19348,22 @@ async function moveUsdc() {
       throw new Error(`#${id} is not the MM's in Matching (owner ${custodian})`);
     console.log(`#${id}: under ${mgr}, cash ${await ledger(id, cash)} (18dp)`);
   }
-  const resting = await restingOrders(null, from15);
-  if (resting.length > 0)
-    throw new Error(`${resting.length} order(s) of the MM still rest on #${from15}: stop its maker and let them expire first`);
+  const depositOnly = flags.includes("--deposit-only");
+  if (depositOnly) {
+    const usdc = await client.readContract({ address: USDC, abi: abi2, functionName: "balanceOf", args: [owner.address] });
+    if (usdc < units)
+      throw new Error(`--deposit-only: the wallet holds ${usdc} USDC units, under the ${units} to deposit`);
+  } else {
+    const resting = await restingOrders(null, from15);
+    if (resting.length > 0)
+      throw new Error(`${resting.length} order(s) of the MM still rest on #${from15}: stop its maker and let them expire first`);
+  }
   if (!execute) {
-    console.log(`dry run: would withdraw ${units} USDC units of ${cash} from #${from15} to ${owner.address}, then approve ${cash} and deposit(${to}, ${units})`);
+    console.log(`dry run: would ${depositOnly ? "skip the withdrawal" : `withdraw ${units} USDC units of ${cash} from #${from15} to ${owner.address}`}, then approve ${cash} and deposit(${to}, ${units})`);
     return;
   }
-  await withdrawOne(cash, USDC, 6, from15, units);
+  if (!depositOnly)
+    await withdrawOne(cash, USDC, 6, from15, units);
   const before = await ledger(to, cash);
   const send = async (address, functionName, args) => {
     const hash3 = await wallet.writeContract({ address, abi: abi2, functionName, args });
@@ -19364,8 +19373,14 @@ async function moveUsdc() {
     console.log(`  ${functionName} ${hash3} block ${receipt.blockNumber}`);
     return receipt;
   };
-  await send(USDC, "approve", [cash, units]);
-  const deposited = await send(cash, "deposit", [to, units]);
+  const allowance = () => client.readContract({ address: USDC, abi: abi2, functionName: "allowance", args: [owner.address, cash] });
+  if (await allowance() < units)
+    await send(USDC, "approve", [cash, units]);
+  await atBlock(async () => {
+    if (await allowance() < units)
+      throw new Error("allowance not visible yet");
+  });
+  const deposited = await atBlock(() => send(cash, "deposit", [to, units]));
   const after = await atBlock(() => ledger(to, cash, deposited.blockNumber));
   if (after - before !== units * 10n ** 12n)
     throw new Error(`#${to} moved by ${after - before} (18dp), expected ${units * 10n ** 12n}`);
