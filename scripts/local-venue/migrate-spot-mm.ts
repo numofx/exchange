@@ -385,22 +385,19 @@ async function deposit() {
 async function depositCngn() {
   const id = BigInt(flags.find((f) => /^[0-9]+$/.test(f)) ?? '0');
   if (id === 0n) throw new Error('deposit-cngn needs the unified account id');
-  const stack = await perpStack();
   const mgr = await client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'manager', args: [id] });
-  const engine = await spotEngine();
-  if (mgr.toLowerCase() !== stack.srm.toLowerCase() && mgr.toLowerCase() !== engine.toLowerCase()) {
-    throw new Error(`account #${id} is under ${mgr}, neither the perp SRM nor the MarginEngine`);
-  }
-  // The perp's cNGN escrow is the spot asset and the engine's cNGN collateral alike; it must take the manager.
-  const takes = await client.readContract({ address: stack.escrow, abi, functionName: 'whitelistedManager', args: [mgr] });
-  if (!takes) throw new Error(`${stack.escrow} does not take ${mgr} as a manager`);
+  // Under a listed engine the escrow is cNGN-USDC's asset (spotEscrows); the perp SRM's is read from the perp block.
+  const stack = await spotEscrows(id);
+  // The cNGN escrow is the spot asset and the engines' cNGN collateral alike; it must take the manager.
+  const takes = await client.readContract({ address: stack.cngn, abi, functionName: 'whitelistedManager', args: [mgr] });
+  if (!takes) throw new Error(`${stack.cngn} does not take ${mgr} as a manager`);
   const custodian = await client.readContract({ address: MATCHING, abi, functionName: 'subAccountToOwner', args: [id] });
   if (custodian.toLowerCase() !== owner.address.toLowerCase()) throw new Error(`account #${id} is not the MM's in Matching (owner ${custodian})`);
   const cngn = await client.readContract({ address: CNGN, abi, functionName: 'balanceOf', args: [owner.address] });
   if (cngn === 0n) throw new Error('no cNGN in the wallet');
-  console.log(`wallet holds ${cngn} cNGN units; depositing into #${id} via ${stack.escrow}`);
+  console.log(`wallet holds ${cngn} cNGN units; depositing into #${id} via ${stack.cngn}`);
   if (!execute) {
-    console.log(`dry run: would approve ${stack.escrow} for ${cngn} and call deposit(${id}, ${cngn})`);
+    console.log(`dry run: would approve ${stack.cngn} for ${cngn} and call deposit(${id}, ${cngn})`);
     return;
   }
   const send = async (address: Address, functionName: 'approve' | 'deposit', args: readonly unknown[]) => {
@@ -409,10 +406,11 @@ async function depositCngn() {
     if (receipt.status !== 'success') throw new Error(`${functionName} reverted (${hash})`);
     return receipt;
   };
-  await send(CNGN, 'approve', [stack.escrow, cngn]);
-  const deposited = await send(stack.escrow, 'deposit', [id, cngn]);
-  const held = await ledger(id, stack.escrow, deposited.blockNumber);
-  console.log(`ok: #${id} now holds ${held} (18dp) in ${stack.escrow}`);
+  await send(CNGN, 'approve', [stack.cngn, cngn]);
+  // As in move-usdc: a node behind the approve can refuse the deposit's estimate, and the read after it.
+  const deposited = await atBlock(() => send(stack.cngn, 'deposit', [id, cngn]));
+  const held = await atBlock(() => ledger(id, stack.cngn, deposited.blockNumber));
+  console.log(`ok: #${id} now holds ${held} (18dp) in ${stack.cngn}`);
 }
 
 /** The MarginEngine spot trades under (v1), from the spot listing: never typed in by hand. */
