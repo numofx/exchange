@@ -7,8 +7,8 @@
 # Nothing here exists until image_market_maker_future_v2 is set. A series' service runs only once its
 # account is set (mm_future_v2_subaccount_ids, opened with migrate-spot-mm.ts engine-account --market=<symbol>
 # under the MM-key grant) and its replica count is 1 (desired_count_market_maker_future_v2, operator-local in
-# counts.auto.tfvars). Both start in dry run (mm_future_v2_dry_run): the bot reads the series and the account
-# and logs the ladder it would sign, without signing.
+# counts.auto.tfvars). mm_future_v2_dry_run makes both log the ladder they would sign without signing; live since
+# 2026-10-31.
 #
 # Before the enable batch the series are listed with trading_open false: markets-service admits orders (in
 # band, from an account under the series' engine) and the matcher does not cross them, so live quotes only
@@ -50,9 +50,11 @@ variable "desired_count_market_maker_future_v2" {
 }
 
 variable "mm_future_v2_dry_run" {
-  description = "Both v2 makers log the orders they would sign and sign none. Set false once the dry run's ladder reads right."
+  description = "Both v2 makers log the orders they would sign and sign none. True for a new image or series until its ladder reads right."
   type        = bool
-  default     = true
+  # 2026-10-31: both ladders read right in dry run (10 rungs a side, cNGN +/-15 bps on 0.00072025, EURC +/-8 bps
+  # on 1.11681, no IM trimming); live since, resting on the closed books until the enable.
+  default = false
 }
 
 locals {
