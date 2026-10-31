@@ -301,7 +301,8 @@ variable "cngn_future_close_only" {
 # "More series"): MarginEngine v2's <BASE>-<DDMONYY>. Keyed by (asset_address, expiry); two series may
 # share an expiry. Empty lists nothing more, and leaves FUTURE_SERIES out of the task definitions.
 # v2's cNGN-30NOV26 listed 2026-10-28 while v2 is closed (trading_open false until the enable batch): its forward
-# publisher reads its book. The app ignores it (cNGN over USDC) and no maker quotes it yet. Order unit 1,000 cNGN.
+# publisher reads its book. Order unit 1,000 cNGN. Since 2026-10-31 the v2 makers (#39, #40) quote both series, the
+# app shows them (trading-app 59a5454), and the settlement canary watches their engine (local.canary_other_managers).
 variable "future_series" {
   type = list(object({
     asset_address   = string
