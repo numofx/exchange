@@ -67,8 +67,10 @@ interface IRTradeModule {
  * MARGIN_ENGINE_V2_ENABLE_VAULT_ACTIONS.json and EURC_FUTURE_V2_ENABLE_VAULT_ACTIONS.json byte for byte as the vault,
  * then trades each series through the live Matching and TradeModule with the venue's own executor, at its live mark.
  *
- * Run it just before proposing either batch. Once a cap is non-zero the enable has landed and there is nothing left to
- * rehearse, so the suite skips.
+ * Run it just before proposing either batch. Since the enable landed (2026-10-31) it runs against the open series: the
+ * files re-applied as the vault are idempotent (two setters), so each test still proves the batch byte for byte, the
+ * closed-state test checks the open state instead, and the cap test fills only the headroom live open interest leaves.
+ * It never skips: CI fails a fork suite that does.
  *
  * Requires BASE_RPC_URL.
  */
@@ -95,6 +97,8 @@ contract MarginEngineV2EnableRehearsalFork is Test {
   FutureAsset v1Future;
   address v1Engine;
   uint nonce;
+  /// @dev The enable has landed on chain: either series has a cap under v2.
+  bool enabled;
 
   function setUp() public {
     vm.createSelectFork(vm.envString("BASE_RPC_URL"));
@@ -113,15 +117,18 @@ contract MarginEngineV2EnableRehearsalFork is Test {
     v1Future = FutureAsset(vm.parseJsonAddress(v1, ".future"));
     v1Engine = vm.parseJsonAddress(v1, ".manager");
 
-    if (cngn.totalPositionCap(IManager(address(engine))) != 0 || eurc.totalPositionCap(IManager(address(engine))) != 0)
-    {
-      vm.skip(true);
-    }
+    enabled =
+      cngn.totalPositionCap(IManager(address(engine))) != 0 || eurc.totalPositionCap(IManager(address(engine))) != 0;
   }
 
-  function testTheSeriesAreClosedAndMarkedBeforeEnable() public view {
-    assertFalse(IRTradeModule(tradeModule).isDatedFutureAsset(address(cngn)), "cNGN not yet a dated future");
-    assertFalse(IRTradeModule(tradeModule).isDatedFutureAsset(address(eurc)), "EURC not yet a dated future");
+  /// @dev Before the enable both series are closed; after it, both are open, neither half-way.
+  function testTheSeriesAreMarkedAndClosedOrOpenTogether() public view {
+    bool cngnDated = IRTradeModule(tradeModule).isDatedFutureAsset(address(cngn));
+    bool eurcDated = IRTradeModule(tradeModule).isDatedFutureAsset(address(eurc));
+    assertEq(cngnDated, enabled, "cNGN a dated future exactly when enabled");
+    assertEq(eurcDated, enabled, "EURC a dated future exactly when enabled");
+    assertEq(cngn.totalPositionCap(IManager(address(engine))) != 0, enabled, "cNGN's cap set exactly when enabled");
+    assertEq(eurc.totalPositionCap(IManager(address(engine))) != 0, enabled, "EURC's cap set exactly when enabled");
     _assertFreshMark(cngn, cngnSubId, "cNGN");
     _assertFreshMark(eurc, eurcSubId, "EURC");
     assertTrue(matching.tradeExecutors(EXECUTOR), "the venue's executor executes trades");
@@ -155,14 +162,18 @@ contract MarginEngineV2EnableRehearsalFork is Test {
     assertGe(engine.getMargin(makerAcc, true), 0, "maker above initial margin");
   }
 
-  /// @dev A cap counts both sides: EURC's 18 is 9 contracts of open interest (9,000 EURC), cNGN's 30 is 15 (15M cNGN).
+  /**
+   * @dev A cap counts both sides: EURC's 18 is 9 contracts of open interest (9,000 EURC), cNGN's 30 is 15 (15M cNGN).
+   *      Two fresh accounts add 2 to the tracked total per contract, so they fill half the headroom live open interest
+   *      leaves (all of it before any trading), and one contract more is refused.
+   */
   function testEachCapHoldsAtHalfItsValueInOpenInterest() public {
     _enableBoth();
     uint takerAcc = _matchingAccount(vm.addr(takerPk), 20_000e6);
     uint makerAcc = _matchingAccount(vm.addr(makerPk), 20_000e6);
-    _fill(eurc, eurcSubId, takerAcc, makerAcc, 9e18);
+    _fillToCap(eurc, eurcSubId, takerAcc, makerAcc);
     _fillOverCap(eurc, eurcSubId, takerAcc, makerAcc);
-    _fill(cngn, cngnSubId, takerAcc, makerAcc, 15e18);
+    _fillToCap(cngn, cngnSubId, takerAcc, makerAcc);
     _fillOverCap(cngn, cngnSubId, takerAcc, makerAcc);
   }
 
@@ -217,6 +228,13 @@ contract MarginEngineV2EnableRehearsalFork is Test {
       _order(future, subId, takerAcc, makerAcc, amount);
     vm.prank(EXECUTOR);
     matching.verifyAndMatch(actions, sigs, orderData);
+  }
+
+  /// @dev The taker buys whatever open interest the cap has left, if any.
+  function _fillToCap(FutureAsset future, uint subId, uint takerAcc, uint makerAcc) internal {
+    IManager m = IManager(address(engine));
+    uint headroom = (future.totalPositionCap(m) - future.totalPosition(m)) / 2;
+    if (headroom > 0) _fill(future, subId, takerAcc, makerAcc, headroom);
   }
 
   /// @dev One more contract, which the cap refuses.
