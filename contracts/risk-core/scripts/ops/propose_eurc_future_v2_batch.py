@@ -18,7 +18,8 @@ Setup gates (all read live):
   engine     the vault owns v2; v2 lists exactly NGN and EUR, EUR's base is the artifact's EURC escrow, EUR lists no
              other future and no perp; v2's own setup has landed (the cash takes v2)
   series     no other market's future lists this expiry: one subId on two futures couples their close-outs
-  parity     the future and feed as deployed; the deployer holds nothing and has sent nothing since
+  parity     the future and feed as deployed; the deployer holds nothing and has sent nothing since that
+             DEPLOYER_AUDITED_TXS.json does not list (each entry checked on chain by hash and nonce)
 
 Enable gates (all read live, all required unless marked):
   custody    the vault owns both; setup has landed; the future is closed (cap 0, not on the TradeModule)
@@ -368,8 +369,7 @@ def gate_parity(chain: Chain, d: dict, vault: str, attached: bool) -> Gate:
               ("EUR futures MM", w(d["manager"], "futureMarginRequirements", mk, index=0), int(d["futureMMReq"])),
               ("EUR futures IM", w(d["manager"], "futureMarginRequirements", mk, index=1), int(d["futureIMReq"]))]
   deployer = d["deployer"]
-  sent = int(rpc(chain.url, "eth_getTransactionCount", [deployer, "latest"]), 16)
-  pairs += [("deployer transactions since the deploy", sent - int(d["deployerNonce"]), 0),
+  pairs += [("deployer transactions since the deploy, unaudited", v2p.unaudited_deployer_txs(chain.url, deployer, int(d["deployerNonce"])), 0),
             ("deployer signs the forward", w(feed, "isSigner", word_address(deployer)), 0)]
   for c in owned(d):
     # before setup the deployer owns it with the vault its nominee; once attached, the vault owns it
@@ -379,7 +379,7 @@ def gate_parity(chain: Chain, d: dict, vault: str, attached: bool) -> Gate:
   bad = v1p.parity_mismatches(pairs)
   if bad:
     return Gate("parity", False, f"{len(bad)} setting(s) differ from the deploy: " + "; ".join(bad[:4]))
-  return Gate("parity", True, f"all {len(pairs)} settings as deployed; deployer {deployer} has sent nothing since")
+  return Gate("parity", True, f"all {len(pairs)} settings as deployed; deployer {deployer} has sent nothing unaudited since")
 
 
 def gate_enable(chain: Chain, d: dict, cngn: dict, stack: dict, vault: str) -> list[Gate]:
