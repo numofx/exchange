@@ -29,10 +29,11 @@
  *              that much while a position is still open, refused unless the SRM's IM surplus left behind
  *              is at least --min-im-surplus (default $4). Either way, refused while any of the MM's perp
  *              orders rest: stop market-maker-perp and perp-cancel first, or it quotes from what is left.
- *   engine-account <usdc units>  open the futures market maker's account under the MarginEngine:
- *              SubAccountCreator.createAndDepositSubAccount with that much USDC into the future's cash
- *              (the perp's), manager the engine, both read from the future's listing; prints the id to
- *              set as mm_future_subaccount_id, or as mm_subaccount_id for the spot maker. Not
+ *   engine-account <usdc units> [--market=<symbol>]  open a futures market maker's account under the
+ *              series' MarginEngine: SubAccountCreator.createAndDepositSubAccount with that much USDC into
+ *              the future's cash (the perp's), manager the engine, both read from the series' listing
+ *              (--market, required while the venue lists more than one future); prints the id to set
+ *              as that maker's subaccount id, or as mm_subaccount_id for the spot maker. Not
  *              idempotent: each --execute opens a new account.
  *
  * Everything here is what the app does for a user, with the MM's key instead of a wallet prompt.
@@ -78,7 +79,8 @@ const abi = parseAbi([
 const client = createPublicClient({ chain: base, transport: http(RPC) });
 const [phase, ...flags] = process.argv.slice(2);
 const execute = flags.includes('--execute');
-if (!phase) throw new Error('usage: migrate-spot-mm.ts <status|cancel|withdraw|deposit|deposit-cngn|perp-cancel|perp-close|perp-withdraw|engine-account> [--execute]');
+if (!phase) throw new Error('usage: migrate-spot-mm.ts <status|cancel|withdraw|deposit|deposit-cngn|perp-cancel|perp-close|perp-withdraw|engine-account> [--market=<symbol>] [--execute]');
+const MARKET = flags.find((f) => f.startsWith('--market='))?.slice('--market='.length);
 if (!KEY) throw new Error('MM_OWNER_PRIVATE_KEY is not in the environment (run through the SSM wrapper on the box)');
 // The relayer's lesson (perp-feeds): a load-balanced RPC can hand out a mined nonce again; viem's
 // nonce manager never reissues one at or below the last it sent.
@@ -151,7 +153,7 @@ async function spotEscrows(account: bigint): Promise<{ manager: Address; usdc: A
     return { manager, usdc: LEGACY.wrappedUsdc, cngn: LEGACY.cngnEscrow };
   }
   const stack = await perpStack();
-  const engine = (await futureStack()).engine;
+  const engine = await spotEngine();
   if (manager.toLowerCase() !== stack.srm.toLowerCase() && manager.toLowerCase() !== engine.toLowerCase()) {
     throw new Error(`#${account} is under ${manager}: neither the retired spot SRM, the perp SRM nor the MarginEngine`);
   }
@@ -304,7 +306,7 @@ async function depositCngn() {
   if (id === 0n) throw new Error('deposit-cngn needs the unified account id');
   const stack = await perpStack();
   const mgr = await client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'manager', args: [id] });
-  const engine = (await futureStack()).engine;
+  const engine = await spotEngine();
   if (mgr.toLowerCase() !== stack.srm.toLowerCase() && mgr.toLowerCase() !== engine.toLowerCase()) {
     throw new Error(`account #${id} is under ${mgr}, neither the perp SRM nor the MarginEngine`);
   }
@@ -332,12 +334,26 @@ async function depositCngn() {
   console.log(`ok: #${id} now holds ${held} (18dp) in ${stack.escrow}`);
 }
 
-/** The future as the venue lists it: its cash and its manager (the MarginEngine), never typed in by hand. */
+/** The MarginEngine spot trades under (v1), from the spot listing: never typed in by hand. */
+async function spotEngine(): Promise<Address> {
+  const markets = (await (await fetch(`${MARKETS}/v1/markets`)).json()) as Record<string, unknown>[];
+  const spot = markets.find((m) => m.contract_type === 'spot' && m.market === SPOT_SYMBOL);
+  if (!spot?.margin_manager_address) throw new Error(`the venue serves no ${SPOT_SYMBOL} with a margin manager`);
+  return getAddress(spot.margin_manager_address as string);
+}
+
+/**
+ * A future as the venue lists it: its cash and its manager (v1 or v2 MarginEngine), never typed in by
+ * hand. --market picks the series; without it the venue must list exactly one.
+ */
 async function futureStack(): Promise<{ cash: Address; engine: Address; symbol: string }> {
   const markets = (await (await fetch(`${MARKETS}/v1/markets`)).json()) as Record<string, unknown>[];
   const futures = markets.filter((m) => m.future && m.contract_type === 'future');
-  if (futures.length !== 1) throw new Error(`the venue lists ${futures.length} MarginEngine futures, expected 1`);
-  const f = futures[0];
+  const symbols = futures.map((m) => String(m.market)).join(', ');
+  const picked = MARKET === undefined ? futures : futures.filter((m) => m.market === MARKET);
+  if (MARKET !== undefined && picked.length !== 1) throw new Error(`the venue lists no future ${MARKET} (it lists ${symbols})`);
+  if (picked.length !== 1) throw new Error(`the venue lists ${futures.length} futures (${symbols}): pass --market=<symbol>`);
+  const f = picked[0];
   return { cash: getAddress(f.quote_asset_address as string), engine: getAddress(f.margin_manager_address as string), symbol: String(f.market) };
 }
 
@@ -384,7 +400,7 @@ async function engineAccount() {
   if (mgr.toLowerCase() !== engine.toLowerCase()) throw new Error(`#${id} is under ${mgr}, not the engine`);
   if (custodian.toLowerCase() !== owner.address.toLowerCase()) throw new Error(`#${id} is not the MM's in Matching (owner ${custodian})`);
   console.log(`ok: #${id} under ${engine}, the MM's in Matching, cash ${held} (18dp), IM surplus ${im} (18dp)`);
-  console.log(`set mm_future_subaccount_id = "${id}" for the future maker, or mm_subaccount_id = "${id}" for the spot maker (counts.auto.tfvars), before starting it`);
+  console.log(`set "${id}" as the ${symbol} maker's subaccount id, or mm_subaccount_id = "${id}" for the spot maker (counts.auto.tfvars), before starting it`);
 }
 
 /** The perp as the venue lists it: never typed in by hand. */
