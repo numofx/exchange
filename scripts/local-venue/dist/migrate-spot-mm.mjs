@@ -19274,24 +19274,20 @@ async function depositCngn() {
   const id = BigInt(flags.find((f) => /^[0-9]+$/.test(f)) ?? "0");
   if (id === 0n)
     throw new Error("deposit-cngn needs the unified account id");
-  const stack = await perpStack();
   const mgr = await client.readContract({ address: SUB_ACCOUNTS, abi: abi2, functionName: "manager", args: [id] });
-  const engine = await spotEngine();
-  if (mgr.toLowerCase() !== stack.srm.toLowerCase() && mgr.toLowerCase() !== engine.toLowerCase()) {
-    throw new Error(`account #${id} is under ${mgr}, neither the perp SRM nor the MarginEngine`);
-  }
-  const takes = await client.readContract({ address: stack.escrow, abi: abi2, functionName: "whitelistedManager", args: [mgr] });
+  const stack = await spotEscrows(id);
+  const takes = await client.readContract({ address: stack.cngn, abi: abi2, functionName: "whitelistedManager", args: [mgr] });
   if (!takes)
-    throw new Error(`${stack.escrow} does not take ${mgr} as a manager`);
+    throw new Error(`${stack.cngn} does not take ${mgr} as a manager`);
   const custodian = await client.readContract({ address: MATCHING, abi: abi2, functionName: "subAccountToOwner", args: [id] });
   if (custodian.toLowerCase() !== owner.address.toLowerCase())
     throw new Error(`account #${id} is not the MM's in Matching (owner ${custodian})`);
   const cngn = await client.readContract({ address: CNGN, abi: abi2, functionName: "balanceOf", args: [owner.address] });
   if (cngn === 0n)
     throw new Error("no cNGN in the wallet");
-  console.log(`wallet holds ${cngn} cNGN units; depositing into #${id} via ${stack.escrow}`);
+  console.log(`wallet holds ${cngn} cNGN units; depositing into #${id} via ${stack.cngn}`);
   if (!execute) {
-    console.log(`dry run: would approve ${stack.escrow} for ${cngn} and call deposit(${id}, ${cngn})`);
+    console.log(`dry run: would approve ${stack.cngn} for ${cngn} and call deposit(${id}, ${cngn})`);
     return;
   }
   const send = async (address, functionName, args) => {
@@ -19301,17 +19297,10 @@ async function depositCngn() {
       throw new Error(`${functionName} reverted (${hash3})`);
     return receipt;
   };
-  await send(CNGN, "approve", [stack.escrow, cngn]);
-  const deposited = await send(stack.escrow, "deposit", [id, cngn]);
-  const held = await ledger(id, stack.escrow, deposited.blockNumber);
-  console.log(`ok: #${id} now holds ${held} (18dp) in ${stack.escrow}`);
-}
-async function spotEngine() {
-  const markets = await (await fetch(`${MARKETS}/v1/markets`)).json();
-  const spot = markets.find((m) => m.contract_type === "spot" && m.market === SPOT_SYMBOL);
-  if (!spot?.margin_manager_address)
-    throw new Error(`the venue serves no ${SPOT_SYMBOL} with a margin manager`);
-  return getAddress(spot.margin_manager_address);
+  await send(CNGN, "approve", [stack.cngn, cngn]);
+  const deposited = await atBlock(() => send(stack.cngn, "deposit", [id, cngn]));
+  const held = await atBlock(() => ledger(id, stack.cngn, deposited.blockNumber));
+  console.log(`ok: #${id} now holds ${held} (18dp) in ${stack.cngn}`);
 }
 async function futureStack() {
   const markets = await (await fetch(`${MARKETS}/v1/markets`)).json();
