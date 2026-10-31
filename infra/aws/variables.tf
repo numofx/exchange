@@ -446,9 +446,10 @@ variable "desired_count_market_maker" {
 # The spot market-maker's trading account (its MM_SUBACCOUNT_ID and MM_RECIPIENT_ID): #34 under the
 # MarginEngine since 2026-10-14 (inventory moved from #26 under the perp SRM, exchange #219). #26, and
 # #15 on the retired spot stack, are no longer the maker's.
+# The cNGN-USDC maker's account: #42 under MarginEngine v2 since 2026-10-31 (v2 step 5 prep; #34 under v1 emptied).
 variable "mm_subaccount_id" {
   type    = string
-  default = "34"
+  default = "42"
 }
 
 variable "mm_address" {
