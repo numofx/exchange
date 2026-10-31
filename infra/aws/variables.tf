@@ -162,10 +162,13 @@ variable "withdrawal_module_address" {
 # trade_module_address = the perp TradeModule, quote_asset_address = the perp cash and
 # cngn_spot_asset_address = the perp cNGN escrow: the unified cutover moves the four as one, and
 # did so on 2026-10-04. Since 2026-10-14 (exchange #219) spot's accounts live under the MarginEngine
-# (risk-core deployments/8453/MARGIN_ENGINE.json .manager), with deposit_manager_address.
+# (risk-core deployments/8453/MARGIN_ENGINE.json .manager), with deposit_manager_address. MarginEngine v2 step 4
+# (risk-core docs/margin-engine-v2.md) moves both to v2, so spot and the v2 futures margin one account; v1 accounts
+# keep trading spot until step 5 pins v1 close-only. v2's EURC cap is 0 until step 6, so no v2 account takes EURC
+# before then.
 variable "spot_margin_manager_address" {
   type    = string
-  default = "0xA19E296021c9DF25b90D96C2A0793CC3D0800758"
+  default = "0x0705219a1594d5Fc5dC2573da4082cAf3e1B0950"
 }
 
 # Wrapped assets of a retired spot stack that withdrawals must keep paying out of after a cutover
@@ -232,9 +235,9 @@ variable "cngn_perp_srm_address" {
 }
 
 variable "deposit_manager_address" {
-  description = "DEPOSIT_MANAGER_ADDRESS: the manager /v1/deposits opens accounts under. Empty keeps the perp SRM. The MarginEngine since 2026-10-14, with spot_margin_manager_address."
+  description = "DEPOSIT_MANAGER_ADDRESS: the manager /v1/deposits opens accounts under and deposits into. Empty keeps the perp SRM. The MarginEngine from 2026-10-14, MarginEngine v2 since step 4, with spot_margin_manager_address."
   type        = string
-  default     = "0xA19E296021c9DF25b90D96C2A0793CC3D0800758"
+  default     = "0x0705219a1594d5Fc5dC2573da4082cAf3e1B0950"
 }
 
 # The perp's cNGN collateral escrow (risk-core CNGN_PERP_COLLATERAL.json `escrow`). Set it only
@@ -294,7 +297,7 @@ variable "cngn_future_manager_address" {
 # while false, so adding the variable changes nothing deployed.
 variable "cngn_future_close_only" {
   type    = bool
-  default = false
+  default = true
 }
 
 # Further futures series, listed beside the cngn_future_* one (markets-service FUTURE_SERIES, README
