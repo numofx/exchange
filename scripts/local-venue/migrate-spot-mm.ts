@@ -487,7 +487,11 @@ async function moveUsdc() {
   });
   const deposited = await atBlock(() => send(cash, 'deposit', [to, units]));
   const after = await atBlock(() => ledger(to, cash, deposited.blockNumber));
-  if (after - before !== units * 10n ** 12n) throw new Error(`#${to} moved by ${after - before} (18dp), expected ${units * 10n ** 12n}`);
+  // The deposit also credits the account's accrued cash interest (box-28: 0.000000124 USDC on top of 2,800), so the
+  // move is checked to within a cent above the amount, never below it.
+  const moved = after - before;
+  const expected = units * 10n ** 12n;
+  if (moved < expected || moved > expected + 10n ** 16n) throw new Error(`#${to} moved by ${moved} (18dp), expected ${expected}`);
   console.log(`ok: ${units} USDC units moved #${from} -> #${to}; #${to} cash ${after} (18dp)`);
 }
 
