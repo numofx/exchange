@@ -24,7 +24,8 @@ variable "image_market_maker_future_v2" {
 variable "mm_future_v2_subaccount_ids" {
   description = "Each v2 maker's account under the v2 MarginEngine, held by Matching, owned by mm_address, keyed cngn and eurc. Empty keeps that maker at zero replicas."
   type        = map(string)
-  default     = { cngn = "", eurc = "" }
+  # Opened 2026-10-31 with 0.10 USDC each (engine-account --market, under the MM-key grant), blocks 53332502/05.
+  default = { cngn = "39", eurc = "40" }
   validation {
     condition     = toset(keys(var.mm_future_v2_subaccount_ids)) == toset(["cngn", "eurc"])
     error_message = "mm_future_v2_subaccount_ids is keyed cngn and eurc."

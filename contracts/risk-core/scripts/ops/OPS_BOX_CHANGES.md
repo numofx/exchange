@@ -5,6 +5,22 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-31 ~13:50 UTC: v2 maker accounts #39 (cNGN-30NOV26) and #40 (EURC-30NOV26) opened
+
+Under the MM-key grant (`terraform apply -var ops_box_mm_key_grant=true` from `1207934`, which also created the two
+v2 maker services at 0 replicas), by SSM command `4e4195b7`.
+
+- **`/home/ec2-user/exchange-perp/scripts/local-venue/dist`** replaced by `ops/migrate-spot-mm-dist` at `389debe`: the
+  bundle built off-box from `1207934c72fa` (#291, `engine-account --market`). Nothing else in exchange-perp changed;
+  nothing that runs from it was restarted. Rollback: `git checkout e96ecc0 -- scripts/local-venue/dist`, as ec2-user.
+- **`engine-account 100000 --market=cNGN-30NOV26`:** #39 under the v2 engine `0x0705…0950`, the MM's in Matching,
+  0.10 USDC (approve `0xc4b36d26…`, create `0xedd6a18f…`, block 53332502).
+- **`engine-account 100000 --market=EURC-30NOV26`:** #40, likewise (approve `0xe608a754…`, create `0x33d03f75…`,
+  block 53332505). Its post-check failed with "unsupported block number" (the RPC behind the receipt), so the SSM
+  command reports Failed; manager, Matching owner and cash were confirmed on chain afterwards.
+- **Grant revoked** by an apply from `main` (1 changed, 1 destroyed); from the box, the read of
+  `/numo/exchange/mm_private_key` is refused with an explicit deny.
+
 ## 2026-10-30 ~21:00 UTC: gas watch for the forward relayers and the v2 engine keeper; one false page
 
 From #288 (`cfbece9`), installed by SSM command `44c669f0`.
