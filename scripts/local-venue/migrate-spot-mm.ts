@@ -32,7 +32,9 @@
  *   move-usdc <from id> <to id> <usdc units>  USDC from one of the MM's MarginEngine accounts to another
  *              (v1 or v2 engine): a WithdrawalModule withdrawal from <from> to the MM wallet, then the cash's
  *              deposit into <to>. Refused while any of the MM's orders rest on <from>: stop that maker and
- *              let its quotes expire first. The wallet's own USDC is not touched.
+ *              let its quotes expire first. The wallet's own USDC is not touched, except with --deposit-only:
+ *              the deposit alone, from USDC already in the wallet (a move whose withdrawal landed and whose
+ *              deposit did not).
  *   engine-account <usdc units> [--market=<symbol>]  open a futures market maker's account under the
  *              series' MarginEngine: SubAccountCreator.createAndDepositSubAccount with that much USDC into
  *              the future's cash (the perp's), manager the engine, both read from the series' listing
@@ -69,6 +71,7 @@ const LEGACY = {
 
 const abi = parseAbi([
   'function approve(address, uint256) returns (bool)',
+  'function allowance(address, address) view returns (uint256)',
   'function balanceOf(address) view returns (uint256)',
   'function getBalance(uint256 accountId, address asset, uint256 subId) view returns (int256)',
   'function manager(uint256 accountId) view returns (address)',
@@ -454,13 +457,19 @@ async function moveUsdc() {
     if (custodian.toLowerCase() !== owner.address.toLowerCase()) throw new Error(`#${id} is not the MM's in Matching (owner ${custodian})`);
     console.log(`#${id}: under ${mgr}, cash ${await ledger(id, cash)} (18dp)`);
   }
-  const resting = await restingOrders(null, from);
-  if (resting.length > 0) throw new Error(`${resting.length} order(s) of the MM still rest on #${from}: stop its maker and let them expire first`);
+  const depositOnly = flags.includes('--deposit-only');
+  if (depositOnly) {
+    const usdc = await client.readContract({ address: USDC, abi, functionName: 'balanceOf', args: [owner.address] });
+    if (usdc < units) throw new Error(`--deposit-only: the wallet holds ${usdc} USDC units, under the ${units} to deposit`);
+  } else {
+    const resting = await restingOrders(null, from);
+    if (resting.length > 0) throw new Error(`${resting.length} order(s) of the MM still rest on #${from}: stop its maker and let them expire first`);
+  }
   if (!execute) {
-    console.log(`dry run: would withdraw ${units} USDC units of ${cash} from #${from} to ${owner.address}, then approve ${cash} and deposit(${to}, ${units})`);
+    console.log(`dry run: would ${depositOnly ? 'skip the withdrawal' : `withdraw ${units} USDC units of ${cash} from #${from} to ${owner.address}`}, then approve ${cash} and deposit(${to}, ${units})`);
     return;
   }
-  await withdrawOne(cash, USDC, 6, from, units);
+  if (!depositOnly) await withdrawOne(cash, USDC, 6, from, units);
   const before = await ledger(to, cash);
   const send = async (address: Address, functionName: 'approve' | 'deposit', args: readonly unknown[]) => {
     const hash = await wallet.writeContract({ address, abi, functionName, args } as never);
@@ -469,8 +478,14 @@ async function moveUsdc() {
     console.log(`  ${functionName} ${hash} block ${receipt.blockNumber}`);
     return receipt;
   };
-  await send(USDC, 'approve', [cash, units]);
-  const deposited = await send(cash, 'deposit', [to, units]);
+  const allowance = () => client.readContract({ address: USDC, abi, functionName: 'allowance', args: [owner.address, cash] });
+  if ((await allowance()) < units) await send(USDC, 'approve', [cash, units]);
+  // A load-balanced RPC can estimate the deposit on a node behind the approve ("exceeds allowance"):
+  // wait until the allowance reads back, then retry the deposit while the estimate still lags.
+  await atBlock(async () => {
+    if ((await allowance()) < units) throw new Error('allowance not visible yet');
+  });
+  const deposited = await atBlock(() => send(cash, 'deposit', [to, units]));
   const after = await atBlock(() => ledger(to, cash, deposited.blockNumber));
   if (after - before !== units * 10n ** 12n) throw new Error(`#${to} moved by ${after - before} (18dp), expected ${units * 10n ** 12n}`);
   console.log(`ok: ${units} USDC units moved #${from} -> #${to}; #${to} cash ${after} (18dp)`);
