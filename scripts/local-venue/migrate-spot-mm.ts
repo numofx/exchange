@@ -29,6 +29,10 @@
  *              that much while a position is still open, refused unless the SRM's IM surplus left behind
  *              is at least --min-im-surplus (default $4). Either way, refused while any of the MM's perp
  *              orders rest: stop market-maker-perp and perp-cancel first, or it quotes from what is left.
+ *   move-usdc <from id> <to id> <usdc units>  USDC from one of the MM's MarginEngine accounts to another
+ *              (v1 or v2 engine): a WithdrawalModule withdrawal from <from> to the MM wallet, then the cash's
+ *              deposit into <to>. Refused while any of the MM's orders rest on <from>: stop that maker and
+ *              let its quotes expire first. The wallet's own USDC is not touched.
  *   engine-account <usdc units> [--market=<symbol>]  open a futures market maker's account under the
  *              series' MarginEngine: SubAccountCreator.createAndDepositSubAccount with that much USDC into
  *              the future's cash (the perp's), manager the engine, both read from the series' listing
@@ -79,7 +83,7 @@ const abi = parseAbi([
 const client = createPublicClient({ chain: base, transport: http(RPC) });
 const [phase, ...flags] = process.argv.slice(2);
 const execute = flags.includes('--execute');
-if (!phase) throw new Error('usage: migrate-spot-mm.ts <status|cancel|withdraw|deposit|deposit-cngn|perp-cancel|perp-close|perp-withdraw|engine-account> [--market=<symbol>] [--execute]');
+if (!phase) throw new Error('usage: migrate-spot-mm.ts <status|cancel|withdraw|deposit|deposit-cngn|perp-cancel|perp-close|perp-withdraw|engine-account|move-usdc> [--market=<symbol>] [--execute]');
 const MARKET = flags.find((f) => f.startsWith('--market='))?.slice('--market='.length);
 if (!KEY) throw new Error('MM_OWNER_PRIVATE_KEY is not in the environment (run through the SSM wrapper on the box)');
 // The relayer's lesson (perp-feeds): a load-balanced RPC can hand out a mined nonce again; viem's
@@ -122,10 +126,10 @@ async function authHeader() {
   return Buffer.from(JSON.stringify({ ...frame, signature })).toString('base64url');
 }
 
-type HistoryOrder = { order_id: string; nonce: string; status: string; market?: string; owner_address: string };
+type HistoryOrder = { order_id: string; nonce: string; status: string; market?: string; owner_address: string; subaccount_id?: string };
 
 /** Every resting order of the MM: the order history, newest first, 100 a page, walked to its end. */
-async function restingOrders(market = SPOT_SYMBOL) {
+async function restingOrders(market: string | null = SPOT_SYMBOL, account?: bigint) {
   const auth = await authHeader();
   const resting: HistoryOrder[] = [];
   let before = '';
@@ -136,7 +140,15 @@ async function restingOrders(market = SPOT_SYMBOL) {
     const body = (await response.json()) as { orders: HistoryOrder[]; next_before?: string };
     // The venue's resting statuses: active on the book, or matching (a fill in flight). Spot only:
     // the perp maker quotes from the same wallet, and its orders are not this migration's to touch.
-    resting.push(...body.orders.filter((o) => (o.status === 'active' || o.status === 'matching') && o.market === market));
+    // With a market of null and an account: every market, that account's orders only.
+    resting.push(
+      ...body.orders.filter(
+        (o) =>
+          (o.status === 'active' || o.status === 'matching') &&
+          (market === null || o.market === market) &&
+          (account === undefined || o.subaccount_id === account.toString()),
+      ),
+    );
     if (!body.next_before) break;
     before = body.next_before;
   }
@@ -246,7 +258,7 @@ async function withdrawOne(escrow: Address, token: Address, decimals: number, ac
   const landed = BigInt((JSON.parse(body) as { block_number?: string }).block_number ?? '0');
   if (landed === 0n) throw new Error('the venue did not report the block the withdrawal landed in');
   await client.waitForTransactionReceipt({ hash: (JSON.parse(body) as { tx_hash: Hex }).tx_hash });
-  const after = await client.readContract({ address: token, abi, functionName: 'balanceOf', args: [owner.address], blockNumber: landed });
+  const after = await atBlock(() => client.readContract({ address: token, abi, functionName: 'balanceOf', args: [owner.address], blockNumber: landed }));
   if (after - before !== amount) throw new Error(`wallet received ${after - before} between blocks ${head} and ${landed}, expected ${amount}`);
   console.log(`ok: ${amount} token units landed in ${owner.address}`);
 }
@@ -403,6 +415,67 @@ async function engineAccount() {
   console.log(`set "${id}" as the ${symbol} maker's subaccount id, or mm_subaccount_id = "${id}" for the spot maker (counts.auto.tfvars), before starting it`);
 }
 
+/** Every MarginEngine the venue lists a market under (v1 and v2), from the listings: never typed in by hand. */
+async function listedEngines(): Promise<Set<string>> {
+  const markets = (await (await fetch(`${MARKETS}/v1/markets`)).json()) as Record<string, unknown>[];
+  return new Set(
+    markets
+      .filter((m) => (m.contract_type === 'spot' || m.contract_type === 'future') && m.margin_manager_address)
+      .map((m) => String(m.margin_manager_address).toLowerCase()),
+  );
+}
+
+/** Reads a value at a just-mined block, waiting out an RPC still behind it ("unsupported block number"). */
+async function atBlock<T>(read: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await read();
+    } catch (error) {
+      if (attempt >= 10) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+  }
+}
+
+async function moveUsdc() {
+  const [from, to, units] = flags.filter((f) => /^[0-9]+$/.test(f)).map(BigInt);
+  if (!from || !to || !units) throw new Error('move-usdc needs <from id> <to id> <usdc units (6dp)>');
+  if (from === to) throw new Error('from and to are the same account');
+  const engines = await listedEngines();
+  const markets = (await (await fetch(`${MARKETS}/v1/markets`)).json()) as Record<string, unknown>[];
+  const spot = markets.find((m) => m.contract_type === 'spot' && m.market === SPOT_SYMBOL);
+  if (!spot?.quote_asset_address) throw new Error(`the venue serves no ${SPOT_SYMBOL} with a quote asset`);
+  // The USDC cash every engine market settles in, spot and futures alike.
+  const cash = getAddress(spot.quote_asset_address as string);
+  for (const id of [from, to]) {
+    const mgr = await client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'manager', args: [id] });
+    if (!engines.has(mgr.toLowerCase())) throw new Error(`#${id} is under ${mgr}, not a MarginEngine the venue lists`);
+    const custodian = await client.readContract({ address: MATCHING, abi, functionName: 'subAccountToOwner', args: [id] });
+    if (custodian.toLowerCase() !== owner.address.toLowerCase()) throw new Error(`#${id} is not the MM's in Matching (owner ${custodian})`);
+    console.log(`#${id}: under ${mgr}, cash ${await ledger(id, cash)} (18dp)`);
+  }
+  const resting = await restingOrders(null, from);
+  if (resting.length > 0) throw new Error(`${resting.length} order(s) of the MM still rest on #${from}: stop its maker and let them expire first`);
+  if (!execute) {
+    console.log(`dry run: would withdraw ${units} USDC units of ${cash} from #${from} to ${owner.address}, then approve ${cash} and deposit(${to}, ${units})`);
+    return;
+  }
+  await withdrawOne(cash, USDC, 6, from, units);
+  const before = await ledger(to, cash);
+  const send = async (address: Address, functionName: 'approve' | 'deposit', args: readonly unknown[]) => {
+    const hash = await wallet.writeContract({ address, abi, functionName, args } as never);
+    const receipt = await client.waitForTransactionReceipt({ hash });
+    if (receipt.status !== 'success') throw new Error(`${functionName} reverted (${hash})`);
+    console.log(`  ${functionName} ${hash} block ${receipt.blockNumber}`);
+    return receipt;
+  };
+  await send(USDC, 'approve', [cash, units]);
+  const deposited = await send(cash, 'deposit', [to, units]);
+  const after = await atBlock(() => ledger(to, cash, deposited.blockNumber));
+  if (after - before !== units * 10n ** 12n) throw new Error(`#${to} moved by ${after - before} (18dp), expected ${units * 10n ** 12n}`);
+  console.log(`ok: ${units} USDC units moved #${from} -> #${to}; #${to} cash ${after} (18dp)`);
+}
+
 /** The perp as the venue lists it: never typed in by hand. */
 async function perpListing() {
   const markets = (await (await fetch(`${MARKETS}/v1/markets`)).json()) as Record<string, unknown>[];
@@ -552,7 +625,7 @@ async function perpWithdraw() {
 }
 
 const phases: Record<string, () => Promise<void>> = { status, cancel, withdraw, deposit, 'deposit-cngn': depositCngn,
-  'perp-cancel': perpCancel, 'perp-close': perpClose, 'perp-withdraw': perpWithdraw, 'engine-account': engineAccount,
+  'perp-cancel': perpCancel, 'perp-close': perpClose, 'perp-withdraw': perpWithdraw, 'engine-account': engineAccount, 'move-usdc': moveUsdc,
 };
 const run = phases[phase];
 if (!run) throw new Error(`unknown phase ${phase}`);
