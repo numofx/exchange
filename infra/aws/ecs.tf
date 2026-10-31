@@ -549,6 +549,11 @@ resource "aws_ecs_task_definition" "market_maker" {
       { name = "MM_USDCCNGN_SPOT_EXTERNAL_ANCHOR_MAX_AGE_SECONDS", value = "900" },
       { name = "MM_USDCCNGN_SPOT_EXTERNAL_ANCHOR_MAX_DEVIATION_BPS", value = "100" },
       { name = "MM_USDCCNGN_SPOT_EXTERNAL_ANCHOR_TIMEOUT_MS", value = "3000" },
+      # The half spread is multiplied by this while the reference is the external rate, which on a book
+      # with no other maker is always: 2 (the bot's default) quoted 20 bps a side, 40 bps wide, until
+      # 2026-10-31. 1.5 is 15 a side, ~8 bps above the spot index at the ask while the rate sits ~7.5 bps
+      # under it.
+      { name = "MM_USDCCNGN_SPOT_EXTERNAL_ANCHOR_SPREAD_MULTIPLIER", value = "1.5" },
       { name = "MM_STALE_ANCHOR_TIMEOUT_SECONDS", value = "14400" },
 
       { name = "MM_METRICS_ADDR", value = ":8080" },

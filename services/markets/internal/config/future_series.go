@@ -50,6 +50,24 @@ type FutureSeries struct {
 	// CloseOnly takes every order on the series as reduce-only, resting ones included at match time:
 	// the engine is being run out and no position may open or grow on it.
 	CloseOnly bool `json:"close_only,omitempty"`
+	// TakerFeeBps is the series' taker fee in bps of the notional (makers pay none). Absent is
+	// DefaultFutureTakerFeeBps; set per series since 2026-10-31 (EURC-30NOV26 5, cNGN-30NOV26 15).
+	TakerFeeBps *int `json:"taker_fee_bps,omitempty"`
+}
+
+// DefaultFutureTakerFeeBps is a series' taker fee when its config names none.
+const DefaultFutureTakerFeeBps = 25
+
+// MaxFutureTakerFeeBps bounds a configured fee: 1%, far above any schedule, so a typo in bps (250 for
+// 25) is refused rather than charged.
+const MaxFutureTakerFeeBps = 100
+
+// TakerFee is the series' taker fee in bps: its own, else DefaultFutureTakerFeeBps.
+func (s FutureSeries) TakerFee() int {
+	if s.TakerFeeBps == nil {
+		return DefaultFutureTakerFeeBps
+	}
+	return *s.TakerFeeBps
 }
 
 // SubID is the series' sub id: its expiry.
@@ -229,6 +247,8 @@ func (s FutureSeries) validate() error {
 		return errors.New("base_asset is required: the asset a contract is a number of (cNGN, EURC)")
 	case s.Kind == FutureKindInverse && s.BaseAsset != "cNGN":
 		return fmt.Errorf("an inverse series is cNGN's, not %s", s.BaseAsset)
+	case s.TakerFeeBps != nil && (*s.TakerFeeBps < 0 || *s.TakerFeeBps > MaxFutureTakerFeeBps):
+		return fmt.Errorf("taker_fee_bps %d is outside 0..%d", *s.TakerFeeBps, MaxFutureTakerFeeBps)
 	}
 	size, ok := new(big.Rat).SetString(s.ContractSize)
 	if !ok || size.Sign() <= 0 {
