@@ -8,10 +8,12 @@ resource "aws_ecs_cluster" "main" {
 }
 
 resource "aws_cloudwatch_log_group" "tasks" {
-  # market-maker-eurc only once its image is set (market-maker-eurc.tf), so an unset maker plans nothing.
+  # market-maker-eurc and the v2 futures makers only once their image is set (market-maker-eurc.tf,
+  # market-maker-future-v2.tf), so an unset maker plans nothing.
   for_each = toset(concat(
     ["markets-service", "matcher", "execution-service", "migrate", "market-maker", "market-maker-perp", "market-maker-future"],
     var.image_market_maker_eurc == "" ? [] : ["market-maker-eurc"],
+    [for k in keys(local.mm_future_v2_enabled) : "market-maker-future-v2-${k}"],
   ))
   name              = "/ecs/${var.name}/${each.key}"
   retention_in_days = 30
