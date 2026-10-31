@@ -25,6 +25,29 @@ Brought forward from the 9 Nov target. `MarginEngineV2EnableRehearsalFork` passe
   `59a5454`); the v2 makers (#39, #40) quote 10 a side; the pager, the v2 keeper and the settlement canary (#298) cover
   both.
 
+## 2026-10-31 ~20:30–22:20 UTC: MarginEngine v2 steps 4–6; spot makers moved to v2 (#42, #43)
+
+- **Step 4 (ECS, no box change):** `spot_margin_manager_address` / `deposit_manager_address` → v2, `cngn_future_close_only`
+  (f3abc50; also in the operator's counts.auto.tfvars, which overrode both). markets td :48, matcher :47, execution :38;
+  trading-app d208815 live with Vercel's `NEXT_PUBLIC_USDCCNGN_MANAGER_ADDRESS` removed.
+- **Spot makers stopped** (counts: both 0) under an MM-key grant. `exchange-perp/scripts/local-venue/dist` →
+  `ops/migrate-spot-mm-dist` at `96d33ff` then `fcecc6c` (from `51cd7e1`: v1 engine accounts, EURC withdraw,
+  deposit-eurc, deposit-cngn without the delisted perp).
+- **#34 (v1) → #42 (v2):** withdraw 484.905526 USDC (`0xdce551ff…`) + 238,672.280616 cNGN (`0xab567951…`);
+  `engine-account` opened #42 (`0xaef85899…`, first try reverted at estimate on a lagging node, nothing sent);
+  `deposit-cngn 42`.
+- **#36 (v1) → #43 (v2):** withdraw 4,316.186093 USDC (`0xa9b8a467…`) + 3,281.439616 EURC (`0x4a927470…`);
+  `engine-account` opened #43 (`0x029e3983…`; post-check read failed on RPC lag, account confirmed on chain).
+- **Makers repointed** (1e1287f: `mm_subaccount_id` 42, `mm_eurc_subaccount_id` 43, v1-close-only gate's makers 42,43);
+  cNGN-USDC maker restarted on #42, grant revoked.
+- **`exchange-ops`** `fb2b9d5` → `bea3cce` (eurc-cap reads v2's engine keeper on 9466).
+- **Step 5 (`numo-v2-close-only`):** v1 caps = open interest: cNGN escrow 157,459.685234, EURC escrow 0, v1 future 0.
+  Approved in MPCVault.
+- **Step 6 (`numo-v2-eurc-cap`):** `eurcEscrow.setTotalPositionCap(v2, 18,000)`, digest `0xdc9d2cfb…6dab`; depth gate
+  22,808 EURC, keeper MAX_EURC_INVENTORY 40,000. Approved in MPCVault.
+- **EURC maker:** second grant; `deposit-eurc 43` (3,281.439616 EURC; the first try was denied the key while IAM
+  propagated, nothing sent); maker started on #43, grant revoked. Both books quote from v2 (#42, #43).
+
 ## 2026-10-31 ~14:00–14:40 UTC: #32's USDC moved to the v2 makers #39 and #40; v1 future maker stopped
 
 Under a second MM-key grant (`mm-move.plan`, which also stopped `market-maker-future`, the v1 USDC-cNGN-30NOV26 maker
