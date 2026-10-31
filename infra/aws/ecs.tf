@@ -7,6 +7,22 @@ resource "aws_ecs_cluster" "main" {
   }
 }
 
+locals {
+  # Every engine a listed series is margined under, beside the perp SRM: v1 (cngn_future_manager_address) and each
+  # future_series' manager (v2). Accounts are probed through their own manager and the wrappers' backing sums
+  # totalPosition across these, so an engine missing here would leave its accounts unwatched and its escrow
+  # positions uncounted (a false BACKING MISMATCH once anything is deposited under it).
+  canary_other_managers = distinct([
+    for a in concat([var.cngn_future_manager_address], [for s in var.future_series : s.manager_address]) : lower(a)
+  ])
+  # The makers' accounts, each only once it is set: spot (#34), the v1 future (#32), EURC-USDC (#36), and the v2
+  # futures (#39 cNGN-30NOV26, #40 EURC-30NOV26). An empty id would be a check of nothing.
+  canary_accounts = compact(concat(
+    [var.mm_subaccount_id, var.mm_future_subaccount_id, var.mm_eurc_subaccount_id],
+    [for k in sort(keys(var.mm_future_v2_subaccount_ids)) : var.mm_future_v2_subaccount_ids[k]],
+  ))
+}
+
 resource "aws_cloudwatch_log_group" "tasks" {
   # market-maker-eurc and the v2 futures makers only once their image is set (market-maker-eurc.tf,
   # market-maker-future-v2.tf), so an unset maker plans nothing.
@@ -341,11 +357,11 @@ resource "aws_ecs_task_definition" "execution" {
       # so it is no longer watched. Read from the variables the makers themselves use, so a repoint
       # cannot leave the canary watching an emptied account. Each account is probed through its own
       # manager, and wrapper backing sums the SRM's credit and the engine's (OTHER_MANAGERS): with
-      # the SRM alone, the cNGN escrow read 396,131.97 cNGN short for five days while backed 1:1.
+      # the SRM alone, the cNGN escrow read 396,131.97 cNGN short for five days while backed 1:1. Since
+      # 2026-10-31 that includes MarginEngine v2 and its makers' accounts (#39, #40): see local.canary_*.
       { name = "SETTLEMENT_CANARY_MANAGER", value = var.cngn_perp_srm_address },
-      { name = "SETTLEMENT_CANARY_OTHER_MANAGERS", value = var.cngn_future_manager_address },
-      # The EURC-USDC maker's account is appended only once it is set, so the string is unchanged until then.
-      { name = "SETTLEMENT_CANARY_ACCOUNTS", value = "${var.mm_subaccount_id},${var.mm_future_subaccount_id}${var.mm_eurc_subaccount_id == "" ? "" : ",${var.mm_eurc_subaccount_id}"}" },
+      { name = "SETTLEMENT_CANARY_OTHER_MANAGERS", value = join(",", local.canary_other_managers) },
+      { name = "SETTLEMENT_CANARY_ACCOUNTS", value = join(",", local.canary_accounts) },
       { name = "SETTLEMENT_CANARY_INTERVAL_MS", value = "60000" },
       # Re-alert after 30 consecutive failing checks (30 minutes at a 60s interval), so one
       # dropped webhook is not silence for the whole outage.
