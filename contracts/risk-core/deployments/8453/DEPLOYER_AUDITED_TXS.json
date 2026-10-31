@@ -1,0 +1,76 @@
+{
+  "deployer": "0x971Cd37fa58e4D5f6cd5FB3B7fE7DAAF735F2e9c",
+  "about": "Transactions the deployer sent after a deploy whose artifact records deployerNonce, each reviewed by hand. The v2 proposers' parity gate accepts a later transaction only if it is listed here and the chain shows it from the deployer at that nonce; any other still fails the gate.",
+  "transactions": [
+    {
+      "nonce": 38,
+      "hash": "0xfab5fe8b7b266ae350aa02e19dec2918c3d98baa30dfaecdeab5a1b3c6e21891",
+      "note": "deploy-eurc-future-v2.s.sol: CREATE FutureAsset"
+    },
+    {
+      "nonce": 39,
+      "hash": "0x388031967627bfb200d8c6522f2d724765dcfd7e21eb432d7bceb861966b990b",
+      "note": "deploy-eurc-future-v2.s.sol: FutureAsset.setWhitelistManager"
+    },
+    {
+      "nonce": 40,
+      "hash": "0xe8ff524d65d14041b6b4d1613997b99a1e713d38fe53674a2ad5a0bf25275ce2",
+      "note": "deploy-eurc-future-v2.s.sol: FutureAsset.setTotalPositionCap"
+    },
+    {
+      "nonce": 41,
+      "hash": "0x79ceca5e45b309c42e0410b3411eee6ae6feefeba674584a66062f0d98d753e7",
+      "note": "deploy-eurc-future-v2.s.sol: FutureAsset.setMarkBounds"
+    },
+    {
+      "nonce": 42,
+      "hash": "0x71f16e112942b74cb80d34ee147ada72b4ccf5cec3f763c5455bb66ab85435bd",
+      "note": "deploy-eurc-future-v2.s.sol: FutureAsset.setIndexParams"
+    },
+    {
+      "nonce": 43,
+      "hash": "0x568a04fe2dd451b0d7f3751b0c9090bc82aaf421d470a8f0105eecb0770b016a",
+      "note": "deploy-eurc-future-v2.s.sol: CREATE LyraForwardFeed"
+    },
+    {
+      "nonce": 44,
+      "hash": "0x092087dcd9ae6d5f19ee4fcefd0b2c616397765902735c0a0e7038e80519badd",
+      "note": "deploy-eurc-future-v2.s.sol: LyraForwardFeed.setHeartbeat"
+    },
+    {
+      "nonce": 45,
+      "hash": "0x706978e10e1ab45d7081c438436c422e4e17bf8224e6dcd65cd04dee9ed19a5d",
+      "note": "deploy-eurc-future-v2.s.sol: LyraForwardFeed.addSigner"
+    },
+    {
+      "nonce": 46,
+      "hash": "0x2f0dcd06357598efbdbef0306b2a0bcaa98e46c9db661631c03927665313d521",
+      "note": "deploy-eurc-future-v2.s.sol: LyraForwardFeed.setRequiredSigners"
+    },
+    {
+      "nonce": 47,
+      "hash": "0xe2dcfd68f9b171917d00940f7f0f0f34611cd2f7416c47e79c22c00647aae897",
+      "note": "deploy-eurc-future-v2.s.sol: FutureAsset.setForwardFeed"
+    },
+    {
+      "nonce": 48,
+      "hash": "0x42255eac43bab21cd08b13d91fb1135ddd0b2f3fe808b82e3608a9292ac5048c",
+      "note": "deploy-eurc-future-v2.s.sol: FutureAsset.setContract"
+    },
+    {
+      "nonce": 49,
+      "hash": "0x9e0a20bf94b21b50c90b26892e4a2aa87f08de22ec314689f9abbe361dd635c0",
+      "note": "deploy-eurc-future-v2.s.sol: FutureAsset.transferOwnership"
+    },
+    {
+      "nonce": 50,
+      "hash": "0x75e3a9099bd114b8de9e03c1b0dea550b22ed3364f4f7a65371c8af66135717d",
+      "note": "deploy-eurc-future-v2.s.sol: LyraForwardFeed.transferOwnership"
+    },
+    {
+      "nonce": 51,
+      "hash": "0x07971b17cf14cd04a128b89c3bbc732815d0287b8500568b669c732fcdbc75cb",
+      "note": "0.00025 ETH to forward-relayer-v2-cngn 0x3ACe\u2026763f (2026-10-30, clears a false low-gas page); value only, no calldata"
+    }
+  ]
+}

@@ -43,7 +43,8 @@ Enable gates (all read live, all required unless marked):
             index -/+ markIndexBand(expiry), in USDC per cNGN as the chain reads it (no inversion)
   rfq       the RfqModule is not on the TradeModule's Matching
   parity    every setting the deploy made, re-read now the vault owns it: each market against the same market on v1, the
-            rest against the artifact; the single-use deployer holds nothing and has sent nothing since
+            rest against the artifact; the deployer holds nothing and has sent nothing since that
+            DEPLOYER_AUDITED_TXS.json does not list (each entry checked on chain by hash and nonce)
 
 v1-close-only gates:
   custody   the vault owns every asset whose cap it sets
@@ -397,8 +398,7 @@ def gate_parity(chain: Chain, d: dict, vault: str) -> Gate:
                "fixingWindow", "maxSampleGap", "fallbackDelay", "minMarkInterval"):
     pairs.append((f"future {name}", w(future, name), int(d[name])))
   deployer = d["deployer"]
-  sent = int(rpc(chain.url, "eth_getTransactionCount", [deployer, "latest"]), 16)
-  pairs += [("deployer transactions since the deploy", sent - int(d["deployerNonce"]), 0),
+  pairs += [("deployer transactions since the deploy, unaudited", unaudited_deployer_txs(chain.url, deployer, int(d["deployerNonce"])), 0),
             ("deployer signs the forward", w(feed, "isSigner", word_address(deployer)), 0)]
   for c in owned(d):
     pairs.append((f"{c} owner is not the deployer", a(c, "owner").lower() == deployer.lower(), False))
@@ -662,12 +662,49 @@ def gate_eurc_cap(chain: Chain, d: dict, vault: str, cap18: int) -> list[Gate]:
 # self-test
 # ---------------------------------------------------------------------------------------------
 
+AUDITED_DEPLOYER_TXS = ROOT / "deployments" / "8453" / "DEPLOYER_AUDITED_TXS.json"
+
+
+def count_unaudited(sent: int, deployer_nonce: int, verified_nonces: set[int]) -> int:
+  """Transactions the deployer sent from `deployer_nonce` on that no verified audit entry explains."""
+  return (sent - deployer_nonce) - len({n for n in verified_nonces if deployer_nonce <= n < sent})
+
+
+def unaudited_deployer_txs(url: str, deployer: str, deployer_nonce: int, path: Path = AUDITED_DEPLOYER_TXS) -> int:
+  """
+  The deployer's transactions since a deploy that DEPLOYER_AUDITED_TXS.json does not explain. The deployer is meant to
+  send nothing after a deploy, but has (a later deploy, a gas top-up): each such transaction is listed there by nonce
+  and hash after a review, and counts here only once the chain shows that hash sent by the deployer at that nonce. An
+  entry the chain contradicts explains nothing, so the count stays above 0 and the gate fails.
+  """
+  sent = int(rpc(url, "eth_getTransactionCount", [deployer, "latest"]), 16)
+  verified: set[int] = set()
+  if path.exists():
+    audit = json.loads(path.read_text())
+    if audit.get("deployer", "").lower() == deployer.lower():
+      for entry in audit.get("transactions", []):
+        nonce = int(entry["nonce"])
+        if not deployer_nonce <= nonce < sent:
+          continue
+        tx = rpc(url, "eth_getTransactionByHash", [entry["hash"]])
+        if tx and tx.get("from", "").lower() == deployer.lower() and int(tx["nonce"], 16) == nonce:
+          verified.add(nonce)
+  return count_unaudited(sent, deployer_nonce, verified)
+
+
 def self_test() -> int:
   from abi_selectors import assert_script
   assert_script(__file__)
   for name, want in PINNED.items():
     assert selector(name) == want, f"{name}: {selector(name)} != {want}"
   assert set(PINNED) == set(SIGNATURES), "every signature pinned"
+
+  # The deployer audit: only verified entries inside the window explain a transaction.
+  assert count_unaudited(52, 38, set(range(38, 52))) == 0
+  assert count_unaudited(52, 51, set(range(38, 52))) == 0
+  assert count_unaudited(53, 38, set(range(38, 52))) == 1, "a new transaction is unexplained"
+  assert count_unaudited(52, 38, set(range(38, 51))) == 1, "an entry the chain did not verify explains nothing"
+  assert count_unaudited(38, 38, set()) == 0
 
   # A deployment with two markets (cNGN and EURC), its batches as the deploy script writes them, each way a file can be wrong.
   a = lambda n: "0x" + format(n, "040x")  # noqa: E731
