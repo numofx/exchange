@@ -27,8 +27,9 @@ variable "image_market_maker_eurc" {
 variable "mm_eurc_subaccount_id" {
   description = "The EURC-USDC maker's account under the MarginEngine, held by Matching, owned by mm_address, funded with EURC and USDC. Empty keeps the maker at zero replicas and out of the settlement canary."
   type        = string
-  # Opened 2026-10-25, funded 2026-10-26 with 3,291.44 EURC + 4,300 USDC.
-  default = "36"
+  # #36 under v1 opened 2026-10-25, emptied 2026-10-31. #43 under MarginEngine v2 since then, 4,316.19 USDC; its
+  # 3,281.44 EURC waits in the MM wallet for v2's EURC cap (eurc-cap), so the maker stays at 0 until deposit-eurc 43.
+  default = "43"
 }
 
 variable "desired_count_market_maker_eurc" {

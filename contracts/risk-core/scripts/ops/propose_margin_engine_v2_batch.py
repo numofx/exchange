@@ -140,9 +140,9 @@ EURC_INDEX = eurc.MARKET_ID - 1
 
 SIGNATURES = {**v1p.SIGNATURES, "lastMarketId": "lastMarketId()", "manager": "manager(uint256)"}
 PINNED = {**v1p.PINNED, "lastMarketId": "0x565eb87c", "manager": "0x52981457"}
-# The spot makers' accounts under v1: #34 quotes cNGN-USDC, #36 EURC-USDC (the MM wallet 0x3448ac0A…7B, via Matching).
-# Set MM_SUBACCOUNT_IDS to their v2 accounts once they move.
-DEFAULT_MM_SUBACCOUNT_IDS = "34,36"
+# The spot makers' accounts (the MM wallet 0x3448ac0A…7B, via Matching): #42 quotes cNGN-USDC, #43 EURC-USDC, both
+# under v2 since 2026-10-31. Their v1 accounts #34 and #36 were emptied and are no maker's.
+DEFAULT_MM_SUBACCOUNT_IDS = "42,43"
 
 
 def selector(name: str) -> str:
