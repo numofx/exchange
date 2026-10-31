@@ -5,6 +5,24 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-31 ~14:00–14:40 UTC: #32's USDC moved to the v2 makers #39 and #40; v1 future maker stopped
+
+Under a second MM-key grant (`mm-move.plan`, which also stopped `market-maker-future`, the v1 USDC-cNGN-30NOV26 maker
+on #32: `desired_count_market_maker_future = 0` in counts.auto.tfvars; the v1 series' total position was 0).
+
+- **box-27 (SSM `a8da0629`), bundle `8b93d47` from `0f4e0bc` (#294, `move-usdc`):** 2,800 USDC withdrawn from #32 to
+  the MM wallet (`0x283d9ac9…`, block 53333160) and approved (`0x2c1826c3…`); the deposit into #39 was refused at gas
+  estimation ("exceeds allowance"), estimated on a node behind the approve.
+- **box-28 (SSM `2c4cd642`), bundle `74bd597` from `39c6490` (#295, lag retries, `--deposit-only`):** the 2,800 into
+  #39 (`0xfef7f119…`, block 53333339). Its post-check failed on the cash interest the deposit also credits
+  (fixed in #296).
+- **box-29 (SSM `fb32d2d4`), same bundle:** 1,300 USDC #32 → #40 (withdraw `0x951a3a37…`, deposit `0x3d59d5e4…`,
+  block 53333410); the same false post-check.
+- **After, on chain:** #39 2,800.10 USDC, #40 1,300.10, #32 4.61 (and its 151,230 cNGN); MM wallet 0.10 USDC.
+- **Grant revoked** by the apply that started both v2 makers in dry run; from the box, the key read is refused.
+  `exchange-perp/scripts/local-venue/dist` stays at `74bd597` (from `39c6490`, before #296); rebuild before the next
+  grant.
+
 ## 2026-10-31 ~13:50 UTC: v2 maker accounts #39 (cNGN-30NOV26) and #40 (EURC-30NOV26) opened
 
 Under the MM-key grant (`terraform apply -var ops_box_mm_key_grant=true` from `1207934`, which also created the two
