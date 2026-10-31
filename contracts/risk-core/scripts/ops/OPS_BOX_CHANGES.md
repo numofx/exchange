@@ -5,6 +5,26 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-10-31 ~15:45–16:26 UTC: MarginEngine v2 enabled; cNGN-30NOV26 and EURC-30NOV26 open
+
+Brought forward from the 9 Nov target. `MarginEngineV2EnableRehearsalFork` passed at head first (4/4).
+
+- **`exchange-ops`** moved `23e5037` → `54f510c` (box-30, SSM `2f39b909`), then → `fb2b9d5` (box-31). Clean both
+  times; nothing that runs from it was restarted.
+- **Gate dry run (box-30):** both enables passed every gate but `parity`. Its deployer-nonce check counted 14
+  transactions since v2's deploy and 1 since EURC's: the EURC-30NOV26 deploy (nonces 38–50) and the 0.00025 ETH relayer
+  top-up (nonce 51). Every other parity setting held. #299 (`fb2b9d5`) lets the gate accept a later transaction only
+  when `deployments/8453/DEPLOYER_AUDITED_TXS.json` lists it and the chain shows that hash at that nonce.
+- **Proposed (box-31, SSM `ff25036f`):** transient unit `numo-v2-enable`, `propose_margin_engine_v2_batch.py enable
+  --propose`, then `propose_eurc_future_v2_batch.py eurc-future-enable --propose`; exit 0. Approved by hand in
+  MPCVault, landing 16:25–16:26: cNGN-30NOV26 `setTotalPositionCap(v2, 30)` and `setDatedFutureAsset(…, true)`,
+  then EURC-30NOV26 `setTotalPositionCap(v2, 18)` and `setDatedFutureAsset(…, true)`. Gates re-read before each:
+  SecurityModule $3,250 covers a 15% step on both at their caps ($1,621 + $1,508); informational gaps: cNGN's 30 is
+  not covered at a 50% gap, EURC's 18 not at 15%.
+- **After:** `/v1/markets` lists both `trading_open: true`; the app's `/` opens `/trade/cngn-30nov26` (trading-app
+  `59a5454`); the v2 makers (#39, #40) quote 10 a side; the pager, the v2 keeper and the settlement canary (#298) cover
+  both.
+
 ## 2026-10-31 ~14:00–14:40 UTC: #32's USDC moved to the v2 makers #39 and #40; v1 future maker stopped
 
 Under a second MM-key grant (`mm-move.plan`, which also stopped `market-maker-future`, the v1 USDC-cNGN-30NOV26 maker
