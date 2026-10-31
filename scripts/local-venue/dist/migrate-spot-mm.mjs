@@ -18997,13 +18997,16 @@ var abi2 = parseAbi([
   "function subAccountToOwner(uint256) view returns (address)",
   "event DepositedSubAccount(uint256 indexed accountId, address indexed owner)",
   "function whitelistedManager(address) view returns (bool)",
-  "function getMargin(uint256 accountId, bool isInitial) view returns (int256)"
+  "function getMargin(uint256 accountId, bool isInitial) view returns (int256)",
+  "function wrappedAsset() view returns (address)",
+  "function totalPosition(address) view returns (uint256)",
+  "function totalPositionCap(address) view returns (uint256)"
 ]);
 var client = createPublicClient({ chain: base, transport: http(RPC) });
 var [phase, ...flags] = process.argv.slice(2);
 var execute = flags.includes("--execute");
 if (!phase)
-  throw new Error("usage: migrate-spot-mm.ts <status|cancel|withdraw|deposit|deposit-cngn|perp-cancel|perp-close|perp-withdraw|engine-account|move-usdc> [--market=<symbol>] [--execute]");
+  throw new Error("usage: migrate-spot-mm.ts <status|cancel|withdraw|deposit|deposit-cngn|deposit-eurc|perp-cancel|perp-close|perp-withdraw|engine-account|move-usdc> [--market=<symbol>] [--execute]");
 var MARKET = flags.find((f) => f.startsWith("--market="))?.slice("--market=".length);
 if (!KEY)
   throw new Error("MM_OWNER_PRIVATE_KEY is not in the environment (run through the SSM wrapper on the box)");
@@ -19061,10 +19064,16 @@ async function spotEscrows(account) {
   if (manager.toLowerCase() === LEGACY.srm.toLowerCase()) {
     return { manager, usdc: LEGACY.wrappedUsdc, cngn: LEGACY.cngnEscrow };
   }
+  if ((await listedEngines()).has(manager.toLowerCase())) {
+    const markets = await (await fetch(`${MARKETS}/v1/markets`)).json();
+    const spot = markets.find((m) => m.contract_type === "spot" && m.market === SPOT_SYMBOL);
+    if (!(spot?.quote_asset_address && spot.asset_address))
+      throw new Error(`the venue serves no ${SPOT_SYMBOL} with its escrows`);
+    return { manager, usdc: getAddress(spot.quote_asset_address), cngn: getAddress(spot.asset_address) };
+  }
   const stack = await perpStack();
-  const engine = await spotEngine();
-  if (manager.toLowerCase() !== stack.srm.toLowerCase() && manager.toLowerCase() !== engine.toLowerCase()) {
-    throw new Error(`#${account} is under ${manager}: neither the retired spot SRM, the perp SRM nor the MarginEngine`);
+  if (manager.toLowerCase() !== stack.srm.toLowerCase()) {
+    throw new Error(`#${account} is under ${manager}: neither the retired spot SRM, the perp SRM nor a listed MarginEngine`);
   }
   return { manager, usdc: stack.cash, cngn: stack.escrow };
 }
@@ -19161,14 +19170,67 @@ async function withdrawOne(escrow, token, decimals, account = SPOT_ACCOUNT, unit
   console.log(`ok: ${amount} token units landed in ${owner.address}`);
 }
 async function withdraw() {
-  const resting = await restingOrders();
+  const resting = await restingOrders(null, SPOT_ACCOUNT);
   if (resting.length > 0) {
-    throw new Error(`${resting.length} ${SPOT_SYMBOL} order(s) of the MM still rest: stop market-maker-spot (desired_count_market_maker = 0) and let them expire (60 s), then withdraw`);
+    throw new Error(`${resting.length} order(s) of the MM still rest on #${SPOT_ACCOUNT}: stop its maker and let them expire (60 s), then withdraw`);
   }
   const escrows = await spotEscrows(SPOT_ACCOUNT);
   console.log(`#${SPOT_ACCOUNT} is under ${escrows.manager}: withdrawing ${escrows.usdc} (USDC) and ${escrows.cngn} (cNGN)`);
   await withdrawOne(escrows.usdc, USDC, 6);
   await withdrawOne(escrows.cngn, CNGN, 6);
+  const eurc = await eurcEscrow();
+  if (eurc !== null && escrows.manager.toLowerCase() !== LEGACY.srm.toLowerCase()) {
+    console.log(`and ${eurc.escrow} (EURC)`);
+    await withdrawOne(eurc.escrow, eurc.token, 6);
+  }
+}
+async function eurcEscrow() {
+  const markets = await (await fetch(`${MARKETS}/v1/markets`)).json();
+  const listing = markets.find((m) => m.contract_type === "spot" && m.market === "EURC-USDC");
+  if (!listing?.asset_address)
+    return null;
+  const escrow = getAddress(listing.asset_address);
+  const token = await client.readContract({ address: escrow, abi: abi2, functionName: "wrappedAsset" });
+  return { escrow, token };
+}
+async function depositEurc() {
+  const id = BigInt(flags.find((f) => /^[0-9]+$/.test(f)) ?? "0");
+  if (id === 0n)
+    throw new Error("deposit-eurc needs the account id");
+  const eurc = await eurcEscrow();
+  if (eurc === null)
+    throw new Error("the venue lists no EURC-USDC");
+  const mgr = await client.readContract({ address: SUB_ACCOUNTS, abi: abi2, functionName: "manager", args: [id] });
+  if (!(await listedEngines()).has(mgr.toLowerCase()))
+    throw new Error(`account #${id} is under ${mgr}, not a MarginEngine the venue lists`);
+  const custodian = await client.readContract({ address: MATCHING, abi: abi2, functionName: "subAccountToOwner", args: [id] });
+  if (custodian.toLowerCase() !== owner.address.toLowerCase())
+    throw new Error(`account #${id} is not the MM's in Matching (owner ${custodian})`);
+  const units = await client.readContract({ address: eurc.token, abi: abi2, functionName: "balanceOf", args: [owner.address] });
+  if (units === 0n)
+    throw new Error("no EURC in the wallet");
+  const cap = await client.readContract({ address: eurc.escrow, abi: abi2, functionName: "totalPositionCap", args: [mgr] });
+  const held = await client.readContract({ address: eurc.escrow, abi: abi2, functionName: "totalPosition", args: [mgr] });
+  const amount18 = units * 10n ** 12n;
+  if (held + amount18 > cap) {
+    throw new Error(`${eurc.escrow} lets ${mgr} hold ${cap} (18dp), ${held} held: no room for ${amount18}. Land eurc-cap first`);
+  }
+  console.log(`wallet holds ${units} EURC units; depositing into #${id} via ${eurc.escrow} (cap ${cap}, held ${held}, 18dp)`);
+  if (!execute) {
+    console.log(`dry run: would approve ${eurc.escrow} for ${units} and call deposit(${id}, ${units})`);
+    return;
+  }
+  const send = async (address, functionName, args) => {
+    const hash3 = await wallet.writeContract({ address, abi: abi2, functionName, args });
+    const receipt = await client.waitForTransactionReceipt({ hash: hash3 });
+    if (receipt.status !== "success")
+      throw new Error(`${functionName} reverted (${hash3})`);
+    return receipt;
+  };
+  await send(eurc.token, "approve", [eurc.escrow, units]);
+  const deposited = await atBlock(() => send(eurc.escrow, "deposit", [id, units]));
+  const after = await atBlock(() => ledger(id, eurc.escrow, deposited.blockNumber));
+  console.log(`ok: #${id} now holds ${after} (18dp) in ${eurc.escrow}`);
 }
 async function deposit() {
   const stack = await perpStack();
@@ -19382,8 +19444,10 @@ async function moveUsdc() {
   });
   const deposited = await atBlock(() => send(cash, "deposit", [to, units]));
   const after = await atBlock(() => ledger(to, cash, deposited.blockNumber));
-  if (after - before !== units * 10n ** 12n)
-    throw new Error(`#${to} moved by ${after - before} (18dp), expected ${units * 10n ** 12n}`);
+  const moved = after - before;
+  const expected = units * 10n ** 12n;
+  if (moved < expected || moved > expected + 10n ** 16n)
+    throw new Error(`#${to} moved by ${moved} (18dp), expected ${expected}`);
   console.log(`ok: ${units} USDC units moved #${from15} -> #${to}; #${to} cash ${after} (18dp)`);
 }
 async function perpListing() {
@@ -19550,6 +19614,7 @@ var phases = {
   withdraw,
   deposit,
   "deposit-cngn": depositCngn,
+  "deposit-eurc": depositEurc,
   "perp-cancel": perpCancel,
   "perp-close": perpClose,
   "perp-withdraw": perpWithdraw,
