@@ -243,7 +243,7 @@ func TestTheMatcherReadsEachSeriesThroughItsOwnReader(t *testing.T) {
 
 // The margin pre-check prices each series on its own terms. With 200 USD of surplus under each engine,
 // one v1 contract (1,000 USDC at 25%: 250) is refused, one v2 cNGN contract (714 USDC at the mark:
-// 178.6, plus a 1.79 fee) carries, and two EURC contracts (2,320 USDC: 580) are refused.
+// 178.6, plus its 15 bps fee, 1.07) carries, and two EURC contracts (2,320 USDC: 580, plus 5 bps, 1.16) are refused.
 func TestTheMarginPrecheckPricesEachSeriesOnItsOwnTerms(t *testing.T) {
 	chain := newMSChain()
 	rpc := chain.serve(t)
@@ -260,8 +260,8 @@ func TestTheMarginPrecheckPricesEachSeriesOnItsOwnTerms(t *testing.T) {
 		takerAccountTag string
 	}{
 		{msV1, new(big.Int).Mul(big.NewInt(1400), wad), wad, "2500000000000000000", false, "11"},
-		{msV2CNGN, chain.spot[msCNGNFeed], wad, "1785714285714285000", true, "12"},
-		{msV2EURC, chain.spot[msEURCFeed], new(big.Int).Mul(big.NewInt(2), wad), "5800000000000000000", false, "13"},
+		{msV2CNGN, chain.spot[msCNGNFeed], wad, "1071428571428571000", true, "12"},
+		{msV2EURC, chain.spot[msEURCFeed], new(big.Int).Mul(big.NewInt(2), wad), "1160000000000000000", false, "13"},
 	} {
 		instrument := msInstrument(t, cfg, tc.asset)
 		candidate := msCandidate(tc.takerAccountTag)
@@ -391,9 +391,9 @@ insert into active_orders (
 	if got := request.OrderData.FillDetails[0].Price; got != askPrice.String() {
 		t.Fatalf("submitted at %s, expected the maker's %s", got, askPrice)
 	}
-	// 1,000,000 cNGN x 0.0007 = 700 USDC; 25 bps
-	if got := request.OrderData.TakerFee; got != "1750000000000000000" {
-		t.Fatalf("taker fee %s, expected 1.75e18", got)
+	// 1,000,000 cNGN x 0.0007 = 700 USDC; the series' 15 bps (msConfig)
+	if got := request.OrderData.TakerFee; got != "1050000000000000000" {
+		t.Fatalf("taker fee %s, expected 1.05e18", got)
 	}
 	var mark *string
 	if err := pool.QueryRow(ctx, "select mark_price from trade_fills where taker_order_id = $1", bid).Scan(&mark); err != nil {
