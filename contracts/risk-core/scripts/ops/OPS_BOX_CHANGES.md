@@ -5,6 +5,27 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-01 21:27 UTC: numo-perp-feeds on its own checkout, with the two-of-three index fallback (#305)
+
+- **Why.** Textile's 502s since 2026-10-26 left the 3-of-3 index refusing samples; four gaps in seven days ran past the
+  engine cNGN feed's 1200 s heartbeat (10-26 18:20 25 min, 10-27 18:39 32, 10-28 05:14 32, 11-01 10:05 21), and in each
+  v2's margin reads reverted `BLF_DataTooOld` (keeper `margin-unreadable` / `collateral-unpriced-cNGN`). The pager did not
+  page. #305: with one source down, a sample is taken from the two left within 50 bps of each other, alerting
+  `index-sample-fallback`.
+- **box-35 (SSM `3949fbc1`).** `/home/ec2-user/exchange-feeds` cloned at `1c7c838` (origin/main, with #305); `pnpm install
+  --frozen-lockfile --filter perp-feeds...`, `@numo/kms-signer` and `perp-feeds` built (tsc only). `--probe-sources` from
+  the new build: 3 of 3 answered (quidax 1373.87, textile 1372.75, bybit-p2p 1372.00). Drop-in
+  `numo-perp-feeds.service.d/checkout.conf` sets `WorkingDirectory` to its `services/perp-feeds`; ExecStart (exchange-perp's
+  `run-with-ssm.sh`, then the relative `dist/main.js`) and `/etc/numo/perp-feeds.env` unchanged. Restarted at 21:27:15.
+- **exchange-perp not moved:** still `af584bc` with its 2026-10-03 perp-feeds dist (kept, unused now) and the MM bundle;
+  `numo-perp-keeper` runs from it as before.
+- **After.** New PID's cwd is the new checkout, 0 restarts; first sample 21:27:20 from all three sources; first publish
+  read on chain at 21:28:23 (`getSpot` 0.000728462). The index state (`/var/lib/numo/perp-index-state.json`) carried the
+  TWAP window across the restart. box-35's own "OK" line matched the old process's last publish (21:27:15, same second
+  as the stop); the new process was confirmed separately.
+- **Undo.** `rm /etc/systemd/system/numo-perp-feeds.service.d/checkout.conf; systemctl daemon-reload; systemctl restart
+  numo-perp-feeds` (back to exchange-perp's dist, 3-of-3).
+
 ## 2026-11-01 ~00:25–00:46 UTC: v1 emptied and retired on the box
 
 v1 held only #32 (the stopped v1 future maker) and pool #31; both are dust now. Every other v1 account was dust
