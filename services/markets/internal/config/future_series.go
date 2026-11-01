@@ -50,22 +50,25 @@ type FutureSeries struct {
 	// CloseOnly takes every order on the series as reduce-only, resting ones included at match time:
 	// the engine is being run out and no position may open or grow on it.
 	CloseOnly bool `json:"close_only,omitempty"`
-	// TakerFeeBps is the series' taker fee in bps of the notional (makers pay none). Absent is
-	// DefaultFutureTakerFeeBps; set per series since 2026-10-31 (EURC-30NOV26 5, cNGN-30NOV26 15).
+	// TakerFeeBps is the series' taker fee in bps of the notional (makers pay none). Required on every
+	// FUTURE_SERIES entry: there is no default, so a new listing states its fee rather than inheriting
+	// one that the schedule has since moved away from (2026-10-31: EURC-30NOV26 5, cNGN-30NOV26 15).
 	TakerFeeBps *int `json:"taker_fee_bps,omitempty"`
 }
 
-// DefaultFutureTakerFeeBps is a series' taker fee when its config names none.
-const DefaultFutureTakerFeeBps = 25
+// LegacyFutureTakerFeeBps is the v1 series' taker fee: CNGN_FUTURE_* names none, and the series is
+// close-only.
+const LegacyFutureTakerFeeBps = 25
 
 // MaxFutureTakerFeeBps bounds a configured fee: 1%, far above any schedule, so a typo in bps (250 for
 // 25) is refused rather than charged.
 const MaxFutureTakerFeeBps = 100
 
-// TakerFee is the series' taker fee in bps: its own, else DefaultFutureTakerFeeBps.
+// TakerFee is the series' taker fee in bps. Load refuses a series without one, so a nil here is a
+// series built around validation, and listing it at some fallback would charge a fee nobody set.
 func (s FutureSeries) TakerFee() int {
 	if s.TakerFeeBps == nil {
-		return DefaultFutureTakerFeeBps
+		panic(fmt.Sprintf("futures series %s has no taker_fee_bps", s.MarketSymbol()))
 	}
 	return *s.TakerFeeBps
 }
@@ -125,6 +128,7 @@ func (c Config) FutureSubID() string {
 // FUTURE_SERIES in order.
 func (c Config) FutureSeriesList() []FutureSeries {
 	var list []FutureSeries
+	legacyFee := LegacyFutureTakerFeeBps
 	if strings.TrimSpace(c.CNGNFutureAssetAddress) != "" {
 		list = append(list, FutureSeries{
 			AssetAddress:   strings.ToLower(strings.TrimSpace(c.CNGNFutureAssetAddress)),
@@ -134,6 +138,7 @@ func (c Config) FutureSeriesList() []FutureSeries {
 			BaseAsset:      "cNGN",
 			ContractSize:   LegacyFutureContractSize,
 			CloseOnly:      c.CNGNFutureCloseOnly,
+			TakerFeeBps:    &legacyFee,
 		})
 	}
 	return append(list, c.FutureSeries...)
@@ -247,8 +252,6 @@ func (s FutureSeries) validate() error {
 		return errors.New("base_asset is required: the asset a contract is a number of (cNGN, EURC)")
 	case s.Kind == FutureKindInverse && s.BaseAsset != "cNGN":
 		return fmt.Errorf("an inverse series is cNGN's, not %s", s.BaseAsset)
-	case s.TakerFeeBps != nil && (*s.TakerFeeBps < 0 || *s.TakerFeeBps > MaxFutureTakerFeeBps):
-		return fmt.Errorf("taker_fee_bps %d is outside 0..%d", *s.TakerFeeBps, MaxFutureTakerFeeBps)
 	}
 	size, ok := new(big.Rat).SetString(s.ContractSize)
 	if !ok || size.Sign() <= 0 {
@@ -257,6 +260,12 @@ func (s FutureSeries) validate() error {
 	scale, ok := new(big.Int).SetString(s.ScaledAmount(), 10)
 	if !ok || scale.Sign() <= 0 {
 		return fmt.Errorf("amount_scale %q is not a positive whole number, and 1e18 / contract_size is not one either: set it", s.AmountScale)
+	}
+	switch {
+	case s.TakerFeeBps == nil:
+		return errors.New("taker_fee_bps is required: every series states its fee (bps of the notional), there is no default")
+	case *s.TakerFeeBps < 0 || *s.TakerFeeBps > MaxFutureTakerFeeBps:
+		return fmt.Errorf("taker_fee_bps %d is outside 0..%d", *s.TakerFeeBps, MaxFutureTakerFeeBps)
 	}
 	return nil
 }

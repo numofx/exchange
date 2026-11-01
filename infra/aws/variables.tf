@@ -317,7 +317,7 @@ variable "future_series" {
     amount_scale    = optional(string)
     symbol          = optional(string)
     close_only      = optional(bool, false)
-    taker_fee_bps   = optional(number) # absent: markets-service's default, 25
+    taker_fee_bps   = number # required: bps of the notional; no default, so a new series states its fee
   }))
   default = [{
     asset_address   = "0xcACEe66ad41fD1472a47D7D5Fe372FFbFac9AA75"
@@ -340,6 +340,11 @@ variable "future_series" {
     amount_scale    = "1000000000000000" # 1 EURC: 1e18 per 1,000 EURC contract
     taker_fee_bps   = 5                  # 2026-10-31, from 25: EURC-USDC spot's 5
   }]
+
+  validation {
+    condition     = alltrue([for s in var.future_series : s.taker_fee_bps >= 0 && s.taker_fee_bps <= 100 && floor(s.taker_fee_bps) == s.taker_fee_bps])
+    error_message = "Each future_series entry's taker_fee_bps is a whole number of bps from 0 to 100 (markets-service refuses anything else)."
+  }
 
   validation {
     condition     = alltrue([for s in var.future_series : contains(["inverse", "linear"], s.kind)])

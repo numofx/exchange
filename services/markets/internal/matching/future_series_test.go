@@ -156,8 +156,8 @@ func msConfig(rpc string) config.Config {
 		CNGNPerpTradeModuleAddress: msTM,
 		CNGNFutureAssetAddress:     msV1, CNGNFutureExpiry: msExpiry, CNGNFutureManagerAddress: msV1Engine,
 		FutureSeries: []config.FutureSeries{
-			{AssetAddress: msV2CNGN, Expiry: msExpiry, ManagerAddress: msV2Engine, Kind: config.FutureKindLinear, BaseAsset: "cNGN", ContractSize: "1000000"},
-			{AssetAddress: msV2EURC, Expiry: msExpiry, ManagerAddress: msV2Engine, Kind: config.FutureKindLinear, BaseAsset: "EURC", ContractSize: "1000"},
+			{AssetAddress: msV2CNGN, Expiry: msExpiry, ManagerAddress: msV2Engine, Kind: config.FutureKindLinear, BaseAsset: "cNGN", ContractSize: "1000000", TakerFeeBps: msFee(15)},
+			{AssetAddress: msV2EURC, Expiry: msExpiry, ManagerAddress: msV2Engine, Kind: config.FutureKindLinear, BaseAsset: "EURC", ContractSize: "1000", TakerFeeBps: msFee(5)},
 		},
 	}
 }
@@ -198,15 +198,15 @@ func TestTheMatcherReadsEachSeriesThroughItsOwnReader(t *testing.T) {
 		asset, symbol string
 		open          bool
 		price, wrong  *big.Int
-		// fee is one contract's taker fee at price, 25 bps of its USDC notional
+		// fee is one contract's taker fee at price, the series' own bps of its USDC notional (v1 25)
 		fee, mark string
 		position  *big.Int
 	}{
 		{msV1, "USDC-cNGN-30NOV26", true, v1Price, cngnPrice, "2500000000000000000", "1400", new(big.Int).Mul(big.NewInt(3), wad)},
-		// 1,000,000 cNGN x 0.000714285714285714 = 714.285714285714 USDC; 25 bps
-		{msV2CNGN, "cNGN-30NOV26", false, cngnPrice, v1Price, "1785714285714285000", "0.000714285714285714", big.NewInt(0)},
-		// 1,000 EURC x 1.16 = 1,160 USDC; 25 bps
-		{msV2EURC, "EURC-30NOV26", true, eurcPrice, v1Price, "2900000000000000000", "1.16", new(big.Int).Neg(wad)},
+		// 1,000,000 cNGN x 0.000714285714285714 = 714.285714285714 USDC; 15 bps
+		{msV2CNGN, "cNGN-30NOV26", false, cngnPrice, v1Price, "1071428571428571000", "0.000714285714285714", big.NewInt(0)},
+		// 1,000 EURC x 1.16 = 1,160 USDC; 5 bps
+		{msV2EURC, "EURC-30NOV26", true, eurcPrice, v1Price, "580000000000000000", "1.16", new(big.Int).Neg(wad)},
 	} {
 		instrument := msInstrument(t, cfg, tc.asset)
 		if instrument.Symbol != tc.symbol {
@@ -403,3 +403,6 @@ insert into active_orders (
 		t.Fatalf("mark_price %v, expected v2's mark", mark)
 	}
 }
+
+// msFee is a series' taker_fee_bps, which every FUTURE_SERIES entry states.
+func msFee(bps int) *int { return &bps }
