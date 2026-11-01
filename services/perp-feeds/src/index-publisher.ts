@@ -148,12 +148,24 @@ export class IndexPublisher {
     } else {
       const result = aggregateSample(
         answered.map((r) => ({ source: r.source, cngnPerUsdt: r.cngnPerUsdt })),
-        { minSources: this.config.INDEX_MIN_SOURCES, maxSourceDeviationBps: this.config.INDEX_MAX_SOURCE_DEVIATION_BPS },
+        {
+          minSources: this.config.INDEX_MIN_SOURCES,
+          maxSourceDeviationBps: this.config.INDEX_MAX_SOURCE_DEVIATION_BPS,
+          fallbackMinSources: this.config.INDEX_FALLBACK_MIN_SOURCES,
+          fallbackMaxSpreadBps: this.config.INDEX_FALLBACK_MAX_SPREAD_BPS,
+        },
       );
       outcome = result;
       if (result.ok) {
         this.state.samples = [...this.state.samples.filter((p) => p.at >= at - this.config.INDEX_TWAP_WINDOW_MS), { price: result.median, at }];
-        console.log(`[index] sample ${result.median} cNGN/USDT from ${result.sources.join(', ')}`);
+        console.log(`[index] sample ${result.median} cNGN/USDT from ${result.sources.join(', ')}${result.fallback ? ' (fallback)' : ''}`);
+        if (result.fallback) {
+          const missing = readings.filter((r) => !result.sources.includes(r.source)).map((r) => r.source);
+          await this.alert(
+            'index-sample-fallback',
+            `index sample from ${result.sources.length} of ${this.sources.length} sources (${missing.join(', ')} absent), within ${this.config.INDEX_FALLBACK_MAX_SPREAD_BPS}bps of each other`,
+          );
+        }
       } else {
         console.warn(`[index] sample refused: ${result.reason}`);
         await this.alert('index-sample-refused', `index sample refused: ${result.reason}`);

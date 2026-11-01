@@ -48,8 +48,12 @@ async function probeSources(config: ReturnType<typeof loadConfig>) {
       console.log(`${source.name.padEnd(12)} FAIL  ${(error as Error).message.slice(0, 160)}  ${Date.now() - started}ms`);
     }
   }
-  const verdict = answered >= config.INDEX_MIN_SOURCES ? 'enough' : 'NOT ENOUGH: the index will refuse every sample';
-  console.log(`${answered} of ${sources.length} sources answered; the index needs ${config.INDEX_MIN_SOURCES} (${verdict})`);
+  const verdict = answered >= config.INDEX_MIN_SOURCES
+    ? 'enough'
+    : answered >= config.INDEX_FALLBACK_MIN_SOURCES
+      ? `FALLBACK: samples only while they sit within ${config.INDEX_FALLBACK_MAX_SPREAD_BPS}bps of each other`
+      : 'NOT ENOUGH: the index will refuse every sample';
+  console.log(`${answered} of ${sources.length} sources answered; the index needs ${config.INDEX_MIN_SOURCES}, or ${config.INDEX_FALLBACK_MIN_SOURCES} as a fallback (${verdict})`);
   if (answered < config.INDEX_MIN_SOURCES) process.exitCode = 1;
 }
 

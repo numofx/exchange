@@ -189,7 +189,7 @@ describe('index sample and the peg guard', () => {
     assert.match(status.sample.reason, /peg guard/);
   });
 
-  it('retries a failed source once within the sample, and goes without it after a second failure', async () => {
+  it('retries a failed source once within the sample, and falls back to the other two after a second failure', async () => {
     const calls: Record<string, number> = { flaky: 0, dead: 0 };
     const flaky = { name: 'flaky', read: async () => {
       calls.flaky += 1;
@@ -206,10 +206,23 @@ describe('index sample and the peg guard', () => {
       calls.dead += 1;
       throw new Error('api.textilecredit.com returned 502');
     } };
-    const refused = new IndexPublisher(config(), fakeChain({ index: null, diffs: {} }), [three[0], three[1], dead], quiet, () => Number(HEAD) * 1000, parity);
-    await refused.sample();
+    const alerts: string[] = [];
+    const fellBack = new IndexPublisher(config(), fakeChain({ index: null, diffs: {} }), [three[0], three[1], dead], async (key, message) => void alerts.push(`${key}: ${message}`), () => Number(HEAD) * 1000, parity);
+    await fellBack.sample();
     assert.equal(calls.dead, 2, 'exactly one retry');
-    assert.equal(refused.samples().length, 0);
+    assert.equal(fellBack.samples().length, 1, 'the two that answered agree, so the sample is taken');
+    assert.equal(alerts.length, 1);
+    assert.match(alerts[0]!, /^index-sample-fallback: index sample from 2 of 3 sources \(dead absent\)/);
+  });
+
+  it('refuses the fallback when the two sources left disagree by more than its spread', async () => {
+    const dead = { name: 'dead', read: async () => { throw new Error('502'); } };
+    const apart = { name: 'apart', read: async () => ({ source: 'apart', cngnPerUsdt: 1374 * 1.01 }) };
+    const alerts: string[] = [];
+    const index = new IndexPublisher(config(), fakeChain({ index: null, diffs: {} }), [three[0], apart, dead], async (key) => void alerts.push(key), () => Number(HEAD) * 1000, async () => ({ buy: 0.9999, sell: 1.0001 }));
+    await index.sample();
+    assert.equal(index.samples().length, 0);
+    assert.deepEqual(alerts, ['index-sample-refused']);
   });
 
   it('keeps sampling at parity when the tripwire is blind, and says so', async () => {
