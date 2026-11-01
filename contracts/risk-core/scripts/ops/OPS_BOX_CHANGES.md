@@ -5,6 +5,15 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-01 ~21:49 UTC: the vault's v1-pool cNGN deposited into the v2 spot maker #42
+
+- **`exchange-ops`** moved to `4f251e8` (#307, #308).
+- **box-36 (SSM `3ec75cf2`):** transient unit `numo-vault-cngn-to-mm`, `propose_vault_cngn_to_mm.py --propose`; two
+  MPCVault requests approved by hand: `cNGN.approve(cNGN escrow, 6,229.150178)` (`b4c42029`, tx `0x789034c6…`, block
+  53390218) and `escrow.deposit(#42, 6,229.150178)` (`811624f4`, tx `0x507eeb83…`, block 53390224). Artifact
+  `deployments/8453/VAULT_CNGN_TO_MM_VAULT_ACTIONS.json`.
+- **After:** #42 382,412.965849 cNGN; the vault 0 cNGN. Nothing else on the box changed.
+
 ## 2026-11-01 21:27 UTC: numo-perp-feeds on its own checkout, with the two-of-three index fallback (#305)
 
 - **Why.** Textile's 502s since 2026-10-26 left the 3-of-3 index refusing samples; four gaps in seven days ran past the
