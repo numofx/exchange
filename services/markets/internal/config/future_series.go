@@ -50,9 +50,12 @@ type FutureSeries struct {
 	// CloseOnly takes every order on the series as reduce-only, resting ones included at match time:
 	// the engine is being run out and no position may open or grow on it.
 	CloseOnly bool `json:"close_only,omitempty"`
-	// TakerFeeBps is the series' taker fee in bps of the notional (makers pay none). Required on every
-	// FUTURE_SERIES entry: there is no default, so a new listing states its fee rather than inheriting
-	// one that the schedule has since moved away from (2026-10-31: EURC-30NOV26 5, cNGN-30NOV26 15).
+	// TakerFeeBps is the series' taker fee in bps of the notional (makers pay none). Every series is
+	// meant to state it: there is no default, so a new listing never inherits a fee the schedule has
+	// moved away from (2026-10-31: EURC-30NOV26 5, cNGN-30NOV26 15). Terraform refuses a series without
+	// one. One that arrives anyway does not stop the process (every market would go down with it):
+	// futures.ResolveUnpricedSeries drops it at startup, or keeps it close-only at no fee while it holds
+	// positions.
 	TakerFeeBps *int `json:"taker_fee_bps,omitempty"`
 }
 
@@ -64,11 +67,16 @@ const LegacyFutureTakerFeeBps = 25
 // 25) is refused rather than charged.
 const MaxFutureTakerFeeBps = 100
 
-// TakerFee is the series' taker fee in bps. Load refuses a series without one, so a nil here is a
-// series built around validation, and listing it at some fallback would charge a fee nobody set.
+// Priced reports whether the series states its taker fee.
+func (s FutureSeries) Priced() bool {
+	return s.TakerFeeBps != nil
+}
+
+// TakerFee is the series' taker fee in bps. Only meaningful when Priced: an unpriced series is never
+// listed at some fallback (see TakerFeeBps).
 func (s FutureSeries) TakerFee() int {
 	if s.TakerFeeBps == nil {
-		panic(fmt.Sprintf("futures series %s has no taker_fee_bps", s.MarketSymbol()))
+		return 0
 	}
 	return *s.TakerFeeBps
 }
@@ -261,10 +269,8 @@ func (s FutureSeries) validate() error {
 	if !ok || scale.Sign() <= 0 {
 		return fmt.Errorf("amount_scale %q is not a positive whole number, and 1e18 / contract_size is not one either: set it", s.AmountScale)
 	}
-	switch {
-	case s.TakerFeeBps == nil:
-		return errors.New("taker_fee_bps is required: every series states its fee (bps of the notional), there is no default")
-	case *s.TakerFeeBps < 0 || *s.TakerFeeBps > MaxFutureTakerFeeBps:
+	// A missing fee is not an error here (see TakerFeeBps); a stated one must be in range.
+	if s.TakerFeeBps != nil && (*s.TakerFeeBps < 0 || *s.TakerFeeBps > MaxFutureTakerFeeBps) {
 		return fmt.Errorf("taker_fee_bps %d is outside 0..%d", *s.TakerFeeBps, MaxFutureTakerFeeBps)
 	}
 	return nil

@@ -1,6 +1,7 @@
 package instruments
 
 import (
+	"log/slog"
 	"strings"
 	"time"
 
@@ -138,6 +139,13 @@ func DefaultRegistry(cfg config.Config) *Registry {
 		},
 	}
 	for _, series := range cfg.FutureSeriesList() {
+		// futures.ResolveUnpricedSeries settles every unpriced series at startup; one that reaches here
+		// anyway is left unlisted rather than listed at a fee nobody set.
+		if !series.Priced() {
+			slog.Error("future_series_unpriced_unlisted", "market", series.MarketSymbol(), "asset", series.AssetAddress,
+				"reason", "taker_fee_bps is not set and the series was not resolved at startup")
+			continue
+		}
 		items = append(items, futureMetadata(cfg, series))
 	}
 

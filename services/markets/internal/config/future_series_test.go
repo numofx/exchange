@@ -96,7 +96,6 @@ func TestAFutureSeriesListIsRefusedWhenAmbiguousOrPartial(t *testing.T) {
 		"base_asset is required":         `[{"asset_address":"` + testV2Future + `","expiry":1796047200,"manager_address":"` + testV2Engine + `","kind":"linear","contract_size":"1"}]`,
 		"an inverse series is cNGN's":    `[{"asset_address":"` + testV2Future + `","expiry":1796047200,"manager_address":"` + testV2Engine + `","kind":"inverse","base_asset":"EURC","contract_size":"1000"}]`,
 		"contract_size":                  `[{"asset_address":"` + testV2Future + `","expiry":1796047200,"manager_address":"` + testV2Engine + `","kind":"linear","base_asset":"cNGN"}]`,
-		"taker_fee_bps is required":      `[` + strings.Replace(v2, `,"taker_fee_bps":15`, ``, 1) + `]`,
 		"taker_fee_bps -1 is outside":    `[` + strings.Replace(v2, `"taker_fee_bps":15`, `"taker_fee_bps":-1`, 1) + `]`,
 		"taker_fee_bps 250 is outside":   `[` + strings.Replace(v2, `"taker_fee_bps":15`, `"taker_fee_bps":250`, 1) + `]`,
 		"1e18 / contract_size":           `[{"asset_address":"` + testV2Future + `","expiry":1796047200,"manager_address":"` + testV2Engine + `","kind":"linear","base_asset":"cNGN","contract_size":"3"}]`,
@@ -165,3 +164,17 @@ func TestFutureSeriesTakerFee(t *testing.T) {
 }
 
 func ptr(v int) *int { return &v }
+
+// A series without taker_fee_bps loads: it is resolved at startup (futures.ResolveUnpricedSeries), never
+// refused here, since a refusal would stop every market.
+func TestAnUnpricedSeriesLoads(t *testing.T) {
+	setLegacyFutureEnv(t)
+	t.Setenv("FUTURE_SERIES", `[{"asset_address":"`+testV2Future+`","expiry":1796047200,"manager_address":"`+testV2Engine+`","kind":"linear","base_asset":"cNGN","contract_size":"1000000"}]`)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.FutureSeries) != 1 || cfg.FutureSeries[0].Priced() {
+		t.Fatalf("want one unpriced series: %+v", cfg.FutureSeries)
+	}
+}

@@ -33,6 +33,7 @@ const (
 	sigContractSize       = "0x3d7cc610" // contractSize()
 	sigIsDatedFutureAsset = "0x761822ef" // isDatedFutureAsset(address)
 	sigTotalPositionCap   = "0x745ab570" // totalPositionCap(address)
+	sigTotalPosition      = "0xa9578774" // totalPosition(address): positions held under the manager, every series on the asset
 	sigAdjustmentsPaused  = "0xac06ba05" // adjustmentsPaused()
 	sigSubAccounts        = "0x779e5012" // subAccounts()
 	sigManager            = "0x52981457" // SubAccounts.manager(uint256)
