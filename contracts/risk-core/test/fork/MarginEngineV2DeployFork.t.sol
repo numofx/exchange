@@ -63,8 +63,12 @@ contract MarginEngineV2DeployFork is Test {
   uint v1MarketsBefore;
   uint v1EscrowCapBefore;
 
+  /// @dev 2026-10-31 ~14:40 UTC, before MarginEngine v2 step 5 set v1's escrow caps to its open interest (EURC to 0),
+  /// after which the deploy script's checks rightly refuse to copy v1's markets. Unpinned, this failed from that step on.
+  uint constant FORK_BLOCK = 53_333_410;
+
   function setUp() public {
-    vm.createSelectFork(vm.envString("BASE_RPC_URL"));
+    vm.createSelectFork(vm.envString("BASE_RPC_URL"), FORK_BLOCK);
     script = new DeployMarginEngineV2();
 
     string memory v1Artifact = vm.readFile(string.concat(vm.projectRoot(), "/deployments/8453/MARGIN_ENGINE.json"));
