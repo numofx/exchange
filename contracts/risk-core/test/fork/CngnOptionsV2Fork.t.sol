@@ -12,6 +12,7 @@ import {OptionAsset} from "../../src/assets/OptionAsset.sol";
 import {FutureAsset} from "../../src/assets/FutureAsset.sol";
 import {WrappedERC20Asset} from "../../src/assets/WrappedERC20Asset.sol";
 import {LyraVolFeed} from "../../src/feeds/LyraVolFeed.sol";
+import {FutureFixingSettlementFeed} from "../../src/feeds/FutureFixingSettlementFeed.sol";
 import {BaseLyraFeed} from "../../src/feeds/BaseLyraFeed.sol";
 import {MarginEngine} from "../../src/risk-managers/MarginEngine.sol";
 import {IAsset} from "../../src/interfaces/IAsset.sol";
@@ -134,6 +135,7 @@ contract CngnOptionsV2Fork is Test {
   FutureAsset future;
   OptionAsset option;
   LyraVolFeed volFeed;
+  FutureFixingSettlementFeed settlement;
 
   uint spot; // USDC per cNGN, live at the fork block
   uint fwd; // the forward at EXPIRY, live at the fork block
@@ -152,7 +154,8 @@ contract CngnOptionsV2Fork is Test {
     (fwd,) = forwardFeed.getForwardPrice(EXPIRY);
 
     // what the deploy script will do: deploy, configure, hand both to the vault
-    option = new OptionAsset(subAccounts, address(0)); // settlement feed: the fixing adapter, a later step
+    settlement = new FutureFixingSettlementFeed(future);
+    option = new OptionAsset(subAccounts, address(settlement));
     volFeed = new LyraVolFeed();
     volFeed.addSigner(vm.addr(volPk), true);
     volFeed.setHeartbeat(VOL_HEARTBEAT);
@@ -417,6 +420,96 @@ contract CngnOptionsV2Fork is Test {
     _trade(seller, buyer, other, 1e18, 0);
   }
 
+  //////////////////
+  //  settlement  //
+  //////////////////
+
+  /// @dev The index fixing settles the future and, through the adapter, the options at the same price: a put written at
+  ///      the forward pays (K - fixing) x size when cNGN fixes 10% down, the call nothing, and cash moves only between
+  ///      the two sides.
+  function testOptionsSettleAtTheFuturesIndexFixing() public {
+    (uint writer, uint holder, uint96 put, uint96 call, uint k) = _openPutAndCall();
+    uint fixing = spot * 90 / 100;
+    _fixAtIndex(fixing);
+
+    (bool settled, uint price) = settlement.getSettlementPrice(EXPIRY);
+    assertTrue(settled);
+    assertEq(price, fixing, "the index fixing");
+    assertEq(price, future.futureContracts(EXPIRY).markPrice, "the future's own settlement price");
+
+    // interest realised first: settleOptions realises it too, and it is not the payout
+    int writerBefore = _settledCash(writer);
+    int holderBefore = _settledCash(holder);
+    engine.settleOptions(option, writer);
+    engine.settleOptions(option, holder);
+    int payout = int(k - fixing) * int(SETTLE_SIZE) / 1e18;
+    assertGt(payout, 0);
+    assertEq(_cash(holder) - holderBefore, payout, "the put holder is paid (K - fixing) x size");
+    assertEq(writerBefore - _cash(writer), payout, "the writer pays exactly that");
+    assertEq(subAccounts.getBalance(holder, option, put), 0, "put closed");
+    assertEq(subAccounts.getBalance(holder, option, call), 0, "OTM call closed for nothing");
+    assertEq(subAccounts.getBalance(writer, option, put), 0);
+    assertEq(subAccounts.getBalance(writer, option, call), 0);
+  }
+
+  /// @dev Expired but not yet fixed: settleOptions does nothing, and the positions wait for the fixing.
+  function testOptionsWaitForTheFixing() public {
+    (uint writer,, uint96 put,,) = _openPutAndCall();
+    vm.warp(EXPIRY + 1);
+    (bool settled,) = settlement.getSettlementPrice(EXPIRY);
+    assertFalse(settled);
+    engine.settleOptions(option, writer);
+    assertEq(subAccounts.getBalance(writer, option, put), -int(SETTLE_SIZE), "still open: no price yet");
+  }
+
+  /// @dev Break the fixing (no samples): the vault's bounded fallback settles the future after its delay, and the
+  ///      options settle at that same price.
+  function testTheVaultFallbackSettlesOptionsAtTheSamePrice() public {
+    (uint writer, uint holder, uint96 put,, uint k) = _openPutAndCall();
+    vm.warp(EXPIRY + future.fallbackDelay());
+    _holdSpot(spot);
+    uint fallbackPrice = future.fallbackReference(uint96(EXPIRY)) * 99 / 100; // inside the 2% band
+    vm.prank(VAULT);
+    future.setSettlementPrice(uint96(EXPIRY), fallbackPrice);
+
+    (, uint price) = settlement.getSettlementPrice(EXPIRY);
+    assertEq(price, fallbackPrice);
+    int holderBefore = _settledCash(holder);
+    engine.settleOptions(option, holder);
+    engine.settleOptions(option, writer);
+    int payout = k > fallbackPrice ? int(k - fallbackPrice) * int(SETTLE_SIZE) / 1e18 : int(0);
+    assertEq(_cash(holder) - holderBefore, payout);
+    assertEq(subAccounts.getBalance(writer, option, put), 0);
+  }
+
+  /// @dev An expiry no future lists cannot be settled, and says so.
+  function testAnExpiryWithNoFutureIsRefusedBySettlement() public {
+    uint64 other = EXPIRY + 7 days;
+    vm.expectRevert(abi.encodeWithSelector(FutureFixingSettlementFeed.FFSF_NoFutureForExpiry.selector, other));
+    settlement.getSettlementPrice(other);
+  }
+
+  /// @dev Why settlement needs a keeper at expiry: no vol can be published past expiry, so once the last publish ages
+  ///      out, an unsettled option account cannot be margined (nor liquidated) until it is settled. Settling clears it.
+  function testAnUnsettledExpiredAccountIsStuckUntilSettled() public {
+    (uint writer,,,,) = _openPutAndCall();
+    _recordFixing(spot);
+    vm.warp(EXPIRY + VOL_HEARTBEAT + 1);
+    _holdSpot(spot);
+    vm.expectRevert(ILyraVolFeed.LVF_InvalidVolDataTimestamp.selector);
+    this.publishVol(EXPIRY, ATM_VOL);
+    vm.expectRevert(IBaseLyraFeed.BLF_DataTooOld.selector);
+    engine.getMargin(writer, false);
+
+    future.fixSettlementFromIndex(uint96(EXPIRY));
+    engine.settleOptions(option, writer);
+    engine.getMargin(writer, false); // no options left: margined again
+  }
+
+  function publishVol(uint64 expiry, uint atmVol) external {
+    _publishVolAt(expiry, atmVol, 1e18, 1e15);
+  }
+
   ////////////////////////////////
   //  through the live venue    //
   ////////////////////////////////
@@ -482,6 +575,41 @@ contract CngnOptionsV2Fork is Test {
     engine.setOracleContingencyParams(MARKET, _candidateOcParams());
     engine.setOraclesForMarket(MARKET, ISpotFeed(spotForBatch), forwardFeed, volFeed);
     vm.stopPrank();
+  }
+
+  uint constant SETTLE_SIZE = 1_000_000e18;
+
+  /// @dev holder buys a put and a call at the forward from writer, premium paid at the mark.
+  function _openPutAndCall() internal returns (uint writer, uint holder, uint96 put, uint96 call, uint k) {
+    _batch(address(spotFeed));
+    _openCap();
+    _holdSpot(spot);
+    _holdForward(fwd);
+    _publishVol(EXPIRY, ATM_VOL, 1e18);
+    k = _strike(fwd);
+    put = OptionEncoding.toSubId(EXPIRY, k, false);
+    call = OptionEncoding.toSubId(EXPIRY, k, true);
+    writer = _account(alice);
+    holder = _account(bob);
+    _depositUsdc(alice, writer, 2_000e6);
+    _depositUsdc(bob, holder, 2_000e6);
+    _trade(writer, holder, put, SETTLE_SIZE, 0);
+    _trade(writer, holder, call, SETTLE_SIZE, 0);
+  }
+
+  /// @dev Samples the future's fixing window (the keeper's job) with the index held at `price`, ending at expiry.
+  function _recordFixing(uint price) internal {
+    for (uint t = EXPIRY - 1 hours; t <= EXPIRY; t += 10 minutes) {
+      vm.warp(t);
+      _holdSpot(price);
+      future.recordFixingSample(uint96(EXPIRY));
+    }
+  }
+
+  function _fixAtIndex(uint price) internal {
+    _recordFixing(price);
+    vm.warp(EXPIRY + 1);
+    future.fixSettlementFromIndex(uint96(EXPIRY));
   }
 
   function _openCap() internal {
@@ -628,6 +756,11 @@ contract CngnOptionsV2Fork is Test {
       });
     }
     subAccounts.submitTransfers(t, "");
+  }
+
+  function _settledCash(uint acc) internal returns (int) {
+    engine.settleInterest(acc);
+    return _cash(acc);
   }
 
   function _cash(uint acc) internal view returns (int) {
