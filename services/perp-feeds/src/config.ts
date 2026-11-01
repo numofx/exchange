@@ -42,6 +42,13 @@ const envSchema = z.object({
   INDEX_MAX_SAMPLE_AGE_MS: z.coerce.number().int().positive().default(180_000),
   INDEX_MIN_SOURCES: z.coerce.number().int().min(3).default(3),
   INDEX_MAX_SOURCE_DEVIATION_BPS: z.coerce.number().positive().default(150),
+  /**
+   * With one of the three sources down, a sample is taken from the two left if they sit within
+   * INDEX_FALLBACK_MAX_SPREAD_BPS of each other, and alerts. Set INDEX_FALLBACK_MIN_SOURCES to
+   * INDEX_MIN_SOURCES to turn the fallback off.
+   */
+  INDEX_FALLBACK_MIN_SOURCES: z.coerce.number().int().min(2).default(2),
+  INDEX_FALLBACK_MAX_SPREAD_BPS: z.coerce.number().positive().default(50),
   /** Per publish: with publishes every minute, 150 bps lets a 5-minute TWAP track a step of ~7.5%. */
   INDEX_MAX_JUMP_BPS: z.coerce.number().int().positive().default(150),
   /**
@@ -95,5 +102,10 @@ export type Config = z.infer<typeof envSchema> & { markets: { perp: Address } };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const parsed = envSchema.parse(env);
+  if (parsed.INDEX_FALLBACK_MIN_SOURCES > parsed.INDEX_MIN_SOURCES) {
+    throw new Error(
+      `INDEX_FALLBACK_MIN_SOURCES (${parsed.INDEX_FALLBACK_MIN_SOURCES}) is above INDEX_MIN_SOURCES (${parsed.INDEX_MIN_SOURCES})`,
+    );
+  }
   return { ...parsed, markets: { perp: parsed.PERP_ASSET } };
 }

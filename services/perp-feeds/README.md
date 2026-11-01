@@ -7,7 +7,11 @@ and, as a separate process, the forward publisher for the cNGN future (`dist/for
 - **Index.** Every minute, three fiat USDT/NGN providers from
   [`cngn-rate-picker`](https://github.com/wrappedcbdc/cngn-rate-picker) (Quidax `usdtngn`, Textile,
   Bybit P2P) are queried. A sample is the **median**, and is
-  refused if fewer than 3 sources answer or any source sits more than 150 bps from the median. Every
+  refused if any source sits more than 150 bps from the median. With one source down, the sample is
+  taken from the other two if they sit within 50 bps of each other (`INDEX_FALLBACK_MAX_SPREAD_BPS`),
+  and alerts `index-sample-fallback`; with fewer, or further apart, it is refused (since 2026-11-01:
+  Textile's 502s left the 3-of-3 rule refusing for up to 32 minutes, past the feed's 20-minute
+  heartbeat, which halts the engine; `INDEX_FALLBACK_MIN_SOURCES=3` turns the fallback off). Every
   minute the 5-minute **time-weighted average** of accepted samples is inverted to USDC per cNGN,
   refused if it would move the on-chain index more than 150 bps, then signed and pushed (15 min /
   5 min / 300 bps until 2026-10-03; tightened by the leverage study so a step is in the index within
@@ -23,7 +27,8 @@ and, as a separate process, the forward publisher for the cNGN future (`dist/for
 
 **What the index measures: fiat NGN, at cNGN's redemption parity.** cNGN is held at 1 NGN by
 redemption, not by trading, so each source's fiat NGN per USDT is used as cNGN per USDT unconverted
-(`src/index-sources.ts`). There are exactly 3 sources and no spare.
+(`src/index-sources.ts`). There are exactly 3 sources and no spare; the two-source fallback above
+is what covers one of them going down.
 
 **The peg tripwire** (`src/peg.ts`) is not a source: a 15-min TWAP of Quidax `cngnngn` book mids.
 Past 100 bps from parity it refuses every sample and the status file (`INDEX_STATUS_FILE`) records
