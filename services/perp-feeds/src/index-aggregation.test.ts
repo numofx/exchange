@@ -15,7 +15,7 @@ describe('aggregateSample', () => {
       ],
       rules,
     );
-    assert.deepEqual(result, { ok: true, median: 1374, sources: ['quidax', 'textile', 'bybit-p2p'] });
+    assert.deepEqual(result, { ok: true, median: 1374, sources: ['quidax', 'textile', 'bybit-p2p'], fallback: false });
   });
 
   it('averages the middle pair for an even count', () => {
@@ -68,6 +68,65 @@ describe('aggregateSample', () => {
     );
     assert.equal(result.ok, false);
     assert.match(!result.ok ? result.reason : '', /bybit-p2p=1450/);
+  });
+});
+
+describe('aggregateSample with a two-source fallback', () => {
+  const fallbackRules = { ...rules, fallbackMinSources: 2, fallbackMaxSpreadBps: 50 };
+
+  it('takes two close sources when the third is absent, and says it fell back', () => {
+    const result = aggregateSample(
+      [
+        { source: 'quidax', cngnPerUsdt: 1372 },
+        { source: 'bybit-p2p', cngnPerUsdt: 1374 },
+      ],
+      fallbackRules,
+    );
+    assert.deepEqual(result, { ok: true, median: 1373, sources: ['quidax', 'bybit-p2p'], fallback: true });
+  });
+
+  it('refuses two sources further apart than the fallback spread, though within the normal deviation', () => {
+    // 1365 and 1380 each sit ~55 bps from their midpoint: inside the 150 bps a three-source sample
+    // allows, but a pair has no third price to outvote a bad one, so it is held to 50 bps end to end.
+    const result = aggregateSample(
+      [
+        { source: 'quidax', cngnPerUsdt: 1365 },
+        { source: 'bybit-p2p', cngnPerUsdt: 1380 },
+      ],
+      fallbackRules,
+    );
+    assert.equal(result.ok, false);
+    assert.match(!result.ok ? result.reason : '', /109bps apart \(fallback limit 50bps\)/);
+  });
+
+  it('refuses one source', () => {
+    const result = aggregateSample([{ source: 'quidax', cngnPerUsdt: 1372 }], fallbackRules);
+    assert.equal(result.ok, false);
+    assert.match(!result.ok ? result.reason : '', /only 1 of 3 required sources/);
+  });
+
+  it('holds three sources to the normal rules, not the fallback', () => {
+    const result = aggregateSample(
+      [
+        { source: 'quidax', cngnPerUsdt: 1365 },
+        { source: 'textile', cngnPerUsdt: 1372 },
+        { source: 'bybit-p2p', cngnPerUsdt: 1380 },
+      ],
+      fallbackRules,
+    );
+    assert.equal(result.ok && result.fallback, false);
+    assert.equal(result.ok && result.median, 1372);
+  });
+
+  it('has no fallback when fallbackMinSources equals minSources', () => {
+    const result = aggregateSample(
+      [
+        { source: 'quidax', cngnPerUsdt: 1372 },
+        { source: 'bybit-p2p', cngnPerUsdt: 1372 },
+      ],
+      { ...fallbackRules, fallbackMinSources: 3 },
+    );
+    assert.equal(result.ok, false);
   });
 });
 

@@ -26,17 +26,44 @@ export type SampleRules = {
   minSources: number;
   /** Largest distance any source may sit from the median, in bps of the median. */
   maxSourceDeviationBps: number;
+  /**
+   * Fewest sources a sample may fall back to when fewer than `minSources` answer. Unset, or equal to
+   * `minSources`, there is no fallback.
+   */
+  fallbackMinSources?: number;
+  /** Largest spread, highest to lowest in bps of the median, of a fallback sample's sources. */
+  fallbackMaxSpreadBps?: number;
 };
 
 export type SampleResult =
-  | { ok: true; median: number; sources: string[] }
+  | { ok: true; median: number; sources: string[]; fallback: boolean }
   | { ok: false; reason: string };
 
-/** Median of the sources' cNGN-per-USDT, refused when too few answered or any one disagrees. */
+/**
+ * Median of the sources' cNGN-per-USDT, refused when too few answered or any one disagrees.
+ *
+ * With one source down, a sample falls back to the ones that answered, held to a tighter spread:
+ * two sources have no median to outvote a bad one, so they must agree with each other closely. One
+ * flaky provider (Textile's 502s from 2026-10-26) otherwise starved the window past the feed's
+ * 20-minute heartbeat, and a stale feed halts the engine.
+ */
 export function aggregateSample(quotes: SourceQuote[], rules: SampleRules): SampleResult {
   const valid = quotes.filter((quote) => Number.isFinite(quote.cngnPerUsdt) && quote.cngnPerUsdt > 0);
-  if (valid.length < rules.minSources) {
-    return { ok: false, reason: `only ${valid.length} of ${rules.minSources} required sources answered` };
+  const fallback = valid.length < rules.minSources;
+  if (fallback) {
+    const floor = rules.fallbackMinSources ?? rules.minSources;
+    if (valid.length < floor || rules.fallbackMaxSpreadBps === undefined) {
+      return { ok: false, reason: `only ${valid.length} of ${rules.minSources} required sources answered` };
+    }
+    const prices = valid.map((quote) => quote.cngnPerUsdt);
+    const spreadBps = ((Math.max(...prices) - Math.min(...prices)) / medianOf(prices)) * 10_000;
+    if (spreadBps > rules.fallbackMaxSpreadBps) {
+      const detail = valid.map((quote) => `${quote.source}=${quote.cngnPerUsdt}`).join(', ');
+      return {
+        ok: false,
+        reason: `only ${valid.length} of ${rules.minSources} sources answered and they sit ${spreadBps.toFixed(0)}bps apart (fallback limit ${rules.fallbackMaxSpreadBps}bps): ${detail}`,
+      };
+    }
   }
 
   const median = medianOf(valid.map((quote) => quote.cngnPerUsdt));
@@ -48,7 +75,7 @@ export function aggregateSample(quotes: SourceQuote[], rules: SampleRules): Samp
     return { ok: false, reason: `sources disagree with median ${median}: ${detail}` };
   }
 
-  return { ok: true, median, sources: valid.map((quote) => quote.source) };
+  return { ok: true, median, sources: valid.map((quote) => quote.source), fallback };
 }
 
 export type WindowRules = {
