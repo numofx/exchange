@@ -28,6 +28,56 @@ import {OptionEncoding} from "lyra-utils/encoding/OptionEncoding.sol";
 import {Black76} from "lyra-utils/math/Black76.sol";
 import {FixedPointMathLib} from "lyra-utils/math/FixedPointMathLib.sol";
 
+/// @dev contracts/execution's Matching and TradeModule, as deployed: declared here, as in EurcFutureV2Fork.
+struct EAction {
+  uint subaccountId;
+  uint nonce;
+  address module;
+  bytes data;
+  uint expiry;
+  address owner;
+  address signer;
+}
+
+struct ETradeData {
+  address asset;
+  uint subId;
+  int limitPrice;
+  int desiredAmount;
+  uint worstFee;
+  uint recipientId;
+  bool isBid;
+}
+
+struct EFillDetails {
+  uint filledAccount;
+  uint amountFilled;
+  int price;
+  uint fee;
+}
+
+struct EOrderData {
+  uint takerAccount;
+  uint takerFee;
+  EFillDetails[] fillDetails;
+  bytes managerData;
+}
+
+interface IEMatching {
+  function verifyAndMatch(EAction[] memory actions, bytes[] memory signatures, bytes memory actionData) external;
+  function depositSubAccount(uint accountId) external;
+  function setTradeExecutor(address tradeExecutor, bool canExecute) external;
+  function domainSeparator() external view returns (bytes32);
+  function getActionHash(EAction memory action) external pure returns (bytes32);
+}
+
+interface IETradeModule {
+  function matching() external view returns (address);
+  function quoteAsset() external view returns (address);
+  function isPerpAsset(address asset) external view returns (bool);
+  function isDatedFutureAsset(address asset) external view returns (bool);
+}
+
 /**
  * cNGN-USDC options on the live MarginEngine v2 (0x0705…, cNGN market 1), first expiry 30NOV26 with the future.
  *
@@ -55,6 +105,7 @@ contract CngnOptionsV2Fork is Test {
   address constant VAULT = 0x1dcA42ab54Bd3862853A821F84B29BF65245F435;
   address constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
   uint constant MARKET = 1;
+  address constant TRADE_MODULE = 0xDea968188598BA0E3F58A56C0fdfF338C74F699f; // MARGIN_ENGINE_V2.json tradeModule
   uint64 constant EXPIRY = 1796047200; // 2026-11-30 14:00 UTC, cNGN-30NOV26's
 
   // Before any options action, 2026-11-01. The world after the batch is asserted by this suite, not read at head.
@@ -69,6 +120,11 @@ contract CngnOptionsV2Fork is Test {
   uint volPk = uint(keccak256("numo.cngn-options-v2-fork.vol-signer"));
   address alice = address(0xa11ce);
   address bob = address(0xb0b);
+  address executor = address(0xE1EC);
+  uint makerPk = uint(keccak256("numo.cngn-options-v2-fork.maker"));
+  uint takerPk = uint(keccak256("numo.cngn-options-v2-fork.taker"));
+  uint nonce;
+  IEMatching matching;
 
   SubAccounts subAccounts;
   MarginEngine engine;
@@ -361,6 +417,58 @@ contract CngnOptionsV2Fork is Test {
     _trade(seller, buyer, other, 1e18, 0);
   }
 
+  ////////////////////////////////
+  //  through the live venue    //
+  ////////////////////////////////
+
+  /// @dev The live TradeModule needs no registration for options: an asset that is neither perp nor dated future fills
+  ///      as price x amount in its quote asset (v2 cash), which is an option premium. Price is USDC per cNGN, amount in
+  ///      cNGN; the writer is margined in the same batch.
+  function testItFillsThroughTheLiveTradeModuleAsAPremium() public {
+    _batch(address(spotFeed));
+    _openCap();
+    _holdSpot(spot);
+    _holdForward(fwd);
+    _publishVol(EXPIRY, ATM_VOL, 1e18);
+
+    IETradeModule tm = IETradeModule(TRADE_MODULE);
+    assertEq(tm.quoteAsset(), address(cash), "premium is paid in v2 cash");
+    assertFalse(tm.isPerpAsset(address(option)));
+    assertFalse(tm.isDatedFutureAsset(address(option)));
+    // a trusted assessor is held to maintenance only: venue writers must stay at initial margin
+    assertFalse(engine.trustedRiskAssessor(TRADE_MODULE), "TradeModule fills are checked at IM");
+    matching = IEMatching(tm.matching());
+    vm.prank(VAULT);
+    matching.setTradeExecutor(executor, true);
+
+    uint takerAcc = _matchingAccount(vm.addr(takerPk), 1_000e6);
+    uint makerAcc = _matchingAccount(vm.addr(makerPk), 1_000e6);
+    uint96 subId = OptionEncoding.toSubId(EXPIRY, _strike(fwd), false);
+    (, int putMtm) = engine.getIsolatedMargin(MARKET, _strike(fwd), EXPIRY, false, 1e18, true);
+    int price = putMtm; // the premium per cNGN, at the mark
+    uint amount = 1_000_000e18;
+
+    int takerCash = _cash(takerAcc);
+    int makerCash = _cash(makerAcc);
+    _fill(takerAcc, makerAcc, subId, amount, price); // taker buys the put, maker writes it
+
+    assertEq(subAccounts.getBalance(takerAcc, option, subId), int(amount), "taker long 1M cNGN of puts");
+    assertEq(subAccounts.getBalance(makerAcc, option, subId), -int(amount), "maker short");
+    int premium = price * int(amount) / 1e18;
+    assertEq(takerCash - _cash(takerAcc), premium, "taker paid price x amount");
+    assertEq(_cash(makerAcc) - makerCash, premium, "maker received it");
+    emit log_named_decimal_int("premium for 1M cNGN ATM put (USDC)", premium, 18);
+
+    // the writer is margined in the fill: one with too little cash cannot write
+    uint thinAcc = _matchingAccount(vm.addr(makerPk), 20e6);
+    // signed first: an expectRevert placed before _fill would be spent on the signing's view calls, not the match
+    (EAction[] memory actions, bytes[] memory sigs, bytes memory orderData) =
+      _prepareFill(takerAcc, thinAcc, subId, amount, price);
+    vm.prank(executor);
+    vm.expectRevert(IMarginEngine.SRM_PortfolioBelowMargin.selector);
+    matching.verifyAndMatch(actions, sigs, orderData);
+  }
+
   /////////////////
   //   helpers   //
   /////////////////
@@ -520,5 +628,71 @@ contract CngnOptionsV2Fork is Test {
       });
     }
     subAccounts.submitTransfers(t, "");
+  }
+
+  function _cash(uint acc) internal view returns (int) {
+    return subAccounts.getBalance(acc, IAsset(address(cash)), 0);
+  }
+
+  function _matchingAccount(address owner, uint usdcAmount) internal returns (uint accountId) {
+    accountId = subAccounts.createAccount(owner, IManager(address(engine)));
+    deal(USDC, address(this), usdcAmount);
+    IERC20Metadata(USDC).approve(address(cash), usdcAmount);
+    cash.deposit(accountId, usdcAmount);
+    vm.startPrank(owner);
+    subAccounts.approve(address(matching), accountId);
+    matching.depositSubAccount(accountId);
+    vm.stopPrank();
+  }
+
+  function _fill(uint takerAcc, uint makerAcc, uint96 subId, uint amount, int price) internal {
+    (EAction[] memory actions, bytes[] memory sigs, bytes memory orderData) =
+      _prepareFill(takerAcc, makerAcc, subId, amount, price);
+    vm.prank(executor);
+    matching.verifyAndMatch(actions, sigs, orderData);
+  }
+
+  function _prepareFill(uint takerAcc, uint makerAcc, uint96 subId, uint amount, int price)
+    internal
+    returns (EAction[] memory actions, bytes[] memory sigs, bytes memory orderData)
+  {
+    nonce++;
+    actions = new EAction[](2);
+    sigs = new bytes[](2);
+    (actions[0], sigs[0]) = _sign(takerAcc, true, takerPk, subId, price, amount);
+    (actions[1], sigs[1]) = _sign(makerAcc, false, makerPk, subId, price, amount);
+    EFillDetails[] memory fills = new EFillDetails[](1);
+    fills[0] = EFillDetails({filledAccount: makerAcc, amountFilled: amount, price: price, fee: 0});
+    orderData = abi.encode(EOrderData({takerAccount: takerAcc, takerFee: 0, fillDetails: fills, managerData: ""}));
+  }
+
+  function _sign(uint accountId, bool isBid, uint pk, uint96 subId, int price, uint amount)
+    internal
+    view
+    returns (EAction memory action, bytes memory signature)
+  {
+    address owner = vm.addr(pk);
+    action = EAction({
+      subaccountId: accountId,
+      nonce: nonce,
+      module: TRADE_MODULE,
+      data: abi.encode(
+        ETradeData({
+          asset: address(option),
+          subId: subId,
+          limitPrice: price,
+          desiredAmount: int(amount),
+          worstFee: 1e18,
+          recipientId: accountId,
+          isBid: isBid
+        })
+      ),
+      expiry: block.timestamp + 1 days,
+      owner: owner,
+      signer: owner
+    });
+    (uint8 v, bytes32 r, bytes32 s) =
+      vm.sign(pk, MessageHashUtils.toTypedDataHash(matching.domainSeparator(), matching.getActionHash(action)));
+    signature = bytes.concat(r, s, bytes1(v));
   }
 }
