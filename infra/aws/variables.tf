@@ -64,7 +64,7 @@ variable "image_markets" {
   type        = string
   # 2026-10-28 19:54 UTC: main befe85e6 (#280: FUTURE_SERIES, listing MarginEngine v2's cNGN-30NOV26 closed).
   # markets td :46, matcher td :45. Rollback is 06d35e168f58 (td :45 / :44) with future_series = [], in one apply.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:3d6314b83a23"
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:8309e3cea4b3"
 }
 
 variable "image_execution" {
