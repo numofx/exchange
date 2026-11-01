@@ -9,7 +9,7 @@
 import { encodeAbiParameters, type Address, type Hex } from 'viem';
 import type { LocalAccount } from 'viem/accounts';
 
-export type FeedKind = 'LyraSpotFeed' | 'LyraSpotDiffFeed' | 'LyraForwardFeed';
+export type FeedKind = 'LyraSpotFeed' | 'LyraSpotDiffFeed' | 'LyraForwardFeed' | 'LyraVolFeed';
 
 const FEED_DATA_TYPES = {
   FeedData: [
@@ -42,6 +42,37 @@ export function encodeForwardData(expiry: bigint, fwdSpotDifference: bigint, con
   return encodeAbiParameters(
     [{ type: 'uint64' }, { type: 'uint256' }, { type: 'uint256' }, { type: 'int96' }, { type: 'uint64' }],
     [expiry, 0n, 0n, fwdSpotDifference, confidence],
+  );
+}
+
+/**
+ * Inner payload of a LyraVolFeed update: (uint64 expiry, int SVI_a, uint SVI_b, int SVI_rho, int SVI_m, uint SVI_sigma,
+ * uint SVI_fwd, uint64 SVI_refTau, uint64 confidence), raw SVI in total-variance terms (vol-surface.ts).
+ */
+export function encodeVolData(p: {
+  expiry: bigint;
+  a: bigint;
+  b: bigint;
+  rho: bigint;
+  m: bigint;
+  sigma: bigint;
+  fwd: bigint;
+  refTau: bigint;
+  confidence: bigint;
+}): Hex {
+  return encodeAbiParameters(
+    [
+      { type: 'uint64' },
+      { type: 'int256' },
+      { type: 'uint256' },
+      { type: 'int256' },
+      { type: 'int256' },
+      { type: 'uint256' },
+      { type: 'uint256' },
+      { type: 'uint64' },
+      { type: 'uint64' },
+    ],
+    [p.expiry, p.a, p.b, p.rho, p.m, p.sigma, p.fwd, p.refTau, p.confidence],
   );
 }
 

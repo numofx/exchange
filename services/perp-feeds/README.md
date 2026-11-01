@@ -1,8 +1,9 @@
 # perp-feeds
 
 Price publishers for `USDCcNGN-PERP` (`dist/main.js`: one process, one feed signer, one relayer),
-and, as a separate process, the forward publisher for the cNGN future (`dist/forward-main.js`,
-[below](#forward-publisher-cngn-future)). The perp publishers:
+and, as separate processes, the forward publisher for the cNGN future (`dist/forward-main.js`,
+[below](#forward-publisher-cngn-future)) and the vol publisher for cNGN options (`dist/vol-main.js`,
+[below](#vol-publisher-cngn-options)). The perp publishers:
 
 - **Index.** Every minute, three fiat USDT/NGN providers from
   [`cngn-rate-picker`](https://github.com/wrappedcbdc/cngn-rate-picker) (Quidax `usdtngn`, Textile,
@@ -203,3 +204,40 @@ USDC-cNGN-30NOV26 keeps its unit and code path, unchanged, until it settles. Wha
 
 `src/forward-v2.anvil.e2e.test.ts` and `src/expiry-v2.anvil.e2e.test.ts` run it against the real v2
 `FutureAsset` for a cNGN and an EURC series.
+
+## Vol publisher (cNGN options)
+
+`dist/vol-main.js` signs the cNGN options' vol surface into their `LyraVolFeed`
+(`contracts/risk-core/scripts/deploy-cngn-options-v2.s.sol`), for the one expiry they share with
+cNGN-30NOV26. **Not yet installed**: `numo-vol-feeds.service`, `run-with-ssm-vol.sh` and
+`vol-feeds-cngn-30nov26.env` under `contracts/risk-core/scripts/ops/` say what it needs first.
+
+**The surface is hand-set** (decided 2026-11-01), not measured: an ATM vol (`VOL_ATM`) and a shape
+held relative to ATM variance (`src/vol-surface.ts`): `b = VOL_B_MULT × ATM variance`, skew
+`VOL_RHO` (negative: low strikes, a weaker cNGN, are dearer), curvature `VOL_SIGMA`, `m = 0` so the
+ATM vol at the forward is exactly `VOL_ATM`. `SVI_fwd` is the cNGN future's forward
+(`FORWARD_FEED`), which the engine prices the options against too. Every 5 minutes it publishes; the
+feed's heartbeat is 30 minutes, and startup refuses an interval over a third of it.
+
+**Degrade, not halt** (decided 2026-11-01). Any of these makes the index uncertain:
+
+- the index publisher's status file (`INDEX_STATUS_FILE`) is missing, unreadable or over 5 minutes old;
+- the peg tripwire is tripped;
+- the last index sample was refused (sources disagree, or the jump guard held a move);
+- an index step was published in the last 24 hours (`INDEX_STEP_AUDIT_FILE`);
+- the chain's index is unreadable.
+
+While any holds it publishes at once, and every interval after, at `VOL_DEGRADED_CONFIDENCE` (under
+the engine's option threshold, checked at startup) with ATM at least `VOL_DEGRADED_ATM_FLOOR`: new
+shorts cost more initial margin, maintenance is untouched, so nobody is liquidated for it. It alerts
+`vol-degraded` on entering and `vol-recovered` on leaving. The feed goes stale (option accounts stop
+margining, and so stop being liquidated) only when the publisher itself cannot publish: no forward
+(`vol-no-forward`), a signing or relay failure (`vol-sign-failed`, `vol-publish-failed`).
+
+Each publish is read back from the feed (the ATM vol at the forward and the expiry's confidence);
+a mismatch alerts `vol-readback-mismatch`. It writes what it did to `VOL_STATUS_FILE` for the pager.
+At expiry it stops: the feed refuses data stamped after it, so expired option accounts must be
+settled (`settleOptions`) before the last surface ages out.
+
+`src/vol.anvil.e2e.test.ts` runs it against the real `LyraSpotFeed`, `LyraForwardFeed`,
+`LyraVolFeed` and `OracleDataSubmitter`.
