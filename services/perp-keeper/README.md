@@ -63,6 +63,16 @@ feed holds back only the accounts holding cNGN, as EURC's does), and `FUTURE` a 
 series (cNGN-30NOV26 now, EURC-30NOV26 later): each future's cap is watched on its own (`future-oi-cap-<address>`).
 `/health` adds `perp`, `futures` and `cngnSpotFeed`. Its own key, funding account and port (9466).
 
+**Expired options** (`OPTION`, comma-separated: cNGN options on v2, `src/options.ts`). No vol can be published past an
+option's expiry, so once the last surface ages out (30 minutes) an account still holding an expired option cannot be
+margined, traded, withdrawn or liquidated until `settleOptions(option, account)` turns it into cash at the settlement
+price, the cNGN future's own (its index fixing, or the vault's fallback a day later). Each pass therefore starts by
+settling every account (the keeper's bid accounts included) holding an expired option whose price is fixed, before the
+liquidation loop reads them. It alerts `options-settled` when it does, and `options-unsettled` while an expired price is
+still unfixed `OPTION_SETTLE_WARN_SEC` (2 h) after expiry by the chain's clock. `/health` adds `options`,
+`optionsSettled` and `optionsAwaitingPrice`; `propose_cngn_options_v2_batch.py`'s enable gate requires `options`.
+Without `OPTION` nothing option is read.
+
 ## EURC collateral (MarginEngine market 2)
 
 Collateral is a list: each asset has its own escrow, price source, haircut and inventory limit. An
@@ -154,7 +164,8 @@ through `CashAsset.deposit`). Its cash bounds the largest auction it can take in
 pnpm test                               # every decision branch and health alarm
 BASE_RPC_URL=... ./scripts/e2e.sh       # the real stack on an anvil fork: deploy, crash, liquidate
 BASE_RPC_URL=... ./scripts/e2e-engine.sh  # the live MarginEngine and MarginEngine v2 on a fork: an engine account
-                                          # under maintenance auctioned and bought into, on each engine
+                                          # under maintenance auctioned and bought into, on each engine; then cNGN
+                                          # options attached to v2, expired, fixed and settled by the sweep
 ```
 
 The fork test is what found three bugs no unit test could: a start that ran out of gas one block after
