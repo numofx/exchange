@@ -35,7 +35,8 @@ type IndexStatus = { at?: unknown; pegGuardTripped?: unknown; sample?: { ok?: un
  *   - the peg tripwire is tripped (cNGN off its NGN parity);
  *   - the last index sample was refused (sources disagree, or the jump guard held a real move);
  *   - an index step was published within stepDegradeMs (a devaluation was just let through);
- *   - the chain's index is unreadable (stale: margin reads it too).
+ *   - the chain's index is unreadable (stale: margin reads it too). Reported for the alert's sake: with no index the
+ *     forward reverts as well, so the tick ends at 'no-forward' and the surface ages out, alongside the index's own halt.
  */
 export function uncertaintyReasons(args: {
   status: IndexStatus | null;
