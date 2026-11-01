@@ -42,6 +42,9 @@ async function main() {
     insolventAccounts: [] as string[],
     /** Accounts with an auction open at the last pass: the owner cannot trade until it ends. */
     openAuctions: [] as string[],
+    /** Expired options: settled at the last pass, and still waiting for their price. */
+    optionsSettled: [] as string[],
+    optionsAwaitingPrice: [] as string[],
   };
 
   const tick = async () => {
@@ -51,6 +54,8 @@ async function main() {
       health.liquidatableAccounts = summary.liquidatable.map(String);
       health.insolventAccounts = summary.insolvent.map(String);
       health.openAuctions = summary.openAuctions.map(String);
+      health.optionsSettled = (summary.optionsSettled ?? []).map(String);
+      health.optionsAwaitingPrice = (summary.optionsAwaitingPrice ?? []).map(String);
       health.lastPassOk = true;
     } catch (error) {
       health.lastPassOk = false;
@@ -82,6 +87,8 @@ async function main() {
           // The perp and futures it watches (null / none: an engine without them).
           perp: config.PERP ?? null,
           futures: config.FUTURES,
+          // The option assets whose expiries it settles (propose_cngn_options_v2_batch.py's keeper gate reads it).
+          options: config.OPTIONS,
           // The cNGN escrow this keeper bids for (null: cash-only); the batch-5 gate reads it.
           cngnEscrow: config.CNGN_ESCROW ?? null,
           cngnSpotFeed: config.CNGN_SPOT_FEED ?? null,

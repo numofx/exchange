@@ -18,6 +18,7 @@ import type { CollateralAsset, CollateralConfig } from './collateral.js';
 import type { Config } from './config.js';
 import type { AccountView, CollateralView } from './decide.js';
 import type { StackHealth } from './health.js';
+import { optionExpiry, planOptionSettlement, type OptionHolding, type OptionSweepPlan } from './options.js';
 import { readAtOrAfter } from './pinned-read.js';
 
 export const auctionAbi = parseAbi([
@@ -136,6 +137,7 @@ const subAccountsAbi = parseAbi([
   'function createAccount(address owner, address manager) returns (uint256)',
   'function ownerOf(uint256 accountId) view returns (address)',
   'function manager(uint256 accountId) view returns (address)',
+  'function getAccountBalances(uint256 accountId) view returns ((address asset, uint256 subId, int256 balance)[])',
   'function submitTransfer((uint256 fromAcc, uint256 toAcc, address asset, uint256 subId, int256 amount, bytes32 assetData) assetTransfer, bytes managerData) returns (uint256)',
   'event AccountCreated(address indexed owner, uint256 indexed accountId, address indexed manager)',
 ]);
@@ -150,6 +152,8 @@ const perpAbi = parseAbi([
   'function isDisabled() view returns (bool)',
 ]);
 const settleAbi = parseAbi(['function settlePerpsWithIndex(uint256 accountId)']);
+const settleOptionsAbi = parseAbi(['function settleOptions(address option, uint256 accountId)']);
+const optionAbi = parseAbi(['function calcSettlementValue(uint256 subId, int256 balance) view returns (int256 payout, bool priceSettled)']);
 const spotFeedAbi = parseAbi(['function getSpot() view returns (uint256, uint256)', 'error CLF_DataTooOld()', 'error CLF_InvalidPrice()']);
 
 const accountCreated = parseAbiItem(
@@ -463,6 +467,35 @@ export function createKeeperChain(config: Config, transportOverride?: Transport)
         await send({ account: keeper, chain, address: config.MANAGER, abi: settleAbi, functionName: 'settlePerpsWithIndex', args: [accountId] });
       }
       return { settled, underLiquidation };
+    },
+
+    /**
+     * Settles every account holding an expired option whose price is fixed (options.ts), for each OPTION. Reads every
+     * account under the manager, the keeper's own bid accounts included (they can inherit options from a bid). Nothing
+     * is read when no OPTION is configured. Returns the plan, with what it sent (or would, on a dry run).
+     */
+    async settleExpiredOptions(dryRun: boolean): Promise<OptionSweepPlan & { sent: string[]; nowSec: bigint }> {
+      if (config.OPTIONS.length === 0) return { settle: [], awaiting: [], sent: [], nowSec: 0n };
+      const nowSec = (await client.getBlock({ blockTag: 'latest' })).timestamp;
+      const options = new Set(config.OPTIONS.map((o) => o.toLowerCase()));
+      const holdings: OptionHolding[] = [];
+      const candidates = [...new Set([...(await this.discoverAccounts()), ...ownAccounts])];
+      for (const accountId of candidates) {
+        const balances = await read({ address: config.SUB_ACCOUNTS, abi: subAccountsAbi, functionName: 'getAccountBalances', args: [accountId] });
+        for (const b of balances) {
+          if (!options.has(b.asset.toLowerCase()) || b.balance === 0n || optionExpiry(b.subId) > nowSec) continue;
+          const [, priceSettled] = await read({ address: b.asset, abi: optionAbi, functionName: 'calcSettlementValue', args: [b.subId, b.balance] });
+          holdings.push({ account: accountId, option: b.asset, subId: b.subId, balance: b.balance, priceSettled });
+        }
+      }
+      const plan = planOptionSettlement(holdings, nowSec);
+      const sent: string[] = [];
+      for (const { account, option } of plan.settle) {
+        if (dryRun) continue;
+        const receipt = await send({ account: keeper, chain, address: config.MANAGER, abi: settleOptionsAbi, functionName: 'settleOptions', args: [option as Address, account] });
+        sent.push(receipt.transactionHash);
+      }
+      return { ...plan, sent, nowSec };
     },
 
     /** The chain id the RPC itself reports, for the startup check against CHAIN_ID. */

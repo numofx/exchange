@@ -4,6 +4,7 @@ import type { Config } from './config.js';
 import type { CollateralAsset } from './collateral.js';
 import { decide, type Action, type KeeperRules } from './decide.js';
 import { assessHealth, fmt } from './health.js';
+import { lateAwaiting } from './options.js';
 
 /**
  * One pass: find every account, read it, decide, act; then check the stack's health. An account
@@ -11,7 +12,15 @@ import { assessHealth, fmt } from './health.js';
  * stale feed means liquidations are frozen along with trading.
  */
 /** What one pass saw, for /health and the pager: accounts under maintenance margin, and under water. */
-export type PassSummary = { liquidatable: bigint[]; insolvent: bigint[]; openAuctions: bigint[] };
+export type PassSummary = {
+  liquidatable: bigint[];
+  insolvent: bigint[];
+  openAuctions: bigint[];
+  /** Accounts whose expired options were settled this pass (or would be, on a dry run). */
+  optionsSettled?: bigint[];
+  /** Accounts holding an expired option whose price is not fixed yet. */
+  optionsAwaitingPrice?: bigint[];
+};
 
 export async function runOnce(
   config: Config,
@@ -22,6 +31,9 @@ export async function runOnce(
 ): Promise<Action[]> {
   // Throws (a failed pass, so /health fails) when the funding account cannot fund a bid.
   await chain.assertFundingAccount();
+  // Expired options first: an account holding one cannot be margined once its vol ages out, so it would read as
+  // unreadable below. Settling is permissionless and value-neutral. A failure alerts and the pass goes on.
+  await sweepOptions(config, chain, alert, summary);
   const accounts = await chain.discoverAccounts();
   const actions: Action[] = [];
   let keeperCash = await chain.keeperCash();
@@ -136,4 +148,36 @@ function describe(action: Exclude<Action, { kind: 'none' }>): string {
     return `${action.insolvent ? 'insolvent ' : ''}${action.finishing ? 'finishing ' : ''}bid ${fmt(action.percent * 100n)}% (limit ${fmt(action.priceLimit)})`;
   }
   return action.kind;
+}
+
+/** Settles expired options (options.ts), alerting on what it did and on prices still unfixed past the warning age. */
+export async function sweepOptions(config: Config, chain: KeeperChain, alert: Alerter, summary: PassSummary): Promise<void> {
+  if (config.OPTIONS.length === 0) return;
+  try {
+    const result = await chain.settleExpiredOptions(config.DRY_RUN);
+    summary.optionsSettled = result.settle.map((s) => s.account);
+    summary.optionsAwaitingPrice = [...new Set(result.awaiting.map((a) => a.account))];
+    for (const { account, option } of result.settle) {
+      console.log(`[keeper] #${account}: ${config.DRY_RUN ? 'would settle' : 'settled'} expired ${option} options`);
+    }
+    if (result.settle.length > 0) {
+      await alert(
+        'options-settled',
+        `${config.DRY_RUN ? 'DRY-RUN would settle' : 'settled'} expired options in account(s) ${result.settle.map((s) => s.account).join(', ')}`,
+      );
+    }
+    // The chain's clock, the one expiry and the fixing are judged by, not the host's.
+    const nowSec = result.nowSec;
+    const late = lateAwaiting(result, nowSec, config.OPTION_SETTLE_WARN_SEC);
+    if (late.length > 0) {
+      await alert(
+        'options-unsettled',
+        `account(s) ${[...new Set(late.map((a) => a.account))].join(', ')} hold expired options whose price is still not fixed ` +
+          `${Math.floor(Number(nowSec - late[0].expiry) / 60)} min after expiry: fix the future's settlement (or its fallback); ` +
+          'until then they cannot be margined or liquidated',
+      );
+    }
+  } catch (error) {
+    await alert('options-settle-error', `settling expired options failed: ${(error as Error).message}`);
+  }
 }

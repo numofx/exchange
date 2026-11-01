@@ -52,6 +52,18 @@ const envSchema = z.object({
     .optional()
     .transform((value) => (value ?? '').split(',').map((part) => part.trim()).filter((part) => part !== ''))
     .pipe(z.array(address)),
+  /**
+   * The engine's option assets, comma-separated (v2: cNGN options, CNGN_OPTIONS_V2.json `option`). Each pass settles
+   * every account holding an expired option whose price is fixed (options.ts): without that, an expired option account
+   * cannot be margined once the last vol surface ages out. Unset: nothing option is read.
+   */
+  OPTION: z
+    .string()
+    .optional()
+    .transform((value) => (value ?? '').split(',').map((part) => part.trim()).filter((part) => part !== ''))
+    .pipe(z.array(address)),
+  /** Alert when an expired option's price is still not fixed this long after its expiry (the fixing or fallback is late). */
+  OPTION_SETTLE_WARN_SEC: z.coerce.bigint().positive().default(2n * 3600n),
   SECURITY_MODULE_ACCOUNT: z.coerce.bigint(),
   /** The MarginEngine's VM pool (MARGIN_ENGINE.json poolAccount): never auctioned, never a candidate. */
   POOL_ACCOUNT: z.coerce.bigint().optional(),
@@ -139,23 +151,25 @@ const envSchema = z.object({
 });
 
 type Parsed = z.infer<typeof envSchema>;
-export type Config = Omit<Parsed, 'MANAGER' | 'SRM' | 'FUTURE'> & {
+export type Config = Omit<Parsed, 'MANAGER' | 'SRM' | 'FUTURE' | 'OPTION'> & {
   MANAGER: Parsed['SUB_ACCOUNTS'];
   /** FUTURE, as a list: none, one, or one per series. */
   FUTURES: Parsed['FUTURE'];
+  /** OPTION, as a list: none, or one per option asset. */
+  OPTIONS: Parsed['OPTION'];
   /** Every base collateral the keeper reads, prices and limits, from the *_ESCROW settings; empty for cash only. */
   COLLATERAL: CollateralConfig[];
 };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  const { SRM, MANAGER, FUTURE, ...rest } = envSchema.parse(env);
+  const { SRM, MANAGER, FUTURE, OPTION, ...rest } = envSchema.parse(env);
   if (MANAGER && SRM && MANAGER !== SRM) throw new Error(`MANAGER ${MANAGER} and SRM ${SRM} disagree: set one`);
   const manager = MANAGER ?? SRM;
   if (!manager) throw new Error('MANAGER (or SRM) is required: the manager whose accounts this keeper liquidates');
-  return { ...rest, MANAGER: manager, FUTURES: FUTURE, COLLATERAL: collateral(rest) };
+  return { ...rest, MANAGER: manager, FUTURES: FUTURE, OPTIONS: OPTION, COLLATERAL: collateral(rest) };
 }
 
-function collateral(env: Omit<Parsed, 'MANAGER' | 'SRM' | 'FUTURE'>): CollateralConfig[] {
+function collateral(env: Omit<Parsed, 'MANAGER' | 'SRM' | 'FUTURE' | 'OPTION'>): CollateralConfig[] {
   // Half an EURC setup is refused rather than run: an escrow without a price would bid on EURC
   // portfolios with no haircut, and a feed without an escrow reads nothing.
   if ((env.EURC_ESCROW === undefined) !== (env.EURC_SPOT_FEED === undefined)) {
