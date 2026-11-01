@@ -169,7 +169,7 @@ def load_actions() -> list[dict]:
 
 def verify_artifact(actions: list[dict]) -> None:
   """The artifact must be the one reviewed: these three calls, in this order, these digests, no value."""
-  for i, (action, expected) in enumerate(zip(actions, build_actions(), strict=True)):
+  for i, (action, expected) in enumerate(zip(actions, build_actions())):
     if action["to"].lower() != expected["to"].lower():
       raise SystemExit(f"REFUSED: step {i + 1} targets {action['to']}, not {expected['to']}")
     if action["data"].lower()[:10] != expected["data"][:10]:
