@@ -5,6 +5,7 @@ import "forge-std/Test.sol";
 import {IERC20Metadata} from "openzeppelin/token/ERC20/extensions/IERC20Metadata.sol";
 import {MessageHashUtils} from "openzeppelin/utils/cryptography/MessageHashUtils.sol";
 
+import {DeployCngnOptionsV2} from "../../scripts/deploy-cngn-options-v2.s.sol";
 import {SubAccounts} from "../../src/SubAccounts.sol";
 import {ISubAccounts} from "../../src/interfaces/ISubAccounts.sol";
 import {CashAsset} from "../../src/assets/CashAsset.sol";
@@ -72,6 +73,10 @@ interface IEMatching {
   function getActionHash(EAction memory action) external pure returns (bytes32);
 }
 
+interface IOwnable {
+  function owner() external view returns (address);
+}
+
 interface IETradeModule {
   function matching() external view returns (address);
   function quoteAsset() external view returns (address);
@@ -95,7 +100,8 @@ interface IETradeModule {
  *   - low vol confidence raises initial margin only: maintenance, and so liquidation, is untouched (the "degrade" mode);
  *   - an expiry the vol feed has not published cannot be shorted.
  *
- * Margin parameters below are CANDIDATES for the batch, chosen here to be tested, not decided.
+ * Runs deploy-cngn-options-v2.s.sol's own deploy and executes the vault batches it writes (setup, then enable) as the
+ * vault, so what is proven here is what the vault is asked to sign. Its margin parameters are CANDIDATES, not decided.
  *
  * The cNGN index is held with mockCall (its heartbeat is 20 minutes); the forward feed is read live where no time
  * passes and held where it does. Requires BASE_RPC_URL.
@@ -112,10 +118,8 @@ contract CngnOptionsV2Fork is Test {
   // Before any options action, 2026-11-01. The world after the batch is asserted by this suite, not read at head.
   uint constant FORK_BLOCK = 53_390_600;
 
-  // CANDIDATE parameters, under test
-  uint constant ATM_VOL = 0.4e18;
-  uint constant OPTION_CAP = 100_000_000e18; // 100M cNGN of options, both sides
-  uint64 constant VOL_HEARTBEAT = 30 minutes;
+  uint constant ATM_VOL = 0.4e18; // the hand-set level the publisher would sign
+  uint64 constant VOL_HEARTBEAT = 30 minutes; // the script's default, asserted in setUp
 
   // Derived rather than memorable: well-known keys carry EIP-7702 delegations on Base.
   uint volPk = uint(keccak256("numo.cngn-options-v2-fork.vol-signer"));
@@ -137,6 +141,10 @@ contract CngnOptionsV2Fork is Test {
   LyraVolFeed volFeed;
   FutureFixingSettlementFeed settlement;
 
+  DeployCngnOptionsV2 script;
+  DeployCngnOptionsV2.Params params;
+  DeployCngnOptionsV2.Deployment d;
+
   uint spot; // USDC per cNGN, live at the fork block
   uint fwd; // the forward at EXPIRY, live at the fork block
 
@@ -153,18 +161,59 @@ contract CngnOptionsV2Fork is Test {
     (spot,) = spotFeed.getSpot();
     (fwd,) = forwardFeed.getForwardPrice(EXPIRY);
 
-    // what the deploy script will do: deploy, configure, hand both to the vault
-    settlement = new FutureFixingSettlementFeed(future);
-    option = new OptionAsset(subAccounts, address(settlement));
-    volFeed = new LyraVolFeed();
-    volFeed.addSigner(vm.addr(volPk), true);
-    volFeed.setHeartbeat(VOL_HEARTBEAT);
-    option.transferOwnership(VAULT);
-    volFeed.transferOwnership(VAULT);
-    vm.startPrank(VAULT);
-    option.acceptOwnership();
-    volFeed.acceptOwnership();
-    vm.stopPrank();
+    // the script's own deploy, with its defaults; the vault accepts both in the setup batch
+    script = new DeployCngnOptionsV2();
+    params = script.loadChainParams();
+    params.volSigner = vm.addr(volPk);
+    script.checkParams(params);
+    d = script.deploy(params);
+    option = d.option;
+    volFeed = d.volFeed;
+    settlement = d.settlement;
+    assertEq(params.volHeartbeat, VOL_HEARTBEAT);
+  }
+
+  ////////////////////
+  //  the script    //
+  ////////////////////
+
+  function testScriptPostconditionsHold() public view {
+    script.assertDeployment(d, params);
+    assertEq(params.indexFeed, address(spotFeed), "the batch writes back the live index");
+    assertEq(params.forwardFeed, address(forwardFeed), "the future's forward feed");
+    assertEq(params.expiry, EXPIRY);
+  }
+
+  /// @dev The script refuses each way the batch would change what live cNGN markets read, or a slipped unit.
+  function testTheScriptRefusesBatchesThatWouldMoveLiveSettings() public {
+    DeployCngnOptionsV2.Params memory p = params;
+    p.indexFeed = address(forwardFeed);
+    vm.expectRevert(bytes("INDEX is not market 1's live spot feed: the batch would replace it"));
+    script.checkParams(p);
+
+    p = params;
+    p.oc.OCFactor = params.oc.OCFactor / 2;
+    vm.expectRevert(bytes("contingency params: perp, base and OCFactor must be market 1's live values"));
+    script.checkParams(p);
+
+    p = params;
+    p.margin.minSpotReq = 0.1e18; // the add-on the 25% step test shows going bankrupt
+    p.margin.maxSpotReq = 0.12e18;
+    vm.expectRevert(bytes("IM spot add-ons: need 20% <= MIN_SPOT_REQ <= MAX_SPOT_REQ (18dp: 0.25e18 for 25%)"));
+    script.checkParams(p);
+
+    p = params;
+    p.volSigner = VAULT;
+    vm.expectRevert(bytes("VOL_SIGNER must not be the vault"));
+    script.checkParams(p);
+  }
+
+  /// @dev The setup batch opens nothing: the option is listed, but its cap is 0 until enable.
+  function testSetupOpensNothing() public {
+    _batch(address(spotFeed));
+    assertEq(IOwnable(address(option)).owner(), VAULT);
+    assertEq(IOwnable(address(volFeed)).owner(), VAULT);
+    assertEq(option.totalPositionCap(engine), 0);
   }
 
   ///////////////////////
@@ -566,15 +615,25 @@ contract CngnOptionsV2Fork is Test {
   //   helpers   //
   /////////////////
 
-  /// @dev The batch, as the vault executes it. The cap is a separate (enable) action.
+  /// @dev The script's setup batch, as the vault executes it. `spotForBatch` other than the live index is the batch
+  ///      checkParams refuses, built anyway to show what it would do.
   function _batch(address spotForBatch) internal {
-    vm.startPrank(VAULT);
-    option.setWhitelistManager(address(engine), true);
-    engine.whitelistAsset(option, MARKET, IMarginEngine.AssetType.Option);
-    engine.setOptionMarginParams(MARKET, _candidateMarginParams());
-    engine.setOracleContingencyParams(MARKET, _candidateOcParams());
-    engine.setOraclesForMarket(MARKET, ISpotFeed(spotForBatch), forwardFeed, volFeed);
-    vm.stopPrank();
+    DeployCngnOptionsV2.Params memory p = params;
+    p.indexFeed = spotForBatch;
+    _execute(script.vaultActionsJson(d, p), script.vaultActionCount());
+  }
+
+  function _execute(string memory json, uint count) internal {
+    for (uint i = 0; i < count; i++) {
+      string memory key = string.concat("[", vm.toString(i), "]");
+      address to = vm.parseJsonAddress(json, string.concat(key, ".to"));
+      bytes memory data = vm.parseJsonBytes(json, string.concat(key, ".data"));
+      bytes32 digest = vm.parseJsonBytes32(json, string.concat(key, ".digest"));
+      assertEq(digest, keccak256(abi.encodePacked(to, keccak256(data))), "digest must match its own action");
+      vm.prank(VAULT);
+      (bool ok,) = to.call(data);
+      assertTrue(ok, string.concat("vault action ", vm.toString(i), " failed"));
+    }
   }
 
   uint constant SETTLE_SIZE = 1_000_000e18;
@@ -612,31 +671,9 @@ contract CngnOptionsV2Fork is Test {
     future.fixSettlementFromIndex(uint96(EXPIRY));
   }
 
+  /// @dev The script's enable batch: the cap.
   function _openCap() internal {
-    vm.prank(VAULT);
-    option.setTotalPositionCap(engine, OPTION_CAP);
-  }
-
-  /// @dev CANDIDATES. IM 25-30% of spot on a naked short (a 25% devaluation step); MM 15%.
-  function _candidateMarginParams() internal pure returns (IMarginEngine.OptionMarginParams memory) {
-    return IMarginEngine.OptionMarginParams({
-      maxSpotReq: 0.3e18,
-      minSpotReq: 0.25e18,
-      mmCallSpotReq: 0.15e18,
-      mmPutSpotReq: 0.15e18,
-      MMPutMtMReq: 0.5e18,
-      unpairedIMScale: 1.2e18,
-      unpairedMMScale: 1.1e18,
-      mmOffsetScale: 1.05e18
-    });
-  }
-
-  /// @dev CANDIDATES. Keeps perp and base thresholds as they are; adds the option threshold and factor.
-  function _candidateOcParams() internal view returns (IMarginEngine.OracleContingencyParams memory p) {
-    (uint perpT,, uint baseT, uint factor) = _ocParams();
-    p = IMarginEngine.OracleContingencyParams({
-      perpThreshold: perpT, optionThreshold: 0.8e18, baseThreshold: baseT, OCFactor: factor == 0 ? 0.5e18 : factor
-    });
+    _execute(script.enableActionsJson(d, params), script.enableActionCount());
   }
 
   function _ocParams() internal view returns (uint, uint, uint, uint) {
@@ -689,12 +726,19 @@ contract CngnOptionsV2Fork is Test {
     return price / 1e10 * 1e10;
   }
 
+  /// @dev The contingency params the batch rewrites: all but the option threshold must come back as they were.
+  function _contingencyHash(bytes32 h, uint id) internal view returns (bytes32) {
+    (uint perpT,, uint baseT, uint ocFactor) = engine.oracleContingencyParams(id);
+    return keccak256(abi.encode(h, perpT, baseT, ocFactor));
+  }
+
   function _neighbourSettings() internal view returns (bytes32 h) {
     for (uint id = 1; id <= 2; ++id) {
       (uint f, uint s) = engine.baseMarginParams(id);
       (ISpotFeed sf,,) = engine.getMarketFeeds(id);
       address base = address(engine.assetMap(id, IMarginEngine.AssetType.Base));
       (uint mm, uint im) = engine.futureMarginRequirements(id);
+      h = _contingencyHash(h, id);
       h = keccak256(
         abi.encode(
           h,
