@@ -10,6 +10,7 @@ import (
 
 	"github.com/numofx/matching-backend/internal/config"
 	"github.com/numofx/matching-backend/internal/db"
+	"github.com/numofx/matching-backend/internal/futures"
 	"github.com/numofx/matching-backend/internal/instruments"
 	"github.com/numofx/matching-backend/internal/matching"
 	"github.com/numofx/matching-backend/internal/orders"
@@ -34,6 +35,10 @@ func main() {
 	// release, which uses a detached context precisely so it survives shutdown.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// A series with no taker fee is dropped, or kept close-only while it holds positions, rather than
+	// refused at load: refusing would stop every market, not just the one missing its fee.
+	cfg = futures.ResolveUnpricedSeries(ctx, cfg, futures.ChainPositions(cfg.ChainRPCURL))
 
 	pool, err := db.NewPool(ctx, cfg.DatabaseURL)
 	if err != nil {

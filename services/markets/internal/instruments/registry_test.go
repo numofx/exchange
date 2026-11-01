@@ -354,3 +354,16 @@ func TestTheLegacySeriesIsTheSameMarketEitherWayItIsConfigured(t *testing.T) {
 
 // registryFee is a series' taker_fee_bps, which every FUTURE_SERIES entry states.
 func registryFee(bps int) *int { return &bps }
+
+// An unpriced series that was never resolved at startup is left unlisted, not listed at a fallback fee.
+func TestAnUnresolvedUnpricedSeriesIsNotListed(t *testing.T) {
+	cfg := config.Config{
+		CNGNPerpTradeModuleAddress: "0x2222222222222222222222222222222222222222",
+		CNGNPerpCashAddress:        "0x3333333333333333333333333333333333333333",
+		FutureSeries: []config.FutureSeries{{AssetAddress: "0x7777777777777777777777777777777777777777", Expiry: 1798736400,
+			ManagerAddress: "0x6666666666666666666666666666666666666666", Kind: config.FutureKindLinear, BaseAsset: "EURC", ContractSize: "1000"}},
+	}
+	if _, ok := DefaultRegistry(cfg).ByAssetAndSubID("0x7777777777777777777777777777777777777777", "1798736400"); ok {
+		t.Fatal("an unpriced series is listed")
+	}
+}
