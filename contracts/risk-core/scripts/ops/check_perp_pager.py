@@ -56,6 +56,17 @@ cash through the engine's pool, so no reserve target and no escrow cap: the pool
   keeper-unhealthy-v2 / insolvent-account-v2  v2's liquidation keeper (ENGINE_V2_KEEPER_HEALTH_URL, unset: not
                      watched), as keeper-unhealthy and insolvent-account; armed once healthy or a v2 future is open.
 
+cNGN options on MarginEngine v2 (OPTIONS_ARTIFACTS, comma-separated, default deployments/8453/CNGN_OPTIONS_V2.json; skipped
+while missing). Live once the option's cap is open or anyone holds one:
+  vol-stale-<series>  the options' LyraVolFeed has no live surface for the expiry (missing, or past its 30-min heartbeat),
+                     before expiry: every account holding an option stops margining, so trading AND liquidations stop.
+                     Is numo-vol-feeds running? A degraded surface (confidence under 1) is a Slack warning, not a page.
+  options-unsettled-<series>  options are still held OPTION_UNSETTLED_PAGE_SEC (3 h) past expiry: the keeper's
+                     settleOptions sweep is not running, or the cNGN future's settlement is not fixed. Such accounts
+                     cannot be margined or liquidated until settled.
+  sm-coverage        counts the options' live open interest too, one side at the index, delta 1 (an upper bound).
+Each vol feed read is recorded in the state file (`volFeeds`), which propose_cngn_options_v2_batch.py's enable gate reads.
+
 Pager (one of; secrets from SSM via run-with-ssm-pager.sh):
   PAGER_PROVIDER=pushover     PUSHOVER_TOKEN, PUSHOVER_USER. Emergency priority: repeats every 60s
                               until acknowledged in the app, and can be set to break through Do Not
@@ -199,6 +210,12 @@ FUTURE_POOL_DEFICIT_STUCK_SEC = 75 * 60
 # top-up is worth doing. numo-future-feeds uses the same tolerance (POOL_NET_TOLERANCE).
 FUTURE_POOL_DUST_USD = 1.0
 FUTURE_ESCROW_WARN_USED = 0.75
+# cNGN options on MarginEngine v2 (deploy-cngn-options-v2.s.sol), one artifact per option asset; skipped while missing.
+OPTIONS_ARTIFACTS = [ROOT / "deployments" / "8453" / "CNGN_OPTIONS_V2.json"]
+SEL_GET_EXPIRY_MIN_CONFIDENCE = "0xd4435817"  # getExpiryMinConfidence(uint64) on LyraVolFeed: reverts when missing or stale
+# Past expiry, options still held this long means nothing settled them (perp-keeper's sweep, or the future's fixing).
+OPTION_UNSETTLED_PAGE_SEC = 3 * 3600
+OPTION_DEGRADED_WARN_REPEAT_SEC = 6 * 3600
 FUTURE_WARN_REPEAT_SEC = 6 * 3600
 
 
@@ -577,6 +594,62 @@ def future_v2_artifacts() -> list[tuple[Path, dict]]:
   raw = os.environ.get("FUTURE_V2_ARTIFACTS", "").strip()
   paths = [Path(p.strip()) for p in raw.split(",") if p.strip()] if raw else FUTURE_V2_ARTIFACTS
   return [(path, json.loads(path.read_text())) for path in paths if path.exists()]
+
+
+def options_artifacts() -> list[tuple[Path, dict]]:
+  """Each option asset's artifact that exists (CNGN_OPTIONS_V2.json), with its path. Missing: not deployed, skipped."""
+  raw = os.environ.get("OPTIONS_ARTIFACTS", "").strip()
+  paths = [Path(p.strip()) for p in raw.split(",") if p.strip()] if raw else OPTIONS_ARTIFACTS
+  return [(path, json.loads(path.read_text())) for path in paths if path.exists()]
+
+
+def option_label(options: dict) -> str:
+  """cngn-30nov26-style, for keys and messages."""
+  return f"{options.get('baseSymbol', 'cNGN')}-{time.strftime('%d%b%y', time.gmtime(int(options['expiry']))).upper()}"
+
+
+def read_options(url: str, options: dict) -> dict:
+  """The option's cap and open interest under its engine (cNGN, both sides summed), the vol feed's confidence for the
+  expiry (None when it reverts: missing or stale), and the index (None when stale)."""
+  manager_word = options["manager"].lower().removeprefix("0x").rjust(64, "0")
+  call = lambda to, data: rpc(url, "eth_call", [{"to": to, "data": data}, "latest"])[2:]  # noqa: E731
+  cap = int(call(options["option"], SEL_TOTAL_POSITION_CAP + manager_word), 16) / 1e18
+  oi = int(call(options["option"], SEL_TOTAL_POSITION + manager_word), 16) / 1e18
+  try:
+    confidence: float | None = int(call(options["volFeed"], SEL_GET_EXPIRY_MIN_CONFIDENCE + f"{int(options['expiry']):064x}"), 16) / 1e18
+  except Exception:  # noqa: BLE001 -- the feed reverts when it has no live surface
+    confidence = None
+  try:
+    index: float | None = int(call(options["indexFeed"], SEL_GET_SPOT)[:64], 16) / 1e18
+  except Exception:  # noqa: BLE001 -- a stale index: feed-halt's page
+    index = None
+  return {"cap": cap, "oi": oi, "confidence": confidence, "index": index}
+
+
+def option_conditions(label: str, o: dict, expiry: int, now: int) -> tuple[list[Condition], list[str]]:
+  """Pages and Slack warnings for one option asset. `now` is the chain's clock, the one expiry is judged by."""
+  pages: list[Condition] = []
+  warnings: list[str] = []
+  live = o["cap"] > 0 or o["oi"] > 0
+  slug = label.lower()
+  if now < expiry and live:
+    if o["confidence"] is None:
+      pages.append(Condition(f"vol-stale-{slug}", f"{label} options: the vol feed has no live surface: every account "
+                             f"holding one ({o['oi']:,.0f} cNGN open) cannot be margined, traded or liquidated. "
+                             "Is numo-vol-feeds running?"))
+    elif o["confidence"] < 1:
+      warnings.append(f"{label} options: vol surface degraded (confidence {o['confidence']:.2f}): opening shorts costs more "
+                      "initial margin while the index is uncertain")
+  if now >= expiry and o["oi"] > 0 and now - expiry > OPTION_UNSETTLED_PAGE_SEC:
+    pages.append(Condition(f"options-unsettled-{slug}", f"{label} options: {o['oi']:,.0f} cNGN still held "
+                           f"{(now - expiry) // 3600} h past expiry. Those accounts cannot be margined or liquidated until "
+                           "settled: is the engine keeper's settleOptions sweep running, and is the future's settlement fixed?"))
+  return pages, warnings
+
+
+def option_one_side_usd(oi_cngn: float, index_usdc: float) -> float:
+  """One side of the options' open interest (the cap and totalPosition sum both sides) at the index, delta 1."""
+  return oi_cngn / 2 * index_usdc
 
 
 def series_label(future: dict) -> str:
@@ -982,6 +1055,33 @@ def check_and_page(stack_path: Path, state: dict) -> int:
   except Exception as exc:  # noqa: BLE001
     print(f"v2 futures: unreadable ({str(exc)[:80]})")
 
+  # cNGN options on v2: the vol feed while they are live, settlement after expiry, their side for the SecurityModule.
+  option_pages: list[Condition] = []
+  option_warnings: list[str] = []
+  state.pop("volFeeds", None)
+  for path, options in options_artifacts():
+    label = option_label(options)
+    try:
+      o = read_options(url, options)
+    except Exception as exc:  # noqa: BLE001
+      print(f"options {label}: unreadable ({str(exc)[:80]})")
+      continue
+    # Recorded once the feed was read (live or not): the enable gate requires it.
+    state.setdefault("volFeeds", []).append(options["volFeed"])
+    pages, warnings = option_conditions(label, o, int(options["expiry"]), now)
+    option_pages += pages
+    option_warnings += warnings
+    if o["index"] is not None and o["oi"] > 0:
+      side = option_one_side_usd(o["oi"], o["index"])
+      coverage_parts[f"{label} options one side ${side:,.0f}"] = sm_required_usd_linear(side)
+      futures_read = True
+    vol = "no live surface" if o["confidence"] is None else f"confidence {o['confidence']:.2f}"
+    print(f"options {label} ({path.name}): cap {o['cap']:,.0f}, open {o['oi']:,.0f} cNGN; vol {vol}")
+  if option_warnings and time.time() - state.get("optionsWarnedAt", 0) >= OPTION_DEGRADED_WARN_REPEAT_SEC:
+    for warning in option_warnings:
+      mirror(f"{os.environ.get('PAGE_PREFIX', '')}{warning}")
+    state["optionsWarnedAt"] = time.time()
+
   if futures_read:
     coverage = sm_coverage_condition(coverage_parts, sm_cash)
     warning = sm_coverage_warning(coverage_parts, sm_cash)
@@ -1019,6 +1119,7 @@ def check_and_page(stack_path: Path, state: dict) -> int:
   active = [c for c in (feed_condition(ages), keeper_condition(health, now, armed), insolvent_condition(health),
                         sm_condition(previous_sm, sm_cash), unwatched_condition(heartbeat_urls()[0]),
                         peg_condition(read_index_status(), time.time()), coverage, perp_oi, oi, negative_cash, *future_pages, *v2_keeper,
+                        *option_pages,
                         *gas, *matcher) if c is not None]
   to_page, resolved = step_state(state, active, now)
   state["smCash"] = sm_cash
@@ -1276,8 +1377,29 @@ def self_test() -> int:
                               (SEL_TOTAL_POSITION, "totalPosition(address)"), (SEL_GET_SPOT, "getSpot()"),
                               (SEL_CONTRACT_SIZE, "contractSize()"),
                               (SEL_FUTURE_MARGIN_REQUIREMENTS, "futureMarginRequirements(uint256)"),
-                              (SEL_FUTURE_CONTRACTS, "futureContracts(uint256)")]:
+                              (SEL_FUTURE_CONTRACTS, "futureContracts(uint256)"),
+                              (SEL_GET_EXPIRY_MIN_CONFIDENCE, "getExpiryMinConfidence(uint64)")]:
     assert selector == "0x" + keccak(signature.encode()).hex()[:8], signature
+  # cNGN options: a missing vol surface pages while the option is live and unexpired; a degraded one is Slack; options
+  # still held 3 h past expiry page; nothing pages while the option is closed and empty (before enable).
+  exp = 1_796_047_200
+  open_ok = {"cap": 30e6, "oi": 2e6, "confidence": 1.0, "index": 0.00072}
+  assert option_conditions("cNGN-30NOV26", open_ok, exp, exp - 60) == ([], [])
+  stale = option_conditions("cNGN-30NOV26", {**open_ok, "confidence": None}, exp, exp - 60)
+  assert [c.key for c in stale[0]] == ["vol-stale-cngn-30nov26"] and "cannot be margined" in stale[0][0].message
+  assert option_conditions("cNGN-30NOV26", {**open_ok, "cap": 0, "oi": 0, "confidence": None}, exp, exp - 60) == ([], []), \
+    "closed and empty: the publisher need not run yet"
+  assert [c.key for c in option_conditions("cNGN-30NOV26", {**open_ok, "cap": 0, "confidence": None}, exp, exp - 60)[0]] == \
+    ["vol-stale-cngn-30nov26"], "cap cut to 0 with positions left: still live"
+  degraded = option_conditions("cNGN-30NOV26", {**open_ok, "confidence": 0.5}, exp, exp - 60)
+  assert degraded[0] == [] and "degraded" in degraded[1][0]
+  # past expiry: a stale feed is expected (no surface can be published), unsettled positions page after 3 h
+  assert option_conditions("cNGN-30NOV26", {**open_ok, "confidence": None}, exp, exp + 3600) == ([], [])
+  late = option_conditions("cNGN-30NOV26", {**open_ok, "confidence": None}, exp, exp + OPTION_UNSETTLED_PAGE_SEC + 1)
+  assert [c.key for c in late[0]] == ["options-unsettled-cngn-30nov26"]
+  assert option_conditions("cNGN-30NOV26", {**open_ok, "oi": 0, "confidence": None}, exp, exp + 86_400) == ([], []), "all settled"
+  assert option_label({"expiry": exp}) == "cNGN-30NOV26"
+  assert abs(option_one_side_usd(30e6, 0.00072) - 10_800) < 1e-6
   # The peg guard pages from perp-feeds' status; missing or stale status is silent (feed-halt covers it).
   wall = 2_000_000_000.0
   tripped = {"at": wall * 1000 - 60_000, "pegGuardTripped": True, "peg": {"ngnPerCngn": 0.985, "deviationBps": 150}}
