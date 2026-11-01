@@ -311,8 +311,8 @@ func TestSeriesAtOneExpiryAreDistinctMarkets(t *testing.T) {
 		CNGNPerpCashAddress:        "0x3333333333333333333333333333333333333333",
 		CNGNFutureAssetAddress:     v1, CNGNFutureExpiry: 1796047200, CNGNFutureManagerAddress: "0x00000000000000000000000000000000000000e1",
 		FutureSeries: []config.FutureSeries{
-			{AssetAddress: v2CNGN, Expiry: 1796047200, ManagerAddress: v2Engine, Kind: config.FutureKindLinear, BaseAsset: "cNGN", ContractSize: "1000000"},
-			{AssetAddress: v2EURC, Expiry: 1796047200, ManagerAddress: v2Engine, Kind: config.FutureKindLinear, BaseAsset: "EURC", ContractSize: "1000"},
+			{AssetAddress: v2CNGN, Expiry: 1796047200, ManagerAddress: v2Engine, Kind: config.FutureKindLinear, BaseAsset: "cNGN", ContractSize: "1000000", TakerFeeBps: registryFee(15)},
+			{AssetAddress: v2EURC, Expiry: 1796047200, ManagerAddress: v2Engine, Kind: config.FutureKindLinear, BaseAsset: "EURC", ContractSize: "1000", TakerFeeBps: registryFee(5)},
 		},
 	}
 	registry := DefaultRegistry(cfg)
@@ -344,10 +344,13 @@ func TestTheLegacySeriesIsTheSameMarketEitherWayItIsConfigured(t *testing.T) {
 		"0x5555555555555555555555555555555555555555", 1796047200, "0x6666666666666666666666666666666666666666"
 	listed := stack
 	listed.FutureSeries = []config.FutureSeries{{AssetAddress: "0x5555555555555555555555555555555555555555", Expiry: 1796047200,
-		ManagerAddress: "0x6666666666666666666666666666666666666666", Kind: config.FutureKindInverse, BaseAsset: "cNGN", ContractSize: "1000"}}
+		ManagerAddress: "0x6666666666666666666666666666666666666666", Kind: config.FutureKindInverse, BaseAsset: "cNGN", ContractSize: "1000", TakerFeeBps: registryFee(config.LegacyFutureTakerFeeBps)}}
 	a, _ := DefaultRegistry(legacy).BySymbol("USDC-cNGN-30NOV26")
 	b, _ := DefaultRegistry(listed).BySymbol("USDC-cNGN-30NOV26")
 	if !reflect.DeepEqual(a, b) || a.Symbol == "" {
 		t.Fatalf("legacy %+v\nlisted %+v", a, b)
 	}
 }
+
+// registryFee is a series' taker_fee_bps, which every FUTURE_SERIES entry states.
+func registryFee(bps int) *int { return &bps }

@@ -157,8 +157,8 @@ func seriesConfig(rpc string) config.Config {
 	cfg := futureConfig(rpc)
 	cfg.CNGNFutureAssetAddress, cfg.CNGNFutureExpiry, cfg.CNGNFutureManagerAddress = seriesV1, seriesExpiry, seriesV1Engine
 	cfg.FutureSeries = []config.FutureSeries{
-		{AssetAddress: seriesV2CNGN, Expiry: seriesExpiry, ManagerAddress: seriesV2Engine, Kind: config.FutureKindLinear, BaseAsset: "cNGN", ContractSize: "1000000"},
-		{AssetAddress: seriesV2EURC, Expiry: seriesExpiry, ManagerAddress: seriesV2Engine, Kind: config.FutureKindLinear, BaseAsset: "EURC", ContractSize: "1000"},
+		{AssetAddress: seriesV2CNGN, Expiry: seriesExpiry, ManagerAddress: seriesV2Engine, Kind: config.FutureKindLinear, BaseAsset: "cNGN", ContractSize: "1000000", TakerFeeBps: seriesFee(15)},
+		{AssetAddress: seriesV2EURC, Expiry: seriesExpiry, ManagerAddress: seriesV2Engine, Kind: config.FutureKindLinear, BaseAsset: "EURC", ContractSize: "1000", TakerFeeBps: seriesFee(5)},
 	}
 	return cfg
 }
@@ -458,3 +458,6 @@ func TestCreateOrderAdmitsEachSeriesOnItsOwnTerms(t *testing.T) {
 		t.Fatalf("v1 close-only: %d %s, stored %v", rec.Code, rec.Body.String(), stored("3"))
 	}
 }
+
+// seriesFee is a series' taker_fee_bps, which every FUTURE_SERIES entry states.
+func seriesFee(bps int) *int { return &bps }

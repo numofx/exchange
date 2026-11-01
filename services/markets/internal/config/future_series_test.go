@@ -39,7 +39,7 @@ func TestTheLegacyEnvsListTheOneV1Series(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []FutureSeries{{AssetAddress: testV1Future, Expiry: testExpiry, ManagerAddress: testV1Engine, Kind: FutureKindInverse,
-		BaseAsset: "cNGN", ContractSize: "1000"}}
+		BaseAsset: "cNGN", ContractSize: "1000", TakerFeeBps: ptr(LegacyFutureTakerFeeBps)}}
 	if got := cfg.FutureSeriesList(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("series %+v, want %+v", got, want)
 	}
@@ -57,8 +57,8 @@ func TestFutureSeriesListsV2BesideV1(t *testing.T) {
 	setLegacyFutureEnv(t)
 	t.Setenv("CNGN_FUTURE_CLOSE_ONLY", "true")
 	t.Setenv("FUTURE_SERIES", `[
-	  {"asset_address":"0xcACEe66ad41fD1472a47D7D5Fe372FFbFac9AA75","expiry":1796047200,"manager_address":"0x0705219a1594d5Fc5dC2573da4082cAf3e1B0950","kind":"linear","base_asset":"cNGN","contract_size":"1000000"},
-	  {"asset_address":"`+testEURCFuture+`","expiry":1796047200,"manager_address":"0x0705219a1594d5Fc5dC2573da4082cAf3e1B0950","kind":"linear","base_asset":"EURC","contract_size":"1000"}
+	  {"asset_address":"0xcACEe66ad41fD1472a47D7D5Fe372FFbFac9AA75","expiry":1796047200,"manager_address":"0x0705219a1594d5Fc5dC2573da4082cAf3e1B0950","kind":"linear","base_asset":"cNGN","contract_size":"1000000","taker_fee_bps":15},
+	  {"asset_address":"`+testEURCFuture+`","expiry":1796047200,"manager_address":"0x0705219a1594d5Fc5dC2573da4082cAf3e1B0950","kind":"linear","base_asset":"EURC","contract_size":"1000","taker_fee_bps":5}
 	]`)
 	cfg, err := Load()
 	if err != nil {
@@ -85,7 +85,7 @@ func TestFutureSeriesListsV2BesideV1(t *testing.T) {
 }
 
 func TestAFutureSeriesListIsRefusedWhenAmbiguousOrPartial(t *testing.T) {
-	v2 := `{"asset_address":"` + testV2Future + `","expiry":1796047200,"manager_address":"` + testV2Engine + `","kind":"linear","base_asset":"cNGN","contract_size":"1000000"}`
+	v2 := `{"asset_address":"` + testV2Future + `","expiry":1796047200,"manager_address":"` + testV2Engine + `","kind":"linear","base_asset":"cNGN","contract_size":"1000000","taker_fee_bps":15}`
 	for want, raw := range map[string]string{
 		"not a JSON array":               `{"asset_address":"x"}`,
 		"unknown field":                  `[{"asset_address":"` + testV2Future + `","closeonly":true}]`,
@@ -96,8 +96,9 @@ func TestAFutureSeriesListIsRefusedWhenAmbiguousOrPartial(t *testing.T) {
 		"base_asset is required":         `[{"asset_address":"` + testV2Future + `","expiry":1796047200,"manager_address":"` + testV2Engine + `","kind":"linear","contract_size":"1"}]`,
 		"an inverse series is cNGN's":    `[{"asset_address":"` + testV2Future + `","expiry":1796047200,"manager_address":"` + testV2Engine + `","kind":"inverse","base_asset":"EURC","contract_size":"1000"}]`,
 		"contract_size":                  `[{"asset_address":"` + testV2Future + `","expiry":1796047200,"manager_address":"` + testV2Engine + `","kind":"linear","base_asset":"cNGN"}]`,
-		"taker_fee_bps -1 is outside":    `[` + strings.Replace(v2, `"contract_size"`, `"taker_fee_bps":-1,"contract_size"`, 1) + `]`,
-		"taker_fee_bps 250 is outside":   `[` + strings.Replace(v2, `"contract_size"`, `"taker_fee_bps":250,"contract_size"`, 1) + `]`,
+		"taker_fee_bps is required":      `[` + strings.Replace(v2, `,"taker_fee_bps":15`, ``, 1) + `]`,
+		"taker_fee_bps -1 is outside":    `[` + strings.Replace(v2, `"taker_fee_bps":15`, `"taker_fee_bps":-1`, 1) + `]`,
+		"taker_fee_bps 250 is outside":   `[` + strings.Replace(v2, `"taker_fee_bps":15`, `"taker_fee_bps":250`, 1) + `]`,
 		"1e18 / contract_size":           `[{"asset_address":"` + testV2Future + `","expiry":1796047200,"manager_address":"` + testV2Engine + `","kind":"linear","base_asset":"cNGN","contract_size":"3"}]`,
 		"two series are listed on":       `[` + v2 + `,` + strings.Replace(v2, `"base_asset":"cNGN"`, `"base_asset":"cNGN","symbol":"cNGN-B"`, 1) + `]`,
 		"two series are listed as":       `[` + v2 + `,` + strings.Replace(v2, testV2Future, testEURCFuture, 1) + `]`,
@@ -122,7 +123,7 @@ func TestFutureSeriesWithoutTheLegacySeries(t *testing.T) {
 		CNGNPerpCashAddress:        "0x3333333333333333333333333333333333333333",
 		CNGNPerpSRMAddress:         "0x4444444444444444444444444444444444444444",
 		FutureSeries: []FutureSeries{{AssetAddress: testV2Future, Expiry: testExpiry, ManagerAddress: testV2Engine,
-			Kind: FutureKindLinear, BaseAsset: "cNGN", ContractSize: "1000000"}},
+			Kind: FutureKindLinear, BaseAsset: "cNGN", ContractSize: "1000000", TakerFeeBps: ptr(15)}},
 	}
 	if err := c.validateFutureStack(); err != nil || !c.FutureEnabled() {
 		t.Fatalf("v2 alone: %v", err)
@@ -139,7 +140,7 @@ func TestFutureSeriesWithoutTheLegacySeries(t *testing.T) {
 	}
 }
 
-// A series' taker fee is its own when set, zero included, and DefaultFutureTakerFeeBps when absent.
+// Each series lists its own taker fee, zero included; v1's, from CNGN_FUTURE_*, is LegacyFutureTakerFeeBps.
 func TestFutureSeriesTakerFee(t *testing.T) {
 	setLegacyFutureEnv(t)
 	t.Setenv("FUTURE_SERIES", `[
@@ -162,3 +163,5 @@ func TestFutureSeriesTakerFee(t *testing.T) {
 		t.Fatal("a zero fee is the series' own, not the default")
 	}
 }
+
+func ptr(v int) *int { return &v }

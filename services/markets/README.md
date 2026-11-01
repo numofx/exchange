@@ -265,8 +265,10 @@ not share an `(asset, expiry)` or a symbol. On a linear series `/v1/markets` rep
 `future.contract_size` and `future.contract_size_asset` in place of `future.contract_size_usdc`,
 `/v1/positions` reports `pending_vm_usdc` in place of `pending_vm_cngn` and `notional_usdc` at the
 mark, and `/v1/fills` reports `vm_usdc` in place of `vm_cngn`; a close-only series shows
-`future.close_only: true`. The taker fee is the series' `taker_fee_bps` (25 when absent; 15 on
-cNGN-30NOV26, 5 on EURC-30NOV26 since 2026-10-31) of contracts × contract size × the fill price. An account
+`future.close_only: true`. The taker fee is the series' `taker_fee_bps`, required on every series
+(no default: markets-service refuses to boot without it, terraform to plan; 15 on cNGN-30NOV26, 5 on
+EURC-30NOV26 since 2026-10-31), of contracts × contract size × the fill price. v1's series, from
+`CNGN_FUTURE_*`, is 25. An account
 is under one manager, so `futures_account` is its margin under whichever listed engine it is under.
 Terraform: `future_series` and `cngn_future_close_only` (`infra/aws/variables.tf`), both absent from
 the task definitions until set.

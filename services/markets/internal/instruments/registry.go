@@ -217,10 +217,10 @@ func futureMetadata(cfg config.Config, series config.FutureSeries) Metadata {
 		QuoteAssetSymbol: "cNGN",
 		ExpiryTimestamp:  series.Expiry,
 		TickSize:         "0.000000000000000001",
-		// 25 bps taker, 0 maker, of the notional: contracts x FutureContractSizeUSDC, charged in the
+		// 25 bps taker (LegacyFutureTakerFeeBps), 0 maker, of the notional: contracts x FutureContractSizeUSDC, charged in the
 		// perp's USDC cash and paid to the TradeModule's feeRecipient. 2.5 USDC a contract (0.0025 a
 		// unit); worstFee is per contract on chain, so a taker's must still be at least 2.5e18.
-		TakerFeeBps:          25,
+		TakerFeeBps:          series.TakerFee(),
 		MakerFeeBps:          0,
 		MinSize:              AmountStep,
 		ContractMultiplier:   FutureContractSizeUSDC,
@@ -264,7 +264,7 @@ func linearFutureMetadata(cfg config.Config, series config.FutureSeries) Metadat
 		QuoteAssetSymbol: "USDC",
 		ExpiryTimestamp:  series.Expiry,
 		TickSize:         "0.000000000000000001",
-		// The series' taker fee (its taker_fee_bps, else 25 bps), 0 maker, of the notional: contracts x
+		// The series' taker fee (its required taker_fee_bps), 0 maker, of the notional: contracts x
 		// contract size x the fill price, in USDC, charged in the perp's USDC cash and paid to the
 		// TradeModule's feeRecipient.
 		TakerFeeBps:        series.TakerFee(),
