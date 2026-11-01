@@ -1,0 +1,37 @@
+# The cNGN options' vol publisher (services/perp-feeds, dist/vol-main.js): signs the hand-set SVI surface into the
+# options' LyraVolFeed, degrading (lower confidence, ATM floor) while the index is uncertain. NOT YET INSTALLED.
+#
+# Before starting it:
+#   - cNGN options deployed (deploy-cngn-options-v2.s.sol): VOL_FEED in the env file from CNGN_OPTIONS_V2.json;
+#   - a KMS key of its own for the vol signer (not the index's, not the forward's), whose address the deploy took as
+#     VOL_SIGNER, with kms:Sign granted to the ops box's role (infra/aws), and its id in VOL_SIGNER_KMS_KEY_ID;
+#   - a funded relayer of its own at /numo/feeds/<VOL_RELAYER_SSM_NAME>, added to check_signer_balance.py;
+#   - the perp-feeds index publisher running on this box: its status file and step log are what degrade the surface;
+#   - a dry run first: DRY_RUN=true in the env file, then off.
+#
+# Install: its own checkout, as numo-future-feeds-v2@.service:
+#   git clone https://github.com/numofx/exchange /home/ec2-user/exchange-vol && git -C ... checkout <sha>
+#   (cd /home/ec2-user/exchange-vol && pnpm install --frozen-lockfile --filter perp-feeds... && pnpm --filter @numo/kms-signer build && pnpm --filter perp-feeds build)
+#   cp contracts/risk-core/scripts/ops/vol-feeds-cngn-30nov26.env /etc/numo/vol-feeds.env   # then fill VOL_FEED and the key
+#   cp contracts/risk-core/scripts/ops/numo-vol-feeds.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now numo-vol-feeds
+# and record it in OPS_BOX_CHANGES.md the same day.
+[Unit]
+Description=Numo cNGN options vol publisher (Base mainnet, KMS signer, SSM relayer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/home/ec2-user/exchange-vol/services/perp-feeds
+EnvironmentFile=/etc/numo/vol-feeds.env
+ExecStart=/home/ec2-user/exchange-vol/contracts/risk-core/scripts/ops/run-with-ssm-vol.sh /usr/bin/node dist/vol-main.js
+Environment=AWS_REGION=us-east-1
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
