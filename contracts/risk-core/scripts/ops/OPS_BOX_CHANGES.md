@@ -5,6 +5,39 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-01 ~00:25–00:46 UTC: v1 emptied and retired on the box
+
+v1 held only #32 (the stopped v1 future maker) and pool #31; both are dust now. Every other v1 account was dust
+before.
+
+- **box-32 (SSM `e0e038e4`; `e3ee0082` before it was refused the MM key while IAM propagated, nothing sent):** under
+  the MM-key grant (`mm-grant-v1sweep.plan`, revoked by `mm-revoke-v1sweep.plan` after). `exchange-perp/scripts/
+  local-venue/dist` → `ops/migrate-spot-mm-dist` at `fcecc6c` (from `51cd7e1`). #32's whole balance to the MM wallet:
+  4.614333 USDC (`0xcc645c4a…`, block 53351851) and 151,230.535055 cNGN (`0x72b0b6d3…`); `deposit-cngn 42`;
+  `move-usdc 32 42 4614333 --deposit-only` (approve `0x42e01090…`, deposit `0x27131301…`, block 53351860). #42 after:
+  499.519438 USDC, 376,183.815671 cNGN.
+- **`exchange-ops`** moved to `53ad327` (#302, #303: the proposer ran on the box's Python 3.9 only after #303).
+- **box-33 (SSM `f2bd8fc4`; `788189d5` first refused, `zip(strict=)` on 3.9):** transient unit
+  `numo-v1-pool-close`, `propose_v1_pool_close.py --propose`, after 4.85 USDC was sent to the vault. Three MPCVault
+  requests, each approved by hand and confirmed before the next: `USDC.approve(CashAsset, 4.85)` (`0x63d334f6…`),
+  `CashAsset.deposit(#31, 4.85)` (`0xa2f3210a…`), `v1.withdrawFromPool(cNGN escrow, 6,229.150178, vault)`
+  (`0xa897a673…`, block 53352129). Pool #31 after: 0.034116 USDC, 0.000000786 cNGN; the vault holds the 6,229.150178
+  cNGN. Artifact `deployments/8453/V1_POOL_CLOSE_VAULT_ACTIONS.json`.
+- **box-34 (SSM `1ed412ba`):**
+  - `numo-future-feeds` (the v1 USDC-cNGN-30NOV26 keeper) stopped and disabled. Nothing pages on it.
+  - `/etc/numo/perp-pager.env` (kept as `.bak-<stamp>` beside it): `FUTURE_ARTIFACT=/var/lib/numo/v1-future-retired.json`,
+    a path that must not exist, so the pager reports `future: not deployed` for v1 and reads v2 from
+    `FUTURE_V2_ARTIFACTS` as before; `forward-relayer-v1` removed from `GAS_WATCH`.
+  - Drop-in `numo-settlement-canary.service.d/v2-accounts.conf`: `CANARY_ACCOUNTS=42,43`, `OTHER_MANAGERS=<v1>,<v2>`
+    (32 and 34 held dust and failed the $10 floor every 5 min).
+  - Drop-in `numo-rebalance-check.service.d/v2-accounts.conf`: `MM_SUBACCOUNT_ID=42` (the default, 34, is the emptied
+    v1 account and failed on its manager).
+  - After: pager ok, canary ok on #42/#43. The rebalance check then failed on HyperFX alone (`the orderbook cannot
+    fill 1000000 USDC units (max 0)`): the solvers' USDC-cNGN bids on Base lapse for 8–16 h most days since
+    2026-10-25 and come back; left as is.
+  - Undo: `systemctl enable --now numo-future-feeds`; restore the `.bak` pager env; remove both `v2-accounts.conf`;
+    `systemctl daemon-reload`.
+
 ## 2026-10-31 ~15:45–16:26 UTC: MarginEngine v2 enabled; cNGN-30NOV26 and EURC-30NOV26 open
 
 Brought forward from the 9 Nov target. `MarginEngineV2EnableRehearsalFork` passed at head first (4/4).
