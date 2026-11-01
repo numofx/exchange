@@ -225,7 +225,9 @@ feed's heartbeat is 30 minutes, and startup refuses an interval over a third of 
 - the peg tripwire is tripped;
 - the last index sample was refused (sources disagree, or the jump guard held a move);
 - an index step was published in the last 24 hours (`INDEX_STEP_AUDIT_FILE`);
-- the chain's index is unreadable.
+- the chain's index is unreadable. In practice this one cannot be published through: the forward is the index plus a
+  diff, so it reverts too (`vol-no-forward`) and the surface ages out. That costs nothing extra, since the engine
+  cannot margin anything without its index either (the pager's `feed-halt`); seen on a fork, 2026-11-01.
 
 While any holds it publishes at once, and every interval after, at `VOL_DEGRADED_CONFIDENCE` (under
 the engine's option threshold, checked at startup) with ATM at least `VOL_DEGRADED_ATM_FLOOR`: new
