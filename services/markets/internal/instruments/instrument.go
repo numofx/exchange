@@ -12,7 +12,14 @@ const (
 	ContractTypeSpot      = "spot"
 	ContractTypePerpetual = "perpetual"
 	ContractTypeFuture    = "future"
+	ContractTypeOption    = "option"
 )
+
+// IsOption reports whether the market is one strike and side of an OptionAsset series: a fill moves price x amount of
+// cash as the premium, the writer is margined by the engine, and it settles at the dated future's settlement price.
+func (m Metadata) IsOption() bool {
+	return m.ContractType == ContractTypeOption
+}
 
 // IsFuture reports whether the market is a dated future: a FutureAsset series whose fills carry their
 // price to the asset and move no quote leg, bounded on chain by the index band.
@@ -98,6 +105,11 @@ type Metadata struct {
 	FutureKind string `json:"-"`
 	// CloseOnly takes every order on a future as reduce-only (config.FutureSeries.CloseOnly).
 	CloseOnly bool `json:"-"`
+	// An option's strike (decimal, USDC per base) and side, "call" or "put"; empty for every other market.
+	OptionStrike string `json:"option_strike,omitempty"`
+	OptionType   string `json:"option_type,omitempty"`
+	// VolFeedAddress is an option's vol feed: no live surface for its expiry, no trading (config.OptionSeries).
+	VolFeedAddress string `json:"vol_feed_address,omitempty"`
 }
 
 // LinearFuture reports whether the market is a v2 series: priced in USDC per base, VM in USDC.
