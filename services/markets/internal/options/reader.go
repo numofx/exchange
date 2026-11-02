@@ -224,7 +224,12 @@ func (r *Reader) ManagerOf(ctx context.Context, account *big.Int) (string, error
 	return "0x" + raw[len(raw)-40:], nil
 }
 
-// market is the engine's market id for the option, from assetDetails (word 1), read once.
+// assetTypeOption is IMarginEngine.AssetType.Option.
+const assetTypeOption = 1
+
+// market is the engine's market id for the option, read once from assetDetails: struct AssetDetail { bool
+// isWhitelisted; AssetType assetType; uint marketId; }, so the market id is word 2 and the type word 1 (every other
+// decode of it in this repo reads it so; on the cNGN option both are 1, which is why reading word 1 once looked right).
 func (r *Reader) market(ctx context.Context) (*big.Int, error) {
 	r.mu.Lock()
 	if r.marketID != nil {
@@ -244,7 +249,14 @@ func (r *Reader) market(ctx context.Context) (*big.Int, error) {
 	if whitelisted.Sign() == 0 {
 		return nil, errors.New("the engine does not whitelist the option")
 	}
-	id, err := word(raw, 1)
+	assetType, err := word(raw, 1)
+	if err != nil {
+		return nil, fmt.Errorf("assetDetails: %w", err)
+	}
+	if assetType.Cmp(big.NewInt(assetTypeOption)) != 0 {
+		return nil, fmt.Errorf("the engine lists the asset as type %s, not an option", assetType)
+	}
+	id, err := word(raw, 2)
 	if err != nil {
 		return nil, fmt.Errorf("assetDetails: %w", err)
 	}
