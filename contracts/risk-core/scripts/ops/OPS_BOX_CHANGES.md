@@ -5,6 +5,18 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-01: the cNGN options vol signer: a KMS key the box's role may sign with (terraform, not on the box)
+
+- **What.** `terraform apply` from main (`infra/aws` ops-box.tf, `var.vol_signer_kms_enabled`), plan "3 to add, 0 to
+  change, 0 to destroy", nothing else in the stack moved: `aws_kms_key.vol_signer` (secp256k1, SIGN_VERIFY,
+  `prevent_destroy`, key `f8207956-f587-4b40-a0ab-1430e5dd9a47`), `alias/numo-exchange-vol-signer`, and the role policy
+  `numo-vol-signer-kms-sign` on `numo-feed-publisher-role` (`kms:Sign`, `kms:GetPublicKey` on that key only).
+- **Read back.** `describe-key`: Enabled, ECC_SECG_P256K1. The role policy as above. Address
+  `0x30b9c910777a0B08fCfD645bca4121bDDC12fbf5` (`cast wallet address --aws`), and a test signature from KMS recovers to it.
+- **Why.** The options' vol feed takes its signer at deploy (deploy-cngn-options-v2.s.sol `VOL_SIGNER`), and the vol
+  publisher refuses a raw key on mainnet. Nothing on the box changed: numo-vol-feeds is not installed, and the key
+  authorises nothing until the deploy names it.
+
 ## 2026-11-01 ~21:49 UTC: the vault's v1-pool cNGN deposited into the v2 spot maker #42
 
 - **`exchange-ops`** moved to `4f251e8` (#307, #308).

@@ -159,3 +159,44 @@ resource "aws_iam_role_policy" "ops_box_forward_signer" {
   role   = data.aws_iam_role.ops_box.id
   policy = data.aws_iam_policy_document.ops_box_forward_signer[0].json
 }
+
+# ------------------------------------------------- cNGN options vol signer (KMS)
+#
+# numo-vol-feeds (services/perp-feeds vol-main.ts) signs the options' vol surface with this key through the instance
+# role; the key never leaves KMS. Its own key: deploy-cngn-options-v2.s.sol refuses a vol signer that also signs the
+# index or the forward, and the vol publisher refuses a raw key on mainnet. See var.vol_signer_kms_enabled.
+resource "aws_kms_key" "vol_signer" {
+  count                    = var.vol_signer_kms_enabled ? 1 : 0
+  description              = "${var.name} cNGN options vol signer (secp256k1)"
+  key_usage                = "SIGN_VERIFY"
+  customer_master_key_spec = "ECC_SECG_P256K1"
+  # A feed signer is an on-chain identity: retiring it means removing it from the vol feed first (the vault), not a
+  # terraform destroy.
+  deletion_window_in_days = 30
+  enable_key_rotation     = false
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_kms_alias" "vol_signer" {
+  count         = var.vol_signer_kms_enabled ? 1 : 0
+  name          = "alias/${var.name}-vol-signer"
+  target_key_id = aws_kms_key.vol_signer[0].key_id
+}
+
+# Sign and GetPublicKey on this one key only, as the forward signer's.
+data "aws_iam_policy_document" "ops_box_vol_signer" {
+  count = var.vol_signer_kms_enabled ? 1 : 0
+  statement {
+    actions   = ["kms:Sign", "kms:GetPublicKey"]
+    resources = [aws_kms_key.vol_signer[0].arn]
+  }
+}
+
+resource "aws_iam_role_policy" "ops_box_vol_signer" {
+  count  = var.vol_signer_kms_enabled ? 1 : 0
+  name   = "numo-vol-signer-kms-sign"
+  role   = data.aws_iam_role.ops_box.id
+  policy = data.aws_iam_policy_document.ops_box_vol_signer[0].json
+}
