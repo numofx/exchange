@@ -47,9 +47,9 @@ interface ITradeModuleOptions {
  *      checkParams refuses a deploy against anything else; propose_cngn_options_v2_batch.py re-reads both before each
  *      action and refuses if market 1 has moved since.
  *
- * @dev MARGIN PARAMETERS ARE CANDIDATES, NOT DECISIONS (2026-11-01). The defaults are what the fork test proves: a naked
- *      ATM put written at IM stays solvent through a 25% devaluation step with vol doubled (+$57 on $722), and fails at
- *      10-12% spot add-ons. Sign off, or override by env, before broadcasting.
+ * @dev MARGIN PARAMETERS: DECIDED 2026-11-01 (the user approved the defaults below as the launch values). What the fork
+ *      test proves of them: a naked ATM put written at IM stays solvent through a 25% devaluation step with vol doubled
+ *      (+$57 on $722), and fails at 10-12% spot add-ons. A change by env is a change of a decision: record it.
  *
  * Usage (a fresh keystore account, used for this deploy only, or a used one named in USED_DEPLOYER):
  *   VOL_SIGNER=<vol key address> forge script scripts/deploy-cngn-options-v2.s.sol --rpc-url $BASE_RPC_URL \
@@ -76,11 +76,11 @@ contract DeployCngnOptionsV2 is Utils {
   ///      option's delta is at most 1), costs the SecurityModule ~$109 of the ~$119 it has left after cNGN-30NOV26 and
   ///      EURC-30NOV26 at their caps. The enable gate re-reads it, and refuses once the index is above ~0.000791.
   uint internal constant DEFAULT_OPTION_OI_CAP = 2_000_000e18;
-  /// @dev Confidence under this costs IM (never MM): the vol publisher's "degrade" mode. CANDIDATE. The live value is
+  /// @dev Confidence under this costs IM (never MM): the vol publisher's "degrade" mode. Decided 2026-11-01. The live value is
   ///      0.55 (2026-11-01).
   uint internal constant DEFAULT_OPTION_THRESHOLD = 0.8e18;
 
-  // CANDIDATES (see the contract notes): IM 25-30% of spot on a naked short, MM 15%.
+  // Decided 2026-11-01 (see the contract notes): IM 25-30% of spot on a naked short, MM 15%.
   uint internal constant DEFAULT_MAX_SPOT_REQ = 0.3e18;
   uint internal constant DEFAULT_MIN_SPOT_REQ = 0.25e18;
   uint internal constant DEFAULT_MM_CALL_SPOT_REQ = 0.15e18;
@@ -412,7 +412,7 @@ contract DeployCngnOptionsV2 is Utils {
 
   function _marginAction(Params memory params) internal pure returns (string memory) {
     return _action(
-      "engineV2.setOptionMarginParams(1, ...) [NGN option margin: CANDIDATE values, see the artifact]",
+      "engineV2.setOptionMarginParams(1, ...) [NGN option margin, decided 2026-11-01: IM 25-30% / MM 15% of spot; see the artifact]",
       params.engine,
       abi.encodeWithSignature(
         "setOptionMarginParams(uint256,(uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256))",
