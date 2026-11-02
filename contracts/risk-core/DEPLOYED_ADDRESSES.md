@@ -230,7 +230,10 @@ MM 15% of spot on a naked short, option confidence threshold 0.8, vol surface 40
    forward and the vol feed. The cap is still 0. The deployer is free again.
 3. **Vol surface live 2026-11-02 01:22 UTC**: numo-vol-feeds on the box (relayer v1's forward relayer `0xE5b8…ae6de`),
    first publish `0xe29593f8…a44f`; 40% ATM at confidence 1.0, read back on chain.
-4. Next: the keeper's `OPTION`, the markets listing (`option_series`), then `cngn-options-enable` (the cap, 2M cNGN).
+4. **Keeper and pager watching 2026-11-02 01:25 UTC**: numo-engine-keeper-v2 settles expired options (`OPTION`, its
+   `/health` reports `options`); the pager reads the options and the vol feed (`volFeeds`).
+5. Next: the markets listing (a markets image with the option code, then `option_series`), then `cngn-options-enable`
+   (the cap, 2M cNGN).
 
 ### EURC-USDC spot on the MarginEngine — LIVE 2026-10-25, maker quoting since 2026-10-26
 
