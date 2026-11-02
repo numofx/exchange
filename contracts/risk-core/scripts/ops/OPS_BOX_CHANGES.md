@@ -5,6 +5,19 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-02 01:49 UTC: cNGN options OPEN (cngn-options-enable landed)
+
+- **`numo-cngn-options-enable`** (transient unit, `run-with-ssm-mark.sh python3 propose_cngn_options_v2_batch.py
+  cngn-options-enable --propose`, from `exchange-ops` at `4ef4702`), started by SSM `c9ff51f5` (Robert, from the laptop):
+  one MPCVault request, `64028aec`, digest `0x10920ad0…0602`, approved by hand; the unit exited `done`.
+- **On chain:** `OptionAsset(0xA6a0…3821).totalPositionCap(engine v2) = 2,000,000e18` from 01:49:07 UTC (block
+  ~53397400), read through an Alchemy RPC.
+- **After:** `/v1/markets` shows all ten `cNGN-30NOV26-…` strikes `trading_open: true`. The keeper passes clean
+  (nothing to settle); the pager's next run read `cap 2,000,000, open 0 cNGN; vol confidence 1.00`, 0 active, so its
+  `vol-stale` page is now armed. Nothing on the box changed but the transient unit.
+- **To close again:** a vault `setTotalPositionCap(engine v2, 0)` on the option stops new opening risk without trapping
+  holders (closing trades reduce |position|).
+
 ## 2026-11-02: cngn-options-enable dry run; `exchange-ops` → `4ef4702` after auditing the deployer's wallet swaps
 
 - **The first dry run failed parity** (SSM `5b21aea6`, eleven gates PASS): the deployer `0x971C…2e9c` had sent 3
