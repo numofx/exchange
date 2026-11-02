@@ -5,6 +5,24 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-02: cngn-options-enable dry run; `exchange-ops` → `4ef4702` after auditing the deployer's wallet swaps
+
+- **The first dry run failed parity** (SSM `5b21aea6`, eleven gates PASS): the deployer `0x971C…2e9c` had sent 3
+  unaudited transactions. Found through an Alchemy RPC (the public one and Blockscout refused): Robert's own wallet swaps
+  at 01:16 UTC, confirmed by him. Nonce 62 `0x82d5cdee…ab22`, an EIP-7702 type-4 tx that delegated the deployer's account
+  to `0x63c0c19a…e32b` (MetaMask's delegator) and swapped 15,000 cNGN for 10.920393 USDC; nonce 63, used by that
+  authorization (no transaction of its own); nonce 64 `0x11b03242…bd43`, 20.920393 USDC for 0.009154 ETH. The deployer now
+  carries code `0xef0100 63c0c19a…`: it still signs ordinary transactions, so it can still deploy, but it is no longer a
+  plain EOA. It owns nothing on chain.
+- **`4ef4702`:** the parity gate (`propose_margin_engine_v2_batch.unaudited_deployer_txs`, shared by the v2, EURC and
+  options proposers) accepts a nonce used by an EIP-7702 authorization only when an entry flagged `authorization` names a
+  type-4 transaction from the deployer whose authorization at exactly that nonce recovers, from its own signature, to the
+  deployer. Nonces 62–64 audited. All three gates count 0 on chain; without the flag nonce 63 still counts 1.
+- **`exchange-ops`** `0586889` → `4ef4702` by SSM `d4be50a2` (Robert; clean, no proposal unit running, fast-forward),
+  then the dry run: all twelve gates PASS (custody, engine, market1, venue, series, vol, sm $109 of the $120 left beside
+  both futures, pager, keeper, fills, rfq, parity). One action, `cngnOption.setTotalPositionCap(engineV2, 2,000,000e18)`,
+  digest `0x10920ad0…0602`. Nothing proposed.
+
 ## 2026-11-02 01:25 UTC: engine keeper v2 settles cNGN options, on its own checkout; pager on `5cae810`
 
 - **Why its own checkout.** `numo-engine-keeper-v2` ran from `/home/ec2-user/exchange-future-v2` at `840526a`, without
