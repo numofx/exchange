@@ -165,6 +165,8 @@ contract CngnOptionsV2Fork is Test {
     script = new DeployCngnOptionsV2();
     params = script.loadChainParams();
     params.volSigner = vm.addr(volPk);
+    // The mechanics below trade more than the 2M launch cap (testTheLaunchCapIsTwoMillion): a cap of their own.
+    params.optionOICap = 100_000_000e18;
     script.checkParams(params);
     d = script.deploy(params);
     option = d.option;
@@ -176,6 +178,11 @@ contract CngnOptionsV2Fork is Test {
   ////////////////////
   //  the script    //
   ////////////////////
+
+  /// @dev The launch cap, decided 2026-11-01: 2M cNGN over both sides, what the SecurityModule covers beside both futures.
+  function testTheLaunchCapIsTwoMillion() public view {
+    assertEq(script.loadChainParams().optionOICap, 2_000_000e18);
+  }
 
   function testScriptPostconditionsHold() public view {
     script.assertDeployment(d, params);

@@ -71,11 +71,11 @@ contract DeployCngnOptionsV2 is Utils {
 
   /// @dev The vol feed refuses data older than this; option accounts stop margining (and being liquidated) past it.
   uint64 internal constant DEFAULT_VOL_HEARTBEAT = 30 minutes;
-  /// @dev cNGN of options over both sides (the cap sums |balance|): 15M cNGN a side, ~$10.9k at 0.000728. CANDIDATE.
-  ///      A 15% step on that side, taken linearly (an option's delta is at most 1), costs the SecurityModule ~$1,640.
-  ///      At 2026-11-01 the module ($3,250) already holds ~$3,126 for cNGN-30NOV26 and EURC-30NOV26 at their caps, so
-  ///      the enable gate refuses this cap until the module is funded by ~$1.5k, or the cap is cut to ~2.2M cNGN.
-  uint internal constant DEFAULT_OPTION_OI_CAP = 30_000_000e18;
+  /// @dev cNGN of options over both sides (the cap sums |balance|): 1M cNGN a side, ~$728 at 0.000728. Decided 2026-11-01
+  ///      (the user's "about 2.2M", cut to 2.0M because 2.2M did not fit): a 15% step on that side, taken linearly (an
+  ///      option's delta is at most 1), costs the SecurityModule ~$109 of the ~$119 it has left after cNGN-30NOV26 and
+  ///      EURC-30NOV26 at their caps. The enable gate re-reads it, and refuses once the index is above ~0.000791.
+  uint internal constant DEFAULT_OPTION_OI_CAP = 2_000_000e18;
   /// @dev Confidence under this costs IM (never MM): the vol publisher's "degrade" mode. CANDIDATE. The live value is
   ///      0.55 (2026-11-01).
   uint internal constant DEFAULT_OPTION_THRESHOLD = 0.8e18;

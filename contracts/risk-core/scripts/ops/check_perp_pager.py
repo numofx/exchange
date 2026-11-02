@@ -1383,7 +1383,7 @@ def self_test() -> int:
   # cNGN options: a missing vol surface pages while the option is live and unexpired; a degraded one is Slack; options
   # still held 3 h past expiry page; nothing pages while the option is closed and empty (before enable).
   exp = 1_796_047_200
-  open_ok = {"cap": 30e6, "oi": 2e6, "confidence": 1.0, "index": 0.00072}
+  open_ok = {"cap": 2e6, "oi": 2e6, "confidence": 1.0, "index": 0.00072}
   assert option_conditions("cNGN-30NOV26", open_ok, exp, exp - 60) == ([], [])
   stale = option_conditions("cNGN-30NOV26", {**open_ok, "confidence": None}, exp, exp - 60)
   assert [c.key for c in stale[0]] == ["vol-stale-cngn-30nov26"] and "cannot be margined" in stale[0][0].message
@@ -1399,7 +1399,7 @@ def self_test() -> int:
   assert [c.key for c in late[0]] == ["options-unsettled-cngn-30nov26"]
   assert option_conditions("cNGN-30NOV26", {**open_ok, "oi": 0, "confidence": None}, exp, exp + 86_400) == ([], []), "all settled"
   assert option_label({"expiry": exp}) == "cNGN-30NOV26"
-  assert abs(option_one_side_usd(30e6, 0.00072) - 10_800) < 1e-6
+  assert abs(option_one_side_usd(2e6, 0.00072) - 720) < 1e-6  # the 2M launch cap, one side
   # The peg guard pages from perp-feeds' status; missing or stale status is silent (feed-halt covers it).
   wall = 2_000_000_000.0
   tripped = {"at": wall * 1000 - 60_000, "pegGuardTripped": True, "peg": {"ngnPerCngn": 0.985, "deviationBps": 150}}
