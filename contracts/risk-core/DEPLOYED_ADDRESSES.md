@@ -201,7 +201,7 @@ two owner-only engine setters in the vault's setup batch.
    `EURC-30NOV26`.
 4. `eurc-future-enable`: `future.setTotalPositionCap(v2, 18e18)`, `tradeModule.setDatedFutureAsset(future, true)`.
 
-### cNGN options on MarginEngine v2 — DEPLOYED and SET UP 2026-11-02 (closed)
+### cNGN options on MarginEngine v2 — OPEN 2026-11-02 (cap 2M cNGN)
 
 European calls and puts on cNGN at the cNGN-30NOV26 expiry (1796047200, 2026-11-30 14:00 UTC; trading ends an hour
 before), on v2's market 1. Strikes and premiums in USDC per cNGN, one option unit one cNGN; they settle at
@@ -236,8 +236,10 @@ MM 15% of spot on a naked short, option confidence threshold 0.8, vol surface 40
    applied from main through `with-matcher-mute.sh` (plan: the three task definitions and two services only; the old
    matcher task STOPPED, a fresh heartbeat after). `/v1/markets` lists ten markets, `cNGN-30NOV26-{0.00062,0.00067,
    0.00072,0.00077,0.00082}-{C,P}`, 15 bps of premium, each `trading_open: false` (no position cap yet).
-6. Next: `cngn-options-enable` (the cap, 2M cNGN), proposed from the box: its gates read the vol surface, the pager, the
-   keeper, this listing and the SecurityModule's cover.
+6. **OPEN 2026-11-02 01:49 UTC**: `cngn-options-enable` landed, cap 2,000,000 cNGN over both sides; all twelve gates
+   passed on the box first. The ten strikes are `trading_open: true` on `/v1/markets`.
+7. Still to come: a maker quoting the strikes (mm-bot), and the trading-app's option chain. At expiry the keeper settles
+   every account once cNGN-30NOV26's settlement price is fixed.
 
 ### EURC-USDC spot on the MarginEngine — LIVE 2026-10-25, maker quoting since 2026-10-26
 
