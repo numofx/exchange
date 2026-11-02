@@ -672,12 +672,103 @@ def count_unaudited(sent: int, deployer_nonce: int, verified_nonces: set[int]) -
   return (sent - deployer_nonce) - len({n for n in verified_nonces if deployer_nonce <= n < sent})
 
 
+# ---- EIP-7702: an authorization in a type-4 transaction uses its authority's nonce without being a transaction ----
+
+_SECP_P = 2**256 - 2**32 - 977
+_SECP_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+_SECP_G = (0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798,
+           0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8)
+
+
+def _ec_add(a, b):
+  if a is None:
+    return b
+  if b is None:
+    return a
+  if a[0] == b[0] and (a[1] + b[1]) % _SECP_P == 0:
+    return None
+  if a == b:
+    lam = 3 * a[0] * a[0] * pow(2 * a[1], -1, _SECP_P) % _SECP_P
+  else:
+    lam = (b[1] - a[1]) * pow(b[0] - a[0], -1, _SECP_P) % _SECP_P
+  x = (lam * lam - a[0] - b[0]) % _SECP_P
+  return x, (lam * (a[0] - x) - a[1]) % _SECP_P
+
+
+def _ec_mul(k, point):
+  result = None
+  while k:
+    if k & 1:
+      result = _ec_add(result, point)
+    point = _ec_add(point, point)
+    k >>= 1
+  return result
+
+
+def _ecrecover(digest: bytes, y_parity: int, r: int, s: int) -> str:
+  """The address that signed `digest`: secp256k1 public-key recovery, no third-party dependency."""
+  if not (0 < r < _SECP_N and 0 < s < _SECP_N) or y_parity not in (0, 1):
+    raise ValueError("invalid signature")
+  y = pow((pow(r, 3, _SECP_P) + 7) % _SECP_P, (_SECP_P + 1) // 4, _SECP_P)
+  if y % 2 != y_parity:
+    y = _SECP_P - y
+  z = int.from_bytes(digest, "big")
+  r_inv = pow(r, -1, _SECP_N)
+  q = _ec_add(_ec_mul(s * r_inv % _SECP_N, (r, y)), _ec_mul((-z * r_inv) % _SECP_N, _SECP_G))
+  if q is None:
+    raise ValueError("no public key")
+  return "0x" + keccak(q[0].to_bytes(32, "big") + q[1].to_bytes(32, "big"))[-20:].hex()
+
+
+def _rlp(item) -> bytes:
+  if isinstance(item, int):
+    item = item.to_bytes((item.bit_length() + 7) // 8, "big") if item else b""
+  if isinstance(item, bytes):
+    if len(item) == 1 and item[0] < 0x80:
+      return item
+    return _rlp_len(len(item), 0x80) + item
+  body = b"".join(_rlp(x) for x in item)
+  return _rlp_len(len(body), 0xC0) + body
+
+
+def _rlp_len(n: int, offset: int) -> bytes:
+  if n < 56:
+    return bytes([offset + n])
+  b = n.to_bytes((n.bit_length() + 7) // 8, "big")
+  return bytes([offset + 55 + len(b)]) + b
+
+
+def authorization_authority(auth: dict) -> str:
+  """An EIP-7702 authorization's signer: ecrecover(keccak(0x05 || rlp([chain_id, address, nonce])), y, r, s)."""
+  message = b"\x05" + _rlp([int(auth["chainId"], 16), bytes.fromhex(auth["address"].removeprefix("0x")), int(auth["nonce"], 16)])
+  return _ecrecover(keccak(message), int(auth["yParity"], 16), int(auth["r"], 16), int(auth["s"], 16))
+
+
+def authorization_explains(tx: dict, deployer: str, nonce: int, chain_id: int = 8453) -> bool:
+  """Whether a type-4 transaction from the deployer used `nonce` through an authorization the deployer signed (for this
+  chain, or any chain). Then the nonce is explained by that transaction, not by one of its own."""
+  if not tx or tx.get("from", "").lower() != deployer.lower() or tx.get("type") != "0x4":
+    return False
+  for auth in tx.get("authorizationList") or []:
+    try:
+      if int(auth["nonce"], 16) == nonce and int(auth["chainId"], 16) in (0, chain_id) and \
+          authorization_authority(auth).lower() == deployer.lower():
+        return True
+    except (KeyError, ValueError):
+      continue
+  return False
+
+
 def unaudited_deployer_txs(url: str, deployer: str, deployer_nonce: int, path: Path = AUDITED_DEPLOYER_TXS) -> int:
   """
   The deployer's transactions since a deploy that DEPLOYER_AUDITED_TXS.json does not explain. The deployer is meant to
   send nothing after a deploy, but has (a later deploy, a gas top-up): each such transaction is listed there by nonce
   and hash after a review, and counts here only once the chain shows that hash sent by the deployer at that nonce. An
   entry the chain contradicts explains nothing, so the count stays above 0 and the gate fails.
+
+  An entry with "authorization": true explains a nonce an EIP-7702 authorization used rather than a transaction (a
+  type-4 transaction from the deployer authorizing its own account takes two nonces): its hash is that type-4
+  transaction, which must carry an authorization at exactly this nonce, recovered to the deployer.
   """
   sent = int(rpc(url, "eth_getTransactionCount", [deployer, "latest"]), 16)
   verified: set[int] = set()
@@ -689,10 +780,12 @@ def unaudited_deployer_txs(url: str, deployer: str, deployer_nonce: int, path: P
         if not deployer_nonce <= nonce < sent:
           continue
         tx = rpc(url, "eth_getTransactionByHash", [entry["hash"]])
-        if tx and tx.get("from", "").lower() == deployer.lower() and int(tx["nonce"], 16) == nonce:
+        if entry.get("authorization"):
+          if authorization_explains(tx, deployer, nonce):
+            verified.add(nonce)
+        elif tx and tx.get("from", "").lower() == deployer.lower() and int(tx["nonce"], 16) == nonce:
           verified.add(nonce)
   return count_unaudited(sent, deployer_nonce, verified)
-
 
 def self_test() -> int:
   from abi_selectors import assert_script
@@ -707,6 +800,22 @@ def self_test() -> int:
   assert count_unaudited(53, 38, set(range(38, 52))) == 1, "a new transaction is unexplained"
   assert count_unaudited(52, 38, set(range(38, 51))) == 1, "an entry the chain did not verify explains nothing"
   assert count_unaudited(38, 38, set()) == 0
+  # EIP-7702: the deployer's nonce-62 type-4 transaction (0x82d5cdee…, 2026-11-02) authorized its own account at nonce 63
+  # (MetaMask's delegator 0x63c0…e32b). The authority recovers from the authorization's own signature, so only the
+  # deployer's authorization at exactly that nonce explains 63; a tampered signature, another nonce or another sender does not.
+  dep = "0x971Cd37fa58e4D5f6cd5FB3B7fE7DAAF735F2e9c"
+  auth = {"chainId": "0x2105", "address": "0x63c0c19a282a1b52b07dd5a65b58948a07dae32b", "nonce": "0x3f", "yParity": "0x1",
+          "r": "0x4767880aa61e44b78e0b66f5cf403ec7ce4d6ace7a13bfbc245979cc48977f69",
+          "s": "0x3ac1f57bfabfb861745d904fa90fb582209f2ea09fb667e1184763995fa7996c"}
+  assert authorization_authority(auth).lower() == dep.lower(), authorization_authority(auth)
+  tx4 = {"from": dep.lower(), "type": "0x4", "nonce": "0x3e", "authorizationList": [auth]}
+  assert authorization_explains(tx4, dep, 63)
+  assert not authorization_explains(tx4, dep, 62), "the transaction's own nonce is not the authorization's"
+  assert not authorization_explains({**tx4, "type": "0x2"}, dep, 63)
+  assert not authorization_explains({**tx4, "from": "0x" + "11" * 20}, dep, 63)
+  assert not authorization_explains({**tx4, "authorizationList": [{**auth, "s": hex(int(auth["s"], 16) + 1)}]}, dep, 63), \
+    "a tampered signature recovers someone else"
+  assert not authorization_explains({**tx4, "authorizationList": [{**auth, "chainId": "0x1"}]}, dep, 63)
 
   # A deployment with two markets (cNGN and EURC), its batches as the deploy script writes them, each way a file can be wrong.
   a = lambda n: "0x" + format(n, "040x")  # noqa: E731
