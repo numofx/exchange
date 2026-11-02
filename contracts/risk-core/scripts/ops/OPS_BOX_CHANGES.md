@@ -31,6 +31,10 @@ Under the MM-key grant (`terraform apply -var ops_box_mm_key_grant=true` from `a
   failure streak lived in the old process, and the new one only announced its start, so the alert channel's last word
   on this is still "failing" — resolve it there by hand. The same gap CLAUDE.md records ("a recovery message that never
   fired because the fix was a redeploy"); not fixed here.
+- **Options maker live** from `7273774` (`mm_options_dry_run` false, td :3; dry-run task gone 04:10:45 UTC). On the
+  venue at 04:12: one bid and one ask of 100k cNGN from #44 on each of the ten strikes (ATM put 0.0000289 / 0.0000338).
+  First 3.3 min of the live task's own stream: 39 placements (20 initial, 19 replacing quotes that drifted 5 bps),
+  19 cancels all `stale_or_wrong`, no warning or error; #44 IM surplus 1,000.05 (no fill yet).
 
 ## 2026-11-02 01:49 UTC: cNGN options OPEN (cngn-options-enable landed)
 
