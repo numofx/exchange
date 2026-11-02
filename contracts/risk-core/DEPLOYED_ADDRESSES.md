@@ -201,6 +201,33 @@ two owner-only engine setters in the vault's setup batch.
    `EURC-30NOV26`.
 4. `eurc-future-enable`: `future.setTotalPositionCap(v2, 18e18)`, `tradeModule.setDatedFutureAsset(future, true)`.
 
+### cNGN options on MarginEngine v2 — DEPLOYED 2026-11-02 (closed; setup pending)
+
+European calls and puts on cNGN at the cNGN-30NOV26 expiry (1796047200, 2026-11-30 14:00 UTC; trading ends an hour
+before), on v2's market 1. Strikes and premiums in USDC per cNGN, one option unit one cNGN; they settle at
+cNGN-30NOV26's own settlement price. Launch values decided 2026-11-01: cap 2,000,000 cNGN over both sides, IM 25–30% /
+MM 15% of spot on a naked short, option confidence threshold 0.8, vol surface 40% ATM (skew -0.5). Built by
+`scripts/deploy-cngn-options-v2.s.sol`; batches proposed by `scripts/ops/propose_cngn_options_v2_batch.py`.
+
+| Contract | Address |
+| --- | --- |
+| OptionAsset (cNGN options, 30NOV26) | `0xA6a05dC25127CecbC048C7e6CBE35e1c8e503821` |
+| LyraVolFeed (signer: KMS `alias/numo-exchange-vol-signer`) | `0xf2dB01CF76e11A83d8510dACDD69aB62b3BAC5E0` |
+| FutureFixingSettlementFeed (reads cNGN-30NOV26 `0xcACE…AA75`) | `0x5D899c7e521EA787693384A1D61a689e988A1692` |
+| Vol signer (KMS) | `0x30b9c910777a0B08fCfD645bca4121bDDC12fbf5` |
+
+1. **Deployed 2026-11-02 00:33 UTC**, Base block 53395141 (nonces 52–61), at exchange 2da7dc0, by the used deployer
+   `0x971C…2e9c` (`USED_DEPLOYER`; **its keystore is `jason`** on Robert's laptop) at nonce 52 (now 62). The ten
+   transactions are in `DEPLOYER_AUDITED_TXS.json`, described from the chain: forge's `run-latest.json` for this run
+   pairs several hashes with the wrong function, so do not audit from it. Read back at block 53395143: the option and
+   the vol feed nominated to the vault (`pendingOwner`), the option settling on the adapter, the adapter on
+   cNGN-30NOV26, the option whitelisting the engine at cap 0, the vol feed's signer the KMS key at heartbeat 1800 s and
+   quorum 1, and the engine listing no option. Artifacts: `CNGN_OPTIONS_V2.json`, `CNGN_OPTIONS_V2_VAULT_ACTIONS.json`,
+   `CNGN_OPTIONS_V2_ENABLE_VAULT_ACTIONS.json`. The deployer sends nothing else until setup lands.
+2. Next: `cngn-options-setup` (accept both, whitelist the option on market 1, its margin and contingency params, and
+   market 1's oracles with the live index written back), then numo-vol-feeds, the keeper's `OPTION`, the markets
+   listing (`option_series`), and `cngn-options-enable`.
+
 ### EURC-USDC spot on the MarginEngine — LIVE 2026-10-25, maker quoting since 2026-10-26
 
 Market 2 on the MarginEngine `0xA19E296021c9DF25b90D96C2A0793CC3D0800758`, its own market rather than a slot in market 1,

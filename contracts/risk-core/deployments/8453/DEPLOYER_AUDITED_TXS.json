@@ -71,6 +71,56 @@
       "nonce": 51,
       "hash": "0x07971b17cf14cd04a128b89c3bbc732815d0287b8500568b669c732fcdbc75cb",
       "note": "0.00025 ETH to forward-relayer-v2-cngn 0x3ACe\u2026763f (2026-10-30, clears a false low-gas page); value only, no calldata"
+    },
+    {
+      "nonce": 52,
+      "hash": "0x11bc892a4aa0e33d721861249e6f613ae2709cd5d39032ba27b01fcf055637c5",
+      "note": "deploy-cngn-options-v2.s.sol: CREATE FutureFixingSettlementFeed (read from chain: the broadcast file mislabels its hashes)"
+    },
+    {
+      "nonce": 53,
+      "hash": "0xf8644b3c5f31a78414c0da7906743ae695b3ec48f1d27c9f9c1140b62ba8d3e2",
+      "note": "deploy-cngn-options-v2.s.sol: CREATE OptionAsset (read from chain: the broadcast file mislabels its hashes)"
+    },
+    {
+      "nonce": 54,
+      "hash": "0xb116e1cf51edd7b6c12368db7548bd10592c60632907c28303c2beb71545fb10",
+      "note": "deploy-cngn-options-v2.s.sol: OptionAsset.setWhitelistManager (read from chain: the broadcast file mislabels its hashes)"
+    },
+    {
+      "nonce": 55,
+      "hash": "0x445b7f5d1bcdd355578597ff722208a76495d5167296759ee2e8d0e3df086d0e",
+      "note": "deploy-cngn-options-v2.s.sol: OptionAsset.setTotalPositionCap (read from chain: the broadcast file mislabels its hashes)"
+    },
+    {
+      "nonce": 56,
+      "hash": "0x224e7a96951f22c8b56ed05e4a3b661dc642d5e30edd5e90a28f57a6e43ccf17",
+      "note": "deploy-cngn-options-v2.s.sol: CREATE LyraVolFeed (read from chain: the broadcast file mislabels its hashes)"
+    },
+    {
+      "nonce": 57,
+      "hash": "0xcc6e11807ef34bc4a072f24414c9eba9d0a4fbe7da13836aaca893f02cb30f6c",
+      "note": "deploy-cngn-options-v2.s.sol: LyraVolFeed.setHeartbeat (read from chain: the broadcast file mislabels its hashes)"
+    },
+    {
+      "nonce": 58,
+      "hash": "0xeef762ae21810d3b28ef5648ddffd23c43dfbd74159db2966905ce8f407f1aad",
+      "note": "deploy-cngn-options-v2.s.sol: LyraVolFeed.addSigner (read from chain: the broadcast file mislabels its hashes)"
+    },
+    {
+      "nonce": 59,
+      "hash": "0x194cadb79bab3973e252382efb66a735605aae34f499c9e041ee1f082fc11ef3",
+      "note": "deploy-cngn-options-v2.s.sol: LyraVolFeed.setRequiredSigners (read from chain: the broadcast file mislabels its hashes)"
+    },
+    {
+      "nonce": 60,
+      "hash": "0xad330038d4c71a8c0f43db22737dab26fc0b2f120ba9d620e48f114193207d9a",
+      "note": "deploy-cngn-options-v2.s.sol: OptionAsset.transferOwnership (read from chain: the broadcast file mislabels its hashes)"
+    },
+    {
+      "nonce": 61,
+      "hash": "0x6c2b8a5d978f40bf09ada768eb8bcbbe14bef8ee2a2e33cdd4be5683fac5a9bb",
+      "note": "deploy-cngn-options-v2.s.sol: LyraVolFeed.transferOwnership (read from chain: the broadcast file mislabels its hashes)"
     }
   ]
 }
