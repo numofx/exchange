@@ -64,7 +64,9 @@ variable "image_markets" {
   type        = string
   # 2026-10-28 19:54 UTC: main befe85e6 (#280: FUTURE_SERIES, listing MarginEngine v2's cNGN-30NOV26 closed).
   # markets td :46, matcher td :45. Rollback is 06d35e168f58 (td :45 / :44) with future_series = [], in one apply.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:13384daafef9"
+  # 2026-11-02: main 682cb2e (cNGN options: OPTION_SERIES, option order admission and fill margin checks), listing the ten
+  # cNGN-30NOV26 strikes closed (option_series). Rollback is 13384daafef9 with option_series = [], in one apply.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:682cb2e0f9e2"
 }
 
 variable "image_execution" {
@@ -368,7 +370,20 @@ variable "option_series" {
     amount_scale     = string           # 1e21: desired_amount 1 is 1,000 of the base
     taker_fee_bps    = number           # required: bps of the premium
   }))
-  default = []
+  # cNGN options at the cNGN-30NOV26 expiry (risk-core CNGN_OPTIONS_V2.json, deployed and set up 2026-11-02, closed until
+  # cngn-options-enable). Strikes chosen 2026-11-02 around the forward ~0.000721: -14%, -7%, at, +7%, +14%, each a call and
+  # a put (10 markets). Taker fee 15 bps of the premium, the user's choice (about $0.05 on a 1M cNGN ATM option at ~$32).
+  # Orders sized in thousands of cNGN (amount_scale 1e21), as the cNGN future's order unit.
+  default = [{
+    asset_address    = "0xA6a05dC25127CecbC048C7e6CBE35e1c8e503821"
+    manager_address  = "0x0705219a1594d5Fc5dC2573da4082cAf3e1B0950"
+    vol_feed_address = "0xf2dB01CF76e11A83d8510dACDD69aB62b3BAC5E0"
+    base_asset       = "cNGN"
+    expiry           = 1796047200
+    strikes          = ["0.00062", "0.00067", "0.00072", "0.00077", "0.00082"]
+    amount_scale     = "1000000000000000000000"
+    taker_fee_bps    = 15
+  }]
 
   validation {
     condition     = alltrue([for s in var.option_series : s.taker_fee_bps >= 0 && s.taker_fee_bps <= 1000 && floor(s.taker_fee_bps) == s.taker_fee_bps])
