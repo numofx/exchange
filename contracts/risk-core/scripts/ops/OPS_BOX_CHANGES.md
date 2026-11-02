@@ -5,6 +5,28 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-02 ~03:20–03:45 UTC: options maker account #44 opened and funded from #43; maker started in dry run
+
+Under the MM-key grant (`terraform apply -var ops_box_mm_key_grant=true` from `aab44b8`, which also created
+`market-maker-options` at 0 replicas). Each step by SSM from the laptop, as ec2-user in `/home/ec2-user/exchange-perp`
+(at `af584bc`, bundle unchanged), through `run-with-ssm-mm.sh`:
+
+- **EURC-USDC spot maker stopped** (counts.auto.tfvars `desired_count_market_maker_eurc` 0, applied with the grant
+  kept): its task STOPPED 03:22:59 UTC; its quotes expired and the book was empty at 03:29 before anything moved.
+- **`engine-account 50000 --market=cNGN-30NOV26`:** the first `--execute` (SSM `e2f0e6f0`) approved (`0xee79b51d…`,
+  block 53400490) and then failed estimating the create on a node that had not yet seen the approval: nothing sent,
+  nonce 65 unused, allowance 50,000 confirmed on chain. The rerun (SSM `53045086`) opened **#44** under the v2
+  engine, the MM's in Matching (approve `0xfff468c4…`, create `0x603e928e…`, block 53400565), 0.05 USDC.
+- **`move-usdc 43 44 1000000000`** (SSM `fcee89e6`): withdraw `0x953afdbe…` (block 53400593), approve `0x87e4bc9c…`,
+  deposit `0xa2a744cb…` (block 53400596). Read back: #43 cash 3,326.22, #44 cash 1,000.05 (IM surplus 1,000.05).
+- **Closing apply from `6ecbaca`:** grant revoked (from the box, `GetParameter` on `/numo/exchange/mm_private_key`
+  is AccessDenied), EURC-USDC maker back at 1 (quoting from #43 again), `market-maker-options` at 1 on #44 with
+  `MM_DRY_RUN=true` (td :2; ten strikes priced, quotes logged, no order from #44 on the venue), execution td :40 with
+  #44 added to the settlement canary. Execution was down 03:37:55–03:39:27 UTC (stop before start).
+- **Found:** the settlement canary had been red since 2026-11-01 00:31 UTC on #32's value floor (#32 retired and
+  emptied 2026-10-31), alerting every 30 checks for 27 hours. #32 leaves the canary while its maker is stopped
+  (ecs.tf `canary_accounts`), applied separately.
+
 ## 2026-11-02 01:49 UTC: cNGN options OPEN (cngn-options-enable landed)
 
 - **`numo-cngn-options-enable`** (transient unit, `run-with-ssm-mark.sh python3 propose_cngn_options_v2_batch.py
