@@ -232,8 +232,12 @@ MM 15% of spot on a naked short, option confidence threshold 0.8, vol surface 40
    first publish `0xe29593f8…a44f`; 40% ATM at confidence 1.0, read back on chain.
 4. **Keeper and pager watching 2026-11-02 01:25 UTC**: numo-engine-keeper-v2 settles expired options (`OPTION`, its
    `/health` reports `options`); the pager reads the options and the vol feed (`volFeeds`).
-5. Next: the markets listing (a markets image with the option code, then `option_series`), then `cngn-options-enable`
-   (the cap, 2M cNGN).
+5. **Listed 2026-11-02 ~01:35 UTC, closed**: markets-service `682cb2e0f9e2` (markets-service:52, matcher:51, migrate:45),
+   applied from main through `with-matcher-mute.sh` (plan: the three task definitions and two services only; the old
+   matcher task STOPPED, a fresh heartbeat after). `/v1/markets` lists ten markets, `cNGN-30NOV26-{0.00062,0.00067,
+   0.00072,0.00077,0.00082}-{C,P}`, 15 bps of premium, each `trading_open: false` (no position cap yet).
+6. Next: `cngn-options-enable` (the cap, 2M cNGN), proposed from the box: its gates read the vol surface, the pager, the
+   keeper, this listing and the SecurityModule's cover.
 
 ### EURC-USDC spot on the MarginEngine — LIVE 2026-10-25, maker quoting since 2026-10-26
 
