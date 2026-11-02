@@ -16,3 +16,4 @@ __pycache__/
 
 # scripts/local-venue state: Postgres data, logs, pids
 .local-venue/
+.options-fork/

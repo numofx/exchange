@@ -44,6 +44,22 @@ to `REHEARSAL_ALERT_WEBHOOK_URL` if it is set. `rehearse.ts` holds the chain-sid
 To try it without a mainnet deployment, point `--fork-url` at a running `up.sh` venue and
 `--stack` / `--module` / `--keeper-env` at its files.
 
+## cNGN options maker: `options-fork.sh`
+
+The options quoter (market-maker `MM_OPTION_SERIES`) against the venue as deployed. It forks Base at head, where
+MarginEngine v2's cNGN options are already open, and runs markets api + matcher and execution-service with
+**production's environment read from the live ECS task definitions** (AWS profile `numo`; only the chain id, RPC,
+database, ports and executor key are local). It opens a maker (2,000 USDC) and a taker (500 USDC) under the engine,
+starts `mm-bot` from the market-maker checkout (`MARKET_MAKER_DIR`, default `../market-maker`), and requires:
+
+- both sides quoted on every listed strike;
+- a taker buy of 10 units (10,000 cNGN) of the ATM put fills with exact positions, premium and the 15 bps fee, and the
+  maker's IM surplus moves by the premium less the engine's isolated requirement (`options-fork.ts take`);
+- past the feeds' heartbeats, every strike halts ("option state unreadable") and no quote rests.
+
+The fork has no feed publisher, so run it within ~15 minutes of the last on-chain publish. Ports are anvil 8610,
+Postgres 5545, markets 8095, execution 8096; state is in `.options-fork/`, and `options-fork.sh --down` stops it.
+
 ## Index-step drill
 
 `./scripts/local-venue/step-drill.sh [bps]` (default 4000) runs on top of `up.sh`. It fills the rest
