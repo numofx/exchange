@@ -5,6 +5,32 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-02 00:42–00:45 UTC: cNGN options setup proposed and landed
+
+- **`numo-cngn-options-setup`** (transient unit, `run-with-ssm-mark.sh python3 propose_cngn_options_v2_batch.py
+  cngn-options-setup --propose`, as ec2-user, from `exchange-ops` at `0586889`), started by SSM `c4f5045e` (Robert, from
+  the laptop) at 00:42:26 and exited 0 at 00:45:20. An earlier start, SSM `86a2ac86`, refused itself before starting
+  anything: its guard compared the 7-character `0586889` with the box's 8-character `git rev-parse --short` (`05868896`);
+  the second guard compared the full hash. Six requests to MPCVault, one at a time, each approved by hand against the
+  dry run's digest, the six gates re-run (all PASS) before each:
+
+  | # | Action | MPCVault request | Digest |
+  | --- | --- | --- | --- |
+  | 0 | option `acceptOwnership` | `f88c9288` | `0x583b189f…a4d4` |
+  | 1 | vol feed `acceptOwnership` | `1c4b769a` | `0x8fe10d65…97a6` |
+  | 2 | engine v2 `whitelistAsset(option, 1, Option)` | `4403e826` | `0xa184cfcb…68f9` |
+  | 3 | engine v2 `setOptionMarginParams(1, …)` | `0d77daca` | `0xcfb8b17c…6ce` |
+  | 4 | engine v2 `setOracleContingencyParams(1, …)` | `3af58a3f` | `0xfddec438…0b0c` |
+  | 5 | engine v2 `setOraclesForMarket(1, index, forward, vol)` | `18020595` | `0x11632aab…fa0a` |
+
+  Transaction hashes were not recorded: the public RPC throttled every lookup that night. They are the vault's
+  transactions in Base blocks ~53395460–53395525, or each request's in MPCVault.
+- **Read back at block 53395499 (laptop):** the vault owns the option and the vol feed (nothing pending); market 1 lists
+  the option (whitelisted, market 1, Option); option margin 0.30/0.25/0.15/0.15/0.5/1.2/1.1/1.05; contingency perp 0.55,
+  option 0.8, base 0.55, OCFactor 1.0 (perp, base and the factor as before); market 1's feeds the live index
+  `0xFaC4…20a5` (unchanged), the cNGN future's forward, the vol feed; the option's cap 0 (closed). Engine accounts
+  #39, #40, #42 and #43 margin as normal. Nothing else on the box changed.
+
 ## 2026-11-02: `exchange-ops` moved to `0586889` for cNGN options setup; dry run on the box
 
 - **Read-only first (SSM `e8ff048a`):** `exchange-ops` at `4f251e8`, clean, `0586889` its descendant,

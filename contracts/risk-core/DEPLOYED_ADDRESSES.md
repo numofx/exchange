@@ -201,7 +201,7 @@ two owner-only engine setters in the vault's setup batch.
    `EURC-30NOV26`.
 4. `eurc-future-enable`: `future.setTotalPositionCap(v2, 18e18)`, `tradeModule.setDatedFutureAsset(future, true)`.
 
-### cNGN options on MarginEngine v2 — DEPLOYED 2026-11-02 (closed; setup pending)
+### cNGN options on MarginEngine v2 — DEPLOYED and SET UP 2026-11-02 (closed)
 
 European calls and puts on cNGN at the cNGN-30NOV26 expiry (1796047200, 2026-11-30 14:00 UTC; trading ends an hour
 before), on v2's market 1. Strikes and premiums in USDC per cNGN, one option unit one cNGN; they settle at
@@ -224,9 +224,12 @@ MM 15% of spot on a naked short, option confidence threshold 0.8, vol surface 40
    cNGN-30NOV26, the option whitelisting the engine at cap 0, the vol feed's signer the KMS key at heartbeat 1800 s and
    quorum 1, and the engine listing no option. Artifacts: `CNGN_OPTIONS_V2.json`, `CNGN_OPTIONS_V2_VAULT_ACTIONS.json`,
    `CNGN_OPTIONS_V2_ENABLE_VAULT_ACTIONS.json`. The deployer sends nothing else until setup lands.
-2. Next: `cngn-options-setup` (accept both, whitelist the option on market 1, its margin and contingency params, and
-   market 1's oracles with the live index written back), then numo-vol-feeds, the keeper's `OPTION`, the markets
-   listing (`option_series`), and `cngn-options-enable`.
+2. **Setup landed 2026-11-02 00:43–00:45 UTC** (`cngn-options-setup`, proposed from the box's exchange-ops at 0586889
+   and approved by hand in MPCVault; `scripts/ops/OPS_BOX_CHANGES.md`): the vault owns both; market 1 lists the option
+   with its margin and contingency params; market 1's oracles are the live index (unchanged), the cNGN future's
+   forward and the vol feed. The cap is still 0. The deployer is free again.
+3. Next: numo-vol-feeds (a live surface before enable), the keeper's `OPTION`, the markets listing (`option_series`),
+   then `cngn-options-enable` (the cap, 2M cNGN).
 
 ### EURC-USDC spot on the MarginEngine — LIVE 2026-10-25, maker quoting since 2026-10-26
 
