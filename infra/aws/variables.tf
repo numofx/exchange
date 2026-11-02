@@ -352,6 +352,35 @@ variable "future_series" {
   }
 }
 
+# cNGN options (markets-service OPTION_SERIES, internal/config/option_series.go), one entry per OptionAsset expiry: every
+# strike is listed as a call and a put, priced as the premium in USDC per base, the fee in bps of the premium. Addresses
+# from risk-core CNGN_OPTIONS_V2.json once deployed. Empty lists none and leaves OPTION_SERIES out of the task
+# definitions. markets-service refuses a strike off the 1e-8 grid, a duplicate, or a last_trade_time not before expiry.
+variable "option_series" {
+  type = list(object({
+    asset_address    = string
+    manager_address  = string
+    vol_feed_address = string
+    base_asset       = string
+    expiry           = number
+    last_trade_time  = optional(number) # default: an hour before expiry
+    strikes          = list(string)     # decimal USDC per base, e.g. "0.00072"
+    amount_scale     = string           # 1e21: desired_amount 1 is 1,000 of the base
+    taker_fee_bps    = number           # required: bps of the premium
+  }))
+  default = []
+
+  validation {
+    condition     = alltrue([for s in var.option_series : s.taker_fee_bps >= 0 && s.taker_fee_bps <= 1000 && floor(s.taker_fee_bps) == s.taker_fee_bps])
+    error_message = "Each option_series entry's taker_fee_bps is a whole number of bps of the premium from 0 to 1000 (markets-service refuses anything else)."
+  }
+
+  validation {
+    condition     = alltrue([for s in var.option_series : length(s.strikes) > 0])
+    error_message = "Each option_series entry lists at least one strike."
+  }
+}
+
 # The index-lag gate (markets-service api/index_lag.go). The publisher reports every spot sample to
 # the api; with the gate on, a new perp order is refused while that sample is more than
 # index_lag_max_bps from the on-chain index, or while no fresh sample exists. On in production since
