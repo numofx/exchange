@@ -5,6 +5,29 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-02: numo-vol-feeds installed in dry run, on v1's forward relayer
+
+- **Read-only first (laptop):** `/var/lib/numo` writable by ec2-user, `perp-index-status.json` fresh (60 s),
+  no step log (no index step ever taken), node 22.23.3, pnpm 8.7.3, no `exchange-vol`, no unit; the instance role
+  `numo-feed-publisher-role` holds the vol signer's KMS grant (terraform, 2026-11-01).
+- **Relayer.** v1's forward relayer `0xE5b8541dC2558f3db65aF88A2374e464AE4ae6de` (`/numo/feeds/forward_relayer_key`),
+  idle since `numo-future-feeds` was stopped and disabled on 2026-11-01 (box-34); 0.00159 ETH at nonce 886, about 4 days
+  at a publish every 5 min. **Never restart `numo-future-feeds` while numo-vol-feeds runs.** A new key
+  `/numo/feeds/vol_relayer_key` (`0x0198eEDf…10bA`, unfunded, never used) was created first and then superseded by the
+  reuse; nothing reads it, and it can be deleted.
+- **Install (SSM `b4b7017c`, Robert from the laptop):** refused unless no checkout, no unit, and the v1 keeper both
+  inactive and disabled. `/home/ec2-user/exchange-vol` cloned at `6466668` (detached); `pnpm install --frozen-lockfile
+  --filter perp-feeds...`, `@numo/kms-signer` and `perp-feeds` built; `/etc/numo/vol-feeds.env` from
+  `vol-feeds-cngn-30nov26.env` (`DRY_RUN=true`); `numo-vol-feeds.service` installed, enabled and started.
+- **After:** active, 0 restarts, 0 alerts. Startup checks passed (heartbeat, the feed accepts the KMS signer, degraded
+  confidence under the engine's 0.8, the feed attached to market 1). Log: signer `0x30b9…fbf5` (KMS), relayer
+  `0xE5b8…ae6de`, feed `0xf2dB…C5E0`; `DRY RUN: would publish ATM 40.0% conf 1.00 fwd 721368707601761 (normal)`;
+  `/var/lib/numo/vol-status.json` mode normal, `dryRun: true`. Nothing published.
+- **Not yet:** the relayer's top-up (~0.01 ETH to expiry), `/etc/numo/perp-pager.env` with `vol-relayer` in GAS_WATCH,
+  and `DRY_RUN=false`.
+- **Undo.** `systemctl disable --now numo-vol-feeds; rm /etc/systemd/system/numo-vol-feeds.service /etc/numo/vol-feeds.env;
+  systemctl daemon-reload` (the checkout can stay).
+
 ## 2026-11-02 00:42–00:45 UTC: cNGN options setup proposed and landed
 
 - **`numo-cngn-options-setup`** (transient unit, `run-with-ssm-mark.sh python3 propose_cngn_options_v2_batch.py
