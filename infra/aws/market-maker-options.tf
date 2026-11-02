@@ -19,7 +19,10 @@ variable "image_market_maker_options" {
 variable "mm_options_subaccount_id" {
   description = "The options maker's account under the v2 MarginEngine, held by Matching, owned by mm_address. Empty keeps it at zero replicas."
   type        = string
-  default     = ""
+  # Opened 2026-11-02 (engine-account --market=cNGN-30NOV26, under the MM-key grant; create 0x603e928e…, block
+  # 53400565) and funded with 1,000 USDC moved from #43 (move-usdc: withdraw 0x953afdbe…, deposit 0xa2a744cb…, block
+  # 53400596). #44: 1,000.05 USDC, IM surplus 1,000.05.
+  default = "44"
 }
 
 variable "desired_count_market_maker_options" {
