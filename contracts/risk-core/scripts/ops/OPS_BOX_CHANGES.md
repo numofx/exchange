@@ -5,6 +5,24 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-02 01:22 UTC: numo-vol-feeds live; the pager watches its relayer
+
+- **Relayer topped up** by Robert to 0.004090 ETH (+0.0025): ~29 days at the measured ~0.00014 ETH/day, to expiry.
+- **SSM `aed770d1`** (Robert, from the laptop), each file backed up as `.bak-202611020122` beside it:
+  - `/etc/numo/perp-pager.env`: `,vol-relayer=0xE5b8541dC2558f3db65aF88A2374e464AE4ae6de:0.0003` appended to `GAS_WATCH`,
+    nothing else. Not a copy of the repo's file: that had drifted from the box (box-34's `FUTURE_ARTIFACT` and
+    `forward-relayer-v1` removal were never written back; fixed in `b4a314e`), and copying it would have revived v1's
+    future checks. The box's settings now equal the repo's exactly (compared after).
+  - `/etc/numo/vol-feeds.env`: `DRY_RUN=true` → `false`; `numo-vol-feeds` restarted. Refused unless the env was in dry
+    run and the v1 keeper still disabled.
+- **First publish:** `0xe29593f8…a44f`, block 53396604, from `0xE5b8…ae6de` (nonce 886 → 887), 189,349 gas (the first
+  write to the expiry). Read back on chain: `getVol` 40.0% at the forward (strike 0.00072128), 49.2% at 0.8x, confidence
+  1.0; the engine prices a 1M cNGN short ATM put at a $243.86 IM requirement ($32.16 of it the mark) with spot at
+  0.00072797. The pager's next run read `vol-relayer` (0.00409 ETH), 0 active.
+- **Undo.** `cp -p /etc/numo/vol-feeds.env.bak-202611020122 /etc/numo/vol-feeds.env && systemctl restart numo-vol-feeds`
+  (back to dry run; the surface then ages out in 30 min, harmless while the option's cap is 0), and the same for the pager
+  env.
+
 ## 2026-11-02: numo-vol-feeds installed in dry run, on v1's forward relayer
 
 - **Read-only first (laptop):** `/var/lib/numo` writable by ec2-user, `perp-index-status.json` fresh (60 s),
