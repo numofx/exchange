@@ -18,8 +18,13 @@ locals {
   # The makers' accounts, each only once it is set: spot (#34), the v1 future (#32), EURC-USDC (#36), and the v2
   # futures (#39 cNGN-30NOV26, #40 EURC-30NOV26), and the options maker (market-maker-options.tf), whose getMargin
   # also walks the vol and forward feeds an option settlement needs. An empty id would be a check of nothing.
+  #
+  # The v1 future's maker (#32) only while it is set to run: it was stopped and emptied into the v2 makers on
+  # 2026-10-31 (desired_count_market_maker_future 0), and from 2026-11-01 00:31 UTC its $0 held kept the canary red on
+  # its value floor ("too little held for getMargin on it to prove anything") for 27 hours, so a real settlement
+  # failure on any other account would have read as the same red. A running maker's account is always watched.
   canary_accounts = compact(concat(
-    [var.mm_subaccount_id, var.mm_future_subaccount_id, var.mm_eurc_subaccount_id],
+    [var.mm_subaccount_id, var.desired_count_market_maker_future > 0 ? var.mm_future_subaccount_id : "", var.mm_eurc_subaccount_id],
     [for k in sort(keys(var.mm_future_v2_subaccount_ids)) : var.mm_future_v2_subaccount_ids[k]],
     [var.mm_options_subaccount_id],
   ))
