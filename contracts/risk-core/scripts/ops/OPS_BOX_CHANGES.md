@@ -5,6 +5,18 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-02: `exchange-ops` moved to `0586889` for cNGN options setup; dry run on the box
+
+- **Read-only first (SSM `e8ff048a`):** `exchange-ops` at `4f251e8`, clean, `0586889` its descendant,
+  `numo-cngn-options-setup` inactive, Python 3.9.25 (the proposer's mainnet dry run passed under 3.9 off the box first).
+- **`exchange-ops`** moved `4f251e8` → `0586889` (the cNGN options deploy record), detached, by SSM `937aed2e`, run by
+  Robert from the laptop: it refused unless the checkout was clean, the unit inactive and the old HEAD an ancestor.
+- **Dry run in the same command** (`run-with-ssm-mark.sh python3 propose_cngn_options_v2_batch.py cngn-options-setup`,
+  as ec2-user, no `--propose`): all six gates PASS (nominated, engine, market1, venue, series, parity); the six digests
+  are the laptop dry run's: `0x583b189f…a4d4`, `0x8fe10d65…97a6`, `0xa184cfcb…68f9`, `0xcfb8b17c…6ce`,
+  `0xfddec438…0b0c`, `0x11632aab…fa0a`. Nothing proposed, nothing else on the box changed.
+- **Undo.** `sudo -u ec2-user git -C /home/ec2-user/exchange-ops checkout --detach 4f251e8`.
+
 ## 2026-11-01: the cNGN options vol signer: a KMS key the box's role may sign with (terraform, not on the box)
 
 - **What.** `terraform apply` from main (`infra/aws` ops-box.tf, `var.vol_signer_kms_enabled`), plan "3 to add, 0 to
