@@ -88,6 +88,12 @@ func TestOptionMarketsAreListed(t *testing.T) {
 	if put.LastTradeTimestamp != put.ExpiryTimestamp-3600 || put.OptionStrike != "0.00072" || put.VolFeedAddress != optVolFeed {
 		t.Fatalf("its terms: %+v", put)
 	}
+	// One desired_amount is amount_scale / 1e18 of the base: 1,000 cNGN at 1e21. Every unit field says so, since a reader
+	// who takes desired_amount for whole cNGN trades a thousand times what they meant.
+	if put.AmountScale != "1000000000000000000000" || put.UISizeUnit != "1,000 cNGN" || put.EngineAmountUnit != "1,000 cNGN" ||
+		!strings.Contains(put.UISizeToEngine, "ui_size x 1,000 cNGN") || !strings.Contains(put.SettlementNote, "desired_amount 1 is 1,000 cNGN") {
+		t.Fatalf("the size unit: scale %s, ui %q, engine %q, %q; note %q", put.AmountScale, put.UISizeUnit, put.EngineAmountUnit, put.UISizeToEngine, put.SettlementNote)
+	}
 	unpriced := config.Config{OptionSeries: []config.OptionSeries{{AssetAddress: optAsset, ManagerAddress: optEngine, VolFeedAddress: optVolFeed,
 		BaseAsset: "cNGN", Expiry: put.ExpiryTimestamp, Strikes: []string{"0.00072"}, AmountScale: "1"}}}
 	for _, m := range instruments.DefaultRegistry(unpriced).Enabled() {
