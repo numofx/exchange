@@ -16,10 +16,12 @@ locals {
     for a in concat([var.cngn_future_manager_address], [for s in var.future_series : s.manager_address]) : lower(a)
   ])
   # The makers' accounts, each only once it is set: spot (#34), the v1 future (#32), EURC-USDC (#36), and the v2
-  # futures (#39 cNGN-30NOV26, #40 EURC-30NOV26). An empty id would be a check of nothing.
+  # futures (#39 cNGN-30NOV26, #40 EURC-30NOV26), and the options maker (market-maker-options.tf), whose getMargin
+  # also walks the vol and forward feeds an option settlement needs. An empty id would be a check of nothing.
   canary_accounts = compact(concat(
     [var.mm_subaccount_id, var.mm_future_subaccount_id, var.mm_eurc_subaccount_id],
     [for k in sort(keys(var.mm_future_v2_subaccount_ids)) : var.mm_future_v2_subaccount_ids[k]],
+    [var.mm_options_subaccount_id],
   ))
 }
 
@@ -30,6 +32,7 @@ resource "aws_cloudwatch_log_group" "tasks" {
     ["markets-service", "matcher", "execution-service", "migrate", "market-maker", "market-maker-perp", "market-maker-future"],
     var.image_market_maker_eurc == "" ? [] : ["market-maker-eurc"],
     [for k in keys(local.mm_future_v2_enabled) : "market-maker-future-v2-${k}"],
+    [for k in keys(local.mm_options_enabled) : "market-maker-${k}"],
   ))
   name              = "/ecs/${var.name}/${each.key}"
   retention_in_days = 30
