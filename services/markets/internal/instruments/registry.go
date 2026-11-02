@@ -2,6 +2,7 @@ package instruments
 
 import (
 	"log/slog"
+	"math/big"
 	"strings"
 	"time"
 
@@ -346,6 +347,7 @@ func groupThousands(value string) string {
 func optionMetadata(cfg config.Config, contract config.OptionContract) Metadata {
 	series := contract.Series
 	base, scale := series.BaseAsset, series.AmountScale
+	unit := scaleUnits(scale)
 	side, gains := "call", "rises above"
 	if contract.Kind == config.OptionPut {
 		side, gains = "put", "falls below"
@@ -376,17 +378,17 @@ func optionMetadata(cfg config.Config, contract config.OptionContract) Metadata 
 		DisplayLabel:       "USDC per " + base + " (premium)",
 		DisplayName:        contract.MarketSymbol(),
 		SettlementNote: "Cash-settled European " + side + " on " + base + " under MarginEngine v2, strike " + contract.Strike + " USDC per " + base +
-			", expiring " + series.ExpiryCode() + ". Orders are priced as the premium in USDC per " + base + " and sized in " + base +
-			" (desired_amount 1 signed as " + scale + " of the OptionAsset's 1e18 per " + base + "); a fill pays price x amount in USDC cash, buyer to writer, and the writer is margined by the engine. " +
+			", expiring " + series.ExpiryCode() + ". Orders are priced as the premium in USDC per " + base + " and sized in units of " + unit + " " + base +
+			" (desired_amount 1 is " + unit + " " + base + ", signed as " + scale + " of the OptionAsset's 1e18 per " + base + "); a fill pays price x " + unit + " x desired_amount in USDC cash, buyer to writer, and the writer is margined by the engine. " +
 			"At expiry it settles in USDC at the " + base + "-" + series.ExpiryCode() + " future's settlement price (its index fixing, or the vault's bounded fallback).",
 		UIPriceUnit:          "USDC per " + base + " (premium)",
-		UISizeUnit:           base,
+		UISizeUnit:           unit + " " + base,
 		UISideMeaning:        "BUY pays the premium and holds the " + side + ", which pays at expiry if " + base + " " + gains + " the strike; SELL writes it, receiving the premium against engine margin.",
 		EnginePriceUnit:      "USDC per " + base,
-		EngineAmountUnit:     base,
+		EngineAmountUnit:     unit + " " + base,
 		EngineSidePolicy:     "same_as_ui",
 		UIPriceToEngine:      "engine_price = ui_price",
-		UISizeToEngine:       "engine_amount = ui_size (signed as ui_size x " + scale + ")",
+		UISizeToEngine:       "engine_amount = ui_size (signed as ui_size x " + scale + ": ui_size x " + unit + " " + base + ")",
 		TradeModuleAddress:   strings.ToLower(strings.TrimSpace(cfg.CNGNPerpTradeModuleAddress)),
 		QuoteAssetAddress:    strings.ToLower(strings.TrimSpace(cfg.CNGNPerpCashAddress)),
 		MarginManagerAddress: series.ManagerAddress,
@@ -395,4 +397,15 @@ func optionMetadata(cfg config.Config, contract config.OptionContract) Metadata 
 		OptionType:           side,
 		VolFeedAddress:       series.VolFeedAddress,
 	}
+}
+
+// scaleUnits is how many whole base units one desired_amount signs as, at 18 decimals, written for a reader:
+// "1000000000000000000000" -> "1,000". A scale that is not a whole number of base units is written as the raw scale.
+func scaleUnits(scale string) string {
+	v, ok := new(big.Int).SetString(strings.TrimSpace(scale), 10)
+	one := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
+	if !ok || v.Sign() <= 0 || new(big.Int).Mod(v, one).Sign() != 0 {
+		return scale + "/1e18"
+	}
+	return groupThousands(new(big.Int).Quo(v, one).String())
 }
