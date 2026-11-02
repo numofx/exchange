@@ -492,10 +492,12 @@ def self_test() -> int:
 
   # vol: missing or stale, or under the threshold, fails
   assert vol_problem(None, 8 * e17) and vol_problem(5 * e17, 8 * e17) and vol_problem(e18, 8 * e17) is None
-  # SecurityModule: 30M cNGN both sides at 0.00072 is a $10,800 side, a 15% step $1,620
-  assert abs(sm_required_usd_linear(option_side_usd(30_000_000, 0.00072)) - 1_620) < 1e-6 and SM_MOVE == 0.15
-  assert v2p.sm_gate(3_250, option_side_usd(30_000_000, 0.00072), 1_604.84, "cNGN").ok
-  assert not v2p.sm_gate(3_250, option_side_usd(32_000_000, 0.00072), 1_604.84, "cNGN").ok
+  # SecurityModule at 2026-11-01 readings ($3,250, $3,131.41 held for both futures, index 0.000728199): the 2M launch cap
+  # needs $109.23 and fits; 2.2M needs $120.15 and does not, which is why 2M was chosen.
+  held = 1_623.84 + 1_507.57
+  assert abs(sm_required_usd_linear(option_side_usd(2_000_000, 0.000728199)) - 109.23) < 0.01 and SM_MOVE == 0.15
+  assert v2p.sm_gate(3_250, option_side_usd(2_000_000, 0.000728199), held, "both futures").ok
+  assert not v2p.sm_gate(3_250, option_side_usd(2_200_000, 0.000728199), held, "both futures").ok
   # pager, keeper and listing must name the option's own contracts
   assert pager_reads_vol({"volFeeds": [a(4).upper()]}, a(4)) and not pager_reads_vol({}, a(4))
   assert keeper_sweeps({"options": [a(3)]}, a(3)) and not keeper_sweeps({"futures": [a(3)]}, a(3))
