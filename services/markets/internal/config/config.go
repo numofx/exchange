@@ -142,6 +142,9 @@ type Config struct {
 	// FutureSeries (FUTURE_SERIES, a JSON array) are the series listed beside the one above: MarginEngine
 	// v2's <BASE>-<expiry> series. Each is read, admitted and matched through its own reader.
 	FutureSeries []FutureSeries
+	// OptionSeries (OPTION_SERIES, a JSON array) are the listed option expiries, each strike a call and a put market
+	// (option_series.go). Unset, no options are listed.
+	OptionSeries []OptionSeries
 	// The index-lag gate (api/index_lag.go). IndexStatusToken authenticates the publisher's spot
 	// reports on POST /v1/internal/index-status; empty disables the endpoint and the gate. With
 	// IndexLagGate on, a new perp order is refused while the latest good spot sample is more than
@@ -319,6 +322,14 @@ func Load() (Config, error) {
 	}
 	cfg.FutureSeries = series
 	if err := cfg.validateFutureStack(); err != nil {
+		return Config{}, err
+	}
+	optionSeries, err := parseOptionSeries(os.Getenv("OPTION_SERIES"))
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.OptionSeries = optionSeries
+	if err := cfg.validateOptionStack(); err != nil {
 		return Config{}, err
 	}
 	if err := cfg.validateEURCSpot(); err != nil {

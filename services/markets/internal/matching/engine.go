@@ -14,6 +14,7 @@ import (
 	"github.com/numofx/matching-backend/internal/config"
 	"github.com/numofx/matching-backend/internal/futures"
 	"github.com/numofx/matching-backend/internal/instruments"
+	"github.com/numofx/matching-backend/internal/options"
 	"github.com/numofx/matching-backend/internal/orders"
 )
 
@@ -31,6 +32,7 @@ type Engine struct {
 	// futures reads each listed series, keyed by futureSeriesKey: every gate, band, fee, margin and
 	// reduce-only read of a series goes through its own reader.
 	futures map[string]*futures.Reader
+	options map[string]*options.Reader
 	// marginRefusals holds back, and in time cancels, futures orders whose own account cannot carry a fill.
 	marginRefusals *futureMarginRefusals
 	alerts         *settlementAlerter
@@ -53,6 +55,7 @@ func NewEngine(cfg config.Config, pool *pgxpool.Pool) *Engine {
 		perpCloseOnly:  cfg.CNGNPerpCloseOnly,
 		perpGate:       newPerpTradingGate(cfg),
 		futures:        newFutureReaders(cfg),
+		options:        newOptionReaders(cfg),
 		marginRefusals: newFutureMarginRefusals(),
 		alerts:         newSettlementAlerter(cfg.AlertWebhookURL),
 		parks:          newParkTracker(),
@@ -108,6 +111,10 @@ func (e *Engine) Run(ctx context.Context) error {
 				}
 				// So is a future before the enable batch, after its last trade time, or while its manager is paused.
 				if instrument.IsFuture() && !e.futureOpen(ctx, instrument) {
+					continue
+				}
+				// And an option strike before its series is enabled, past last trade, paused, or without a live vol surface.
+				if instrument.IsOption() && !e.optionOpen(ctx, instrument) {
 					continue
 				}
 				e.tickInstrument(ctx, instrument)
@@ -301,6 +308,12 @@ func (e *Engine) tickInstrument(ctx context.Context, instrument instruments.Meta
 	switch {
 	case instrument.IsPerpetual():
 		if !e.perpMarginAllows(ctx, instrument, *candidate, executionFill.FillPrice, executionFill.FillAmount, fillFee) {
+			return
+		}
+	case instrument.IsOption():
+		// The buyer's premium and fee, the writer's isolated requirement, each against the engine (option.go). The spot
+		// check below would read the venue-wide quote asset, not this market's cash, and never the writer.
+		if !e.optionMarginAllows(ctx, instrument, *candidate, executionFill.FillPrice, executionFill.FillAmount, fillFee) {
 			return
 		}
 	case instrument.IsFuture():

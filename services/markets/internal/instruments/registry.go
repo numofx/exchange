@@ -148,6 +148,23 @@ func DefaultRegistry(cfg config.Config) *Registry {
 		}
 		items = append(items, futureMetadata(cfg, series))
 	}
+	for _, series := range cfg.OptionSeries {
+		// Unpriced: not listed, as a future (config.OptionSeries.TakerFeeBps).
+		if !series.Priced() {
+			slog.Error("option_series_unpriced_unlisted", "asset", series.AssetAddress, "expiry", series.Expiry,
+				"reason", "taker_fee_bps is not set")
+			continue
+		}
+		contracts, err := series.Contracts()
+		if err != nil {
+			// config.validateOptionStack refuses this at startup; never list a strike that does not encode.
+			slog.Error("option_series_unlisted", "asset", series.AssetAddress, "error", err.Error())
+			continue
+		}
+		for _, contract := range contracts {
+			items = append(items, optionMetadata(cfg, contract))
+		}
+	}
 
 	return NewRegistry(items)
 }
@@ -320,4 +337,62 @@ func groupThousands(value string) string {
 		out = append(out, value[i])
 	}
 	return string(out)
+}
+
+// optionMetadata is one strike and side of an OptionAsset series under MarginEngine v2, on the shared stack's
+// TradeModule and cash. Priced as the premium in USDC per base unit (Black-76's units: the engine marks it the same
+// way), sized in AmountScale base units; a fill pays price x amount of cash, buyer to writer. Orders are taken in
+// engine units only.
+func optionMetadata(cfg config.Config, contract config.OptionContract) Metadata {
+	series := contract.Series
+	base, scale := series.BaseAsset, series.AmountScale
+	side, gains := "call", "rises above"
+	if contract.Kind == config.OptionPut {
+		side, gains = "put", "falls below"
+	}
+	return Metadata{
+		Symbol:             contract.MarketSymbol(),
+		AssetAddress:       series.AssetAddress,
+		SubID:              contract.SubID(),
+		ContractType:       ContractTypeOption,
+		SettlementType:     "cash_settled_option",
+		BaseAssetSymbol:    base,
+		QuoteAssetSymbol:   "USDC",
+		ExpiryTimestamp:    series.Expiry,
+		LastTradeTimestamp: series.TradingEnds(),
+		TickSize:           "0.000000000000000001",
+		// The series' taker fee, in bps of the premium (price x amount), 0 maker: what the matcher already charges on
+		// the quote that moves, paid in the shared stack's cash to the TradeModule's feeRecipient.
+		TakerFeeBps:        series.TakerFee(),
+		MakerFeeBps:        0,
+		MinSize:            AmountStep,
+		ContractMultiplier: "1",
+		AmountScale:        scale,
+		QuotePrecision:     18,
+		PricingModel:       PricingModelLinear,
+		PriceSemantics:     PricingModelLinear,
+		DisplayPriceKind:   DisplayPriceDirect,
+		DisplaySemantics:   DisplayPriceDirect,
+		DisplayLabel:       "USDC per " + base + " (premium)",
+		DisplayName:        contract.MarketSymbol(),
+		SettlementNote: "Cash-settled European " + side + " on " + base + " under MarginEngine v2, strike " + contract.Strike + " USDC per " + base +
+			", expiring " + series.ExpiryCode() + ". Orders are priced as the premium in USDC per " + base + " and sized in " + base +
+			" (desired_amount 1 signed as " + scale + " of the OptionAsset's 1e18 per " + base + "); a fill pays price x amount in USDC cash, buyer to writer, and the writer is margined by the engine. " +
+			"At expiry it settles in USDC at the " + base + "-" + series.ExpiryCode() + " future's settlement price (its index fixing, or the vault's bounded fallback).",
+		UIPriceUnit:          "USDC per " + base + " (premium)",
+		UISizeUnit:           base,
+		UISideMeaning:        "BUY pays the premium and holds the " + side + ", which pays at expiry if " + base + " " + gains + " the strike; SELL writes it, receiving the premium against engine margin.",
+		EnginePriceUnit:      "USDC per " + base,
+		EngineAmountUnit:     base,
+		EngineSidePolicy:     "same_as_ui",
+		UIPriceToEngine:      "engine_price = ui_price",
+		UISizeToEngine:       "engine_amount = ui_size (signed as ui_size x " + scale + ")",
+		TradeModuleAddress:   strings.ToLower(strings.TrimSpace(cfg.CNGNPerpTradeModuleAddress)),
+		QuoteAssetAddress:    strings.ToLower(strings.TrimSpace(cfg.CNGNPerpCashAddress)),
+		MarginManagerAddress: series.ManagerAddress,
+		Enabled:              true,
+		OptionStrike:         contract.Strike,
+		OptionType:           side,
+		VolFeedAddress:       series.VolFeedAddress,
+	}
 }
