@@ -38,7 +38,9 @@ variable "desired_count_market_maker_options" {
 variable "mm_options_dry_run" {
   description = "The options maker logs the quotes it would sign and signs none. True until its quotes read right on mainnet."
   type        = bool
-  default     = true
+  # 2026-11-02 03:38-04:02 UTC in dry run on #44: ten strikes priced, quotes followed time decay each cycle and the
+  # 5-minute forward/vol publishes (ATM put 0.0000290 / 0.0000338 around 0.0000313), no error or halt. Live since.
+  default = false
 }
 
 locals {
