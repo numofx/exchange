@@ -121,6 +121,22 @@
       "nonce": 61,
       "hash": "0x6c2b8a5d978f40bf09ada768eb8bcbbe14bef8ee2a2e33cdd4be5683fac5a9bb",
       "note": "deploy-cngn-options-v2.s.sol: LyraVolFeed.transferOwnership (read from chain: the broadcast file mislabels its hashes)"
+    },
+    {
+      "nonce": 62,
+      "hash": "0x82d5cdee3840af792b4e5fd5a329f22a2fa8c643b1016f0a8bdfa933a84dab22",
+      "note": "Robert, from a wallet app, 2026-11-02 01:16 UTC: EIP-7702 type-4 tx, the deployer's account delegated to 0x63c0c19a\u2026e32b (MetaMask's delegator) and, in the same tx, execute(): 15,000 cNGN swapped for 10.920393 USDC. Owns nothing on chain since the options setup."
+    },
+    {
+      "nonce": 63,
+      "hash": "0x82d5cdee3840af792b4e5fd5a329f22a2fa8c643b1016f0a8bdfa933a84dab22",
+      "authorization": true,
+      "note": "Not a transaction: nonce 63 was used by nonce 62's EIP-7702 authorization (delegate 0x63c0c19a\u2026e32b, chain 8453), which recovers to the deployer."
+    },
+    {
+      "nonce": 64,
+      "hash": "0x11b03242baa6ddcbcdfe85f7082b4297948a8aed1e70ecbb9cc89c84349cbd43",
+      "note": "Robert, from a wallet app, 2026-11-02 01:16 UTC: execute() through the delegation, 20.920393 USDC swapped for 0.009154 ETH."
     }
   ]
 }
