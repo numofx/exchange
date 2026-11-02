@@ -101,7 +101,7 @@ interface IETradeModule {
  *   - an expiry the vol feed has not published cannot be shorted.
  *
  * Runs deploy-cngn-options-v2.s.sol's own deploy and executes the vault batches it writes (setup, then enable) as the
- * vault, so what is proven here is what the vault is asked to sign. Its margin parameters are CANDIDATES, not decided.
+ * vault, so what is proven here is what the vault is asked to sign. Its margin parameters are the launch values (2026-11-01).
  *
  * The cNGN index is held with mockCall (its heartbeat is 20 minutes); the forward feed is read live where no time
  * passes and held where it does. Requires BASE_RPC_URL.
