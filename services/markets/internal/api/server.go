@@ -22,6 +22,7 @@ import (
 	"github.com/numofx/matching-backend/internal/events"
 	"github.com/numofx/matching-backend/internal/futures"
 	"github.com/numofx/matching-backend/internal/instruments"
+	"github.com/numofx/matching-backend/internal/options"
 	"github.com/numofx/matching-backend/internal/orders"
 	"github.com/numofx/matching-backend/internal/wsauth"
 )
@@ -48,6 +49,7 @@ type Server struct {
 	// expiry alone): /v1/markets, order admission, reduce-only and /v1/positions read a series only
 	// through its own reader. Nil without a chain to read.
 	futureSeries map[string]*futures.Reader
+	optionSeries map[string]*options.Reader
 	// indexLag is the index-lag gate; nil without INDEX_STATUS_TOKEN.
 	indexLag *indexLagGate
 }
@@ -111,6 +113,8 @@ type marketPresentation struct {
 	FillBandLow      string             `json:"fill_band_low,omitempty"`
 	FillBandHigh     string             `json:"fill_band_high,omitempty"`
 	Future           *futureMarketState `json:"future,omitempty"`
+	// Option is an option strike's terms and whether it is matching now; absent for every other market.
+	Option *optionMarketState `json:"option,omitempty"`
 }
 
 type presentedOrder struct {
@@ -260,6 +264,7 @@ func NewServer(cfg config.Config, pool *pgxpool.Pool, registry *instruments.Regi
 		deposits:     newDepositService(cfg, signatures, pool),
 		perp:         newPerpStateReader(cfg),
 		futureSeries: newFutureSeriesReaders(cfg, registry),
+		optionSeries: newOptionSeriesReaders(cfg),
 		indexLag:     newIndexLagGate(cfg),
 		hub:          events.NewHub(pool, cfg, slog.Default()),
 		wsAuth:       wsauth.Verifier{Domain: cfg.WSAuthDomain, MaxTTL: cfg.WSAuthMaxTTL},
@@ -367,6 +372,9 @@ func (s *Server) handleMarkets(w http.ResponseWriter, r *http.Request) {
 		presentation := s.presentMarket(r.Context(), item)
 		if item.IsFuture() {
 			s.presentFuture(r.Context(), item, &presentation)
+		}
+		if item.IsOption() {
+			s.presentOption(r.Context(), item, &presentation)
 		}
 		if item.IsPerpetual() && s.perp != nil {
 			state, raw, err := s.perp.marketState(r.Context(), item)
@@ -691,6 +699,13 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 	if instrument, ok := s.instruments.ByAssetAndSubID(strings.ToLower(params.AssetAddress), params.SubID); ok && instrument.IsFuture() {
 		if status, msg := s.admitFuture(r.Context(), instrument, params); msg != "" {
 			slog.Info("order_submit_rejected_future", "order_id", params.OrderID, "market", instrument.Symbol, "error", msg)
+			writeJSON(w, status, map[string]string{"error": msg})
+			return
+		}
+	}
+	if instrument, ok := s.instruments.ByAssetAndSubID(strings.ToLower(params.AssetAddress), params.SubID); ok && instrument.IsOption() {
+		if status, msg := s.admitOption(r.Context(), instrument, params); msg != "" {
+			slog.Info("order_submit_rejected_option", "order_id", params.OrderID, "market", instrument.Symbol, "error", msg)
 			writeJSON(w, status, map[string]string{"error": msg})
 			return
 		}

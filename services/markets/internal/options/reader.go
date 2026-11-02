@@ -29,6 +29,7 @@ const (
 	sigAssetDetails           = "0xd21415a3" // assetDetails(address)
 	sigGetBalance             = "0x0806e640" // getBalance(uint256,address,uint256)
 	sigSubAccounts            = "0x779e5012" // subAccounts()
+	sigManager                = "0x52981457" // SubAccounts.manager(uint256)
 )
 
 // Reader reads one series (one OptionAsset at one expiry): its trading switches, cached for stateTTL, and its accounts.
@@ -205,6 +206,22 @@ func (r *Reader) IsolatedIM(ctx context.Context, strike *big.Int, isCall bool, b
 		return nil, fmt.Errorf("getIsolatedMargin: %w", err)
 	}
 	return signed(value), nil
+}
+
+// ManagerOf is the manager the account is under (SubAccounts.manager): only the option's engine can hold it.
+func (r *Reader) ManagerOf(ctx context.Context, account *big.Int) (string, error) {
+	ledger, err := r.ledger(ctx)
+	if err != nil {
+		return "", err
+	}
+	raw, err := r.call(ctx, ledger, sigManager+uintWord(account))
+	if err != nil {
+		return "", err
+	}
+	if len(raw) < 2+64 {
+		return "", errors.New("manager: short result")
+	}
+	return "0x" + raw[len(raw)-40:], nil
 }
 
 // market is the engine's market id for the option, from assetDetails (word 1), read once.

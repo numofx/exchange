@@ -135,8 +135,8 @@ func (s *Server) resolveIntegrationMarket(w http.ResponseWriter, r *http.Request
 	// The registry's exact-match lookup: an integrator asking for a pair that does not exist must
 	// hear so, not receive another pair's data under its ticker.
 	if item, deprecated, ok := s.instruments.ResolveIdentifier(tickerID); ok {
-		if item.IsFuture() {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": tickerID + " is a dated future; the integrations endpoints serve spot-style pairs only (see /v1/markets)"})
+		if item.IsFuture() || item.IsOption() {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": tickerID + " is a dated future or an option; the integrations endpoints serve spot-style pairs only (see /v1/markets)"})
 			return instruments.Metadata{}, false
 		}
 		if deprecated {
@@ -260,7 +260,7 @@ func (s *Server) handleIntegrationTickers(w http.ResponseWriter, r *http.Request
 	for _, market := range markets {
 		// Spot-pair tickers: a dated future's amount is contracts, not its base, and its notional is
 		// contracts x contract size, not price x amount. It is not one of these pairs.
-		if market.AssetAddress == "" || market.IsFuture() {
+		if market.AssetAddress == "" || market.IsFuture() || market.IsOption() {
 			continue
 		}
 		ticker, err := s.integrationTicker(r, market)

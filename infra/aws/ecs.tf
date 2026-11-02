@@ -120,6 +120,11 @@ locals {
       name  = "FUTURE_SERIES"
       value = jsonencode([for s in var.future_series : { for k, v in s : k => v if v != null }])
     }],
+    # OPTION_SERIES likewise: absent while empty, so listing options is the one apply that changes both task definitions.
+    length(var.option_series) == 0 ? [] : [{
+      name  = "OPTION_SERIES"
+      value = jsonencode([for s in var.option_series : { for k, v in s : k => v if v != null }])
+    }],
   )
 
   # EURC-USDC spot, for the api and the matcher alike, and only once the escrow exists. Absent rather than
