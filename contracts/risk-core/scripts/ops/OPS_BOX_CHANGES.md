@@ -26,6 +26,11 @@ Under the MM-key grant (`terraform apply -var ops_box_mm_key_grant=true` from `a
 - **Found:** the settlement canary had been red since 2026-11-01 00:31 UTC on #32's value floor (#32 retired and
   emptied 2026-10-31), alerting every 30 checks for 27 hours. #32 leaves the canary while its maker is stopped
   (ecs.tf `canary_accounts`), applied separately.
+- **Canary fix applied** from `8aa3e81` (execution td :41; down 03:52:39–03:54:04 UTC). From the new task's own stream
+  (`b0059627…`): `ok: true`, no failures of any kind, accounts 42,43,39,40,44. **No recovery alert was sent**: the
+  failure streak lived in the old process, and the new one only announced its start, so the alert channel's last word
+  on this is still "failing" — resolve it there by hand. The same gap CLAUDE.md records ("a recovery message that never
+  fired because the fix was a redeploy"); not fixed here.
 
 ## 2026-11-02 01:49 UTC: cNGN options OPEN (cngn-options-enable landed)
 
