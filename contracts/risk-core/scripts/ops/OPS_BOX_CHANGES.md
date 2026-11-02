@@ -5,6 +5,30 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-02 01:25 UTC: engine keeper v2 settles cNGN options, on its own checkout; pager on `5cae810`
+
+- **Why its own checkout.** `numo-engine-keeper-v2` ran from `/home/ec2-user/exchange-future-v2` at `840526a`, without
+  the `OPTION` sweep (exchange `370a063`), and that checkout is also the two v2 forward keepers': moving it and running
+  `pnpm install` there would change their code on their next restart. 840526a..5cae810 changes only that commit in
+  perp-keeper and nothing in `pnpm-lock.yaml`.
+- **SSM `c4bd5c13`** (Robert, from the laptop; refused unless no new checkout, no drop-in, `OPTION` unset, the keeper
+  healthy, the pager checkout clean and its move a fast-forward):
+  - `/home/ec2-user/exchange-keeper-v2` cloned at `5cae810` (detached); `pnpm install --frozen-lockfile --filter
+    perp-keeper...`, `@numo/kms-signer` and `perp-keeper` built.
+  - `/etc/numo/engine-keeper-v2.env` (backup `.bak-202611020125`): `OPTION=0xA6a05dC25127CecbC048C7e6CBE35e1c8e503821`
+    and `OPTION_SETTLE_WARN_SEC=7200` appended; it equals the repo's settings.
+  - Drop-in `numo-engine-keeper-v2.service.d/checkout.conf`: `WorkingDirectory=/home/ec2-user/exchange-keeper-v2/
+    services/perp-keeper`; ExecStart unchanged. Restarted.
+  - `/home/ec2-user/exchange-pager` `290a4b8` → `5cae810` (detached; 8685b4c and 3587fa1, the options checks). No restart:
+    the pager is a timer.
+- **After.** Keeper active from the new cwd, 0 restarts, 0 alerts; `/health` `lastPassOk: true`, `options:
+  [0xA6a0…3821]`, `optionsSettled: []`, `optionsAwaitingPrice: []`. Pager's first run on the new code: `options
+  cNGN-30NOV26: cap 0, open 0 cNGN; vol confidence 1.00`; state `volFeeds: [0xf2dB…C5E0]`, `lastRunOk: true`, 0 active.
+  `exchange-future-v2` untouched (the forward keepers still on 840526a).
+- **Undo.** `rm /etc/systemd/system/numo-engine-keeper-v2.service.d/checkout.conf; cp -p /etc/numo/engine-keeper-v2.env.bak-202611020125
+  /etc/numo/engine-keeper-v2.env; systemctl daemon-reload; systemctl restart numo-engine-keeper-v2`; pager:
+  `sudo -u ec2-user git -C /home/ec2-user/exchange-pager checkout --detach 290a4b8`.
+
 ## 2026-11-02 01:22 UTC: numo-vol-feeds live; the pager watches its relayer
 
 - **Relayer topped up** by Robert to 0.004090 ETH (+0.0025): ~29 days at the measured ~0.00014 ETH/day, to expiry.
