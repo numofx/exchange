@@ -5,7 +5,8 @@
 #   - cNGN options deployed (deploy-cngn-options-v2.s.sol): VOL_FEED in the env file from CNGN_OPTIONS_V2.json;
 #   - a KMS key of its own for the vol signer (not the index's, not the forward's), whose address the deploy took as
 #     VOL_SIGNER, with kms:Sign granted to the ops box's role (infra/aws), and its id in VOL_SIGNER_KMS_KEY_ID;
-#   - a funded relayer of its own at /numo/feeds/<VOL_RELAYER_SSM_NAME>, added to check_signer_balance.py;
+#   - a funded relayer at /numo/feeds/<VOL_RELAYER_SSM_NAME> that no other running process sends from (v1's forward
+#     relayer since 2026-11-02, numo-future-feeds disabled), watched by the pager's GAS_WATCH (vol-relayer);
 #   - the perp-feeds index publisher running on this box: its status file and step log are what degrade the surface;
 #   - a dry run first: DRY_RUN=true in the env file, then off.
 #
