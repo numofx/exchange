@@ -588,6 +588,22 @@ variable "forward_signer_kms_enabled" {
   default     = true
 }
 
+variable "vol_signer_kms_enabled" {
+  description = <<-EOT
+    Create the KMS signing key for the cNGN options' vol publisher (numo-vol-feeds on the ops box) and grant the ops
+    box's role Sign on it.
+
+    Its own key, NOT the index's or the forward's: the deploy script refuses a vol signer that signs either, and the
+    publisher refuses a raw key on mainnet. Creating the key authorises nothing: its address is the deploy script's
+    VOL_SIGNER, added to the vol feed at deploy. Created 2026-11-01 (alias/numo-exchange-vol-signer, key
+    f8207956-f587-4b40-a0ab-1430e5dd9a47, address 0x30b9c910777a0B08fCfD645bca4121bDDC12fbf5) for the cNGN options
+    deploy. Keep it true: a plan that resolves it to false would propose deleting a feed signer (prevent_destroy
+    refuses that).
+  EOT
+  type        = bool
+  default     = true
+}
+
 variable "ops_box_mm_key_grant" {
   description = <<-EOT
     Let the ops box read /numo/exchange/mm_private_key, and nothing else under /numo/exchange/ (see
