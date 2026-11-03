@@ -13,9 +13,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/numofx/matching-backend/internal/instruments"
-	"github.com/numofx/matching-backend/internal/pricing"
 )
 
 var ErrNotFound = errors.New("order not found")
@@ -87,70 +84,6 @@ type Repository struct {
 
 func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
-}
-
-func (r *Repository) BackfillLimitPriceTicks(ctx context.Context, registry *instruments.Registry) error {
-	if registry == nil {
-		return fmt.Errorf("instrument registry is required for limit price backfill")
-	}
-
-	const query = `
-select order_id, asset_address, sub_id, limit_price
-from active_orders
-where limit_price_ticks is null
-`
-
-	rows, err := r.pool.Query(ctx, query)
-	if err != nil {
-		return mapPGError(err)
-	}
-	defer rows.Close()
-
-	type missing struct {
-		OrderID      string
-		AssetAddress string
-		SubID        string
-		LimitPrice   string
-	}
-
-	var updates []missing
-	for rows.Next() {
-		var item missing
-		if err := rows.Scan(&item.OrderID, &item.AssetAddress, &item.SubID, &item.LimitPrice); err != nil {
-			return mapPGError(err)
-		}
-		updates = append(updates, item)
-	}
-	if err := rows.Err(); err != nil {
-		return mapPGError(err)
-	}
-
-	for _, item := range updates {
-		instrument, ok := registry.ByAssetAndSubID(strings.ToLower(item.AssetAddress), item.SubID)
-		if !ok {
-			slog.Warn(
-				"skip limit price tick backfill for unknown instrument",
-				"order_id", item.OrderID,
-				"asset_address", item.AssetAddress,
-				"sub_id", item.SubID,
-			)
-			continue
-		}
-		converter, err := pricing.NewConverter(instrument)
-		if err != nil {
-			return err
-		}
-		ticks, _, err := converter.Parse(item.LimitPrice)
-		if err != nil {
-			return fmt.Errorf("backfill price ticks for order %s: %w", item.OrderID, err)
-		}
-
-		if _, err := r.pool.Exec(ctx, `update active_orders set limit_price_ticks = $2 where order_id = $1`, item.OrderID, ticks); err != nil {
-			return mapPGError(err)
-		}
-	}
-
-	return nil
 }
 
 // WouldCross reports whether an incoming order at these ticks would take against a resting order

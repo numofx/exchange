@@ -12,7 +12,6 @@ import (
 	"github.com/numofx/matching-backend/internal/db"
 	"github.com/numofx/matching-backend/internal/futures"
 	"github.com/numofx/matching-backend/internal/instruments"
-	"github.com/numofx/matching-backend/internal/orders"
 )
 
 func main() {
@@ -45,12 +44,6 @@ func main() {
 	defer pool.Close()
 
 	registry := instruments.DefaultRegistry(cfg)
-	ordersRepo := orders.NewRepository(pool)
-	if err := ordersRepo.BackfillLimitPriceTicks(ctx, registry); err != nil {
-		slog.Error("backfill limit price ticks", "error", err)
-		os.Exit(1)
-	}
-
 	server := api.NewServer(cfg, pool, registry)
 	if err := server.Run(ctx); err != nil {
 		slog.Error("run api server", "error", err)
