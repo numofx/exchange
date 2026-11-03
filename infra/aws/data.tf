@@ -61,11 +61,32 @@ resource "aws_db_instance" "main" {
   performance_insights_enabled = true
   auto_minor_version_upgrade   = false # pin the minor: a silent bump breaks dump parity
 
+  # OS-level memory and process metrics. The 2026-11-03 crash could not be explained without them.
+  monitoring_interval = 60
+  monitoring_role_arn = aws_iam_role.rds_monitoring.arn
+
   deletion_protection       = true
   skip_final_snapshot       = false
   final_snapshot_identifier = "${var.name}-pg-final"
 
   tags = { Name = "${var.name}-pg" }
+}
+
+resource "aws_iam_role" "rds_monitoring" {
+  name = "${var.name}-rds-monitoring"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Action    = "sts:AssumeRole"
+      Principal = { Service = "monitoring.rds.amazonaws.com" }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "rds_monitoring" {
+  role       = aws_iam_role.rds_monitoring.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"
 }
 
 # --------------------------------------------------------- private service DNS
