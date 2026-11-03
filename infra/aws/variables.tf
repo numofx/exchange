@@ -68,7 +68,9 @@ variable "image_markets" {
   # cNGN-30NOV26 strikes closed (option_series). Rollback is 13384daafef9 with option_series = [], in one apply.
   # 2026-11-02: main 67f82e3 (option listing states the size unit, 1,000 cNGN; option market id read from assetDetails word 2).
   # Applied 2026-11-02 02:33 UTC: markets td :53, matcher td :52. Rollback is 682cb2e0f9e2, in one apply.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:67f82e3e4b7b"
+  # 2026-11-03: main e5567ec (a linear future's size wording follows its amount scale: 1,000 cNGN a unit on cNGN-30NOV26).
+  # Text only. Applied 2026-11-03 18:03 UTC: markets td :54, matcher td :53, migrate td :47. Rollback is 67f82e3e4b7b, in one apply.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:e5567ec40f97"
 }
 
 variable "image_execution" {
