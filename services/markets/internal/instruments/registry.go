@@ -280,6 +280,7 @@ func futureMetadata(cfg config.Config, series config.FutureSeries) Metadata {
 // one contract ContractSize base units, sized in whole base units of notional by default, VM in USDC.
 func linearFutureMetadata(cfg config.Config, series config.FutureSeries) Metadata {
 	base, size, scale := series.BaseAsset, series.ContractSize, series.ScaledAmount()
+	unit := futureSizeUnit(base, size, scale)
 	return Metadata{
 		Symbol:           series.MarketSymbol(),
 		AssetAddress:     series.AssetAddress,
@@ -306,15 +307,15 @@ func linearFutureMetadata(cfg config.Config, series config.FutureSeries) Metadat
 		DisplayLabel:       "USDC per " + base,
 		DisplayName:        series.MarketSymbol(),
 		SettlementNote: "Cash-settled " + base + " future on Base, under MarginEngine v2. One contract is " + groupThousands(size) + " " + base +
-			", and orders are sized in " + base + " of notional (desired_amount 1 signed as " + scale + " of the FutureAsset's 1e18 a contract); variation margin accrues in USDC at each mark, Δmark x contract size, and the series settles at a TWAP of the index over its fixing window. A fill carries its price and moves no quote leg; the chain refuses one outside the index band (fill_band_low to fill_band_high), and so does the venue.",
+			", and orders are sized in " + unit + " of notional (desired_amount 1 signed as " + scale + " of the FutureAsset's 1e18 a contract); variation margin accrues in USDC at each mark, Δmark x contract size, and the series settles at a TWAP of the index over its fixing window. A fill carries its price and moves no quote leg; the chain refuses one outside the index band (fill_band_low to fill_band_high), and so does the venue.",
 		UIPriceUnit:          "USDC per " + base,
-		UISizeUnit:           base + " of notional (" + groupThousands(size) + " a contract)",
+		UISizeUnit:           unit + " of notional (" + groupThousands(size) + " " + base + " a contract)",
 		UISideMeaning:        "BUY (long) gains when " + base + " strengthens against USD (more USDC per " + base + "); SELL (short) gains when it weakens.",
 		EnginePriceUnit:      "USDC per " + base,
-		EngineAmountUnit:     base + " of notional",
+		EngineAmountUnit:     unit + " of notional",
 		EngineSidePolicy:     "same_as_ui",
 		UIPriceToEngine:      "engine_price = ui_price",
-		UISizeToEngine:       "engine_amount = ui_size (signed as ui_size x " + scale + ": ui_size / " + size + " contracts)",
+		UISizeToEngine:       "engine_amount = ui_size (signed as ui_size x " + scale + ": " + futureSizeInContracts(scale) + ")",
 		TradeModuleAddress:   strings.ToLower(strings.TrimSpace(cfg.CNGNPerpTradeModuleAddress)),
 		QuoteAssetAddress:    strings.ToLower(strings.TrimSpace(cfg.CNGNPerpCashAddress)),
 		MarginManagerAddress: series.ManagerAddress,
@@ -322,6 +323,40 @@ func linearFutureMetadata(cfg config.Config, series config.FutureSeries) Metadat
 		FutureKind:           config.FutureKindLinear,
 		CloseOnly:            series.CloseOnly,
 	}
+}
+
+// futureSizeUnit names what desired_amount 1 is on a linear series: contract size x amount_scale / 1e18 of the base.
+// The default scale makes that one base token, written as the bare base; an overriding scale does not (production's
+// cNGN series signs 1e15 of a 1,000,000 cNGN contract, so its unit is 1,000 cNGN).
+func futureSizeUnit(base, size, scale string) string {
+	contractSize, okSize := new(big.Rat).SetString(strings.TrimSpace(size))
+	scaled, okScale := new(big.Rat).SetString(strings.TrimSpace(scale))
+	if !okSize || !okScale {
+		return base
+	}
+	unit := new(big.Rat).Mul(contractSize, scaled)
+	unit.Quo(unit, new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)))
+	switch {
+	case unit.Cmp(big.NewRat(1, 1)) == 0:
+		return base
+	case unit.IsInt():
+		return groupThousands(unit.Num().String()) + " " + base
+	default:
+		return strings.TrimRight(unit.FloatString(18), "0") + " " + base
+	}
+}
+
+// futureSizeInContracts is ui_size in contracts: a contract is 1e18 of the FutureAsset, so one unit is amount_scale / 1e18.
+func futureSizeInContracts(scale string) string {
+	scaled, ok := new(big.Rat).SetString(strings.TrimSpace(scale))
+	if !ok || scaled.Sign() <= 0 {
+		return "ui_size x " + scale + " / 1e18 contracts"
+	}
+	contracts := new(big.Rat).Quo(scaled, new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)))
+	if contracts.Num().Cmp(big.NewInt(1)) == 0 {
+		return "ui_size / " + contracts.Denom().String() + " contracts"
+	}
+	return "ui_size x " + contracts.RatString() + " contracts"
 }
 
 // groupThousands writes a whole number with thousands separators: 1000000 -> 1,000,000. Anything else
