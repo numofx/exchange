@@ -632,6 +632,10 @@ resource "aws_ecs_service" "markets" {
   desired_count   = var.desired_count_markets
   launch_type     = "FARGATE"
 
+  # The API listens only after its startup work (51s measured 2026-11-03) and the ALB gives up after 45s, so with no
+  # grace ECS killed 11 new tasks in a row during that day's rollout. Each retry repeated the startup queries.
+  health_check_grace_period_seconds = 180
+
   network_configuration {
     subnets         = aws_subnet.app[*].id
     security_groups = [aws_security_group.app.id]
