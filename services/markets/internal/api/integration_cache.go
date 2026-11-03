@@ -116,7 +116,8 @@ func integrationCacheKey(r *http.Request, params []string) string {
 			canonical.Set(name, value)
 		}
 	}
-	return r.URL.Path + "?" + canonical.Encode()
+	// With or without /v1 is one endpoint, so it is one entry: the cache exists to bound reads of the book.
+	return strings.TrimPrefix(r.URL.Path, "/v1") + "?" + canonical.Encode()
 }
 
 func (c *integrationCache) lookup(key string) (cachedIntegrationResponse, bool) {
