@@ -55,7 +55,7 @@ Enable gates (all read live, all required):
             engine account under maintenance is never auctioned (the perp keeper watches the SRM only)
   fills     markets-service refuses futures orders priced outside the band FutureAsset enforces on fills, so an
             out-of-band order is rejected before it matches instead of reverting at settlement. GET
-            {MARKETS_URL}/v1/markets must list the future (asset_address, sub_id) with fill_band_enforced: true and
+            {MARKETS_URL}/markets must list the future (asset_address, sub_id) with fill_band_enforced: true and
             fill_band_low / fill_band_high (cNGN per USDC, decimal strings), and those must equal the chain's band now,
             the index -/+ markIndexBand(expiry), within FILL_BAND_TOLERANCE. Fails until CNGN_FUTURE_* is set on markets-service.
 
@@ -476,9 +476,9 @@ def gate_rfq(chain: Chain, d: dict) -> Gate:
 
 
 def fills_gate(listing: dict | None, chain_low: float, chain_high: float, unit: str = "cNGN per USDC") -> Gate:
-  """markets-service's fill band for the future (its /v1/markets entry) against the chain's, in `unit`."""
+  """markets-service's fill band for the future (its /markets entry) against the chain's, in `unit`."""
   if listing is None:
-    return Gate("fills", False, "the future is not on markets-service /v1/markets: the listing must ship with its fill-band check")
+    return Gate("fills", False, "the future is not on markets-service /markets: the listing must ship with its fill-band check")
   if listing.get("fill_band_enforced") is not True:
     return Gate("fills", False, "markets-service lists the future but does not report fill_band_enforced: true")
   try:
@@ -501,9 +501,9 @@ def chain_fill_band(spot_word: int, band_word: int) -> tuple[float, float]:
 
 def gate_fills(chain: Chain, d: dict, markets_url: str) -> Gate:
   try:
-    body = http_json(f"{markets_url.rstrip('/')}/v1/markets")
+    body = http_json(f"{markets_url.rstrip('/')}/markets")
   except Exception as exc:  # noqa: BLE001 -- unreadable is a failed gate
-    return Gate("fills", False, f"markets-service /v1/markets unreadable: {str(exc)[:80]}")
+    return Gate("fills", False, f"markets-service /markets unreadable: {str(exc)[:80]}")
   entries = body.get("markets", body) if isinstance(body, dict) else body
   listing = next((e for e in entries or [] if str(e.get("asset_address", "")).lower() == d["future"].lower()
                   and str(e.get("sub_id", "")) == str(d["subId"])), None)

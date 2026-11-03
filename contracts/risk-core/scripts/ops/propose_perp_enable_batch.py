@@ -290,7 +290,7 @@ def gate_security_module(rpc_url: str, v: Venue, min_cash: float) -> Gate:
 def gate_quoter(rpc_url: str, v: Venue, markets_url: str, min_usd: float, owner: str | None) -> Gate:
   try:
     index = uint_at(call(rpc_url, v.index_feed, selector("getSpot"))) / 1e18
-    book = http_json(f"{markets_url}/v1/book?asset_address={v.perp.lower()}&sub_id=0")
+    book = http_json(f"{markets_url}/book?asset_address={v.perp.lower()}&sub_id=0")
   except Exception as exc:  # noqa: BLE001
     return Gate("quoter", False, f"book or index unreadable: {exc}")
   depth = {}

@@ -1,4 +1,4 @@
-# Access logs for the public ALB, so a question like "who reads /v1/integrations?" has an answer.
+# Access logs for the public ALB, so a question like "who reads /integrations?" has an answer.
 # markets-service logs a user agent only on order submissions and cancels, never on reads, and
 # nothing sits in front of the ALB, so until this nothing recorded a request path or a client.
 # Standard ALB access logs: one gzipped line per request (time, client ip:port, path, user agent,

@@ -207,7 +207,7 @@ def gate_services(art: dict, markets_url: str, keeper_health_url: str) -> list[G
   """Batch 5 only: the services that enforce the cNGN rules must be live with this escrow."""
   gates = []
   try:
-    markets = http_json(markets_url.rstrip("/") + "/v1/markets")
+    markets = http_json(markets_url.rstrip("/") + "/markets")
     perp = next((m for m in markets if m.get("contract_type") == "perpetual"), {})
     assets = (perp.get("perp") or {}).get("collateral_assets") or []
     listed = any(a.get("asset_address", "").lower() == art["escrow"].lower() for a in assets)

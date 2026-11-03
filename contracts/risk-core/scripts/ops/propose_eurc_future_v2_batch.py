@@ -320,7 +320,7 @@ def gate_fills(chain: Chain, d: dict, markets_url: str) -> Gate:
   try:
     listing = v2p.find_listing(v2p.markets(markets_url), d["future"], d["subId"])
   except Exception as exc:  # noqa: BLE001
-    return Gate("fills", False, f"markets-service /v1/markets unreadable: {str(exc)[:80]}")
+    return Gate("fills", False, f"markets-service /markets unreadable: {str(exc)[:80]}")
   wrong = listing_gate(listing, d["symbol"])
   if wrong:
     return wrong

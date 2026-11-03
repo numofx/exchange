@@ -282,7 +282,7 @@ api_request() {
 
 fetch_trade_count() {
   local trades
-  if ! api_request "GET" "/v1/trades?asset_address=$ASSET_ADDRESS&sub_id=$SUB_ID"; then
+  if ! api_request "GET" "/trades?asset_address=$ASSET_ADDRESS&sub_id=$SUB_ID"; then
     return 1
   fi
   trades="$API_RESP_BODY"
@@ -291,7 +291,7 @@ fetch_trade_count() {
 
 fetch_latest_trade() {
   local trades
-  if ! api_request "GET" "/v1/trades?asset_address=$ASSET_ADDRESS&sub_id=$SUB_ID"; then
+  if ! api_request "GET" "/trades?asset_address=$ASSET_ADDRESS&sub_id=$SUB_ID"; then
     return 1
   fi
   trades="$API_RESP_BODY"
@@ -308,7 +308,7 @@ determine_cross_prices() {
     return 0
   fi
   local book best_ask
-  if ! api_request "GET" "/v1/book?asset_address=$ASSET_ADDRESS&sub_id=$SUB_ID"; then
+  if ! api_request "GET" "/book?asset_address=$ASSET_ADDRESS&sub_id=$SUB_ID"; then
     return 1
   fi
   book="$API_RESP_BODY"
@@ -379,7 +379,7 @@ build_order_payload() {
 
 submit_order_file() {
   local order_file="$1"
-  if ! api_request "POST" "/v1/orders" "file" "$order_file"; then
+  if ! api_request "POST" "/orders" "file" "$order_file"; then
     return 1
   fi
   printf '%s' "$API_RESP_BODY"
@@ -388,7 +388,7 @@ submit_order_file() {
 fetch_order_status() {
   local order_id="$1"
   local response
-  if ! api_request "GET" "/v1/orders/$order_id"; then
+  if ! api_request "GET" "/orders/$order_id"; then
     return 1
   fi
   response="$API_RESP_BODY"
@@ -433,7 +433,7 @@ assert_not_resting_on_book() {
     return 0
   fi
   local book ids_csv
-  if ! api_request "GET" "/v1/book?asset_address=$ASSET_ADDRESS&sub_id=$SUB_ID"; then
+  if ! api_request "GET" "/book?asset_address=$ASSET_ADDRESS&sub_id=$SUB_ID"; then
     return 1
   fi
   book="$API_RESP_BODY"
@@ -450,7 +450,7 @@ cancel_order() {
   local reason="$3"
   local body
   body="$(jq -cn --arg owner "$owner_address" --arg nonce "$nonce" --arg reason "$reason" '{owner_address:$owner,nonce:$nonce,reason:$reason}')"
-  if ! api_request "POST" "/v1/orders/cancel" "json" "$body"; then
+  if ! api_request "POST" "/orders/cancel" "json" "$body"; then
     return 1
   fi
 }
@@ -459,7 +459,7 @@ preflight_cleanup_prefixed_orders() {
   local max_rounds="${1:-5}"
   local round book rows row owner nonce order_id
   for round in $(seq 1 "$max_rounds"); do
-    if ! api_request "GET" "/v1/book?asset_address=$ASSET_ADDRESS&sub_id=$SUB_ID"; then
+    if ! api_request "GET" "/book?asset_address=$ASSET_ADDRESS&sub_id=$SUB_ID"; then
       return 1
     fi
     book="$API_RESP_BODY"

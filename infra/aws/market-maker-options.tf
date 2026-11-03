@@ -73,7 +73,7 @@ resource "aws_ecs_task_definition" "market_maker_options" {
       { name = "MM_OPERATOR_MODE", value = "normal" },
       { name = "MM_DRY_RUN", value = tostring(var.mm_options_dry_run) },
 
-      # Options mode: every listed strike of the series, discovered from /v1/markets. MM_MARKET_SYMBOL only names the
+      # Options mode: every listed strike of the series, discovered from /markets. MM_MARKET_SYMBOL only names the
       # process in its config; each strike is its own market inside it.
       { name = "MM_OPTION_SERIES", value = "cNGN-30NOV26" },
       { name = "MM_MARKET_SYMBOL", value = "cNGN-30NOV26-0.00072-P" },

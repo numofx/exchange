@@ -5,7 +5,7 @@ resource "aws_lb" "main" {
   security_groups    = [aws_security_group.alb.id]
   subnets            = aws_subnet.public[*].id
 
-  # /v1/ws carries the live order book. The 60s default would sever idle sockets and
+  # /ws carries the live order book. The 60s default would sever idle sockets and
   # look like flapping clients rather than an LB setting.
   idle_timeout = 3600
 

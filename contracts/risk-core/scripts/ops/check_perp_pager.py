@@ -164,11 +164,11 @@ GAS_WARN_REPEAT_SEC = 6 * 3600
 DEFAULT_GAS_WATCH = "executor=0xF68ebcC8934B068655E1A4367Ba6C0e564678703:0.002,relayer=0xC9F1FfdEd29f7051538ad3a72729C3d07F920FDc:0.003"
 KEEPER_GAS_FLOOR_ETH = 0.002  # ~100 liquidation cycles at 3M gas and Base gas prices; the keeper idles at ~0 burn
 # The matcher: a dead one is a venue nobody can close on. It heartbeats service_heartbeats every 5s
-# and markets-service serves that on GET /v1/health (MATCHER_HEALTH_URL); older than MATCHER_DEAD_SEC
+# and markets-service serves that on GET /health (MATCHER_HEALTH_URL); older than MATCHER_DEAD_SEC
 # pages. Its position indexer (reduce-only ledger) reports the block it has applied up to; more than
 # MATCHER_INDEXER_LAG_SEC of Base blocks (2s) behind the pager's own head pages too: the match-time
 # chain read still guards every reduce-only fill, but the ledger the venue trusts is no longer current.
-DEFAULT_MATCHER_HEALTH_URL = "https://api.numofx.com/v1/health"
+DEFAULT_MATCHER_HEALTH_URL = "https://api.numofx.com/health"
 MATCHER_DEAD_SEC = 60
 MATCHER_INDEXER_LAG_SEC = 120
 # A deploy replaces the matcher stop-before-start (one task; exchange #235 is the overlap fix), so every deploy
@@ -278,7 +278,7 @@ def keeper_condition(health: dict | None, now: int, armed: bool = True, name: st
 def matcher_conditions(health: dict | None, head_block: int) -> list[Condition]:
   """Pages for a matcher that stopped heartbeating, and for a position indexer that fell behind."""
   if health is None:
-    return [Condition("matcher-dead", "cNGN matcher health unreadable (markets-service /v1/health down or unreachable): "
+    return [Condition("matcher-dead", "cNGN matcher health unreadable (markets-service /health down or unreachable): "
                       "if the matcher is down, nobody can close.")]
   matcher = health.get("matcher")
   if not matcher:

@@ -10,7 +10,7 @@
 #  5. perp-feeds --local-fixed-price, the keeper (live, /health on), the SecurityModule seed, a quote
 #  6. propose_perp_enable_batch.py --local checks every launch gate and writes the enable actions;
 #     they are applied as the vault (impersonated) -- the step that opens the market
-#  7. a taker crosses the quote and the position is read back from /v1/positions, then withdraws
+#  7. a taker crosses the quote and the position is read back from /positions, then withdraws
 #     100 USDC of margin by a signed WithdrawalModule action on the perp cash
 #
 # Everything runs in the background with logs and pids under $LOCAL_VENUE_DIR (default
@@ -216,7 +216,7 @@ step "services: execution :$EXEC_PORT, markets api :$API_PORT, matcher"
   PORT=$EXEC_PORT HOST=127.0.0.1 DRY_RUN=false WAIT_FOR_RECEIPT=true start execution env $PERP_EXEC_ENV node dist/index.js)
 (set -a; . "$DIR/markets.env"; set +a; start markets-api "$DIR/bin/markets-api"; start markets-matcher "$DIR/bin/markets-matcher")
 wait_for execution curl -sf http://127.0.0.1:$EXEC_PORT/healthz
-wait_for "markets api" curl -sf http://127.0.0.1:$API_PORT/v1/markets
+wait_for "markets api" curl -sf http://127.0.0.1:$API_PORT/markets
 
 # What perp-feeds does on Base after every sample: report spot to the venue's index-lag gate. The
 # local publisher runs at a fixed price and takes no samples, so this loop reports that price every
@@ -234,19 +234,19 @@ done
 REPORTER
   chmod +x "$DIR/bin/index-status-reporter.sh"
   start index-status-reporter "$DIR/bin/index-status-reporter.sh"
-  # The venue answers 204 to a report it recorded; the sample shows on /v1/markets only once the perp
+  # The venue answers 204 to a report it recorded; the sample shows on /markets only once the perp
   # block exists (after the index feed is published, below), which unified-rules.sh asserts.
   wait_for "index-status report accepted" sh -c "[ \"\$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'X-Numo-Index-Token: $INDEX_STATUS_TOKEN' -H 'content-type: application/json' -d '{\"at_ms\": '\$(( \$(date +%s) * 1000 ))', \"usdc_per_cngn\": \"0.000727802037845705\", \"sample_ok\": true}' http://127.0.0.1:$API_PORT/v1/internal/index-status)\" = 204 ]"
 fi
 
 VENUE="pnpm --dir $HERE exec tsx $HERE/venue.ts $DIR"
 if [ "$SPOT_ONLY" = 1 ]; then
-  step "spot regression: /v1/markets, a fill, a withdrawal"
-  curl -sf http://127.0.0.1:$API_PORT/v1/markets | python3 -c "
+  step "spot regression: /markets, a fill, a withdrawal"
+  curl -sf http://127.0.0.1:$API_PORT/markets | python3 -c "
 import json, sys
 markets = [m['market'] for m in json.load(sys.stdin)]
 assert markets == ['cNGN-USDC'], f'expected spot only, got {markets}'
-print('ok: /v1/markets serves spot only:', markets)"
+print('ok: /markets serves spot only:', markets)"
   $VENUE spot-account usdc-maker usdc 1000
   $VENUE spot-account cngn-taker cngn 200000
   # The UI contract is the engine's: a price in USDC per cNGN and a size in cNGN ($100 worth).
@@ -315,7 +315,7 @@ http.server.HTTPServer(("127.0.0.1", int(sys.argv[2])), H).serve_forever()
 PY
 start pager-capture python3 "$DIR/capture.py" "$DIR/pager-capture.log" 9780
 wait_for "pager capture" curl -sf http://127.0.0.1:9780/ready
-PAGER_ENV="RPC_URL=$RPC KEEPER_HEALTH_URL=http://127.0.0.1:$KEEPER_HEALTH_PORT/health MATCHER_HEALTH_URL=http://127.0.0.1:$API_PORT/v1/health PAGER_PROVIDER=pagerduty
+PAGER_ENV="RPC_URL=$RPC KEEPER_HEALTH_URL=http://127.0.0.1:$KEEPER_HEALTH_PORT/health MATCHER_HEALTH_URL=http://127.0.0.1:$API_PORT/health PAGER_PROVIDER=pagerduty
 PAGERDUTY_URL=http://127.0.0.1:9780/page PAGERDUTY_ROUTING_KEY=local PAGER_HEARTBEAT_URL=http://127.0.0.1:9780/hb
 PAGE_PREFIX=[LOCAL] PAGER_STATE_FILE=$DIR/pager-state.json PERP_INDEX_STATUS_FILE=$DIR/perp-index-status.json ALERT_WEBHOOK_URL="
 rm -f "$DIR/pager-state.json"
@@ -324,7 +324,7 @@ grep -q "GET /hb " "$DIR/pager-capture.log" || { echo "the pager did not ping it
 
 step "enable: every launch gate, then the enable actions as the vault"
 ACTIONS="$DIR/enable-actions.json"
-(cd "$ROOT/contracts/risk-core" && RPC_URL=$RPC KEEPER_HEALTH_URL=http://127.0.0.1:$KEEPER_HEALTH_PORT/health MATCHER_HEALTH_URL=http://127.0.0.1:$API_PORT/v1/health \
+(cd "$ROOT/contracts/risk-core" && RPC_URL=$RPC KEEPER_HEALTH_URL=http://127.0.0.1:$KEEPER_HEALTH_PORT/health MATCHER_HEALTH_URL=http://127.0.0.1:$API_PORT/health \
   PAGER_STATE_FILE="$DIR/pager-state.json" \
   MARKETS_URL=http://127.0.0.1:$API_PORT python3 scripts/ops/propose_perp_enable_batch.py --local \
   --stack "$V" --module "$MODULE_JSON" --write "$ACTIONS")
@@ -332,7 +332,7 @@ python3 -c "import json,sys;[print(a['to'], a['data']) for a in json.load(open(s
   while read -r TO DATA; do cast send "$TO" "$DATA" --from $VAULT --unlocked --rpc-url $RPC >/dev/null; done
 echo "cap=$(cast call "$PERP" 'totalPositionCap(address)(uint256)' "$SRM" --rpc-url $RPC)" \
   "module allowed=$(cast call $MATCHING 'allowedModules(address)(bool)' "$MODULE" --rpc-url $RPC)"
-wait_for "trading_enabled" sh -c "curl -sf http://127.0.0.1:$API_PORT/v1/markets | grep -q '\"trading_enabled\":true'"
+wait_for "trading_enabled" sh -c "curl -sf http://127.0.0.1:$API_PORT/markets | grep -q '\"trading_enabled\":true'"
 
 step "smoke: taker crosses the maker's offer"
 $VENUE cross
@@ -344,7 +344,7 @@ cat <<DONE
 
 Local venue up$([ "$UNIFIED" = 1 ] && echo " (UNIFIED: spot on the perp stack; run unified-rules.sh)"). Point trading-app at it:
   MARKETS_SERVICE_URL=http://127.0.0.1:$API_PORT
-  NEXT_PUBLIC_MARKETS_WS_URL=ws://127.0.0.1:$API_PORT/v1/ws
+  NEXT_PUBLIC_MARKETS_WS_URL=ws://127.0.0.1:$API_PORT/ws
   NEXT_PUBLIC_BASE_RPC_URL=$RPC
 (orders the app signs name chain 8453 in their domain; the local venue verifies against 31337)
 

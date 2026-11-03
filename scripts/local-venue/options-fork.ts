@@ -87,7 +87,7 @@ type Listing = {
   option: { strike: string; option_type: 'call' | 'put'; expiry_timestamp: number };
 };
 async function listing(symbol: string): Promise<Listing> {
-  const markets = (await (await fetch(`${MARKETS}/v1/markets`)).json()) as Listing[];
+  const markets = (await (await fetch(`${MARKETS}/markets`)).json()) as Listing[];
   const found = markets.find((m) => m.market === symbol);
   if (!found?.option) throw new Error(`${symbol} is not a listed option`);
   return found;
@@ -129,7 +129,7 @@ async function openAccount(label: string, usdcWhole: bigint) {
 
 type Row = { limit_price: string; desired_amount: string };
 async function book(symbol: string) {
-  const response = await fetch(`${MARKETS}/v1/book?symbol=${encodeURIComponent(symbol)}`);
+  const response = await fetch(`${MARKETS}/book?symbol=${encodeURIComponent(symbol)}`);
   if (!response.ok) throw new Error(`book ${symbol}: ${response.status}`);
   return (await response.json()) as { bids: Row[]; asks: Row[] };
 }
@@ -174,7 +174,7 @@ async function placeOrder(label: string, l: Listing, side: 'buy' | 'sell', price
     message: { subaccountId, nonce: orderNonce, module, data, expiry, owner, signer: owner },
   });
   const orderId = `taker-${crypto.randomUUID()}`;
-  const response = await fetch(`${MARKETS}/v1/orders`, {
+  const response = await fetch(`${MARKETS}/orders`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({

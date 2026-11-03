@@ -388,7 +388,7 @@ def gate_fills(d: dict, markets_url: str) -> Gate:
   try:
     listing = listing_for(v2p.markets(markets_url), d["option"])
   except Exception as exc:  # noqa: BLE001
-    return Gate("fills", False, f"markets-service /v1/markets unreadable: {str(exc)[:80]}")
+    return Gate("fills", False, f"markets-service /markets unreadable: {str(exc)[:80]}")
   if listing is None:
     return Gate("fills", False, f"markets-service does not list the option {d['option']}")
   return Gate("fills", True, f"markets-service lists the option as {listing.get('market')!r}")

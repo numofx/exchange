@@ -11,7 +11,7 @@
 # The mute only stops a NEW matcher-dead page, never one already paging, and the pager ignores one set more
 # than 900s ahead (MATCHER_MUTE_MAX_SEC), so a script killed mid-deploy cannot hide a dead matcher for long.
 # After the command it waits for the old matcher task to be STOPPED (wait-for-rollout.sh: desired status is
-# not stopped status) and for /v1/health to show a fresh heartbeat. Only then is the deploy over.
+# not stopped status) and for /health to show a fresh heartbeat. Only then is the deploy over.
 set -euo pipefail
 
 PROFILE="${AWS_PROFILE:-numo}"
@@ -19,7 +19,7 @@ REGION="${AWS_REGION:-us-east-1}"
 CLUSTER="${CLUSTER:-numo-exchange}"
 PARAM="${MUTE_PARAM:-/numo/pager/mute_matcher_dead_until}"
 MUTE_SEC="${MUTE_SEC:-600}"
-HEALTH_URL="${MATCHER_HEALTH_URL:-https://api.numofx.com/v1/health}"
+HEALTH_URL="${MATCHER_HEALTH_URL:-https://api.numofx.com/health}"
 FRESH_SEC="${FRESH_SEC:-30}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-300}"
 

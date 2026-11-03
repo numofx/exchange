@@ -149,7 +149,7 @@ variable "cash_asset_address" {
 }
 
 variable "ws_allowed_origins" {
-  description = "Origins allowed to open /v1/ws. Empty means same-origin only, which breaks the browser app."
+  description = "Origins allowed to open /ws. Empty means same-origin only, which breaks the browser app."
   type        = string
   default     = "trade.numofx.com,app.numofx.com"
 }
@@ -219,7 +219,7 @@ variable "eurc_spot_asset_address" {
 # never plan them off; blanking them takes spot and the future down with the perp.
 #
 # The asset is the perp's listing alone. Empty since 2026-10-21: the perp is delisted (open interest
-# zero, close-only since 2026-10-13), so /v1/markets no longer lists it, cNGN-PERP and USDCcNGN-PERP
+# zero, close-only since 2026-10-13), so /markets no longer lists it, cNGN-PERP and USDCcNGN-PERP
 # are an unknown market, and perp state, funding, the perp margin check and the position indexer are
 # off. markets-service accepts all four, the shared three without the asset, or none; it needs an
 # image with that rule (exchange markets/delist-perp) before an apply that leaves this empty, or it
@@ -245,7 +245,7 @@ variable "cngn_perp_srm_address" {
 }
 
 variable "deposit_manager_address" {
-  description = "DEPOSIT_MANAGER_ADDRESS: the manager /v1/deposits opens accounts under and deposits into. Empty keeps the perp SRM. The MarginEngine from 2026-10-14, MarginEngine v2 since step 4, with spot_margin_manager_address."
+  description = "DEPOSIT_MANAGER_ADDRESS: the manager /deposits opens accounts under and deposits into. Empty keeps the perp SRM. The MarginEngine from 2026-10-14, MarginEngine v2 since step 4, with spot_margin_manager_address."
   type        = string
   default     = "0x0705219a1594d5Fc5dC2573da4082cAf3e1B0950"
 }
@@ -273,7 +273,7 @@ variable "cngn_perp_collateral_address" {
 # has a maker again.
 #
 # Turning it off is blocked until numofx/trading-app#131 is closed: since exchange #227 a perp read
-# failure on /v1/positions is a 200 with the perp keys absent, which the trading app shows as a flat
+# failure on /positions is a 200 with the perp keys absent, which the trading app shows as a flat
 # perp. Harmless while no one can hold a perp; wrong for real holders once it reopens. Remove this
 # validation when #131 is merged.
 variable "cngn_perp_close_only" {
@@ -282,7 +282,7 @@ variable "cngn_perp_close_only" {
 
   validation {
     condition     = var.cngn_perp_close_only
-    error_message = "The perp cannot leave close-only until numofx/trading-app#131 is fixed: the trading app would show perp holders as flat whenever /v1/positions cannot read the perp. See the comment on this variable."
+    error_message = "The perp cannot leave close-only until numofx/trading-app#131 is fixed: the trading app would show perp holders as flat whenever /positions cannot read the perp. See the comment on this variable."
   }
 }
 
@@ -408,7 +408,7 @@ variable "option_series" {
 # the api; with the gate on, a new perp order is refused while that sample is more than
 # index_lag_max_bps from the on-chain index, or while no fresh sample exists. On in production since
 # 2026-10-04 (markets-service task definition 28 onward); set false to watch the reports on
-# /v1/markets (perp.index_lag) without refusing anything.
+# /markets (perp.index_lag) without refusing anything.
 variable "index_lag_gate" {
   type    = bool
   default = true

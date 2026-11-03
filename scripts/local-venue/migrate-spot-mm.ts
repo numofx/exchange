@@ -105,7 +105,7 @@ type PerpStack = { srm: Address; cash: Address; escrow: Address; module: Address
 
 /** The perp stack as the venue serves it: never typed in by hand. */
 async function perpStack(): Promise<PerpStack> {
-  const markets = (await (await fetch(`${MARKETS}/v1/markets`)).json()) as Record<string, unknown>[];
+  const markets = (await (await fetch(`${MARKETS}/markets`)).json()) as Record<string, unknown>[];
   const perp = markets.find((m) => m.contract_type === 'perpetual');
   if (!perp) throw new Error('the venue serves no perpetual');
   const p = perp.perp as Record<string, unknown>;
@@ -126,7 +126,7 @@ async function ledger(account: bigint, asset: Address, blockNumber?: bigint) {
   return client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'getBalance', args: [account, asset, 0n], blockNumber });
 }
 
-/** The venue's signed authentication frame (wsauth, order-history statement): what GET /v1/orders needs. */
+/** The venue's signed authentication frame (wsauth, order-history statement): what GET /orders needs. */
 async function authHeader() {
   const now = Math.floor(Date.now() / 1000);
   const frame = { address: owner.address.toLowerCase(), nonce: `${now}-${Math.random().toString(36).slice(2)}`, issued_at: now, expiry: now + 300 };
@@ -144,9 +144,9 @@ async function restingOrders(market: string | null = SPOT_SYMBOL, account?: bigi
   const resting: HistoryOrder[] = [];
   let before = '';
   for (let page = 0; page < 200; page++) {
-    const url = `${MARKETS}/v1/orders?limit=100${before ? `&before=${encodeURIComponent(before)}` : ''}`;
+    const url = `${MARKETS}/orders?limit=100${before ? `&before=${encodeURIComponent(before)}` : ''}`;
     const response = await fetch(url, { headers: { 'X-Numo-Auth': auth } });
-    if (!response.ok) throw new Error(`GET /v1/orders -> ${response.status} ${await response.text()}`);
+    if (!response.ok) throw new Error(`GET /orders -> ${response.status} ${await response.text()}`);
     const body = (await response.json()) as { orders: HistoryOrder[]; next_before?: string };
     // The venue's resting statuses: active on the book, or matching (a fill in flight). Spot only:
     // the perp maker quotes from the same wallet, and its orders are not this migration's to touch.
@@ -178,7 +178,7 @@ async function spotEscrows(account: bigint): Promise<{ manager: Address; usdc: A
   }
   if ((await listedEngines()).has(manager.toLowerCase())) {
     // From the cNGN-USDC listing: the perp, whose block named them before, is delisted since 2026-10-21.
-    const markets = (await (await fetch(`${MARKETS}/v1/markets`)).json()) as Record<string, unknown>[];
+    const markets = (await (await fetch(`${MARKETS}/markets`)).json()) as Record<string, unknown>[];
     const spot = markets.find((m) => m.contract_type === 'spot' && m.market === SPOT_SYMBOL);
     if (!(spot?.quote_asset_address && spot.asset_address)) throw new Error(`the venue serves no ${SPOT_SYMBOL} with its escrows`);
     return { manager, usdc: getAddress(spot.quote_asset_address as string), cngn: getAddress(spot.asset_address as string) };
@@ -218,7 +218,7 @@ async function cancel() {
       console.log(`dry run: would cancel ${order.order_id} (nonce ${order.nonce})`);
       continue;
     }
-    const response = await fetch(`${MARKETS}/v1/orders/cancel`, {
+    const response = await fetch(`${MARKETS}/orders/cancel`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ owner_address: owner.address.toLowerCase(), nonce: order.nonce, reason: 'unified_cutover', service: 'migrate-spot-mm' }),
@@ -262,7 +262,7 @@ async function withdrawOne(escrow: Address, token: Address, decimals: number, ac
   });
   const head = await client.getBlockNumber();
   const before = await client.readContract({ address: token, abi, functionName: 'balanceOf', args: [owner.address], blockNumber: head });
-  const response = await fetch(`${MARKETS}/v1/withdrawals`, {
+  const response = await fetch(`${MARKETS}/withdrawals`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -300,7 +300,7 @@ async function withdraw() {
 
 /** The EURC-USDC escrow and the token it wraps, from the listing; null while the venue lists no EURC-USDC. */
 async function eurcEscrow(): Promise<{ escrow: Address; token: Address } | null> {
-  const markets = (await (await fetch(`${MARKETS}/v1/markets`)).json()) as Record<string, unknown>[];
+  const markets = (await (await fetch(`${MARKETS}/markets`)).json()) as Record<string, unknown>[];
   const listing = markets.find((m) => m.contract_type === 'spot' && m.market === 'EURC-USDC');
   if (!listing?.asset_address) return null;
   const escrow = getAddress(listing.asset_address as string);
@@ -415,7 +415,7 @@ async function depositCngn() {
 
 /** The MarginEngine spot trades under (v1), from the spot listing: never typed in by hand. */
 async function spotEngine(): Promise<Address> {
-  const markets = (await (await fetch(`${MARKETS}/v1/markets`)).json()) as Record<string, unknown>[];
+  const markets = (await (await fetch(`${MARKETS}/markets`)).json()) as Record<string, unknown>[];
   const spot = markets.find((m) => m.contract_type === 'spot' && m.market === SPOT_SYMBOL);
   if (!spot?.margin_manager_address) throw new Error(`the venue serves no ${SPOT_SYMBOL} with a margin manager`);
   return getAddress(spot.margin_manager_address as string);
@@ -426,7 +426,7 @@ async function spotEngine(): Promise<Address> {
  * hand. --market picks the series; without it the venue must list exactly one.
  */
 async function futureStack(): Promise<{ cash: Address; engine: Address; symbol: string }> {
-  const markets = (await (await fetch(`${MARKETS}/v1/markets`)).json()) as Record<string, unknown>[];
+  const markets = (await (await fetch(`${MARKETS}/markets`)).json()) as Record<string, unknown>[];
   const futures = markets.filter((m) => m.future && m.contract_type === 'future');
   const symbols = futures.map((m) => String(m.market)).join(', ');
   const picked = MARKET === undefined ? futures : futures.filter((m) => m.market === MARKET);
@@ -484,7 +484,7 @@ async function engineAccount() {
 
 /** Every MarginEngine the venue lists a market under (v1 and v2), from the listings: never typed in by hand. */
 async function listedEngines(): Promise<Set<string>> {
-  const markets = (await (await fetch(`${MARKETS}/v1/markets`)).json()) as Record<string, unknown>[];
+  const markets = (await (await fetch(`${MARKETS}/markets`)).json()) as Record<string, unknown>[];
   return new Set(
     markets
       .filter((m) => (m.contract_type === 'spot' || m.contract_type === 'future') && m.margin_manager_address)
@@ -509,7 +509,7 @@ async function moveUsdc() {
   if (!from || !to || !units) throw new Error('move-usdc needs <from id> <to id> <usdc units (6dp)>');
   if (from === to) throw new Error('from and to are the same account');
   const engines = await listedEngines();
-  const markets = (await (await fetch(`${MARKETS}/v1/markets`)).json()) as Record<string, unknown>[];
+  const markets = (await (await fetch(`${MARKETS}/markets`)).json()) as Record<string, unknown>[];
   const spot = markets.find((m) => m.contract_type === 'spot' && m.market === SPOT_SYMBOL);
   if (!spot?.quote_asset_address) throw new Error(`the venue serves no ${SPOT_SYMBOL} with a quote asset`);
   // The USDC cash every engine market settles in, spot and futures alike.
@@ -561,7 +561,7 @@ async function moveUsdc() {
 
 /** The perp as the venue lists it: never typed in by hand. */
 async function perpListing() {
-  const markets = (await (await fetch(`${MARKETS}/v1/markets`)).json()) as Record<string, unknown>[];
+  const markets = (await (await fetch(`${MARKETS}/markets`)).json()) as Record<string, unknown>[];
   const m = markets.find((x) => x.contract_type === 'perpetual');
   if (!m) throw new Error('the venue serves no perpetual');
   return {
@@ -602,7 +602,7 @@ async function perpCancel() {
       console.log(`dry run: would cancel ${order.order_id} (nonce ${order.nonce})`);
       continue;
     }
-    const response = await fetch(`${MARKETS}/v1/orders/cancel`, {
+    const response = await fetch(`${MARKETS}/orders/cancel`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ owner_address: owner.address.toLowerCase(), nonce: order.nonce, reason: 'perp_maker_stopped', service: 'migrate-spot-mm' }),
@@ -633,7 +633,7 @@ async function perpClose() {
   const against = flags.find((f) => f.startsWith('--against='))?.slice('--against='.length);
   if (!against || !/^[0-9]+$/.test(against)) throw new Error('perp-close needs --against=<the account whose sell it crosses>');
   type Resting = { subaccount_id: string; limit_price: string; desired_amount: string; filled_amount: string };
-  const book = (await (await fetch(`${MARKETS}/v1/book?symbol=${encodeURIComponent(perp.market)}`)).json()) as { asks?: Resting[] };
+  const book = (await (await fetch(`${MARKETS}/book?symbol=${encodeURIComponent(perp.market)}`)).json()) as { asks?: Resting[] };
   const crossing = (book.asks ?? []).filter((a) => parsePrice(a.limit_price) <= price);
   const strangers = crossing.filter((a) => a.subaccount_id !== against);
   if (strangers.length) throw new Error(`${strangers.length} ask(s) at or under ${decimal18(price)} are not #${against}'s (${strangers.map((a) => `#${a.subaccount_id}`).join(', ')}): the buy could fill against them`);
@@ -657,7 +657,7 @@ async function perpClose() {
   }
   const signature = await signAction(PERP_ACCOUNT, nonce, perp.module, data, expiry);
   const orderId = `manual:perp-close-${PERP_ACCOUNT}-${nonce}`;
-  const response = await fetch(`${MARKETS}/v1/orders`, {
+  const response = await fetch(`${MARKETS}/orders`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({

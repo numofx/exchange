@@ -1,4 +1,4 @@
-# Sponsored deposits: POST /v1/deposits on markets-service, submitted by execution-service through the deployed
+# Sponsored deposits: POST /deposits on markets-service, submitted by execution-service through the deployed
 # DepositModule with the executor paying gas (numofx/exchange#147, #148). Off unless deposits_enabled: with it false
 # neither task definition gains a variable, so this file plans as no change.
 #
@@ -8,7 +8,7 @@
 # markets-service off first, wait for its old task to STOP (wait-for-rollout.sh), then execution-service.
 
 variable "deposits_enabled" {
-  description = "Serve POST /v1/deposits. Both services read it at boot."
+  description = "Serve POST /deposits. Both services read it at boot."
   type        = bool
   default     = true
 }
