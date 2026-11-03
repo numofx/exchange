@@ -72,7 +72,9 @@ variable "image_markets" {
   # Text only. Applied 2026-11-03 18:03 UTC: markets td :54, matcher td :53, migrate td :47. Rollback is 67f82e3e4b7b, in one apply.
   # 2026-11-03: main 7235bbc (the public API also served without /v1). Applied 2026-11-03 19:15 UTC: markets td :55, matcher td :54, migrate td :48,
   # with an 18-minute matcher outage and an RDS restart; rollout completed ~19:44. Rollback is e5567ec40f97, in one apply.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:7235bbc7f41b"
+  # 2026-11-03: main b2951be (219ac60: no limit price backfill at boot). Applied 20:16 UTC: markets td :56, matcher td :55, migrate td :49, 0 failed tasks. Every older image scans active_orders at boot, so a rollback
+  # to 7235bbc7f41b brings that back.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:b2951be2884d"
 }
 
 variable "image_execution" {
