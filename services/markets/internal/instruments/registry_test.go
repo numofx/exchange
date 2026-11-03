@@ -299,6 +299,67 @@ func TestTwoSpotMarketsDoNotCollideInAnyLookup(t *testing.T) {
 	}
 }
 
+// A listing's words for a size must follow the series' amount_scale, not assume desired_amount 1 is one base
+// token. Production's cNGN series overrides the default (infra/aws/variables.tf): 1e15 of a 1,000,000 cNGN
+// contract is 1,000 cNGN, and a client that read "cNGN of notional" would size 1,000 times too large.
+func TestLinearFutureSizeWordsFollowTheAmountScale(t *testing.T) {
+	for name, tc := range map[string]struct {
+		base, size, scale          string
+		sizeUnit, engineUnit, sign string
+		note                       string
+	}{
+		"production cNGN, overriding the scale": {
+			"cNGN", "1000000", "1000000000000000",
+			"1,000 cNGN of notional (1,000,000 cNGN a contract)", "1,000 cNGN of notional",
+			"engine_amount = ui_size (signed as ui_size x 1000000000000000: ui_size / 1000 contracts)",
+			"orders are sized in 1,000 cNGN of notional (desired_amount 1 signed as 1000000000000000 ",
+		},
+		"cNGN at the default scale": {
+			"cNGN", "1000000", "",
+			"cNGN of notional (1,000,000 cNGN a contract)", "cNGN of notional",
+			"engine_amount = ui_size (signed as ui_size x 1000000000000: ui_size / 1000000 contracts)",
+			"orders are sized in cNGN of notional (desired_amount 1 signed as 1000000000000 ",
+		},
+		"production EURC, whose override is the default": {
+			"EURC", "1000", "1000000000000000",
+			"EURC of notional (1,000 EURC a contract)", "EURC of notional",
+			"engine_amount = ui_size (signed as ui_size x 1000000000000000: ui_size / 1000 contracts)",
+			"orders are sized in EURC of notional (desired_amount 1 signed as 1000000000000000 ",
+		},
+		"a unit of a whole contract": {
+			"cNGN", "1000000", "1000000000000000000",
+			"1,000,000 cNGN of notional (1,000,000 cNGN a contract)", "1,000,000 cNGN of notional",
+			"engine_amount = ui_size (signed as ui_size x 1000000000000000000: ui_size / 1 contracts)",
+			"orders are sized in 1,000,000 cNGN of notional (",
+		},
+		"a unit that is part of a base token": {
+			"EURC", "1000", "500000000000000",
+			"0.5 EURC of notional (1,000 EURC a contract)", "0.5 EURC of notional",
+			"engine_amount = ui_size (signed as ui_size x 500000000000000: ui_size / 2000 contracts)",
+			"orders are sized in 0.5 EURC of notional (",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := linearFutureMetadata(config.Config{}, config.FutureSeries{
+				BaseAsset: tc.base, ContractSize: tc.size, AmountScale: tc.scale, Expiry: 1796047200,
+				Kind: config.FutureKindLinear, TakerFeeBps: registryFee(15),
+			})
+			if got.UISizeUnit != tc.sizeUnit {
+				t.Errorf("ui_size_unit %q, want %q", got.UISizeUnit, tc.sizeUnit)
+			}
+			if got.EngineAmountUnit != tc.engineUnit {
+				t.Errorf("engine_amount_unit %q, want %q", got.EngineAmountUnit, tc.engineUnit)
+			}
+			if got.UISizeToEngine != tc.sign {
+				t.Errorf("ui_size_to_engine %q, want %q", got.UISizeToEngine, tc.sign)
+			}
+			if !strings.Contains(got.SettlementNote, tc.note) {
+				t.Errorf("settlement_note %q lacks %q", got.SettlementNote, tc.note)
+			}
+		})
+	}
+}
+
 // v1's series and v2's cNGN and EURC series at one expiry are three markets: each found under its own
 // (asset, expiry) and its own symbol, v1's under the name the app and the makers route by.
 func TestSeriesAtOneExpiryAreDistinctMarkets(t *testing.T) {
