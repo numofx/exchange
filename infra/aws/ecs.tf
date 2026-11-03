@@ -213,7 +213,7 @@ resource "aws_ecs_task_definition" "markets" {
       # takes the live order book down without any error the API would surface.
       { name = "WS_ALLOWED_ORIGINS", value = var.ws_allowed_origins },
 
-      # Signed withdrawals (POST /v1/withdrawals): verified here, submitted by execution-service.
+      # Signed withdrawals (POST /withdrawals): verified here, submitted by execution-service.
       # EXECUTOR_WITHDRAW_TIMEOUT must outlast execution-service's WITHDRAWAL_RECEIPT_TIMEOUT_MS (30s).
       { name = "WITHDRAWAL_MODULE_ADDRESS", value = var.withdrawal_module_address },
       { name = "WITHDRAWAL_ASSET_ADDRESSES", value = local.withdrawal_asset_addresses },
@@ -281,7 +281,7 @@ resource "aws_ecs_task_definition" "matcher" {
     # The matcher answers its own /healthz (503 once its tick loop has stalled for two minutes); the
     # probe is the binary itself, the image having no shell. With minimum healthy 0 a failing probe
     # has ECS stop the task and start a fresh one. The pager watches the same heartbeat through
-    # markets-service /v1/health from outside the cluster (check_perp_pager.py, matcher-dead).
+    # markets-service /health from outside the cluster (check_perp_pager.py, matcher-dead).
     healthCheck = {
       command     = ["CMD", "/app/matcher", "-healthcheck"]
       interval    = 30
@@ -499,7 +499,7 @@ resource "aws_ecs_task_definition" "market_maker" {
       # pause before it drained six orders signed worstFee 0, which would have reverted
       # TM_FeeTooHigh against the new schedule.
       #
-      # This apply is also the restart that makes the bot SEE the schedule: it reads /v1/markets
+      # This apply is also the restart that makes the bot SEE the schedule: it reads /markets
       # once at construction and caches the MarketSpec, so the container paused before the
       # cutover held TakerFeeBps 0 and would have kept signing a zero bound indefinitely. Until
       # that cache is fixed, any future fee change needs a maker restart, not just a service

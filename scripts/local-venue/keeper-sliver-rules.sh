@@ -4,7 +4,7 @@
 #      outside liquidator), and the owner's Close sized from the pre-liquidation position ends flat
 #   2. the keeper's /health lists open auctions while one runs, and an auction open past
 #      AUCTION_OPEN_WARN_MS raises auction-open-<id> (run up.sh with AUCTION_OPEN_WARN_MS=20000 to see it)
-#   3. markets-service /v1/health carries the matcher's heartbeat; the pager reads it quietly while
+#   3. markets-service /health carries the matcher's heartbeat; the pager reads it quietly while
 #      the matcher runs, pages matcher-dead once the matcher is killed, and resolves when it is back
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -72,7 +72,7 @@ http.server.HTTPServer(("127.0.0.1", 9778), H).serve_forever()
 PY
 CAPTURE=$!
 trap 'kill $CAPTURE 2>/dev/null || true' EXIT
-PAGER() { (cd "$ROOT/contracts/risk-core" && RPC_URL=$RPC KEEPER_HEALTH_URL=http://127.0.0.1:9464/health MATCHER_HEALTH_URL=http://127.0.0.1:$API_PORT/v1/health \
+PAGER() { (cd "$ROOT/contracts/risk-core" && RPC_URL=$RPC KEEPER_HEALTH_URL=http://127.0.0.1:9464/health MATCHER_HEALTH_URL=http://127.0.0.1:$API_PORT/health \
   PAGER_PROVIDER=pagerduty PAGERDUTY_URL=http://127.0.0.1:9778/ PAGERDUTY_ROUTING_KEY=local PAGE_PREFIX="[LOCAL] " \
   PAGER_STATE_FILE="$DIR/pager-state.json" PERP_INDEX_STATUS_FILE="$DIR/perp-index-status.json" PAGER_HEARTBEAT_URL=http://127.0.0.1:9778/hb \
   ALERT_WEBHOOK_URL= python3 scripts/ops/check_perp_pager.py --stack "$DIR/venue.json"); }
@@ -96,16 +96,16 @@ $VENUE close-from liq "$PRE"
 step "2. the keeper's /health while idle"
 curl -s http://127.0.0.1:9464/health | python3 -c 'import sys,json; h=json.load(sys.stdin); print("keeper health: lastPassOk", h["lastPassOk"], "openAuctions", h.get("openAuctions"))'
 
-step "3. the matcher's heartbeat on /v1/health, and the pager on a dead matcher"
+step "3. the matcher's heartbeat on /health, and the pager on a dead matcher"
 curl -s http://127.0.0.1:8082/healthz | cut -c1-200; echo
-curl -s http://127.0.0.1:$API_PORT/v1/health | python3 -c 'import sys,json; h=json.load(sys.stdin); m=h["matcher"]; print("api /v1/health:", h["status"], "heartbeat age", round(m["age_seconds"],1), "s; indexer", m["details"].get("indexer"))'
+curl -s http://127.0.0.1:$API_PORT/health | python3 -c 'import sys,json; h=json.load(sys.stdin); m=h["matcher"]; print("api /health:", h["status"], "heartbeat age", round(m["age_seconds"],1), "s; indexer", m["details"].get("indexer"))'
 PAGER | grep -E "^matcher:|^ok:"
 [ "$(paged trigger matcher)" = 0 ] || { echo "FAIL: the pager paged a live matcher" >&2; exit 1; }
 echo "stopping the matcher"
 kill "$(cat "$DIR/pids/markets-matcher")"; rm -f "$DIR/pids/markets-matcher"
 sleep 70
 curl -s -o /dev/null -w "matcher /healthz after kill: %{http_code} (connection refused reads as 000)\n" http://127.0.0.1:8082/healthz || true
-curl -s http://127.0.0.1:$API_PORT/v1/health | python3 -c 'import sys,json; h=json.load(sys.stdin); print("api /v1/health:", h["status"], "heartbeat age", round(h["matcher"]["age_seconds"]), "s")'
+curl -s http://127.0.0.1:$API_PORT/health | python3 -c 'import sys,json; h=json.load(sys.stdin); print("api /health:", h["status"], "heartbeat age", round(h["matcher"]["age_seconds"]), "s")'
 PAGER | grep -E "^matcher:|^ok:"
 [ "$(paged trigger matcher-dead)" = 1 ] || { echo "FAIL: no matcher-dead page" >&2; cat "$PAGES" >&2; exit 1; }
 echo "ok: paged matcher-dead"

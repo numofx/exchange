@@ -29,7 +29,7 @@ variable "desired_count_market_maker_perp" {
 
 variable "mm_perp_quote_while_closed" {
   description = <<-EOT
-    Rest quotes while /v1/markets reports trading_enabled false. True for the launch: the enable
+    Rest quotes while /markets reports trading_enabled false. True for the launch: the enable
     gate needs a two-sided book of at least $1k within 2% of the index before the vault opens the
     market, and the matcher skips a closed market so the quotes only rest. False since step 22
     (2026-10-01), so a market the guardian closes is not quoted into.
@@ -93,7 +93,7 @@ resource "aws_ecs_task_definition" "market_maker_perp" {
       # 20 resting quotes replaced 15 s before expiry: 300 s keeps that at ~4 cancels/min against
       # the 30/min cap (60 s would be ~27/min and skip replaces).
       { name = "MM_ORDER_EXPIRY_SECONDS", value = "300" },
-      # The reference is the venue's own index (the /v1/markets perp block); no external anchor.
+      # The reference is the venue's own index (the /markets perp block); no external anchor.
       { name = "MM_ANCHOR_SOURCE_TYPE", value = "none" },
       { name = "MM_USDCCNGN_SPOT_EXTERNAL_ANCHOR_ENABLED", value = "false" },
       { name = "MM_MAX_ANCHOR_DEVIATION_BPS", value = "150" },

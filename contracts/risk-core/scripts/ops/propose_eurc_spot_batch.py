@@ -317,7 +317,7 @@ def gate_services(rpc_url: str, art: dict, markets_url: str, keeper_health_url: 
   without its largest LP."""
   gates = []
   try:
-    markets = http_json(markets_url.rstrip("/") + "/v1/markets")
+    markets = http_json(markets_url.rstrip("/") + "/markets")
     listing = next((m for m in markets if m.get("market") == SYMBOL), {})
     ok = str(listing.get("asset_address", "")).lower() == art["escrow"].lower() \
       and str(listing.get("margin_manager_address", "")).lower() == art["engine"].lower()

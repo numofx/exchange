@@ -128,8 +128,8 @@ step "services: execution :$EXEC_PORT, markets api :$API_PORT, matcher"
 (cd "$ROOT/services/execution" && set -a && . "$DIR/execution.env" && set +a && start execution node dist/index.js)
 (set -a; . "$DIR/markets.env"; set +a; start markets-api "$DIR/bin/markets-api"; start markets-matcher "$DIR/bin/markets-matcher")
 wait_for execution curl -sf http://127.0.0.1:$EXEC_PORT/healthz
-wait_for "markets api" curl -sf http://127.0.0.1:$API_PORT/v1/markets
-curl -sf http://127.0.0.1:$API_PORT/v1/markets | python3 -c '
+wait_for "markets api" curl -sf http://127.0.0.1:$API_PORT/markets
+curl -sf http://127.0.0.1:$API_PORT/markets | python3 -c '
 import json, sys
 opts = [m for m in json.load(sys.stdin) if m.get("contract_type") == "option"]
 assert opts, "no option markets listed"
@@ -170,17 +170,17 @@ MM_DRY_RUN=false
 ENV
 (set -a; . "$DIR/mm.env"; set +a; start mm-bot "$DIR/bin/mm-bot")
 two_sided() { # every listed strike has a bid and an ask resting
-  curl -sf http://127.0.0.1:$API_PORT/v1/markets | python3 -c '
+  curl -sf http://127.0.0.1:$API_PORT/markets | python3 -c '
 import json, sys, urllib.request
 syms = [m["market"] for m in json.load(sys.stdin) if m.get("contract_type") == "option"]
 for s in syms:
-    b = json.load(urllib.request.urlopen("http://127.0.0.1:'$API_PORT'/v1/book?symbol=" + s))
+    b = json.load(urllib.request.urlopen("http://127.0.0.1:'$API_PORT'/book?symbol=" + s))
     if not b.get("bids") and not b.get("asks"):
         sys.exit(1)
 '
 }
 wait_for "the maker to quote every strike" two_sided
-for S in $(curl -sf http://127.0.0.1:$API_PORT/v1/markets | python3 -c 'import json,sys;[print(m["market"]) for m in json.load(sys.stdin) if m.get("contract_type")=="option"]'); do
+for S in $(curl -sf http://127.0.0.1:$API_PORT/markets | python3 -c 'import json,sys;[print(m["market"]) for m in json.load(sys.stdin) if m.get("contract_type")=="option"]'); do
   printf '%-26s %s\n' "$S" "$($OPT best "$S")"
 done
 
@@ -194,10 +194,10 @@ cast rpc evm_mine --rpc-url $RPC >/dev/null
 # ("option state unreadable") and cancels its quotes.
 pulled() { ! two_sided_any; }
 two_sided_any() { # any strike still has a quote resting
-  curl -sf http://127.0.0.1:$API_PORT/v1/markets | python3 -c '
+  curl -sf http://127.0.0.1:$API_PORT/markets | python3 -c '
 import json, sys, urllib.request
 syms = [m["market"] for m in json.load(sys.stdin) if m.get("contract_type") == "option"]
-sys.exit(0 if any(json.load(urllib.request.urlopen("http://127.0.0.1:'$API_PORT'/v1/book?symbol=" + s)).get(k) for s in syms for k in ("bids", "asks")) else 1)
+sys.exit(0 if any(json.load(urllib.request.urlopen("http://127.0.0.1:'$API_PORT'/book?symbol=" + s)).get(k) for s in syms for k in ("bids", "asks")) else 1)
 '
 }
 wait_for "the maker to pull every strike after the feeds went stale" pulled

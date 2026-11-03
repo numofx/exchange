@@ -30,7 +30,7 @@ sub 26 ──[ 1. withdraw ]──▶ MM wallet ──[ 2. transfer ]──▶ r
 is `Matching.subAccountToOwner(26)`. Read the mapping, not the ERC-721.
 
 The CLI does not hard-code the escrow, cash or manager: it reads the cNGN spot market from the
-venue's `/v1/markets` and refuses to run unless `SubAccounts.manager(MM_SUBACCOUNT_ID)` is that
+venue's `/markets` and refuses to run unless `SubAccounts.manager(MM_SUBACCOUNT_ID)` is that
 market's manager, the escrow is whitelisted on it and the quote asset is its cash. Account 15, on
 the retired spot stack, is refused by name. Before 2026-10-04 this runbook used sub 15 and the
 wrapped USDC escrow `0x364058aF…`; both are retired.

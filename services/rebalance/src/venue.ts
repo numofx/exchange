@@ -3,7 +3,7 @@
  *
  * Every address here was read back off Base rather than copied: the gateway's `host()` matches the
  * SDK's Base config. The venue's escrows are NOT here -- they move with each cutover, so they are
- * read from /v1/markets and confirmed on chain (spot.ts). A WrappedERC20Asset only ever accepts the
+ * read from /markets and confirmed on chain (spot.ts). A WrappedERC20Asset only ever accepts the
  * exact ERC-20 it wraps, and depositing the wrong one leaves tokens with no ledger credit and no
  * way back, so the escrow's `wrappedAsset()` is checked against CNGN below on every deposit.
  */
@@ -41,7 +41,7 @@ export const SUBACCOUNTS_ABI = [{
   name: 'manager', type: 'function', stateMutability: 'view', inputs: [{ type: 'uint256' }], outputs: [{ type: 'address' }],
 }] as const;
 
-/** StandardManager reads used to confirm what /v1/markets reports. */
+/** StandardManager reads used to confirm what /markets reports. */
 export const MANAGER_ABI = [{
   name: 'assetDetails', type: 'function', stateMutability: 'view',
   inputs: [{ type: 'address' }],

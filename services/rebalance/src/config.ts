@@ -33,7 +33,7 @@ const schema = z.object({
   MM_SUBACCOUNT_ID: z.coerce.bigint().default(34n),
   /**
    * The venue API. The spot market's escrow, quote asset and manager are read from its
-   * /v1/markets, which serves the same Terraform variables the venue and the makers run on.
+   * /markets, which serves the same Terraform variables the venue and the makers run on.
    */
   VENUE_API_URL: z.string().url().default('https://api.numofx.com'),
   /**

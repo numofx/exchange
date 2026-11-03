@@ -133,7 +133,7 @@ node scripts/generate_trade_order.mjs > taker-order.json
 
 For sells, set `SIDE=sell`. `DESIRED_AMOUNT` stays a positive integer; the side is determined by `SIDE`, matching `TradeModule`'s `isBid` flag.
 
-The emitted JSON can be posted directly to the `markets-service` backend `/v1/orders` endpoint.
+The emitted JSON can be posted directly to the `markets-service` backend `/orders` endpoint.
 
 ### Deliverable FX future example
 

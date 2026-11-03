@@ -6,7 +6,7 @@ import { runCommand, type CliDeps } from './cli.js';
 import type { FetchQuote } from './orderbook.js';
 import type { FetchMarkets } from './spot.js';
 
-// The unified stack's spot contracts, as /v1/markets serves them.
+// The unified stack's spot contracts, as /markets serves them.
 const CNGN_ESCROW = '0x37c976bb5d4887a714ef19AF6B83e34fe2f37c98';
 const CASH = '0xA74E49b4Ed7cb176bc02ef4D8a1A3240C9aD4272';
 const MANAGER = '0xDE0423D0a1E15536265C9513d2e0c10DAb5835D4';

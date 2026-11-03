@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The unified account on the local venue (after up.sh --unified): spot runs on the perp stack, so one
 # account under the perp SRM holds USDC cash and cNGN, trades spot and perp, and all of it is margin.
-#   1. /v1/markets binds spot to the perp's cNGN escrow, the perp TradeModule, the perp cash and the perp SRM
+#   1. /markets binds spot to the perp's cNGN escrow, the perp TradeModule, the perp cash and the perp SRM
 #   2. a spot trade settles through the perp module: both legs move on the perp cash and escrow,
 #      checked against the spot fill contract, with the executor's gas headroom
 #   3. a spot sell that would overdraw cash (the engine's buyer underfunded) never fills: the venue
@@ -28,7 +28,7 @@ echo "index $INDEX cNGN/USDC = $PRICE USDC/cNGN"
 
 step "1. spot is bound to the perp stack, and the index-lag gate is enforced as on Base"
 $VENUE spot-market-check
-curl -sf http://127.0.0.1:8090/v1/markets | python3 -c "
+curl -sf http://127.0.0.1:8090/markets | python3 -c "
 import json, sys
 perp = next(m for m in json.load(sys.stdin) if m['contract_type'] == 'perpetual')
 lag = (perp.get('perp') or {}).get('index_lag') or {}

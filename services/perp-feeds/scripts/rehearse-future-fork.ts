@@ -304,12 +304,12 @@ async function main() {
   // propose_margin_engine_batch.py, in --local mode, rebuilds each batch from the deployment artifact and
   // reads every gate from the fork. It never proposes; the vault's side is played by impersonation.
   type Proposal = { gates: { name: string; ok: boolean; detail: string }[]; landed: boolean[] };
-  // markets-service's /v1/markets, stubbed: until `listed`, the future is absent (no futures path yet); then it is
+  // markets-service's /markets, stubbed: until `listed`, the future is absent (no futures path yet); then it is
   // listed with the band the venue would enforce, computed from the chain as markets-service would: the index -/+
   // markIndexBand(expiry). The enable gate's `fills` check compares that with its own read of the chain.
   let listed = false;
   const marketsServer = createServer(async (req, res) => {
-    if (!req.url?.startsWith('/v1/markets')) return void res.writeHead(404).end();
+    if (!req.url?.startsWith('/markets')) return void res.writeHead(404).end();
     const markets = [];
     if (listed) {
       const index = invert(spot);
@@ -518,7 +518,7 @@ async function main() {
   // ---- stub book and webhook -----------------------------------------------------------------
   let book: { bids: Order[]; asks: Order[] } | null = null;
   const bookServer = createServer((req, res) => {
-    if (!book || !req.url?.startsWith('/v1/book')) {
+    if (!book || !req.url?.startsWith('/book')) {
       res.writeHead(404).end();
       return;
     }
@@ -667,7 +667,7 @@ async function main() {
           FUTURE_ARTIFACT: join(LOCAL, 'MARGIN_ENGINE.json'),
           FUTURE_POOL_RESERVE_CNGN: '20000000',
           PAGER_STATE_FILE: join(OUT, 'pager-state.json'),
-          MATCHER_HEALTH_URL: `http://127.0.0.1:${BOOK_PORT}/v1/health`,
+          MATCHER_HEALTH_URL: `http://127.0.0.1:${BOOK_PORT}/health`,
           ALERT_WEBHOOK_URL: `http://127.0.0.1:${HOOK_PORT}/hook`,
           ...extra,
         },

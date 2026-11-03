@@ -474,7 +474,7 @@ async function placeOrderDetailed(
     subaccount_id: subaccountId,
   };
   const orderId = `${market.label}-${crypto.randomUUID()}`;
-  const response = await fetch(`${MARKETS}/v1/orders`, {
+  const response = await fetch(`${MARKETS}/orders`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -530,7 +530,7 @@ async function closeFrom(label: string, position: bigint, expectation: 'accepted
 }
 
 async function orderStatus(orderId: string): Promise<{ status: string; filled_amount: string; cancel_reason: string; reduce_only: boolean }> {
-  const response = await fetch(`${MARKETS}/v1/orders/${orderId}`);
+  const response = await fetch(`${MARKETS}/orders/${orderId}`);
   if (!response.ok) throw new Error(`order ${orderId}: ${response.status}`);
   return (await response.json()) as { status: string; filled_amount: string; cancel_reason: string; reduce_only: boolean };
 }
@@ -567,7 +567,7 @@ async function assertFlat(label: string, orderIds: string[]) {
 async function waitForPosition(label: string) {
   const subaccountId = readAccounts()[label];
   for (let attempt = 0; attempt < 60; attempt++) {
-    const response = await fetch(`${MARKETS}/v1/positions?subaccount_id=${subaccountId}`);
+    const response = await fetch(`${MARKETS}/positions?subaccount_id=${subaccountId}`);
     const body = (await response.json()) as { positions?: unknown[] };
     if ((body.positions?.length ?? 0) > 0) {
       console.log(`${label} position:`, JSON.stringify(body.positions));
@@ -845,7 +845,7 @@ async function perpWithdraw(label: string, whole: bigint, expectation: 'accepted
   });
   const before = await client.readContract({ address: USDC, abi, functionName: 'balanceOf', args: [owner] });
   const cashBefore = await balance(subaccountId, getAddress(venue.cash));
-  const response = await fetch(`${MARKETS}/v1/withdrawals`, {
+  const response = await fetch(`${MARKETS}/withdrawals`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -898,7 +898,7 @@ async function spotWithdraw(label: string, whole: bigint) {
     message: { subaccountId: BigInt(subaccountId), nonce: withdrawalNonce, module: SPOT.withdrawalModule, data, expiry, owner, signer: owner },
   });
   const before = await client.readContract({ address: USDC, abi, functionName: 'balanceOf', args: [owner] });
-  const response = await fetch(`${MARKETS}/v1/withdrawals`, {
+  const response = await fetch(`${MARKETS}/withdrawals`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -974,9 +974,9 @@ switch (command) {
     await spotCross(parsePrice(args[0] ?? '0.000728'), BigInt(args[1] ?? '137400'));
     break;
   case 'spot-market-check': {
-    // spot-market-check: /v1/markets binds the spot market to the stack venue.json says it should.
+    // spot-market-check: /markets binds the spot market to the stack venue.json says it should.
     const expected = { asset: SPOT.asset, module: SPOT.module, quote: SPOT.wrappedUsdc, manager: venue.unified ? SPOT.srm : null };
-    const markets = (await (await fetch(`${MARKETS}/v1/markets`)).json()) as Record<string, string>[];
+    const markets = (await (await fetch(`${MARKETS}/markets`)).json()) as Record<string, string>[];
     // By symbol, not the first spot: EURC-USDC is a second spot market, on another escrow.
     const spot = markets.find((m) => m.contract_type === 'spot' && m.market === 'cNGN-USDC');
     if (!spot) throw new Error('no cNGN-USDC spot market served');

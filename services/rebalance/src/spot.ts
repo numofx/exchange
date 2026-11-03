@@ -4,7 +4,7 @@
  * These used to be constants here, and the 2026-10-04 unified cutover moved spot onto the perp
  * stack without them: the rebalance kept reading the retired escrows and defaulting to account 15,
  * so a `deposit --execute` would have credited cNGN to an account the market maker no longer
- * trades. /v1/markets is served from the same Terraform variables the venue and the makers run
+ * trades. /markets is served from the same Terraform variables the venue and the makers run
  * on, so reading it here means the next cutover moves this too.
  *
  * The API names the contracts; the chain has the final say. A deposit target taken on trust from
@@ -34,8 +34,8 @@ type Market = {
 export type FetchMarkets = (apiUrl: string) => Promise<Market[]>;
 
 export const fetchMarkets: FetchMarkets = async (apiUrl) => {
-  const response = await fetch(new URL('/v1/markets', apiUrl), { signal: AbortSignal.timeout(10_000) });
-  if (!response.ok) throw new Error(`GET /v1/markets returned ${response.status}`);
+  const response = await fetch(new URL('/markets', apiUrl), { signal: AbortSignal.timeout(10_000) });
+  if (!response.ok) throw new Error(`GET /markets returned ${response.status}`);
   return (await response.json()) as Market[];
 };
 

@@ -35,7 +35,7 @@ export async function fetchBook(
   nowSec: number,
   fetchImpl: typeof fetch = fetch,
 ): Promise<RestingOrder[]> {
-  const url = `${marketsServiceUrl}/v1/book?asset_address=${asset}&sub_id=${subId}`;
+  const url = `${marketsServiceUrl}/book?asset_address=${asset}&sub_id=${subId}`;
   const response = await fetchImpl(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(8_000) });
   if (!response.ok) throw new Error(`markets-service book returned ${response.status}`);
   return parseBook((await response.json()) as BookResponse, nowSec);

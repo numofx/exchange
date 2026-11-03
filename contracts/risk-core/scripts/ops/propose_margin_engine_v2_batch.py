@@ -53,7 +53,7 @@ v1-close-only gates:
             TradeModule): holders have somewhere to go
   venue     markets-service lists v1's future close-only (future.close_only: true) and no listing still sends accounts
             to v1 (margin_manager_address): new spot deposits default to v2
-  bids      no account under v1 (SubAccounts.manager) rests a buy on a spot book (/v1/book of each spot listing): its
+  bids      no account under v1 (SubAccounts.manager) rests a buy on a spot book (/book of each spot listing): its
             fill would raise the escrow's position under v1 over the new cap and revert. The makers' accounts
             (MM_SUBACCOUNT_IDS, default #34 and #36) are refused under v1 even while they rest nothing: a paused maker
             resumes. The makers move to v2 accounts first
@@ -335,7 +335,7 @@ def gate_fills(chain: Chain, d: dict, markets_url: str) -> Gate:
   try:
     listing = find_listing(markets(markets_url), d["future"], d["subId"])
   except Exception as exc:  # noqa: BLE001
-    return Gate("fills", False, f"markets-service /v1/markets unreadable: {str(exc)[:80]}")
+    return Gate("fills", False, f"markets-service /markets unreadable: {str(exc)[:80]}")
   try:
     low, high = chain_fill_band(chain.word(d["indexFeed"], selector("getSpot")),
                                 chain.word(d["future"], selector("markIndexBand") + word_uint(int(d["expiry"]))))
@@ -345,7 +345,7 @@ def gate_fills(chain: Chain, d: dict, markets_url: str) -> Gate:
 
 
 def markets(markets_url: str) -> list[dict]:
-  body = http_json(f"{markets_url.rstrip('/')}/v1/markets")
+  body = http_json(f"{markets_url.rstrip('/')}/markets")
   return (body.get("markets", body) if isinstance(body, dict) else body) or []
 
 
@@ -499,7 +499,7 @@ def venue_gate(entries: list[dict], v1d: dict) -> Gate:
   listing = find_listing(entries, v1d["future"], v1d["subId"])
   problems = []
   if listing is None:
-    problems.append("v1's future is not on /v1/markets: holders could not close it on the venue")
+    problems.append("v1's future is not on /markets: holders could not close it on the venue")
   elif (listing.get("future") or {}).get("close_only") is not True:
     problems.append("v1's future is listed but not close-only (future.close_only)")
   still = [str(e.get("market") or e.get("asset_address")) for e in entries
@@ -530,7 +530,7 @@ def v1_bids_gate(bids: list[tuple[str, str, str]], makers: list[str], managers: 
 
 
 def resting_buys(market: str, book: dict) -> list[tuple[str, str, str]]:
-  """(market, account, order id) for each active buy of base in a /v1/book, by its side, not the list it sits in."""
+  """(market, account, order id) for each active buy of base in a /book, by its side, not the list it sits in."""
   return [(market, str(o["subaccount_id"]), str(o.get("order_id", ""))) for o in (book.get("bids") or []) + (book.get("asks") or [])
           if o.get("side") == "buy" and o.get("status", "active") == "active"]
 
@@ -540,7 +540,7 @@ def gate_v1_bids(chain: Chain, v1d: dict, entries: list[dict], markets_url: str)
   for e in entries:
     if e.get("contract_type") != "spot":
       continue
-    bids += resting_buys(e["market"], http_json(f"{markets_url.rstrip('/')}/v1/book?symbol={e['market']}"))
+    bids += resting_buys(e["market"], http_json(f"{markets_url.rstrip('/')}/book?symbol={e['market']}"))
   makers = maker_accounts()
   managers = {acc: "0x" + chain.call(v1p.SUB_ACCOUNTS, selector("manager") + word_uint(int(acc)))[24:64]
               for acc in {*makers, *(b[1] for b in bids)}}
@@ -573,10 +573,10 @@ def gate_close_only(chain: Chain, d: dict, v1d: dict, vault: str) -> list[Gate]:
     gates.append(venue_gate(entries, v1d))
   except Exception as exc:  # noqa: BLE001
     entries = None
-    gates.append(Gate("venue", False, f"markets-service /v1/markets unreadable: {str(exc)[:80]}"))
+    gates.append(Gate("venue", False, f"markets-service /markets unreadable: {str(exc)[:80]}"))
   try:
     gates.append(gate_v1_bids(chain, v1d, entries, markets_url) if entries is not None
-                 else Gate("bids", False, "markets-service /v1/markets unreadable"))
+                 else Gate("bids", False, "markets-service /markets unreadable"))
   except Exception as exc:  # noqa: BLE001
     gates.append(Gate("bids", False, f"spot books or their accounts unreadable: {str(exc)[:80]}"))
   gates.append(close_only_caps_gate([(what, chain.word(a, selector("totalPositionCap") + v1),
