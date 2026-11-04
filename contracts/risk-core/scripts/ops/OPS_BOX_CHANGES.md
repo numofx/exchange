@@ -1128,3 +1128,21 @@ checks accounts 26 and 24 under the perp SRM `0xDE0423D0…`, pins `EXPECTED_NET
   equal `main`'s current versions.
 - `check_settlement_canary.py` was untracked in the box's checkout (it was hand-copied there; the
   version it replaced dated from 2026-09-10).
+
+## 2026-11-04: services moved off the markets API's /v1 paths
+
+The public `/v1` routes were deleted from markets-service, so everything on this box that called them was moved first.
+Each checkout stays on its pinned commit: `main` carries the same path change (`065211e`), so a later move to `main`
+needs nothing from here, except that the `spot.ts` edit below must be discarded first or `git checkout` will refuse.
+
+- `exchange-feeds`, `exchange-future-v2`, `exchange-vol`: `services/perp-feeds/dist/book.js` now calls `/book`. `dist` is
+  gitignored, so the checkouts stay clean, and a rebuild from a pinned commit would restore `/v1/book` and fail with 404.
+  Backups are `book.js.bak-20261104` beside each. `numo-perp-feeds`, `numo-vol-feeds` and both
+  `numo-future-feeds-v2@` instances were restarted one at a time at 16:48-16:49 UTC.
+- `exchange-rebalance`: `services/rebalance/src/spot.ts` calls `/markets`. This leaves the checkout's tree dirty by one
+  file. Backup is `/home/ec2-user/spot.ts.bak-20261104`. No restart: the timer runs it from source.
+- `/etc/numo/perp-pager.env`: added `MATCHER_HEALTH_URL=https://api.numofx.com/health`, because the pinned
+  `check_perp_pager.py` defaults to `/v1/health`. Backup is `perp-pager.env.bak-20261104`.
+
+Not changed: `INDEX_STATUS_PUSH_URL` keeps `/v1/internal/index-status`, which is still served. `exchange-perp`'s
+`dist/book.js` still says `/v1/book`, because no running service uses that checkout's feeds.

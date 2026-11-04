@@ -21,7 +21,8 @@ variable "image_market_maker_eurc" {
   description = "The EURC-USDC market maker's mm-bot image, tagged by git SHA: the first market-maker build with MM_ANCHOR_SOURCE_TYPE=chainlink, or later. Empty creates nothing."
   type        = string
   # market-maker main with #43 (the chainlink anchor); quoting since 2026-10-26.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:54d7ae630278"
+  # 2026-11-04: 54d7ae630278 plus the /v1 path change only (market-maker tag deploy/mm-*-no-v1), so no strategy change.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:be002527c1b9"
 }
 
 variable "mm_eurc_subaccount_id" {
