@@ -65,12 +65,12 @@ migrations/   database schema (incl. market_events table + triggers)
   migration 000014 backfilled the fee wherever it was exactly known.
 - **Pruning keeps orders that traded.** The API prunes `cancelled` and `expired` orders older than
   `ORDERS_PRUNE_HORIZON` (default 30 days) unless they have fills: the order row is the only link from
-  a fill to its owner, which `GET /v1/fills` and `filled_quote` depend on. `filled` orders are never
+  a fill to its owner, which `GET /fills` and `filled_quote` depend on. `filled` orders are never
   pruned.
 
 ## Signed withdrawals
 
-`POST /v1/withdrawals` lets a trader withdraw from a subaccount held by Matching, which is every account the app
+`POST /withdrawals` lets a trader withdraw from a subaccount held by Matching, which is every account the app
 creates. The trader signs one `WithdrawalModule` action (`data = abi.encode(address asset, uint256 amount)`, amount
 in the token's native decimals); this service checks it and forwards it to execution-service's `POST /withdraw`,
 which simulates it and submits it through `Matching.verifyAndMatch`. The account stays in Matching throughout.
@@ -104,7 +104,7 @@ that cash, and USDC deposits default to it. The asset is the perp's listing alon
 all four (the perp listed), the shared three without the asset (the perp delisted), or none; any
 other set refuses to boot.
 
-**Delisted since 2026-10-21** (production leaves `CNGN_PERP_ASSET_ADDRESS` empty): `/v1/markets` does
+**Delisted since 2026-10-21** (production leaves `CNGN_PERP_ASSET_ADDRESS` empty): `/markets` does
 not list it, `cNGN-PERP` and `USDCcNGN-PERP` are a `400 unknown_market`, and perp state, funding,
 the perp margin check and the position indexer are off. The shared stack runs as before, including
 the USDC withdrawal ledger check on its cash and the quote-asset guard on its module.
@@ -135,14 +135,14 @@ Set them on the API **and** the matcher, and set `PERP_TRADE_MODULE_ADDRESS` on 
 - **Closed until enabled.** The stack deploys with position cap 0 and the module not allowlisted,
   and the matcher skips the perp until `Matching.allowedModules(module)` is true and
   `perp.totalPositionCap(srm)` is above zero. It re-reads both every 30s and treats an unreadable
-  gate as closed. Orders are accepted and rest while the market is closed. `/v1/markets` reports
+  gate as closed. Orders are accepted and rest while the market is closed. `/markets` reports
   the gate as `perp.trading_enabled` and the cap as `perp.position_cap`. The enable is a separate,
   final vault action (`risk-core/scripts/ops/propose_perp_enable_batch.py`), gated on live feeds, a
   live keeper, a seeded SecurityModule and a two-sided quote.
 - **Perp close-only (`CNGN_PERP_CLOSE_ONLY=true`).** The whole perp, whatever the manager: every perp order
   is taken as reduce-only (refused at intake unless it reduces the account's position, as `reduce_only`
   is), and the matcher holds every perp leg to its position at each fill, so an order resting from before
-  the switch cannot open one either. `/v1/markets` shows `perp.close_only`. For a perp with no market maker
+  the switch cannot open one either. `/markets` shows `perp.close_only`. For a perp with no market maker
   to exit against. Exits stay open. **Leaving close-only is blocked** until numofx/trading-app#131 is
   fixed: with a perp configured and `CNGN_PERP_CLOSE_ONLY` not `true`, the api, matcher and migrate
   binaries refuse to boot and log why, unless `CNGN_PERP_REOPEN_ACK=trading-app-131` is also set. The
@@ -158,12 +158,12 @@ Set them on the API **and** the matcher, and set `PERP_TRADE_MODULE_ADDRESS` on 
   both sides: IM surplus now, minus the price-vs-mark leg, the taker fee and the initial margin the
   fill adds. Reducing a position is always allowed. Fails open on RPC errors, like the funding check;
   the SRM is the enforcement.
-- **`/v1/markets`** adds a `perp` object for the perp: mark and index in USDC per cNGN
+- **`/markets`** adds a `perp` object for the perp: mark and index in USDC per cNGN
   (`mark_price`/`index_price` at 18 places, `mark_price_ui`/`index_price_ui` at ten), the hourly
   funding rate (`funding_rate_1h`; `ui_long_funding_rate_1h` is the same number — positive means
   the long, long cNGN, pays), open interest, margin rates, max leverage, and the module/cash/SRM to
   sign and deposit for.
-- **`GET /v1/positions?subaccount_id=N`** returns the account's perp position from chain:
+- **`GET /positions?subaccount_id=N`** returns the account's perp position from chain:
   `engine_position` (signed, cNGN), `ui_side` (`long` when positive), `ui_size` (|position| in
   cNGN), `ui_notional_usdc` (that size at the index), `mark_price_ui`/`index_price_ui`, unrealized
   PnL, IM/MM surplus and an estimated `liquidation_price_ui` in USDC per cNGN.
@@ -210,7 +210,7 @@ Set them on the API **and** the matcher.
   `fill_band: …`), and the matcher re-checks every fill's on-chain price against a read at most 2s old,
   holding back a resting order the index has moved away from (backoff, as `FA_FillOutsideIndexBand`).
   A stale index (`BLF_DataTooOld`) or an unreadable band refuses both: the chain cannot settle a fill
-  then either. `/v1/markets` reports `fill_band_enforced: true` and, while the band can be read,
+  then either. `/markets` reports `fill_band_enforced: true` and, while the band can be read,
   `fill_band_low` / `fill_band_high` (cNGN per USDC); the enable batch's `fills` gate checks them
   against the chain.
 - **Accounts.** Only accounts under the MarginEngine can hold the future (`MW_UnknownManager`
@@ -221,7 +221,7 @@ Set them on the API **and** the matcher.
 - **Closed until enabled.** The matcher skips the series until the TradeModule treats it as a dated
   future (`isDatedFutureAsset`, the enable batch's last action), the engine has a position cap on it,
   the engine is not paused, and it is before the series' last trade time. Orders rest while it is
-  closed; after the last trade time none are accepted. `/v1/markets` reports the gate as
+  closed; after the last trade time none are accepted. `/markets` reports the gate as
   `future.trading_open` and why as `future.trading_closed_reason`.
 - **Margin pre-check, per order.** Before submitting, the matcher checks each account against the
   engine's IM: `getMargin(account, true)` less the IM the fill adds (contracts beyond the old
@@ -233,15 +233,15 @@ Set them on the API **and** the matcher.
   after the first, it is cancelled with `cancel_reason: insufficient_margin`. A fill or a pass resets
   the count. A revert the pre-check did not foresee cannot say which side was short, so it backs the
   pair off and cancels nothing.
-- Not on `/v1/integrations/*`, which serve spot-style pairs.
+- Not on `/integrations/*`, which serve spot-style pairs.
 
 ### More series: `FUTURE_SERIES` (MarginEngine v2)
 
 `FUTURE_SERIES` is a JSON array of further series, listed after the `CNGN_FUTURE_*` one; unset, the
 venue lists exactly what it did. Each series is keyed by `(asset_address, sub_id)`, never by expiry
-alone, and read through its own reader everywhere: `/v1/markets` (band, mark, contract state,
+alone, and read through its own reader everywhere: `/markets` (band, mark, contract state,
 `trading_open`), order admission (band, last trade time, settled, the engine), reduce-only, the
-matcher's gate, band, fee, margin pre-check and fill mark, and `/v1/positions`. v1's
+matcher's gate, band, fee, margin pre-check and fill mark, and `/positions`. v1's
 `USDC-cNGN-30NOV26` and v2's `cNGN-30NOV26` share an expiry on different assets and engines.
 
 ```json
@@ -261,10 +261,10 @@ matcher's gate, band, fee, margin pre-check and fill mark, and `/v1/positions`. 
 | `close_only` | optional: every order is taken as reduce-only, and resting orders are held to their position at match time |
 
 `CNGN_FUTURE_CLOSE_ONLY=true` makes the `CNGN_FUTURE_*` series close-only the same way. Two series may
-not share an `(asset, expiry)` or a symbol. On a linear series `/v1/markets` reports
+not share an `(asset, expiry)` or a symbol. On a linear series `/markets` reports
 `future.contract_size` and `future.contract_size_asset` in place of `future.contract_size_usdc`,
-`/v1/positions` reports `pending_vm_usdc` in place of `pending_vm_cngn` and `notional_usdc` at the
-mark, and `/v1/fills` reports `vm_usdc` in place of `vm_cngn`; a close-only series shows
+`/positions` reports `pending_vm_usdc` in place of `pending_vm_cngn` and `notional_usdc` at the
+mark, and `/fills` reports `vm_usdc` in place of `vm_cngn`; a close-only series shows
 `future.close_only: true`. The taker fee is the series' `taker_fee_bps` (15 on cNGN-30NOV26, 5 on
 EURC-30NOV26 since 2026-10-31), of contracts × contract size × the fill price; v1's series, from
 `CNGN_FUTURE_*`, is 25. There is no default. Terraform refuses to plan a series without one. One that
@@ -512,7 +512,7 @@ Then submit orders whose top-level fields and `action_json` agree on:
 
 ### Namespace Separation For Cancels
 
-Service-tagged cancels (`/v1/orders/cancel` requests with `service`) are blocked for protected
+Service-tagged cancels (`/orders/cancel` requests with `service`) are blocked for protected
 order namespaces so bot sweeps cannot cancel manual/smoke/validation orders.
 
 - `CANCEL_PROTECTED_ORDER_ID_PREFIXES=validation:,smoke:,manual:`
@@ -522,7 +522,7 @@ Manual cancels without a `service` tag are still allowed.
 ### Production Smoke: Deposited APR Cross
 
 Use the built-in smoke script to run the exact deposited cross flow (`ask 0.001 @ 1390`,
-`buy 0.001 @ 1391`) with real signed orders and assert `/v1/trades` increments:
+`buy 0.001 @ 1391`) with real signed orders and assert `/trades` increments:
 
 ```bash
 PRIVATE_KEY=0x... \
@@ -530,6 +530,6 @@ PRIVATE_KEY=0x... \
 ```
 
 The script submits namespaced order IDs (`smoke:spot:...`) so they stay separated from bot order
-namespaces and cancel sweeps, and then verifies terminal order state through `GET /v1/orders/{order_id}`.
+namespaces and cancel sweeps, and then verifies terminal order state through `GET /orders/{order_id}`.
 
 

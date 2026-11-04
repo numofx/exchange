@@ -18,7 +18,7 @@ import (
 )
 
 func getFills(server *Server, header, query string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodGet, "/v1/fills"+query, nil)
+	req := httptest.NewRequest(http.MethodGet, "/fills"+query, nil)
 	if header != "" {
 		req.Header.Set(orderHistoryAuthHeader, header)
 	}
@@ -195,7 +195,7 @@ values ($1, '0', $2, $3, $4, $5, $6)
 		t.Helper()
 		rec := getFills(server, header, query)
 		if rec.Code != http.StatusOK {
-			t.Fatalf("GET /v1/fills%s status = %d body=%s", query, rec.Code, rec.Body.String())
+			t.Fatalf("GET /fills%s status = %d body=%s", query, rec.Code, rec.Body.String())
 		}
 		if got := rec.Header().Get("Cache-Control"); got != "no-store" {
 			t.Fatalf("Cache-Control = %q, want no-store", got)

@@ -14,7 +14,7 @@ import (
 	"github.com/numofx/matching-backend/migrations"
 )
 
-// A deposit record is public (GET /v1/deposits/{action_hash}, no auth). A failed submission's error can carry the
+// A deposit record is public (GET /deposits/{action_hash}, no auth). A failed submission's error can carry the
 // executor's URL, or, in an execution-service 500, its RPC's, and an Alchemy RPC URL holds the API key (#229).
 const depositLeakKey = "alch_TESTKEY_must_not_leak_0123456789"
 

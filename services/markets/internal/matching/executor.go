@@ -24,7 +24,7 @@ import (
 const makerFillFeeZero = "0"
 
 // takerFillFee computes the taker fee for one fill, in quote-asset wei, from the market's own
-// schedule in the instrument registry. That registry is the single source: /v1/markets serves the
+// schedule in the instrument registry. That registry is the single source: /markets serves the
 // same numbers, so the UI does not carry a second copy to disagree with.
 //
 // The result is a TOTAL, in the same units as the notional:

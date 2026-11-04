@@ -58,7 +58,7 @@ insert into active_orders (
 }
 
 // An order that traded and was then cancelled or expired is the only record of who owned its fills.
-// Pruning it would drop those fills from the owner's GET /v1/fills and from its filled_quote.
+// Pruning it would drop those fills from the owner's GET /fills and from its filled_quote.
 func TestPruneKeepsTerminalOrdersThatTraded(t *testing.T) {
 	pool := openTestPool(t)
 	repo := NewRepository(pool)

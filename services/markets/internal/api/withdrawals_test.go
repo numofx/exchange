@@ -124,7 +124,7 @@ func postWithdrawal(t *testing.T, server *Server, body any) *httptest.ResponseRe
 		}
 		raw = encoded
 	}
-	req := httptest.NewRequest(http.MethodPost, "/v1/withdrawals", bytes.NewReader(raw))
+	req := httptest.NewRequest(http.MethodPost, "/withdrawals", bytes.NewReader(raw))
 	rec := httptest.NewRecorder()
 	server.handleCreateWithdrawal(rec, req)
 	return rec

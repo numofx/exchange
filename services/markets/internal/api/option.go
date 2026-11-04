@@ -18,7 +18,7 @@ import (
 
 const optionAPIStateTTL = 15 * time.Second
 
-// optionMarketState is an option strike's live state on /v1/markets. TradingOpen is absent while it cannot be read.
+// optionMarketState is an option strike's live state on /markets. TradingOpen is absent while it cannot be read.
 type optionMarketState struct {
 	Strike              string    `json:"strike"`
 	OptionType          string    `json:"option_type"`
@@ -30,7 +30,7 @@ type optionMarketState struct {
 	UpdatedAt           time.Time `json:"updated_at"`
 }
 
-// newOptionSeriesReaders is one reader per listed option series (every strike of an expiry shares it), for /v1/markets
+// newOptionSeriesReaders is one reader per listed option series (every strike of an expiry shares it), for /markets
 // and order admission. Nil without a chain to read.
 func newOptionSeriesReaders(cfg config.Config) map[string]*options.Reader {
 	if strings.TrimSpace(cfg.ChainRPCURL) == "" || len(cfg.OptionSeries) == 0 {

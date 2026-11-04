@@ -60,7 +60,7 @@ type Metadata struct {
 	MinSize string `json:"min_size"`
 	// TakerFeeBps and MakerFeeBps are THE fee schedule for this market, in basis points of the
 	// quote notional. Everything downstream reads them from here: the matcher charges them, the
-	// funding check reserves them, and /v1/markets serves them so the UI never carries its own
+	// funding check reserves them, and /markets serves them so the UI never carries its own
 	// copy. A fee that lives in two repos disagrees the first time one of them changes.
 	TakerFeeBps        int    `json:"taker_fee_bps"`
 	MakerFeeBps        int    `json:"maker_fee_bps"`
@@ -254,7 +254,7 @@ func assetAndSubIDKey(assetAddress, subID string) string {
 
 // AmountStep is the step every market's desired_amount is taken in, in the market's own units (whole
 // cNGN on spot and the perp, whole USDC of notional on the future): the one source for the API's amount
-// normalization and for what /v1/markets says. A listing's min_size used to say 0.001 (the future) and
+// normalization and for what /markets says. A listing's min_size used to say 0.001 (the future) and
 // 0.000001 (spot, the perp) while intake refused anything but whole steps; on 2026-10-13 the futures
 // market maker sized to the listing and had its 1.5-contract rung refused.
 const AmountStep = "1"

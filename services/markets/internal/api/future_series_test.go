@@ -204,7 +204,7 @@ func TestMarketsListsEachSeriesWithItsOwnBandMarkAndState(t *testing.T) {
 	cfg.ChainRPCURL = srv.URL
 
 	rec := httptest.NewRecorder()
-	seriesServer(t, cfg).handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/v1/markets", nil))
+	seriesServer(t, cfg).handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/markets", nil))
 	var entries []map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &entries); err != nil {
 		t.Fatalf("markets: %v %s", err, rec.Body.String())
@@ -406,7 +406,7 @@ func TestALinearFillsVMIsUSDC(t *testing.T) {
 	}
 }
 
-// The wiring: POST /v1/orders, against the test database, with v1's and v2's series listed at one
+// The wiring: POST /orders, against the test database, with v1's and v2's series listed at one
 // expiry. A v2 cNGN order in v2's band (USDC per cNGN) is stored; one at a v1 price is refused before it
 // is stored; and with v1 close-only, an order on v1 from an account holding none of it is refused as a
 // reduce-only order with nothing to reduce, while v2 is untouched.
@@ -435,7 +435,7 @@ func TestCreateOrderAdmitsEachSeriesOnItsOwnTerms(t *testing.T) {
 			"action_json": action, "signature": "0xsig",
 		})
 		rec := httptest.NewRecorder()
-		server.handleCreateOrder(rec, httptest.NewRequest(http.MethodPost, "/v1/orders", bytes.NewReader(body)))
+		server.handleCreateOrder(rec, httptest.NewRequest(http.MethodPost, "/orders", bytes.NewReader(body)))
 		return rec
 	}
 	stored := func(id string) bool {

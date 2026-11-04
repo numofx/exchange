@@ -195,7 +195,7 @@ insert into active_orders (
 		}
 		return got.Asks
 	}
-	asks := func() []integrationLevel { return asksAt("/v1/integrations/orderbook") }
+	asks := func() []integrationLevel { return asksAt("/integrations/orderbook") }
 
 	insert(0, "0.0005", "500000000000000")
 	before := []integrationLevel{{"0.0005", "2000"}}
@@ -208,10 +208,6 @@ insert into active_orders (
 	clock.Advance(4 * time.Second)
 	if got := asks(); !reflect.DeepEqual(got, before) {
 		t.Fatalf("read within TTL = %v, want the cached %v", got, before)
-	}
-	// Both paths are one endpoint, so they share one entry: a second path must not be a second read of the book.
-	if got := asksAt("/integrations/orderbook"); !reflect.DeepEqual(got, before) {
-		t.Fatalf("unprefixed read within TTL = %v, want the cached %v", got, before)
 	}
 
 	clock.Advance(time.Second)

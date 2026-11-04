@@ -58,7 +58,7 @@ func TestHandleBookAndTradesReturnEmptyArraysNotNull(t *testing.T) {
 	})
 	server := NewServer(config.Config{}, pool, registry)
 
-	bookReq := httptest.NewRequest(http.MethodGet, "/v1/book?asset_address="+assetAddress+"&sub_id=0", nil)
+	bookReq := httptest.NewRequest(http.MethodGet, "/book?asset_address="+assetAddress+"&sub_id=0", nil)
 	bookRec := httptest.NewRecorder()
 	server.handleBook(bookRec, bookReq)
 
@@ -77,7 +77,7 @@ func TestHandleBookAndTradesReturnEmptyArraysNotNull(t *testing.T) {
 		t.Fatalf("expected null last_trade_timestamp in empty book response, got %v", *bookResp.MarketPresentation.LastTradeTimestamp)
 	}
 
-	tradesReq := httptest.NewRequest(http.MethodGet, "/v1/trades?asset_address="+assetAddress+"&sub_id=0", nil)
+	tradesReq := httptest.NewRequest(http.MethodGet, "/trades?asset_address="+assetAddress+"&sub_id=0", nil)
 	tradesRec := httptest.NewRecorder()
 	server.handleTrades(tradesRec, tradesReq)
 
@@ -175,7 +175,7 @@ func TestHandleCreateOrderRejectsUndepositedSubaccount(t *testing.T) {
 		t.Fatalf("marshal payload: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/orders", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/orders", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	server.handleCreateOrder(rec, req)
@@ -243,7 +243,7 @@ func TestDepositedCrossPathEndToEnd(t *testing.T) {
 		if err != nil {
 			t.Fatalf("marshal payload: %v", err)
 		}
-		req := httptest.NewRequest(http.MethodPost, "/v1/orders", bytes.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/orders", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 		server.handleCreateOrder(rec, req)
@@ -271,7 +271,7 @@ func TestDepositedCrossPathEndToEnd(t *testing.T) {
 		t.Fatalf("finalize match: %v", err)
 	}
 
-	tradesReq := httptest.NewRequest(http.MethodGet, "/v1/trades?asset_address="+assetAddress+"&sub_id="+subID, nil)
+	tradesReq := httptest.NewRequest(http.MethodGet, "/trades?asset_address="+assetAddress+"&sub_id="+subID, nil)
 	tradesRec := httptest.NewRecorder()
 	server.handleTrades(tradesRec, tradesReq)
 	if tradesRec.Code != http.StatusOK {
@@ -320,7 +320,7 @@ insert into active_orders (
 		CNGNSpotAssetAddress: assetAddress,
 	}))
 
-	serviceReq := httptest.NewRequest(http.MethodPost, "/v1/orders/cancel", strings.NewReader(`{"owner_address":"0xowner","nonce":"777001","service":"market-maker","reason":"refresh"}`))
+	serviceReq := httptest.NewRequest(http.MethodPost, "/orders/cancel", strings.NewReader(`{"owner_address":"0xowner","nonce":"777001","service":"market-maker","reason":"refresh"}`))
 	serviceRec := httptest.NewRecorder()
 	server.handleCancelOrder(serviceRec, serviceReq)
 
@@ -339,7 +339,7 @@ insert into active_orders (
 		t.Fatalf("status = %s", status)
 	}
 
-	manualReq := httptest.NewRequest(http.MethodPost, "/v1/orders/cancel", strings.NewReader(`{"owner_address":"0xowner","nonce":"777001","reason":"manual"}`))
+	manualReq := httptest.NewRequest(http.MethodPost, "/orders/cancel", strings.NewReader(`{"owner_address":"0xowner","nonce":"777001","reason":"manual"}`))
 	manualRec := httptest.NewRecorder()
 	server.handleCancelOrder(manualRec, manualReq)
 	if manualRec.Code != http.StatusOK {
@@ -387,7 +387,7 @@ insert into active_orders (
 
 	beforeCancel := time.Now().Add(-time.Second)
 	body := fmt.Sprintf(`{"owner_address":%q,"nonce":%q,"reason":"trader clicked cancel"}`, owner, nonce)
-	cancelReq := httptest.NewRequest(http.MethodPost, "/v1/orders/cancel", strings.NewReader(body))
+	cancelReq := httptest.NewRequest(http.MethodPost, "/orders/cancel", strings.NewReader(body))
 	cancelReq.Header.Set("X-Principal", "trader-42")
 	cancelRec := httptest.NewRecorder()
 	server.handleCancelOrder(cancelRec, cancelReq)
@@ -417,7 +417,7 @@ insert into active_orders (
 	}
 
 	// The status endpoint surfaces them, and updated_at tracks the cancel, not created_at.
-	statusReq := httptest.NewRequest(http.MethodGet, "/v1/orders/"+orderID, nil)
+	statusReq := httptest.NewRequest(http.MethodGet, "/orders/"+orderID, nil)
 	routeCtx := chi.NewRouteContext()
 	routeCtx.URLParams.Add("order_id", orderID)
 	statusReq = statusReq.WithContext(context.WithValue(statusReq.Context(), chi.RouteCtxKey, routeCtx))
@@ -481,7 +481,7 @@ insert into active_orders (
 	// Unsigned cancel is rejected, and the order is untouched.
 	unsigned := fmt.Sprintf(`{"owner_address":%q,"nonce":%q,"reason":"no sig"}`, owner, nonce)
 	unsignedRec := httptest.NewRecorder()
-	server.handleCancelOrder(unsignedRec, httptest.NewRequest(http.MethodPost, "/v1/orders/cancel", strings.NewReader(unsigned)))
+	server.handleCancelOrder(unsignedRec, httptest.NewRequest(http.MethodPost, "/orders/cancel", strings.NewReader(unsigned)))
 	if unsignedRec.Code != http.StatusUnauthorized {
 		t.Fatalf("unsigned cancel status = %d body=%s", unsignedRec.Code, unsignedRec.Body.String())
 	}
@@ -497,7 +497,7 @@ insert into active_orders (
 	signed := fmt.Sprintf(`{"owner_address":%q,"nonce":%q,"expiry":%q,"signature":"0xdeadbeef","reason":"signed"}`,
 		owner, nonce, fmt.Sprintf("%d", time.Now().Add(10*time.Minute).Unix()))
 	signedRec := httptest.NewRecorder()
-	server.handleCancelOrder(signedRec, httptest.NewRequest(http.MethodPost, "/v1/orders/cancel", strings.NewReader(signed)))
+	server.handleCancelOrder(signedRec, httptest.NewRequest(http.MethodPost, "/orders/cancel", strings.NewReader(signed)))
 	if signedRec.Code != http.StatusOK {
 		t.Fatalf("signed cancel status = %d body=%s", signedRec.Code, signedRec.Body.String())
 	}
@@ -540,7 +540,7 @@ insert into active_orders (
 		CNGNSpotAssetAddress: assetAddress,
 	}
 	server := NewServer(cfg, pool, instruments.DefaultRegistry(cfg))
-	req := httptest.NewRequest(http.MethodGet, "/v1/orders/"+orderID, nil)
+	req := httptest.NewRequest(http.MethodGet, "/orders/"+orderID, nil)
 	routeCtx := chi.NewRouteContext()
 	routeCtx.URLParams.Add("order_id", orderID)
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeCtx))

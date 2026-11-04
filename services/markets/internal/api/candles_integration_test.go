@@ -52,7 +52,7 @@ values ($1, $2, $3, '2', 'buy', $4, $5, $6)`,
 	}
 
 	get := func(query string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodGet, "/v1/candles?asset_address="+asset+"&sub_id="+subID+query, nil)
+		req := httptest.NewRequest(http.MethodGet, "/candles?asset_address="+asset+"&sub_id="+subID+query, nil)
 		rec := httptest.NewRecorder()
 		server.handleCandles(rec, req)
 		return rec

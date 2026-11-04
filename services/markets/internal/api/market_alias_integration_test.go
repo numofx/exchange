@@ -69,9 +69,9 @@ insert into active_orders (
 		path    string
 		handler http.HandlerFunc
 	}{
-		{"/v1/book", server.handleBook},
-		{"/v1/trades", server.handleTrades},
-		{"/v1/candles", server.handleCandles},
+		{"/book", server.handleBook},
+		{"/trades", server.handleTrades},
+		{"/candles", server.handleCandles},
 	}
 	for _, market := range markets {
 		for _, endpoint := range endpoints {
@@ -101,7 +101,7 @@ insert into active_orders (
 		}
 
 		// The book served under either name is this market's own: its seeded size, not the other's.
-		book := get(server.handleBook, "/v1/book?symbol="+market.alias).Body.String()
+		book := get(server.handleBook, "/book?symbol="+market.alias).Body.String()
 		if !strings.Contains(book, `"`+market.size+`"`) {
 			t.Errorf("book for %s lacks its own order (%s): %s", market.alias, market.size, book)
 		}
@@ -114,18 +114,18 @@ insert into active_orders (
 
 	// The perp answers under its canonical name with its own order, never spot's. Its pre-rename name,
 	// USDCcNGN-PERP, is no longer an alias: an unknown market.
-	perpBook := get(server.handleBook, "/v1/book?symbol=cNGN-PERP").Body.String()
+	perpBook := get(server.handleBook, "/book?symbol=cNGN-PERP").Body.String()
 	if !strings.Contains(perpBook, `"2222"`) || strings.Contains(perpBook, `"1111"`) {
 		t.Errorf("book for cNGN-PERP is not its own: %s", perpBook)
 	}
 	retired := httptest.NewRecorder()
-	server.handleBook(retired, httptest.NewRequest(http.MethodGet, "/v1/book?symbol=USDCcNGN-PERP", nil))
+	server.handleBook(retired, httptest.NewRequest(http.MethodGet, "/book?symbol=USDCcNGN-PERP", nil))
 	if retired.Code != http.StatusBadRequest || !strings.Contains(retired.Body.String(), "unknown_market") {
-		t.Errorf("GET /v1/book?symbol=USDCcNGN-PERP: status=%d body=%s; want 400 unknown_market", retired.Code, retired.Body.String())
+		t.Errorf("GET /book?symbol=USDCcNGN-PERP: status=%d body=%s; want 400 unknown_market", retired.Code, retired.Body.String())
 	}
 
-	// /v1/markets lists the canonical names only.
-	rec := get(server.handleMarkets, "/v1/markets")
+	// /markets lists the canonical names only.
+	rec := get(server.handleMarkets, "/markets")
 	var listed []marketPresentation
 	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
 		t.Fatalf("decode markets: %v", err)
@@ -135,7 +135,7 @@ insert into active_orders (
 		names = append(names, m.Market)
 	}
 	if strings.Join(names, ",") != "cNGN-PERP,cNGN-USDC" {
-		t.Fatalf("/v1/markets lists %v", names)
+		t.Fatalf("/markets lists %v", names)
 	}
 }
 

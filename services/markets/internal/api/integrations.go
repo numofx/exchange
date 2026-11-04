@@ -13,7 +13,7 @@ import (
 	"github.com/numofx/matching-backend/internal/orders"
 )
 
-// The /v1/integrations endpoints restate market data in the orientation /v1/markets advertises,
+// The /integrations endpoints restate market data in the orientation /markets advertises,
 // in the shape aggregators read: an aggregated book, a ticker and a trade tape per market.
 //
 // Since the cngn_usdc_*_v1 contract the advertised pair is the engine's own -- cNGN is what trades,
@@ -136,7 +136,7 @@ func (s *Server) resolveIntegrationMarket(w http.ResponseWriter, r *http.Request
 	// hear so, not receive another pair's data under its ticker.
 	if item, deprecated, ok := s.instruments.ResolveIdentifier(tickerID); ok {
 		if item.IsFuture() || item.IsOption() {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": tickerID + " is a dated future or an option; the integrations endpoints serve spot-style pairs only (see /v1/markets)"})
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": tickerID + " is a dated future or an option; the integrations endpoints serve spot-style pairs only (see /markets)"})
 			return instruments.Metadata{}, false
 		}
 		if deprecated {

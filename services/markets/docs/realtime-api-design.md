@@ -11,8 +11,8 @@ sharing one Postgres pool. State changes that clients want in real time originat
 
 | Event | Producer | Today's storage |
 |-------|----------|-----------------|
-| order placed | `cmd/api` `POST /v1/orders` | `active_orders` INSERT |
-| order cancelled | `cmd/api` `POST /v1/orders/cancel` | `active_orders` UPDATE status |
+| order placed | `cmd/api` `POST /orders` | `active_orders` INSERT |
+| order cancelled | `cmd/api` `POST /orders/cancel` | `active_orders` UPDATE status |
 | order matched / filled | `cmd/matcher` finalize | `active_orders` UPDATE + `trade_fills` INSERT |
 | order expired | sweep | `active_orders` UPDATE status |
 
@@ -95,14 +95,14 @@ route it through `market_events` too so all channels share one monotonic `seq` s
 
 ## Client-facing WebSocket protocol
 
-Endpoint: `GET /v1/ws` (chi route, upgraded via **`coder/websocket`**). JSON text frames.
+Endpoint: `GET /ws` (chi route, upgraded via **`coder/websocket`**). JSON text frames.
 
 ### Channels
 
 | Channel | Access | Snapshot | Deltas |
 |---------|--------|----------|--------|
-| `book` | public | top-N bids/asks (matches `GET /v1/book`) | price-level size changes |
-| `trades` | public | last N fills (matches `GET /v1/trades`) | one per new fill |
+| `book` | public | top-N bids/asks (matches `GET /book`) | price-level size changes |
+| `trades` | public | last N fills (matches `GET /trades`) | one per new fill |
 | `orders` | **private** (auth) | caller's open orders | status/fill changes for caller |
 | `ticker` | public (phase 2) | mark/last/24h | on mark update — *depends on the setMarkPrice cadence job* |
 
@@ -154,7 +154,7 @@ not the notification.
 
 Public channels need no auth. `orders` is per-owner: the client proves control of
 `owner_address` with an EIP-191 `personal_sign` frame (`internal/wsauth`) over a canonical
-message bound to `WS_AUTH_DOMAIN`. REST `GET /v1/orders` and `GET /v1/fills` reuse the same frame,
+message bound to `WS_AUTH_DOMAIN`. REST `GET /orders` and `GET /fills` reuse the same frame,
 carried in the `X-Numo-Auth` header and signed over a different statement
 (`wsauth.OrderHistoryStatement`, one statement for both endpoints), so a WebSocket frame is never
 accepted by either and a history frame never opens a WebSocket session. The hub routes `orders` events by
@@ -190,7 +190,7 @@ Shipped:
 
 1. ✅ Migration `000008_create_market_events` + triggers on `active_orders` / `trade_fills`.
 2. ✅ `internal/events`: `Hub` (LISTEN loop, catch-up, per-conn subscriptions, prune job).
-3. ✅ `internal/api`: `GET /v1/ws` handler (`coder/websocket`), subscribe/auth/resume, snapshot
+3. ✅ `internal/api`: `GET /ws` handler (`coder/websocket`), subscribe/auth/resume, snapshot
    readers reusing the existing `ListBook` / trades queries.
 4. ✅ Heartbeats, backpressure, slow-consumer drop wired in `internal/api/ws.go`.
 

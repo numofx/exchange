@@ -17,7 +17,7 @@ const defaultPruneBatch = 5000
 // next to the churn (market-maker requoting leaves a cancelled row per replaced
 // quote — thousands a day — against a handful of fills). Neither is a cancelled or
 // expired order that traded before it ended: the order row is the only record of who
-// owned its fills, so deleting it would silently drop them from GET /v1/fills and
+// owned its fills, so deleting it would silently drop them from GET /fills and
 // from the order's filled_quote.
 //
 // The delete is batched on purpose. A single unbounded DELETE over a large backlog

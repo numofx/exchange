@@ -17,7 +17,7 @@ func TestHandleMarketsIncludesSpotMetadata(t *testing.T) {
 
 	server := NewServer(config.Config{}, nil, registry)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/markets", nil)
+	req := httptest.NewRequest(http.MethodGet, "/markets", nil)
 	rec := httptest.NewRecorder()
 	server.handleMarkets(rec, req)
 
@@ -89,7 +89,7 @@ func TestHandleMarketsIncludesSpotMetadata(t *testing.T) {
 func TestHandleMarketsOmitsUnconfiguredMarkets(t *testing.T) {
 	server := NewServer(config.Config{}, nil, instruments.DefaultRegistry(config.Config{}))
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/markets", nil)
+	req := httptest.NewRequest(http.MethodGet, "/markets", nil)
 	rec := httptest.NewRecorder()
 	server.handleMarkets(rec, req)
 

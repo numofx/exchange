@@ -208,7 +208,7 @@ func futureServer(t *testing.T, rpc string) *Server {
 func futureEntry(t *testing.T, s *Server) map[string]any {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	s.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/v1/markets", nil))
+	s.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/markets", nil))
 	var entries []map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &entries); err != nil {
 		t.Fatalf("markets: %v %s", err, rec.Body.String())
@@ -218,7 +218,7 @@ func futureEntry(t *testing.T, s *Server) map[string]any {
 			return entry
 		}
 	}
-	t.Fatalf("the future is not on /v1/markets: %s", rec.Body.String())
+	t.Fatalf("the future is not on /markets: %s", rec.Body.String())
 	return nil
 }
 
@@ -357,7 +357,7 @@ func TestAFuturesOrderIsAdmittedOnlyWhenItCouldSettle(t *testing.T) {
 	}
 }
 
-// The wiring: POST /v1/orders, against the test database, refuses an out-of-band futures order before
+// The wiring: POST /orders, against the test database, refuses an out-of-band futures order before
 // it is stored, and stores one inside the band.
 func TestCreateOrderRefusesAFuturesOrderOutsideTheBand(t *testing.T) {
 	pool := openTestPool(t)
@@ -382,7 +382,7 @@ func TestCreateOrderRefusesAFuturesOrderOutsideTheBand(t *testing.T) {
 			"action_json": action, "signature": "0xsig",
 		})
 		rec := httptest.NewRecorder()
-		server.handleCreateOrder(rec, httptest.NewRequest(http.MethodPost, "/v1/orders", bytes.NewReader(body)))
+		server.handleCreateOrder(rec, httptest.NewRequest(http.MethodPost, "/orders", bytes.NewReader(body)))
 		return rec
 	}
 	stored := func(id string) bool {
@@ -408,7 +408,7 @@ func TestIntegrationsLeaveTheFutureOut(t *testing.T) {
 	defer srv.Close()
 	s := futureServer(t, srv.URL)
 	symbol := instruments.FutureSymbol(testFutureExpiry)
-	for _, path := range []string{"/v1/integrations/orderbook?ticker_id=" + symbol, "/v1/integrations/trades?ticker_id=" + symbol} {
+	for _, path := range []string{"/integrations/orderbook?ticker_id=" + symbol, "/integrations/trades?ticker_id=" + symbol} {
 		rec := httptest.NewRecorder()
 		handler := s.handleIntegrationOrderbook
 		if strings.Contains(path, "trades") {
@@ -420,7 +420,7 @@ func TestIntegrationsLeaveTheFutureOut(t *testing.T) {
 		}
 	}
 	rec := httptest.NewRecorder()
-	s.handleIntegrationTickers(rec, httptest.NewRequest(http.MethodGet, "/v1/integrations/tickers", nil))
+	s.handleIntegrationTickers(rec, httptest.NewRequest(http.MethodGet, "/integrations/tickers", nil))
 	if strings.Contains(rec.Body.String(), symbol) {
 		t.Fatalf("tickers list the future: %s", rec.Body.String())
 	}
