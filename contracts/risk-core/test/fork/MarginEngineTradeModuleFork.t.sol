@@ -112,8 +112,12 @@ contract MarginEngineTradeModuleFork is Test {
   uint makerAcc;
   uint takerAcc;
 
+  // The fork is pinned: the suite deploys against the world before the engine existed, and would revert on
+  // EXPIRY - block.timestamp from 2026-11-30 at head.
+  uint constant FORK_BLOCK = 53_401_757;
+
   function setUp() public {
-    vm.createSelectFork(vm.envString("BASE_RPC_URL"));
+    vm.createSelectFork(vm.envString("BASE_RPC_URL"), FORK_BLOCK);
     maker = vm.addr(makerPk);
     taker = vm.addr(takerPk);
     script = new DeployMarginEngine();

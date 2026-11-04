@@ -67,6 +67,12 @@ contract MarginEngineDeployFork is Test {
   uint forwardPk = uint(keccak256("cngn-future-deploy-fork-forward-signer"));
   address forwardSigner = vm.addr(forwardPk);
 
+  // The fork is pinned. This suite deploys against the world before the engine existed, and its coverage test rests on
+  // a step at the insolvency cliff: the futures premium decays with time to EXPIRY, about $1.21 a day at the 14% step,
+  // which took that step from -$0.14 of equity at this block to +$2.97 two days later and turned the test red with
+  // nothing changed on chain. Unpinned, the whole suite would also revert on EXPIRY - block.timestamp from 2026-11-30.
+  uint constant FORK_BLOCK = 53_401_757;
+
   DeployMarginEngine script;
   DeployMarginEngine.Params params;
   DeployMarginEngine.Deployment d;
@@ -77,7 +83,7 @@ contract MarginEngineDeployFork is Test {
   uint perpMarketsBefore;
 
   function setUp() public {
-    vm.createSelectFork(vm.envString("BASE_RPC_URL"));
+    vm.createSelectFork(vm.envString("BASE_RPC_URL"), FORK_BLOCK);
     script = new DeployMarginEngine();
 
     // The initial mark is the operator's input, checked against index * (1 + carry * tau); here it is exactly that.
