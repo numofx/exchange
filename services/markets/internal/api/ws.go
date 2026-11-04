@@ -153,7 +153,7 @@ func (c *wsConn) readLoop(ctx context.Context) {
 func (c *wsConn) handleAuth(in wsIn) {
 	owner, err := c.srv.wsAuth.Verify(in.AuthFrame, time.Now())
 	if err != nil {
-		c.send(wsOut{Type: "error", Code: "auth_failed", Message: err.Error()})
+		c.send(wsOut{Type: "error", Code: "auth_failed", Message: publicErrorMessage(err)})
 		return
 	}
 	c.mu.Lock()

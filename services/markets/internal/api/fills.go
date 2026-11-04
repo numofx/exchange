@@ -64,18 +64,18 @@ func (s *Server) handleFills(w http.ResponseWriter, r *http.Request) {
 
 	owner, err := s.authenticateOrderHistory(r, time.Now())
 	if err != nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusUnauthorized, errorBody(err))
 		return
 	}
 
 	limit, err := parseOrderHistoryLimit(r.URL.Query().Get("limit"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusBadRequest, errorBody(err))
 		return
 	}
 	before, err := decodeFillCursor(r.URL.Query().Get("before"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusBadRequest, errorBody(err))
 		return
 	}
 

@@ -65,12 +65,16 @@ func (c *chainCustodyChecker) ValidateDeposited(ctx context.Context, subaccountI
 
 	subAccountsAddress, err := c.subAccountsAddress(ctx)
 	if err != nil {
-		return fmt.Errorf("resolve subaccounts contract: %w", err)
+		return fmt.Errorf("%w: resolve subaccounts contract: %v", errCustodyUnreadable, err)
 	}
 
 	owner, err := c.callAddress(ctx, subAccountsAddress, "0x6352211e", subaccountID)
 	if err != nil {
-		return fmt.Errorf("read subaccount owner: %w", err)
+		// ownerOf reverts for a subaccount that does not exist, which is an answer and not a failed read.
+		if strings.Contains(strings.ToLower(err.Error()), "execution reverted") {
+			return fmt.Errorf("subaccount_id %s is not deposited in matching custody", subaccountID)
+		}
+		return fmt.Errorf("%w: read subaccount owner: %v", errCustodyUnreadable, err)
 	}
 	if owner != c.matchingAddress {
 		return fmt.Errorf("subaccount_id %s is not deposited in matching custody", subaccountID)
@@ -78,7 +82,7 @@ func (c *chainCustodyChecker) ValidateDeposited(ctx context.Context, subaccountI
 
 	recordedOwner, err := c.callAddress(ctx, c.matchingAddress, "0x63f1ddaa", subaccountID)
 	if err != nil {
-		return fmt.Errorf("read subaccount ownership record: %w", err)
+		return fmt.Errorf("%w: read subaccount ownership record: %v", errCustodyUnreadable, err)
 	}
 	if recordedOwner == zeroAddress {
 		return fmt.Errorf("subaccount_id %s has no owner recorded in matching", subaccountID)
@@ -86,6 +90,10 @@ func (c *chainCustodyChecker) ValidateDeposited(ctx context.Context, subaccountI
 
 	return nil
 }
+
+// errCustodyUnreadable marks a chain read that failed, as distinct from an account custody does not hold. Nothing is
+// wrong with the order, so the client is told to retry rather than that it was refused.
+var errCustodyUnreadable = errors.New("the account's custody could not be read; retry shortly")
 
 // errNotDepositedInMatching marks a subaccount Matching does not hold, as distinct from a chain read that failed.
 var errNotDepositedInMatching = errors.New("not deposited in matching custody")

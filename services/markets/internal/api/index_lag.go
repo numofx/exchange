@@ -176,7 +176,7 @@ func (s *Server) handleIndexStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.indexLag.record(report); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusBadRequest, errorBody(err))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
