@@ -18,8 +18,8 @@ variable "image_market_maker_future_v2" {
   description = "The v2 futures makers' mm-bot image, tagged by git SHA: market-maker #44 (364dbfe3) or later. Empty creates nothing."
   type        = string
   # market-maker main with #44 (American-terms series), built by build-and-push.sh 2026-10-31.
-  # 2026-11-04: 364dbfe3afd6 plus the /v1 path change only (market-maker tag deploy/mm-*-no-v1), so no strategy change.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:667066b37a4b"
+  # 2026-11-04: 364dbfe3afd6 plus the /v1 path change and the fee-schedule fix only (market-maker tag deploy/mm-future-v2-fee-fix), so no strategy change.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:085fc2b413c5"
 }
 
 variable "mm_future_v2_subaccount_ids" {
