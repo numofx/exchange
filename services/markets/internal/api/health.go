@@ -26,7 +26,7 @@ type matcherReport struct {
 	Details    json.RawMessage `json:"details"`
 }
 
-// handleHealthReport serves GET /v1/health: the matcher's last heartbeat (service_heartbeats) and
+// handleHealthReport serves GET /health: the matcher's last heartbeat (service_heartbeats) and
 // its age on the database's clock, for the pager outside the cluster. /healthz stays this process's
 // own liveness. Always 200: the pager reads the body; a 5xx here would only hide the matcher's
 // state behind the API's.

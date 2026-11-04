@@ -46,7 +46,7 @@ func TestPerpCloseOnlyTakesOnlyOrdersThatReduce(t *testing.T) {
 			"expiry": time.Now().Add(time.Hour).Unix(), "action_json": action, "signature": "0xsig",
 		})
 		rec := httptest.NewRecorder()
-		server.handleCreateOrder(rec, httptest.NewRequest(http.MethodPost, "/v1/orders", bytes.NewReader(body)))
+		server.handleCreateOrder(rec, httptest.NewRequest(http.MethodPost, "/orders", bytes.NewReader(body)))
 		return rec
 	}
 	stored := func(id string) (bool, bool) {
@@ -81,14 +81,14 @@ func TestPerpCloseOnlyTakesOnlyOrdersThatReduce(t *testing.T) {
 	}
 }
 
-// /v1/markets says so: the perp block carries close_only.
+// /markets says so: the perp block carries close_only.
 func TestMarketsShowsThePerpCloseOnly(t *testing.T) {
 	for _, on := range []bool{true, false} {
 		rpc := stubPerpRPC(t, big.NewInt(0))
 		server := perpServer(t, rpc.URL)
 		server.cfg.CNGNPerpCloseOnly = on
 		rec := httptest.NewRecorder()
-		server.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/v1/markets", nil))
+		server.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/markets", nil))
 		rpc.Close()
 		var markets []struct {
 			Perp *struct {

@@ -26,7 +26,7 @@ import (
 // refuses new perp orders too: an index it cannot check is the condition the gate exists for.
 //
 // Enforcement is a separate switch (INDEX_LAG_GATE) from the status endpoint, so the publisher can
-// be seen pushing and the lag watched on /v1/markets before anything is refused.
+// be seen pushing and the lag watched on /markets before anything is refused.
 
 type indexStatusReport struct {
 	// AtMs is the sample's time, Unix ms, from the publisher's clock.
@@ -126,7 +126,7 @@ func (g *indexLagGate) allows(onChainIndex *big.Int) error {
 	return nil
 }
 
-// presentation is what /v1/markets shows under the perp block.
+// presentation is what /markets shows under the perp block.
 func (g *indexLagGate) presentation(onChainIndex *big.Int) indexLagPresentation {
 	bps, age, ok := g.lag(onChainIndex)
 	p := indexLagPresentation{Enforced: g.enforce, MaxBps: g.maxBps}

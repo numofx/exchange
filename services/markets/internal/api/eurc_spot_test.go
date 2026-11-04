@@ -142,11 +142,11 @@ func TestUIDecimalsMatchTheSpotContractEcho(t *testing.T) {
 	}
 }
 
-// /v1/markets lists both spots, each bound to its own escrow, and only EURC-USDC without a ui_intent spec.
+// /markets lists both spots, each bound to its own escrow, and only EURC-USDC without a ui_intent spec.
 func TestHandleMarketsListsBothSpotsUnderTheirOwnAssets(t *testing.T) {
 	server := NewServer(config.Config{}, nil, instruments.DefaultRegistry(twoSpotConfig()))
 	rec := httptest.NewRecorder()
-	server.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/v1/markets", nil))
+	server.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/markets", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}

@@ -16,7 +16,7 @@ import (
 	"github.com/numofx/matching-backend/internal/instruments"
 )
 
-// The integration endpoints restate USDCcNGN-SPOT in the orientation /v1/markets advertises, which
+// The integration endpoints restate USDCcNGN-SPOT in the orientation /markets advertises, which
 // since cngn_usdc_spot_v1 is the engine's own: cNGN priced in USDC. Every expected value below is
 // worked out by hand from the engine rows seeded, at the UI's scales, so a handler that inverts
 // anything, or shows the engine's 18 places, fails here.
@@ -98,7 +98,7 @@ values ($1, $2, $3, $4, $5, $6, $7, $8)`,
 	}
 
 	t.Run("orderbook bids buy cNGN and asks sell it, aggregated and rounded away from the touch", func(t *testing.T) {
-		rec := get(server.handleIntegrationOrderbook, "/v1/integrations/orderbook?ticker_id=USDCcNGN-SPOT")
+		rec := get(server.handleIntegrationOrderbook, "/integrations/orderbook?ticker_id=USDCcNGN-SPOT")
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 		}
@@ -120,7 +120,7 @@ values ($1, $2, $3, $4, $5, $6, $7, $8)`,
 	})
 
 	t.Run("orderbook depth counts levels, not orders", func(t *testing.T) {
-		rec := get(server.handleIntegrationOrderbook, "/v1/integrations/orderbook?ticker_id=USDCcNGN-SPOT&depth=2")
+		rec := get(server.handleIntegrationOrderbook, "/integrations/orderbook?ticker_id=USDCcNGN-SPOT&depth=2")
 		var got integrationOrderbookResponse
 		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 			t.Fatalf("unmarshal: %v body=%s", err, rec.Body.String())
@@ -136,7 +136,7 @@ values ($1, $2, $3, $4, $5, $6, $7, $8)`,
 	})
 
 	t.Run("tickers report cNGN base volume and match the orderbook touch", func(t *testing.T) {
-		rec := get(server.handleIntegrationTickers, "/v1/integrations/tickers")
+		rec := get(server.handleIntegrationTickers, "/integrations/tickers")
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 		}
@@ -175,7 +175,7 @@ values ($1, $2, $3, $4, $5, $6, $7, $8)`,
 	})
 
 	t.Run("trades are priced in USDC per cNGN with the taker's cNGN side", func(t *testing.T) {
-		rec := get(server.handleIntegrationTrades, "/v1/integrations/trades?ticker_id=USDCcNGN-SPOT")
+		rec := get(server.handleIntegrationTrades, "/integrations/trades?ticker_id=USDCcNGN-SPOT")
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 		}
@@ -199,7 +199,7 @@ values ($1, $2, $3, $4, $5, $6, $7, $8)`,
 	})
 
 	t.Run("the canonical ticker_id and its deprecated alias answer alike, the alias with a Deprecation header", func(t *testing.T) {
-		for _, path := range []string{"/v1/integrations/orderbook?ticker_id=", "/v1/integrations/trades?ticker_id="} {
+		for _, path := range []string{"/integrations/orderbook?ticker_id=", "/integrations/trades?ticker_id="} {
 			handler := server.handleIntegrationOrderbook
 			if strings.Contains(path, "trades") {
 				handler = server.handleIntegrationTrades
@@ -236,16 +236,16 @@ values ($1, $2, $3, $4, $5, $6, $7, $8)`,
 
 	t.Run("rejects missing or unknown tickers instead of falling back to a default", func(t *testing.T) {
 		for _, target := range []string{
-			"/v1/integrations/orderbook",
-			"/v1/integrations/orderbook?ticker_id=BTC-PERP",
-			"/v1/integrations/orderbook?ticker_id=USDCcNGN-SPOT&depth=0",
-			"/v1/integrations/orderbook?ticker_id=USDCcNGN-SPOT&depth=501",
-			"/v1/integrations/trades?ticker_id=nope",
-			"/v1/integrations/trades?ticker_id=USDCcNGN-SPOT&limit=501",
-			"/v1/integrations/trades?ticker_id=USDCcNGN-SPOT&before_trade_id=-1",
+			"/integrations/orderbook",
+			"/integrations/orderbook?ticker_id=BTC-PERP",
+			"/integrations/orderbook?ticker_id=USDCcNGN-SPOT&depth=0",
+			"/integrations/orderbook?ticker_id=USDCcNGN-SPOT&depth=501",
+			"/integrations/trades?ticker_id=nope",
+			"/integrations/trades?ticker_id=USDCcNGN-SPOT&limit=501",
+			"/integrations/trades?ticker_id=USDCcNGN-SPOT&before_trade_id=-1",
 		} {
 			handler := server.handleIntegrationOrderbook
-			if strings.HasPrefix(target, "/v1/integrations/trades") {
+			if strings.HasPrefix(target, "/integrations/trades") {
 				handler = server.handleIntegrationTrades
 			}
 			if rec := get(handler, target); rec.Code != http.StatusBadRequest {

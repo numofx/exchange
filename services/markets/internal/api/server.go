@@ -36,17 +36,17 @@ type Server struct {
 	signatures  signatureChecker
 	hub         *events.Hub
 	wsAuth      wsauth.Verifier
-	// orderHistoryAuth verifies GET /v1/orders and GET /v1/fills frames: same domain as wsAuth, its own
+	// orderHistoryAuth verifies GET /orders and GET /fills frames: same domain as wsAuth, its own
 	// statement and validity window, so neither kind of frame is accepted by the other.
 	orderHistoryAuth wsauth.Verifier
-	// withdrawals serves POST /v1/withdrawals; nil when not fully configured, and the endpoint answers 503.
+	// withdrawals serves POST /withdrawals; nil when not fully configured, and the endpoint answers 503.
 	withdrawals *withdrawalService
-	// deposits serves POST /v1/deposits; nil unless DEPOSITS_ENABLED and fully configured, and the endpoint answers 503.
+	// deposits serves POST /deposits; nil unless DEPOSITS_ENABLED and fully configured, and the endpoint answers 503.
 	deposits *depositService
-	// perp reads cNGN-PERP's chain state for /v1/markets and /v1/positions; nil without a perp.
+	// perp reads cNGN-PERP's chain state for /markets and /positions; nil without a perp.
 	perp *perpStateReader
 	// futureSeries reads each listed future series, keyed by futureSeriesKey (asset and sub id, never the
-	// expiry alone): /v1/markets, order admission, reduce-only and /v1/positions read a series only
+	// expiry alone): /markets, order admission, reduce-only and /positions read a series only
 	// through its own reader. Nil without a chain to read.
 	futureSeries map[string]*futures.Reader
 	optionSeries map[string]*options.Reader
@@ -189,7 +189,7 @@ type presentedTrade struct {
 	MakerOrderID  string      `json:"maker_order_id,omitempty"`
 	CreatedAt     time.Time   `json:"created_at"`
 	// TxHash is the settling transaction, for a link to the explorer; omitted for fills recorded
-	// before it was stored. Owner fills (/v1/fills) carry the same field.
+	// before it was stored. Owner fills (/fills) carry the same field.
 	TxHash         string                 `json:"tx_hash,omitempty"`
 	ContractType   string                 `json:"contract_type,omitempty"`
 	SettlementType string                 `json:"settlement_type,omitempty"`

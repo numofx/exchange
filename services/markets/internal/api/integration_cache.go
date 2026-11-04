@@ -13,7 +13,7 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// The /v1/integrations endpoints are for third parties that poll, and every uncached request reads
+// The /integrations endpoints are for third parties that poll, and every uncached request reads
 // the same Postgres the matcher and trading UI depend on (including the expiry UPDATE ListBook and
 // BestBidAndAsk run first). This cache puts a ceiling on that: at most one computation per distinct
 // request per TTL, however many clients poll and however fast.
@@ -116,8 +116,7 @@ func integrationCacheKey(r *http.Request, params []string) string {
 			canonical.Set(name, value)
 		}
 	}
-	// With or without /v1 is one endpoint, so it is one entry: the cache exists to bound reads of the book.
-	return strings.TrimPrefix(r.URL.Path, "/v1") + "?" + canonical.Encode()
+	return r.URL.Path + "?" + canonical.Encode()
 }
 
 func (c *integrationCache) lookup(key string) (cachedIntegrationResponse, bool) {

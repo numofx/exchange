@@ -23,7 +23,7 @@ const clockSkew = 60 * time.Second
 // every existing client already signs, so it must never change.
 const DefaultStatement = "authenticate for the Numo markets WebSocket"
 
-// OrderHistoryStatement authorizes reading an owner's order history over GET /v1/orders. It is
+// OrderHistoryStatement authorizes reading an owner's order history over GET /orders. It is
 // distinct from DefaultStatement so a frame signed for one cannot be replayed against the other:
 // the two accept very different validity windows, and a long-lived history frame must not open a
 // WebSocket session.

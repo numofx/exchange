@@ -52,9 +52,9 @@ type fillsResponse struct {
 	NextBefore string `json:"next_before,omitempty"`
 }
 
-// handleFills serves GET /v1/fills: the fills on the authenticated owner's orders, newest first.
+// handleFills serves GET /fills: the fills on the authenticated owner's orders, newest first.
 //
-// It takes the same signed login as GET /v1/orders. A fill is part of an owner's order history — it
+// It takes the same signed login as GET /orders. A fill is part of an owner's order history — it
 // is what the orders listed there actually did — and asking a trader to sign twice to see one account
 // would buy no protection: either frame already reveals which orders are theirs. As with order
 // history, the owner comes only from the signature. The public trade tape carries order ids but no

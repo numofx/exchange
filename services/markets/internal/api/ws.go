@@ -172,7 +172,7 @@ func (c *wsConn) handleSubscribe(ctx context.Context, in wsIn) {
 
 	// Frames and the subscription key carry the market's canonical symbol, whatever identifier
 	// the client subscribed with (a deprecated alias, or asset:sub_id), so two spellings of one
-	// market are one subscription and every frame names the market the same way /v1/markets does.
+	// market are one subscription and every frame names the market the same way /markets does.
 	// An unscoped orders subscription has no market and keeps an empty one.
 	market := meta.Symbol
 	key := channel + "|" + market

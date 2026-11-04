@@ -8,7 +8,7 @@
 #   withdraw <sub>    withdraw 10 USDC of perp cash back to the wallet (one sponsored transaction)
 #   approve           USDC.approve(DepositModule, 10 USDC), paid by the wallet itself
 #   topup <sub>       deposit 10 USDC into the existing account, on the approval (one sponsored transaction)
-#   status <hash>     GET /v1/deposits/<action_hash>
+#   status <hash>     GET /deposits/<action_hash>
 #
 # cNGN (no permit exists for it, so the wallet approves once, paying its own gas):
 #   approve-cngn      cNGN.approve(DepositModule, CNGN_AMOUNT)
@@ -98,7 +98,7 @@ deposit() { # subaccount amount with_permit [asset]
     body=$(jq -c --arg v "$2" --arg d "$expiry" --arg s "$(sign_permit "$2" "$expiry")" \
       '. + {permit:{value:$v, deadline:$d, signature:$s}}' <<<"$body")
   fi
-  post /v1/deposits "$body"
+  post /deposits "$body"
 }
 
 withdraw() { # subaccount amount [asset]
@@ -107,7 +107,7 @@ withdraw() { # subaccount amount [asset]
   data=$(cast abi-encode 'f(address,uint256)' "${3:-$PERP_CASH}" "$2")
   action=$(action_json "$1" "$(fresh_nonce)" "$WITHDRAWAL_MODULE" "$data" "$expiry")
   sig=$(sign_action "$action")
-  post /v1/withdrawals "$(jq -nc --argjson a "$action" --arg s "$sig" '{action:$a, signature:$s}')"
+  post /withdrawals "$(jq -nc --argjson a "$action" --arg s "$sig" '{action:$a, signature:$s}')"
 }
 
 case "${1:-}" in
@@ -120,6 +120,6 @@ case "${1:-}" in
   open-cngn) deposit 0 "$CNGN_AMOUNT" none "$CNGN_ESCROW" ;;
   topup-cngn) deposit "${2:?subaccount id}" "$CNGN_AMOUNT" none "$CNGN_ESCROW" ;;
   withdraw-cngn) withdraw "${2:?subaccount id}" "$CNGN_AMOUNT" "$CNGN_ESCROW" ;;
-  status) curl -sS -w '\nHTTP %{http_code}\n' "$API/v1/deposits/${2:?action hash}" ;;
+  status) curl -sS -w '\nHTTP %{http_code}\n' "$API/deposits/${2:?action hash}" ;;
   *) sed -n '2,22p' "$0"; exit 2 ;;
 esac

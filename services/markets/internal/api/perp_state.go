@@ -16,7 +16,7 @@ import (
 )
 
 // cNGN-PERP's live state, read from its own stack on chain: mark, index, funding, open interest
-// and margin rates for /v1/markets, and per-account positions for /v1/positions.
+// and margin rates for /markets, and per-account positions for /positions.
 //
 // The UI orientation is the engine's own: prices in USDC per cNGN, sizes in cNGN, and a UI long is
 // the on-chain long of the cNGN perp. The *_ui fields are the chain's figures at the UI's scales,
@@ -639,7 +639,7 @@ func uiPriceString(price *big.Int) string {
 	return formatDecimal(new(big.Rat).SetFrac(price, perpE18), perpPriceScale)
 }
 
-// handlePositions serves GET /v1/positions?subaccount_id=N, read from chain: the account's perp
+// handlePositions serves GET /positions?subaccount_id=N, read from chain: the account's perp
 // positions and perp margin accounts under "positions" and "accounts", its dated-futures positions
 // under "futures", and its margin under the futures engine it is under under "futures_account" (absent
 // when it is under none of the listed series' engines; an account has one manager, so with v1 and v2

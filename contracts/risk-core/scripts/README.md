@@ -323,13 +323,13 @@ Canonical sequence:
 3. boot `markets-service`
 4. submit one tiny crossed live order pair
 5. confirm exactly one `trade_fills` row lands
-6. confirm `GET /v1/trades` returns that fill
+6. confirm `GET /trades` returns that fill
 7. confirm `stats_24h.last` equals the fill price
 
 Hard readiness checks before launch:
 
 - `quoteSpotFeed.getSpot()` must succeed onchain
-- `/v1/trades` must reflect the latest live fill
+- `/trades` must reflect the latest live fill
 
 If either check fails, the market is not launch-ready.
 

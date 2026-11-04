@@ -205,7 +205,7 @@ func TestMarketsAndPositionsReportCngnCollateralOnceConfigured(t *testing.T) {
 	defer rpc.Close()
 	without := perpServer(t, rpc.URL)
 	rec := httptest.NewRecorder()
-	without.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/v1/markets", nil))
+	without.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/markets", nil))
 	var plain []struct {
 		Perp struct {
 			CollateralAssets []perpCollateralAsset `json:"collateral_assets"`
@@ -220,7 +220,7 @@ func TestMarketsAndPositionsReportCngnCollateralOnceConfigured(t *testing.T) {
 
 	s := perpServerWithCollateral(t, rpc.URL)
 	rec = httptest.NewRecorder()
-	s.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/v1/markets", nil))
+	s.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/markets", nil))
 	var markets []struct {
 		Perp struct {
 			CollateralAssets []perpCollateralAsset `json:"collateral_assets"`
@@ -246,7 +246,7 @@ func TestMarketsAndPositionsReportCngnCollateralOnceConfigured(t *testing.T) {
 	defer func() { stubDepositsOpen = 0 }()
 	s.perp.cache = map[string]cachedPerpState{}
 	rec = httptest.NewRecorder()
-	s.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/v1/markets", nil))
+	s.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/markets", nil))
 	if err := json.Unmarshal(rec.Body.Bytes(), &markets); err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +255,7 @@ func TestMarketsAndPositionsReportCngnCollateralOnceConfigured(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	s.handlePositions(rec, httptest.NewRequest(http.MethodGet, "/v1/positions?subaccount_id=25", nil))
+	s.handlePositions(rec, httptest.NewRequest(http.MethodGet, "/positions?subaccount_id=25", nil))
 	var body struct {
 		Accounts []presentedPerpAccount `json:"accounts"`
 	}
@@ -280,7 +280,7 @@ func TestMarketsServesPerpStateInTheEngineOrientation(t *testing.T) {
 	server := perpServer(t, rpc.URL)
 
 	recorder := httptest.NewRecorder()
-	server.handleMarkets(recorder, httptest.NewRequest(http.MethodGet, "/v1/markets", nil))
+	server.handleMarkets(recorder, httptest.NewRequest(http.MethodGet, "/markets", nil))
 	var markets []marketPresentation
 	if err := json.Unmarshal(recorder.Body.Bytes(), &markets); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -322,7 +322,7 @@ func TestPositionsReportsANegativePositionAsAShort(t *testing.T) {
 	server := perpServer(t, rpc.URL)
 
 	recorder := httptest.NewRecorder()
-	server.handlePositions(recorder, httptest.NewRequest(http.MethodGet, "/v1/positions?subaccount_id=42", nil))
+	server.handlePositions(recorder, httptest.NewRequest(http.MethodGet, "/positions?subaccount_id=42", nil))
 	var body struct {
 		Positions []presentedPosition `json:"positions"`
 	}
@@ -353,7 +353,7 @@ func TestPositionsReportsAPositivePositionAsALong(t *testing.T) {
 	server := perpServer(t, rpc.URL)
 
 	recorder := httptest.NewRecorder()
-	server.handlePositions(recorder, httptest.NewRequest(http.MethodGet, "/v1/positions?subaccount_id=42", nil))
+	server.handlePositions(recorder, httptest.NewRequest(http.MethodGet, "/positions?subaccount_id=42", nil))
 	var body struct {
 		Positions []presentedPosition `json:"positions"`
 	}
@@ -373,7 +373,7 @@ func TestPositionsReportsAPositivePositionAsALong(t *testing.T) {
 	}
 
 	recorder = httptest.NewRecorder()
-	server.handleMarkets(recorder, httptest.NewRequest(http.MethodGet, "/v1/markets", nil))
+	server.handleMarkets(recorder, httptest.NewRequest(http.MethodGet, "/markets", nil))
 	if !strings.Contains(recorder.Body.String(), `"ui_long_funding_rate_1h":"0.0000125"`) {
 		t.Fatalf("the long pays the chain's rate as it is: %s", recorder.Body.String())
 	}
@@ -383,7 +383,7 @@ func TestPositionsIsEmptyForAnAccountWithNoPerp(t *testing.T) {
 	rpc := stubPerpRPC(t, big.NewInt(0))
 	defer rpc.Close()
 	recorder := httptest.NewRecorder()
-	perpServer(t, rpc.URL).handlePositions(recorder, httptest.NewRequest(http.MethodGet, "/v1/positions?subaccount_id=42", nil))
+	perpServer(t, rpc.URL).handlePositions(recorder, httptest.NewRequest(http.MethodGet, "/positions?subaccount_id=42", nil))
 	if !strings.Contains(recorder.Body.String(), `"positions":[]`) {
 		t.Fatalf("want an empty list, got %s", recorder.Body.String())
 	}
@@ -395,7 +395,7 @@ func TestPositionsIsEmptyForAnAccountWithNoPerp(t *testing.T) {
 
 func TestPositionsRequiresASubaccount(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	(&Server{}).handlePositions(recorder, httptest.NewRequest(http.MethodGet, "/v1/positions", nil))
+	(&Server{}).handlePositions(recorder, httptest.NewRequest(http.MethodGet, "/positions", nil))
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", recorder.Code)
 	}
@@ -409,7 +409,7 @@ func TestMarketsReportsTheGuardianPause(t *testing.T) {
 	srv := perpServer(t, rpc.URL)
 	read := func() (bool, bool) {
 		rec := httptest.NewRecorder()
-		srv.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/v1/markets", nil))
+		srv.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/markets", nil))
 		var markets []struct {
 			Market string `json:"market"`
 			Perp   *struct {
@@ -453,7 +453,7 @@ func TestLiftingAPauseDoesNotOpenAClosedMarket(t *testing.T) {
 	for _, step := range []int64{1, 0} {
 		stubPaused = step
 		rec := httptest.NewRecorder()
-		srv.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/v1/markets", nil))
+		srv.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/markets", nil))
 		if strings.Contains(rec.Body.String(), `"trading_enabled":true`) {
 			t.Fatalf("paused=%d on a cap-0 market read as enabled: %s", step, rec.Body.String())
 		}

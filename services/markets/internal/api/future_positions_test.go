@@ -25,7 +25,7 @@ type positionsBody struct {
 func getPositions(t *testing.T, server *Server, subaccount string) (positionsBody, string) {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	server.handlePositions(rec, httptest.NewRequest(http.MethodGet, "/v1/positions?subaccount_id="+subaccount, nil))
+	server.handlePositions(rec, httptest.NewRequest(http.MethodGet, "/positions?subaccount_id="+subaccount, nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 	}
@@ -43,7 +43,7 @@ func contractsWad(whole, tenths int64) *big.Int {
 var testFutureSymbol = instruments.FutureSymbol(testFutureExpiry)
 var testFutureSubID = strconv.FormatInt(testFutureExpiry, 10)
 
-// A futures position is on /v1/positions under "futures", read from the series at its expiry: a short
+// A futures position is on /positions under "futures", read from the series at its expiry: a short
 // of 2.5 contracts is 2,500 USDC of notional at the series' mark. The engine's margin is the
 // account's, so it is reported once under futures_account, not on the position.
 func TestPositionsListsTheFuturesPosition(t *testing.T) {
@@ -252,7 +252,7 @@ func TestPositionsOmitsTheFuturesAccountUnderAnotherManager(t *testing.T) {
 // configured, whether or not a future is.
 func TestPositionsKeepsThePerpKeysWithoutAPerp(t *testing.T) {
 	rec := httptest.NewRecorder()
-	(&Server{}).handlePositions(rec, httptest.NewRequest(http.MethodGet, "/v1/positions?subaccount_id=42", nil))
+	(&Server{}).handlePositions(rec, httptest.NewRequest(http.MethodGet, "/positions?subaccount_id=42", nil))
 	if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusOK || got != `{"accounts":[],"futures":[],"positions":[]}` {
 		t.Fatalf("nothing configured: %d %s", rec.Code, got)
 	}
@@ -314,7 +314,7 @@ func TestPositionsServesTheFuturesWhenThePerpCannotBeRead(t *testing.T) {
 func TestPositionsIsA502WhenThePerpCannotBeReadAndNoFutureIsListed(t *testing.T) {
 	server := perpServer(t, deadRPC(t))
 	rec := httptest.NewRecorder()
-	server.handlePositions(rec, httptest.NewRequest(http.MethodGet, "/v1/positions?subaccount_id=42", nil))
+	server.handlePositions(rec, httptest.NewRequest(http.MethodGet, "/positions?subaccount_id=42", nil))
 	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "could not read the account's manager from chain") {
 		t.Fatalf("want the 502 as before, got %d %s", rec.Code, rec.Body.String())
 	}
@@ -364,7 +364,7 @@ func TestPositionsNeverPutsTheRPCURLInTheResponse(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	perpServer(t, keyed).handlePositions(rec, httptest.NewRequest(http.MethodGet, "/v1/positions?subaccount_id=42", nil))
+	perpServer(t, keyed).handlePositions(rec, httptest.NewRequest(http.MethodGet, "/positions?subaccount_id=42", nil))
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("want the 502 without a future, got %d %s", rec.Code, rec.Body.String())
 	}
@@ -417,7 +417,7 @@ func TestPositionsIsEmptyForAnAccountUnderAnotherManager(t *testing.T) {
 	rpc := stubPerpRPC(t, big.NewInt(0))
 	defer rpc.Close()
 	rec := httptest.NewRecorder()
-	perpServer(t, rpc.URL).handlePositions(rec, httptest.NewRequest(http.MethodGet, "/v1/positions?subaccount_id=42", nil))
+	perpServer(t, rpc.URL).handlePositions(rec, httptest.NewRequest(http.MethodGet, "/positions?subaccount_id=42", nil))
 	if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusOK || got != `{"accounts":[],"futures":[],"positions":[]}` {
 		t.Fatalf("want an empty 200, got %d %s", rec.Code, got)
 	}
@@ -432,7 +432,7 @@ func TestPositionsReadsThePerpUnderTheCloseOnlyManager(t *testing.T) {
 	server := perpServer(t, rpc.URL)
 	server.cfg.CNGNPerpCloseOnlyManager = closeOnly
 	rec := httptest.NewRecorder()
-	server.handlePositions(rec, httptest.NewRequest(http.MethodGet, "/v1/positions?subaccount_id=42", nil))
+	server.handlePositions(rec, httptest.NewRequest(http.MethodGet, "/positions?subaccount_id=42", nil))
 	var body positionsBody
 	_ = json.Unmarshal(rec.Body.Bytes(), &body)
 	if rec.Code != http.StatusOK || len(body.Positions) != 1 || len(body.Accounts) != 1 {
@@ -454,7 +454,7 @@ func TestPositionsReportsAFailedManagerRead(t *testing.T) {
 		t.Fatalf("a failed manager read is a perp_error with the perp keys absent: %s", raw)
 	}
 	rec := httptest.NewRecorder()
-	perpServer(t, perpRPC.URL).handlePositions(rec, httptest.NewRequest(http.MethodGet, "/v1/positions?subaccount_id=42", nil))
+	perpServer(t, perpRPC.URL).handlePositions(rec, httptest.NewRequest(http.MethodGet, "/positions?subaccount_id=42", nil))
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("without a future it is the 502: %d %s", rec.Code, rec.Body.String())
 	}

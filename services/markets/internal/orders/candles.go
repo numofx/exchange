@@ -90,7 +90,7 @@ func (r *Repository) ListCandles(
 
 	// open/close come from array_agg ordered by time; high/low from array_agg
 	// ordered by price. Taking all four from the stored text (rather than a
-	// numeric aggregate) keeps their formatting identical to /v1/trades.
+	// numeric aggregate) keeps their formatting identical to /trades.
 	const query = `
 with bucketed as (
   select

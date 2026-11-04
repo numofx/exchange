@@ -47,7 +47,7 @@ type orderHistoryResponse struct {
 	NextBefore string `json:"next_before,omitempty"`
 }
 
-// handleOrderHistory serves GET /v1/orders: the authenticated owner's orders in every status,
+// handleOrderHistory serves GET /orders: the authenticated owner's orders in every status,
 // newest first.
 //
 // Authentication is required, and the owner comes only from the signature — never from a query

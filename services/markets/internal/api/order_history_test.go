@@ -71,7 +71,7 @@ func signedHistoryHeader(t *testing.T, key []byte, verifier wsauth.Verifier, iss
 }
 
 func getOrderHistory(server *Server, header, query string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodGet, "/v1/orders"+query, nil)
+	req := httptest.NewRequest(http.MethodGet, "/orders"+query, nil)
 	if header != "" {
 		req.Header.Set(orderHistoryAuthHeader, header)
 	}
@@ -244,7 +244,7 @@ values ($1, '0', $2, $3, 'buy', $4, $5)
 		t.Helper()
 		rec := getOrderHistory(server, header, query)
 		if rec.Code != http.StatusOK {
-			t.Fatalf("GET /v1/orders%s status = %d body=%s", query, rec.Code, rec.Body.String())
+			t.Fatalf("GET /orders%s status = %d body=%s", query, rec.Code, rec.Body.String())
 		}
 		if bytes.Contains(rec.Body.Bytes(), []byte(`"orders":null`)) {
 			t.Fatalf("orders must be an array, got %s", rec.Body.String())

@@ -168,7 +168,7 @@ func postDeposit(t *testing.T, server *Server, body any) *httptest.ResponseRecor
 		t.Fatalf("encode body: %v", err)
 	}
 	rec := httptest.NewRecorder()
-	server.handleCreateDeposit(rec, httptest.NewRequest(http.MethodPost, "/v1/deposits", bytes.NewReader(encoded)))
+	server.handleCreateDeposit(rec, httptest.NewRequest(http.MethodPost, "/deposits", bytes.NewReader(encoded)))
 	return rec
 }
 
@@ -465,7 +465,7 @@ func counted(h *depositHarness) *countingSubmitter {
 
 func getDeposit(t *testing.T, server *Server, hash string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/v1/deposits/"+hash, nil)
+	req := httptest.NewRequest(http.MethodGet, "/deposits/"+hash, nil)
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("action_hash", hash)
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))

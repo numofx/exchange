@@ -44,7 +44,7 @@ type Config struct {
 	// passes, and a second verifyAndMatch goes out for a fill already broadcast.
 	ExecutorTimeout time.Duration
 	// WithdrawalModuleAddress is the WithdrawalModule every signed withdrawal must target. With
-	// ExecutorWithdrawURL unset or this unset, POST /v1/withdrawals answers 503.
+	// ExecutorWithdrawURL unset or this unset, POST /withdrawals answers 503.
 	WithdrawalModuleAddress string
 	// WithdrawalAssetAddresses are the wrapped assets a withdrawal may pay out of, lowercased:
 	// WITHDRAWAL_ASSET_ADDRESSES, or by default the quote asset and the cNGN spot asset.
@@ -56,7 +56,7 @@ type Config struct {
 	// It must exceed that service's WITHDRAWAL_RECEIPT_TIMEOUT_MS, or the API reports an unknown
 	// outcome for a withdrawal that was about to land.
 	ExecutorWithdrawTimeout time.Duration
-	// Signed deposits (POST /v1/deposits), through the deployed DepositModule with the venue paying gas. Off unless
+	// Signed deposits (POST /deposits), through the deployed DepositModule with the venue paying gas. Off unless
 	// DEPOSITS_ENABLED; when on and anything below is missing, the endpoint answers 503 rather than half-check.
 	DepositsEnabled bool
 	// DepositModuleAddress is the DepositModule every signed deposit must target.
@@ -118,7 +118,7 @@ type Config struct {
 	// API refuses one that would open, add to or flip a position) and the matcher holds every perp leg,
 	// resting ones included, to what reduces its account's position. For a perp with no market maker to
 	// exit against. Exits stay open; nothing new can be opened. Do not turn it off before
-	// numofx/trading-app#131: the trading app reads a /v1/positions perp read failure (a 200 with the perp
+	// numofx/trading-app#131: the trading app reads a /positions perp read failure (a 200 with the perp
 	// keys absent) as a flat perp. Terraform refuses cngn_perp_close_only = false until then.
 	CNGNPerpCloseOnly bool
 	// CNGNPerpReopenAck (CNGN_PERP_REOPEN_ACK) must equal PerpReopenAck for a configured perp to boot
@@ -126,7 +126,7 @@ type Config struct {
 	CNGNPerpReopenAck string
 	// CNGNPerpCollateralAddress is the perp stack's own cNGN escrow (risk-core
 	// CNGN_PERP_COLLATERAL.json `escrow`), once the vault has whitelisted it as a base asset on the
-	// perp SRM. Optional: unset, the perp is margined in its cash only and /v1/positions reports no
+	// perp SRM. Optional: unset, the perp is margined in its cash only and /positions reports no
 	// collateral. It is also a withdrawable asset by default.
 	CNGNPerpCollateralAddress string
 	// The cNGN future (risk-core MARGIN_ENGINE.json): a FutureAsset series quoted in cNGN per USDC,
@@ -192,7 +192,7 @@ type Config struct {
 	WSAuthMaxTTL     time.Duration // max validity window of a single signed auth frame (replay bound)
 	WSAllowedOrigins []string      // browser Origin allowlist; empty = same-origin only
 
-	// Max validity window of a GET /v1/orders auth frame (internal/wsauth, OrderHistoryStatement).
+	// Max validity window of a GET /orders auth frame (internal/wsauth, OrderHistoryStatement).
 	// Longer than WSAuthMaxTTL because every history request is verified, where a socket verifies
 	// once per connection; the frame only reads the signer's own orders.
 	OrderHistoryAuthMaxTTL time.Duration
@@ -497,7 +497,7 @@ func (c Config) validatePerpStack() error {
 	if listed && !c.CNGNPerpCloseOnly && c.CNGNPerpReopenAck != PerpReopenAck {
 		return fmt.Errorf("the perp is configured without CNGN_PERP_CLOSE_ONLY=true, and CNGN_PERP_REOPEN_ACK is not %q: "+
 			"the perp may not reopen until numofx/trading-app#131 is fixed (the trading app shows a perp holder as flat "+
-			"whenever /v1/positions cannot read the perp). Set CNGN_PERP_CLOSE_ONLY=true, or, once #131 is merged and "+
+			"whenever /positions cannot read the perp). Set CNGN_PERP_CLOSE_ONLY=true, or, once #131 is merged and "+
 			"deployed, CNGN_PERP_REOPEN_ACK=%s", PerpReopenAck, PerpReopenAck)
 	}
 	return nil
@@ -696,7 +696,7 @@ func parseExecutorManagerData(data []byte) (string, error) {
 	return trimmed, nil
 }
 
-// DepositAsset is one wrapped asset POST /v1/deposits accepts.
+// DepositAsset is one wrapped asset POST /deposits accepts.
 type DepositAsset struct {
 	// Address is the wrapped asset (the CashAsset, or a WrappedERC20Asset escrow), lowercased.
 	Address string

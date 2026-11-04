@@ -24,7 +24,7 @@ const (
 	futureAPIStateTTL = 30 * time.Second
 )
 
-// futureMarketState is the series as the chain has it, on its /v1/markets entry. Prices are in the
+// futureMarketState is the series as the chain has it, on its /markets entry. Prices are in the
 // series' own unit: cNGN per USDC on a v1 series, USDC per base on a v2 one. Absent fields were
 // unreadable: a client must treat them as unknown, not as zero.
 type futureMarketState struct {
@@ -152,7 +152,7 @@ func futureSeriesKey(asset, subID string) string {
 }
 
 // newFutureSeriesReaders gives every enabled future in the registry its own reader, of its own kind:
-// /v1/markets, order admission, reduce-only and /v1/positions all read a series through it. Nil without
+// /markets, order admission, reduce-only and /positions all read a series through it. Nil without
 // a chain to read.
 func newFutureSeriesReaders(cfg config.Config, registry *instruments.Registry) map[string]*futures.Reader {
 	if registry == nil || strings.TrimSpace(cfg.ChainRPCURL) == "" {
@@ -174,7 +174,7 @@ func (s *Server) futureReader(instrument instruments.Metadata) *futures.Reader {
 	return s.futureSeries[futureSeriesKey(instrument.AssetAddress, instrument.SubID)]
 }
 
-// Series status on /v1/positions: trading until last trade time, closing from then until the
+// Series status on /positions: trading until last trade time, closing from then until the
 // settlement price is fixed, settled after.
 const (
 	futureStatusTrading = "trading"
@@ -182,7 +182,7 @@ const (
 	futureStatusSettled = "settled"
 )
 
-// presentedFuturePosition is an account's position in one dated-futures series, on /v1/positions. A v1
+// presentedFuturePosition is an account's position in one dated-futures series, on /positions. A v1
 // series is USDC-cNGN, priced in cNGN per USDC: a long is long USDC, and gains when the naira weakens
 // (the price rises). A v2 series is <BASE>-<expiry>, priced in USDC per base: a long is long the base.
 // Variation margin accrues at every mark and is realised into cash at each settlement, when the manager

@@ -30,7 +30,7 @@ func TestADelistedPerpIsAnUnknownMarketUnderEitherName(t *testing.T) {
 	server := &Server{cfg: cfg, instruments: instruments.DefaultRegistry(cfg)}
 	for _, symbol := range []string{"cNGN-PERP", "USDCcNGN-PERP"} {
 		rec := httptest.NewRecorder()
-		if _, ok := server.resolveMarket(rec, httptest.NewRequest(http.MethodGet, "/v1/book?symbol="+symbol, nil)); ok {
+		if _, ok := server.resolveMarket(rec, httptest.NewRequest(http.MethodGet, "/book?symbol="+symbol, nil)); ok {
 			t.Errorf("%s resolved", symbol)
 		}
 		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"unknown_market"`) {
@@ -38,7 +38,7 @@ func TestADelistedPerpIsAnUnknownMarketUnderEitherName(t *testing.T) {
 		}
 	}
 	for _, symbol := range []string{instruments.CNGNSpotSymbol} {
-		if _, ok := server.resolveMarket(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/v1/book?symbol="+symbol, nil)); !ok {
+		if _, ok := server.resolveMarket(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/book?symbol="+symbol, nil)); !ok {
 			t.Errorf("%s no longer resolves", symbol)
 		}
 	}
@@ -55,7 +55,7 @@ func TestADelistedPerpHasNoStateAndTheMarketsListLeavesItOut(t *testing.T) {
 	registry := instruments.DefaultRegistry(cfg)
 	server := &Server{cfg: cfg, instruments: registry, futureSeries: newFutureSeriesReaders(cfg, registry)}
 	rec := httptest.NewRecorder()
-	server.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/v1/markets", nil))
+	server.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/markets", nil))
 	var entries []map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &entries); err != nil {
 		t.Fatalf("markets: %v %s", err, rec.Body.String())

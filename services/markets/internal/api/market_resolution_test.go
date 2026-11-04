@@ -28,7 +28,7 @@ func resolutionServer(t *testing.T) *Server {
 }
 
 // Every market identifier the REST market-data endpoints might be sent that is not one the venue
-// lists. GET /v1/book?symbol=cNGN-PERP once returned the spot book under that name; each of these
+// lists. GET /book?symbol=cNGN-PERP once returned the spot book under that name; each of these
 // must now be a 400 that names the identifiers the venue accepts.
 var unknownMarketQueries = []string{
 	"symbol=usdccngn-spot",
@@ -49,9 +49,9 @@ var unknownMarketQueries = []string{
 func TestMarketDataEndpointsRefuseUnknownMarkets(t *testing.T) {
 	server := resolutionServer(t)
 	handlers := map[string]http.HandlerFunc{
-		"/v1/book":    server.handleBook,
-		"/v1/trades":  server.handleTrades,
-		"/v1/candles": server.handleCandles,
+		"/book":    server.handleBook,
+		"/trades":  server.handleTrades,
+		"/candles": server.handleCandles,
 	}
 	for path, handler := range handlers {
 		for _, query := range unknownMarketQueries {
@@ -88,7 +88,7 @@ func TestResolveMarketAcceptsListedIdentifiersOnly(t *testing.T) {
 	}
 	for query, want := range cases {
 		rec := httptest.NewRecorder()
-		market, ok := server.resolveMarket(rec, httptest.NewRequest(http.MethodGet, "/v1/book?"+query, nil))
+		market, ok := server.resolveMarket(rec, httptest.NewRequest(http.MethodGet, "/book?"+query, nil))
 		if !ok || market.Symbol != want {
 			t.Errorf("resolveMarket(%q) = %q, %v; want %q (%s)", query, market.Symbol, ok, want, rec.Body.String())
 		}
@@ -104,8 +104,8 @@ func TestResolveMarketAcceptsListedIdentifiersOnly(t *testing.T) {
 	}
 
 	// The spot and the perp never cross: each symbol resolves to its own asset.
-	spot, _ := server.resolveMarket(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/v1/book?symbol="+instruments.CNGNSpotSymbol, nil))
-	perp, _ := server.resolveMarket(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/v1/book?symbol="+instruments.CNGNPerpSymbol, nil))
+	spot, _ := server.resolveMarket(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/book?symbol="+instruments.CNGNSpotSymbol, nil))
+	perp, _ := server.resolveMarket(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/book?symbol="+instruments.CNGNPerpSymbol, nil))
 	if spot.AssetAddress != resolutionSpotAsset || perp.AssetAddress != resolutionPerpAsset {
 		t.Fatalf("spot -> %s, perp -> %s", spot.AssetAddress, perp.AssetAddress)
 	}
@@ -114,8 +114,8 @@ func TestResolveMarketAcceptsListedIdentifiersOnly(t *testing.T) {
 func TestIntegrationEndpointsRefuseUnknownTickers(t *testing.T) {
 	server := resolutionServer(t)
 	handlers := map[string]http.HandlerFunc{
-		"/v1/integrations/orderbook": server.handleIntegrationOrderbook,
-		"/v1/integrations/trades":    server.handleIntegrationTrades,
+		"/integrations/orderbook": server.handleIntegrationOrderbook,
+		"/integrations/trades":    server.handleIntegrationTrades,
 	}
 	for path, handler := range handlers {
 		for _, ticker := range []string{"usdccngn-spot", "cngn-usdc", "USDCcNGN", "cNGN", "BTC-PERP"} {

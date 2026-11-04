@@ -23,7 +23,7 @@ import (
 	"github.com/numofx/matching-backend/internal/ordersig"
 )
 
-// Signed deposits: POST /v1/deposits opens a perp margin account (subaccount_id 0) or tops one up, through the
+// Signed deposits: POST /deposits opens a perp margin account (subaccount_id 0) or tops one up, through the
 // already-deployed DepositModule, with the venue paying gas. The trader still approves USDC to the DepositModule
 // once, on chain; everything after that is this endpoint.
 //
@@ -47,7 +47,7 @@ const (
 	sigBalanceOf   = "0x70a08231" // balanceOf(address)
 	sigAllowanceOf = "0xdd62ed3e" // allowance(address,address)
 	// A WrappedERC20Asset escrow's cap under a manager, what is posted under it, and whether it accepts that manager:
-	// the same reads GET /v1/perp/state makes for collateral_assets.
+	// the same reads GET /perp/state makes for collateral_assets.
 	sigEscrowCap   = "0x745ab570" // totalPositionCap(address)
 	sigEscrowTotal = "0xa9578774" // totalPosition(address)
 	sigEscrowOpen  = "0x97d51c04" // whitelistedManager(address)
@@ -76,7 +76,7 @@ type depositPermit struct {
 
 // depositReceipt is the answer: execution-service's receipt, the account credited, and the amount in each unit.
 type depositReceipt struct {
-	// ActionHash is Matching.getActionHash of the signed action: the key for GET /v1/deposits/{action_hash}.
+	// ActionHash is Matching.getActionHash of the signed action: the key for GET /deposits/{action_hash}.
 	ActionHash string `json:"action_hash,omitempty"`
 	// Status is the record's: pending, submitted, confirmed, reverted, rejected or unknown (migration 000018).
 	Status        string `json:"status,omitempty"`
@@ -131,7 +131,7 @@ type depositReceipts interface {
 	DepositOutcome(ctx context.Context, txHash, owner string) (mined, success bool, block, account string, err error)
 }
 
-// depositService is everything POST /v1/deposits needs. Nil unless DEPOSITS_ENABLED and fully configured; the
+// depositService is everything POST /deposits needs. Nil unless DEPOSITS_ENABLED and fully configured; the
 // endpoint then answers 503.
 type depositService struct {
 	moduleAddress string
@@ -243,7 +243,7 @@ func formatDepositUnits(units *big.Int) string {
 	return fmt.Sprintf("%s.%0*s", whole, depositTokenDecimals, frac.String())
 }
 
-// handleCreateDeposit serves POST /v1/deposits. Every check fails closed, in order:
+// handleCreateDeposit serves POST /deposits. Every check fails closed, in order:
 //
 //  1. the request itself -- module, owner = signer, expiry, data, asset, amount, manager (400)
 //  2. at most one deposit in flight per owner, a few a minute, and DEPOSITS_PER_OWNER_PER_HOUR submitted an hour (429)
@@ -365,7 +365,7 @@ func (s *Server) handleCreateDeposit(w http.ResponseWriter, r *http.Request) {
 	svc.hourly.record(owner, svc.now())
 	receipt, err := svc.submitter.SubmitDeposit(r.Context(), req)
 	if err != nil {
-		// The record is public (GET /v1/deposits/{action_hash}), so it keeps a fixed message: the error can carry the
+		// The record is public (GET /deposits/{action_hash}), so it keeps a fixed message: the error can carry the
 		// executor's URL, or, in an execution-service 500, its RPC's (an Alchemy URL holds the API key). The error is
 		// logged in full by writeDepositSubmitError.
 		rec.Status, rec.Error, rec.Revert = depositUnknown, depositUnconfirmedMessage, ""
@@ -406,7 +406,7 @@ func (svc *depositService) save(ctx context.Context, rec depositRecord) {
 	}
 }
 
-// handleGetDeposit serves GET /v1/deposits/{action_hash}: the deposit's record, with a broadcast deposit whose receipt
+// handleGetDeposit serves GET /deposits/{action_hash}: the deposit's record, with a broadcast deposit whose receipt
 // was not known re-read from the chain first.
 func (s *Server) handleGetDeposit(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")

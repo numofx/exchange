@@ -9,13 +9,13 @@ import (
 	"testing"
 )
 
-// legacyListingGolden is the /v1/markets entry today's deployment serves for its one series
+// legacyListingGolden is the /markets entry today's deployment serves for its one series
 // (CNGN_FUTURE_ASSET_ADDRESS / CNGN_FUTURE_EXPIRY / CNGN_FUTURE_MANAGER_ADDRESS), captured before the
 // series list existed (exchange #228). Regenerate only for a change meant to reach that listing:
 // UPDATE_GOLDEN=1 go test ./internal/api -run TestTheLegacySingleSeriesConfigServesTodaysListing
 var legacyListingGolden = filepath.Join("testdata", "legacy_future_listing.golden.json")
 
-// The single-series envs alone, as every deployment sets them today, produce the same /v1/markets
+// The single-series envs alone, as every deployment sets them today, produce the same /markets
 // entry, byte for byte but for the clock (updated_at, and the stub's last trade time, set from now).
 func TestTheLegacySingleSeriesConfigServesTodaysListing(t *testing.T) {
 	rpc := newFutureRPC()
@@ -24,7 +24,7 @@ func TestTheLegacySingleSeriesConfigServesTodaysListing(t *testing.T) {
 	s := futureServer(t, srv.URL)
 
 	rec := httptest.NewRecorder()
-	s.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/v1/markets", nil))
+	s.handleMarkets(rec, httptest.NewRequest(http.MethodGet, "/markets", nil))
 	var entries []map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &entries); err != nil {
 		t.Fatalf("markets: %v %s", err, rec.Body.String())
@@ -51,6 +51,6 @@ func TestTheLegacySingleSeriesConfigServesTodaysListing(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(got) != string(want) {
-		t.Fatalf("the legacy config's /v1/markets changed:\n got %s\nwant %s", got, want)
+		t.Fatalf("the legacy config's /markets changed:\n got %s\nwant %s", got, want)
 	}
 }

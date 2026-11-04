@@ -76,7 +76,7 @@ type withdrawalSubmitter interface {
 	SubmitWithdrawal(ctx context.Context, request withdrawalRequest) (withdrawalReceipt, error)
 }
 
-// withdrawalService is everything POST /v1/withdrawals needs. A nil service means withdrawals are not fully
+// withdrawalService is everything POST /withdrawals needs. A nil service means withdrawals are not fully
 // configured, and the endpoint answers 503 rather than accept anything it cannot completely check.
 type withdrawalService struct {
 	moduleAddress string
@@ -136,7 +136,7 @@ func newWithdrawalService(cfg config.Config, signatures signatureChecker) *withd
 	}
 }
 
-// handleCreateWithdrawal serves POST /v1/withdrawals: a trader's signed withdrawal from a subaccount held by
+// handleCreateWithdrawal serves POST /withdrawals: a trader's signed withdrawal from a subaccount held by
 // Matching, submitted by execution-service through the WithdrawalModule.
 //
 // Unlike order submission, every check here fails closed: a signature that cannot be verified, or an owner that
