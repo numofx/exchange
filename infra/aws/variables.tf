@@ -476,8 +476,8 @@ variable "image_market_maker" {
   # 2026-10-21: d3a78aa3a2df, market-maker #42 (SpotMarket names only the cNGN spot market; with EURC-USDC listed
   # the old image could pick it at startup and refuse to run). Everything else in it already runs as the future
   # maker's 91ad6ac7462e. EURC rollout step 0.
-  # 2026-11-04: d3a78aa3a2df plus the /v1 path change only (market-maker tag deploy/mm-*-no-v1), so no strategy change.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:3b0062f8a494"
+  # 2026-11-04: d3a78aa3a2df plus the /v1 path change and the fee-schedule fix only (market-maker tag deploy/mm-spot-fee-fix), so no strategy change.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:02d731887851"
 }
 
 variable "image_market_maker_perp" {

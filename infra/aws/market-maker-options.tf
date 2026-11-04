@@ -13,8 +13,8 @@ variable "image_market_maker_options" {
   description = "The options maker's mm-bot image, tagged by git SHA: market-maker 697d70e9 or later. Empty creates nothing."
   type        = string
   # market-maker main 697d70e9 (options mode, per-strike pool cap), built by build-and-push.sh 2026-11-02.
-  # 2026-11-04: 697d70e95773 plus the /v1 path change only (market-maker tag deploy/mm-*-no-v1), so no strategy change.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:ff99c1135650"
+  # 2026-11-04: 697d70e95773 plus the /v1 path change and the fee-schedule fix only (market-maker tag deploy/mm-options-fee-fix), so no strategy change.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:63616ac6b7ea"
 }
 
 variable "mm_options_subaccount_id" {
