@@ -166,7 +166,7 @@ func (s *Server) handleCreateWithdrawal(w http.ResponseWriter, r *http.Request) 
 	}
 	if err := svc.validate(req); err != nil {
 		slog.Info("withdrawal_rejected", "stage", "request", "subaccount_id", req.Action.SubaccountID, "error", err)
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusBadRequest, errorBody(err))
 		return
 	}
 
@@ -186,7 +186,7 @@ func (s *Server) handleCreateWithdrawal(w http.ResponseWriter, r *http.Request) 
 	if _, err := s.signatures.Verify(r.Context(), withdrawalOrdersigAction(req.Action), req.Signature, req.Action.Signer); err != nil {
 		if errors.Is(err, ordersig.ErrInvalidSignature) {
 			slog.Info("withdrawal_rejected", "stage", "signature", "owner", owner, "subaccount_id", req.Action.SubaccountID)
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			writeJSON(w, http.StatusUnauthorized, errorBody(err))
 			return
 		}
 		slog.Warn("withdrawal_signature_unverifiable", "owner", owner, "subaccount_id", req.Action.SubaccountID, "error", err)
@@ -197,7 +197,7 @@ func (s *Server) handleCreateWithdrawal(w http.ResponseWriter, r *http.Request) 
 	recordedOwner, err := svc.custody.DepositedOwner(r.Context(), req.Action.SubaccountID)
 	if err != nil {
 		if errors.Is(err, errNotDepositedInMatching) {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			writeJSON(w, http.StatusBadRequest, errorBody(err))
 			return
 		}
 		slog.Warn("withdrawal_custody_unreadable", "owner", owner, "subaccount_id", req.Action.SubaccountID, "error", err)

@@ -271,12 +271,12 @@ func (s *Server) handleCreateDeposit(w http.ResponseWriter, r *http.Request) {
 	data, err := svc.validate(req)
 	if err != nil {
 		slog.Info("deposit_rejected", "stage", "request", "subaccount_id", req.Action.SubaccountID, "error", err)
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusBadRequest, errorBody(err))
 		return
 	}
 	actionHash, err := ordersig.ActionHash(withdrawalOrdersigAction(req.Action))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusBadRequest, errorBody(err))
 		return
 	}
 
@@ -303,7 +303,7 @@ func (s *Server) handleCreateDeposit(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.signatures.Verify(r.Context(), withdrawalOrdersigAction(req.Action), req.Signature, req.Action.Signer); err != nil {
 		if errors.Is(err, ordersig.ErrInvalidSignature) {
 			slog.Info("deposit_rejected", "stage", "signature", "owner", owner)
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			writeJSON(w, http.StatusUnauthorized, errorBody(err))
 			return
 		}
 		slog.Warn("deposit_signature_unverifiable", "owner", owner, "error", err)

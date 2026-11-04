@@ -641,13 +641,17 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 
 	params, err := req.toParams(s.cfg)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusBadRequest, errorBody(err))
 		return
 	}
 	if s.custody != nil {
 		if err := s.custody.ValidateDeposited(r.Context(), params.SubaccountID); err != nil {
 			slog.Warn("order_submit_rejected_custody", "order_id", params.OrderID, "subaccount_id", params.SubaccountID, "error", err)
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			if errors.Is(err, errCustodyUnreadable) {
+				writeJSON(w, http.StatusServiceUnavailable, errorBody(errCustodyUnreadable))
+				return
+			}
+			writeJSON(w, http.StatusBadRequest, errorBody(err))
 			return
 		}
 	}
@@ -657,7 +661,7 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 	// proven against real traffic before it can reject anything.
 	if err := s.verifyOrderSignature(r.Context(), req, params); err != nil {
 		if s.cfg.EnforceOrderSignatures {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			writeJSON(w, http.StatusBadRequest, errorBody(err))
 			return
 		}
 	}
@@ -691,7 +695,7 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 				if errors.Is(err, errIndexBlind) {
 					status = http.StatusServiceUnavailable
 				}
-				writeJSON(w, status, map[string]string{"error": err.Error()})
+				writeJSON(w, status, errorBody(err))
 				return
 			}
 		}
@@ -741,7 +745,7 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 			statusCode = http.StatusConflict
 		}
 		slog.Error("create order", "error", err)
-		writeJSON(w, statusCode, map[string]string{"error": err.Error()})
+		writeJSON(w, statusCode, errorBody(err))
 		return
 	}
 
@@ -789,7 +793,7 @@ func (s *Server) handleCancelOrder(w http.ResponseWriter, r *http.Request) {
 	)
 
 	if err := req.validate(); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusBadRequest, errorBody(err))
 		return
 	}
 
@@ -821,14 +825,14 @@ func (s *Server) handleCancelOrder(w http.ResponseWriter, r *http.Request) {
 			"reason", strings.TrimSpace(req.Reason),
 			"error", err,
 		)
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusForbidden, errorBody(err))
 		return
 	}
 	// Signature check is observe-first: the outcome is always logged, but a cancel is rejected on
 	// it only once EnforceCancelSignatures is on, so unsigned clients keep working until they ship
 	// signed cancels. An unverifiable check (RPC failure) returns nil and never rejects.
 	if sigErr := s.verifyCancelSignature(r.Context(), req, time.Now()); sigErr != nil && s.cfg.EnforceCancelSignatures {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": sigErr.Error()})
+		writeJSON(w, http.StatusUnauthorized, errorBody(sigErr))
 		return
 	}
 
