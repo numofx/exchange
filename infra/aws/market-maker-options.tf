@@ -100,6 +100,9 @@ resource "aws_ecs_task_definition" "market_maker_options" {
       { name = "MM_MAX_SHORT_INVENTORY", value = "-300000" },
 
       { name = "MM_ORDER_EXPIRY_SECONDS", value = "300" },
+      # Ten strikes a cycle: at the 2s default the options maker made ~60 RPC reads every 2s and exhausted the plan
+      # (2026-11-12). Quotes live 300s, so a 10s requote is ample.
+      { name = "MM_POLL_INTERVAL_MS", value = "10000" },
       { name = "MM_PROTECTED_ORDER_ID_PREFIXES", value = "validation:,smoke:,manual:,test:" },
       { name = "MM_METRICS_ADDR", value = ":8080" },
       { name = "MM_READINESS_MISSING_QUOTE_TIMEOUT_SECONDS", value = "120" },
