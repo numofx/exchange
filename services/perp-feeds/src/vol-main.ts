@@ -6,6 +6,7 @@ import { createAlerter } from './alert.js';
 import { createChain } from './chain.js';
 import { loadVolConfig, type VolConfig } from './vol-config.js';
 import { VolPublisher } from './vol-publisher.js';
+import { installRpcCounter } from './rpc-count.js';
 
 /**
  * The vol publisher for cNGN options (numo-vol-feeds.service): its own KMS signer and relayer. Each tick decides the
@@ -18,6 +19,8 @@ async function volSigner(config: VolConfig): Promise<LocalAccount> {
 }
 
 async function main() {
+  // Every RPC call this process makes is counted and logged as "rpc_calls" each minute.
+  installRpcCounter();
   const config = loadVolConfig();
   const alert = createAlerter(config.ALERT_WEBHOOK_URL || undefined, undefined, undefined, undefined, 'vol-feeds cNGN options');
   let signer: LocalAccount;

@@ -6,12 +6,14 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/numofx/matching-backend/internal/api"
 	"github.com/numofx/matching-backend/internal/config"
 	"github.com/numofx/matching-backend/internal/db"
 	"github.com/numofx/matching-backend/internal/futures"
 	"github.com/numofx/matching-backend/internal/instruments"
+	"github.com/numofx/matching-backend/internal/rpccount"
 )
 
 func main() {
@@ -31,6 +33,8 @@ func main() {
 	// requests instead of dropping them mid-response.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// Before any client dials: every RPC call this process makes is counted and logged as "rpc_calls" each minute.
+	rpccount.Install(ctx, slog.Default(), time.Minute)
 
 	// A series with no taker fee is dropped, or kept close-only while it holds positions, rather than
 	// refused at load: refusing would stop every market, not just the one missing its fee.

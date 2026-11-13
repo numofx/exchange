@@ -7,6 +7,7 @@ import { createChain } from './chain.js';
 import { loadForwardConfig, type ForwardConfig } from './forward-config.js';
 import { ForwardPublisher } from './forward-publisher.js';
 import { ExpiryKeeper } from './expiry-keeper.js';
+import { installRpcCounter } from './rpc-count.js';
 
 /**
  * The keeper for a dated future, one unit per series (numo-future-feeds.service for v1's
@@ -66,6 +67,8 @@ export function alertTag(config: Pick<ForwardConfig, 'FUTURE_VERSION' | 'BASE_SY
 }
 
 async function main() {
+  // Every RPC call this process makes is counted and logged as "rpc_calls" each minute.
+  installRpcCounter();
   const config = loadForwardConfig();
   const alert = createAlerter(config.ALERT_WEBHOOK_URL || undefined, undefined, undefined, undefined, alertTag(config));
   const signer = await obtainSigner(config, alert);

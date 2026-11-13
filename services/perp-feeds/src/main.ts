@@ -7,6 +7,7 @@ import { fetchPegTicker, pegMid, pegReading } from './peg.js';
 import { acceptIndexStep, fetchKeeperHealth, parseStepArgs } from './index-step.js';
 import { assertRpcIsLocal, localPegTicker, localSources, parseFixedPrice, parseLocalSources, publishFixedPrice } from './local-fixed-price.js';
 import { MarkPublisher } from './mark-publisher.js';
+import { installRpcCounter } from './rpc-count.js';
 
 /**
  * The cNGN-PERP price publishers: the index (rate-picker sources → median → 15-minute TWAP →
@@ -63,6 +64,8 @@ async function main() {
     await probeSources(config);
     return;
   }
+  // Every RPC call this process makes is counted and logged as "rpc_calls" each minute.
+  installRpcCounter();
   const chain = createChain(config);
   const alert = createAlerter(config.ALERT_WEBHOOK_URL || undefined);
 

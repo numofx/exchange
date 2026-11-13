@@ -6,6 +6,7 @@ import type { CollateralConfig } from './collateral.js';
 import { loadConfig } from './config.js';
 import { fmt } from './health.js';
 import { runOnce, type PassSummary } from './keeper.js';
+import { installRpcCounter } from './rpc-count.js';
 
 /**
  * Liquidation keeper for one manager (the perp SRM, the MarginEngine, or MarginEngine v2, each its own
@@ -15,6 +16,8 @@ import { runOnce, type PassSummary } from './keeper.js';
  * stack's solvency. Dry run (simulate, never send) until DRY_RUN=false.
  */
 async function main() {
+  // Every RPC call this process makes is counted and logged as "rpc_calls" each minute.
+  installRpcCounter();
   const config = loadConfig();
   const chain = createKeeperChain(config);
   const alert = createAlerter(config.ALERT_WEBHOOK_URL || undefined, undefined, undefined, undefined, config.ALERT_PREFIX);

@@ -4,6 +4,7 @@ import { SettlementCanary, settlementCanaryOptions } from './canary.js';
 import { loadConfig, loadDeploymentAddresses } from './config.js';
 import { loadContractArtifacts } from './contracts.js';
 import { MatchExecutor } from './executor.js';
+import { installRpcCounter } from './rpc-count.js';
 
 // Probe mode, for the container health check. Runs before loadConfig on purpose:
 // a health check that parses the full env can fail over a missing PRIVATE_KEY
@@ -37,6 +38,9 @@ if (process.argv.includes('--healthcheck') || process.argv.includes('-healthchec
     process.exit(1);
   }
 }
+
+// Every RPC call this process makes is counted and logged as "rpc_calls" each minute.
+installRpcCounter();
 
 const config = loadConfig();
 // The deployment record is the fallback for addresses the environment does not name, so it is read
