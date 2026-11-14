@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/numofx/matching-backend/internal/config"
 )
 
@@ -48,7 +50,20 @@ type Reader struct {
 	marketID    *big.Int
 	subAccounts string
 	open        *openState
+	// Each account's manager as last read, and when; concurrent reads of one account share a request.
+	managers map[string]managerRead
+	inFlight singleflight.Group
 }
+
+type managerRead struct {
+	at      time.Time
+	manager string
+}
+
+// managerTTL is how long an account's manager is used without reading it again. Every option order read it, and a
+// maker sends a strike's quotes ten at a time (2026-11-14). A manager changes only by its owner's transaction, and an
+// order admitted on a stale one cannot settle and is cancelled by the matcher.
+const managerTTL = 30 * time.Second
 
 type openState struct {
 	at     time.Time
@@ -210,6 +225,30 @@ func (r *Reader) IsolatedIM(ctx context.Context, strike *big.Int, isCall bool, b
 
 // ManagerOf is the manager the account is under (SubAccounts.manager): only the option's engine can hold it.
 func (r *Reader) ManagerOf(ctx context.Context, account *big.Int) (string, error) {
+	key := account.String()
+	r.mu.Lock()
+	cached, ok := r.managers[key]
+	r.mu.Unlock()
+	if ok && r.now().Sub(cached.at) < managerTTL {
+		return cached.manager, nil
+	}
+	manager, err, _ := r.inFlight.Do(key, func() (any, error) {
+		manager, err := r.readManager(ctx, account)
+		if err != nil {
+			return "", err
+		}
+		r.mu.Lock()
+		if r.managers == nil {
+			r.managers = map[string]managerRead{}
+		}
+		r.managers[key] = managerRead{at: r.now(), manager: manager}
+		r.mu.Unlock()
+		return manager, nil
+	})
+	return manager.(string), err
+}
+
+func (r *Reader) readManager(ctx context.Context, account *big.Int) (string, error) {
 	ledger, err := r.ledger(ctx)
 	if err != nil {
 		return "", err

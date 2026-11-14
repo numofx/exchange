@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/numofx/matching-backend/internal/config"
 )
 
@@ -37,7 +39,19 @@ type chainCustodyChecker struct {
 
 	mu              sync.RWMutex
 	subAccountsAddr string
+
+	// Subaccounts confirmed deposited, and until when that answer is used (custodyConfirmedTTL); concurrent checks of
+	// one subaccount share a single read. Only a confirmation is kept, never a refusal or a failed read.
+	confirmed map[string]time.Time
+	inFlight  singleflight.Group
+	now       func() time.Time
 }
+
+// custodyConfirmedTTL is how long a confirmed deposit is trusted without reading the chain again. Every order read
+// custody twice, so a maker quoting ten strikes at once made twenty reads, over the public RPC's 25/s (2026-11-14).
+// It only changes when the owner withdraws the subaccount from Matching, and an order accepted in that window
+// cannot settle and is cancelled by the matcher, as one is today when custody moves after it rests.
+const custodyConfirmedTTL = 30 * time.Second
 
 func newCustodyChecker(cfg config.Config) custodyChecker {
 	if !cfg.EnforceMatchingCustody {
@@ -62,6 +76,33 @@ func (c *chainCustodyChecker) ValidateDeposited(ctx context.Context, subaccountI
 	if subaccountID == "" {
 		return fmt.Errorf("subaccount_id is required")
 	}
+	now := time.Now
+	if c.now != nil {
+		now = c.now
+	}
+	c.mu.RLock()
+	until, ok := c.confirmed[subaccountID]
+	c.mu.RUnlock()
+	if ok && now().Before(until) {
+		return nil
+	}
+	_, err, _ := c.inFlight.Do(subaccountID, func() (any, error) {
+		if err := c.readDeposited(ctx, subaccountID); err != nil {
+			return nil, err
+		}
+		c.mu.Lock()
+		if c.confirmed == nil {
+			c.confirmed = map[string]time.Time{}
+		}
+		c.confirmed[subaccountID] = now().Add(custodyConfirmedTTL)
+		c.mu.Unlock()
+		return nil, nil
+	})
+	return err
+}
+
+// readDeposited reads, uncached, whether Matching holds the subaccount with an owner recorded.
+func (c *chainCustodyChecker) readDeposited(ctx context.Context, subaccountID string) error {
 
 	subAccountsAddress, err := c.subAccountsAddress(ctx)
 	if err != nil {
