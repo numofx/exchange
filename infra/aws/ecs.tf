@@ -225,6 +225,7 @@ resource "aws_ecs_task_definition" "markets" {
       { name = "INDEX_STATUS_TOKEN", valueFrom = local.secret_arns.index_status_token },
       { name = "DATABASE_URL", valueFrom = local.secret_arns.database_url },
       { name = "CHAIN_RPC_URL", valueFrom = local.secret_arns.rpc_url },
+      { name = "CHAIN_RPC_FALLBACK_URL", valueFrom = local.secret_arns.rpc_fallback_url },
     ]
 
     healthCheck = {
@@ -274,6 +275,7 @@ resource "aws_ecs_task_definition" "matcher" {
     secrets = [
       { name = "DATABASE_URL", valueFrom = local.secret_arns.database_url },
       { name = "CHAIN_RPC_URL", valueFrom = local.secret_arns.rpc_url },
+      { name = "CHAIN_RPC_FALLBACK_URL", valueFrom = local.secret_arns.rpc_fallback_url },
       # Settlement failures post here (internal/matching/settlement_alert.go): the canary's channel.
       { name = "ALERT_WEBHOOK_URL", valueFrom = local.secret_arns.alert_webhook_url },
     ]

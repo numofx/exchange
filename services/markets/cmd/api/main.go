@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/numofx/matching-backend/internal/futures"
 	"github.com/numofx/matching-backend/internal/instruments"
 	"github.com/numofx/matching-backend/internal/rpccount"
+	"github.com/numofx/matching-backend/internal/rpcfallback"
 )
 
 func main() {
@@ -35,6 +37,11 @@ func main() {
 	defer stop()
 	// Before any client dials: every RPC call this process makes is counted and logged as "rpc_calls" each minute.
 	rpccount.Install(ctx, slog.Default(), time.Minute)
+	// After the counter, so it counts the refused call and its retry, each under its own host.
+	if err := rpcfallback.Install(cfg.ChainRPCURL, strings.TrimSpace(os.Getenv("CHAIN_RPC_FALLBACK_URL"))); err != nil {
+		slog.Error("CHAIN_RPC_FALLBACK_URL", "error", err)
+		os.Exit(1)
+	}
 
 	// A series with no taker fee is dropped, or kept close-only while it holds positions, rather than
 	// refused at load: refusing would stop every market, not just the one missing its fee.

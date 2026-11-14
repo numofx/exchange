@@ -16,7 +16,9 @@ variable "image_market_maker_options" {
   # 2026-11-04: 697d70e95773 plus the /v1 path change and the fee-schedule fix only (market-maker tag deploy/mm-options-fee-fix), so no strategy change.
   # 2026-11-13: aa70ebe99d18 = market-maker main: strikes share identical chain reads (c7e60178; ten copies a cycle
   # exhausted the RPC plan on 2026-11-12) and rpc_calls logging (aa70ebe9).
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:aa70ebe99d18"
+  # 2026-11-14: 2da71a190895 = market-maker main: a call the public RPC refuses with 429 is retried on
+  # MM_RPC_FALLBACK_URL (2da71a19).
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:2da71a190895"
 }
 
 variable "mm_options_subaccount_id" {
@@ -116,6 +118,7 @@ resource "aws_ecs_task_definition" "market_maker_options" {
       { name = "MM_OWNER_PRIVATE_KEY", valueFrom = local.secret_arns.mm_private_key },
       { name = "MM_SIGNER_PRIVATE_KEY", valueFrom = local.secret_arns.mm_private_key },
       { name = "MM_RPC_URL", valueFrom = local.secret_arns.mm_rpc_url },
+      { name = "MM_RPC_FALLBACK_URL", valueFrom = local.secret_arns.rpc_fallback_url },
       { name = "MM_DATABASE_URL", valueFrom = local.secret_arns.database_url },
     ]
     healthCheck = {
