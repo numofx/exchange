@@ -21,7 +21,9 @@ variable "image_market_maker_future_v2" {
   # 2026-11-04: 364dbfe3afd6 plus the /v1 path change and the fee-schedule fix only (market-maker tag deploy/mm-future-v2-fee-fix), so no strategy change.
   # 2026-11-13: ddfe910d67ea = deploy/mm-future-v2-rpc-count, the previous image plus only market-maker aa70ebe9
   # (rpc_calls logged per minute by host, method and status), so no strategy change.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:ddfe910d67ea"
+  # 2026-11-14: f80fa90c3fa8 = deploy/mm-future-v2-rpc-fallback (ddfe910d + 2da71a19): a call the public RPC
+  # refuses with 429 is retried on MM_RPC_FALLBACK_URL; all ECS tasks share its 25/s limit through the NAT.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:f80fa90c3fa8"
 }
 
 variable "mm_future_v2_subaccount_ids" {
@@ -161,6 +163,7 @@ resource "aws_ecs_task_definition" "market_maker_future_v2" {
       { name = "MM_OWNER_PRIVATE_KEY", valueFrom = local.secret_arns.mm_private_key },
       { name = "MM_SIGNER_PRIVATE_KEY", valueFrom = local.secret_arns.mm_private_key },
       { name = "MM_RPC_URL", valueFrom = local.secret_arns.mm_rpc_url },
+      { name = "MM_RPC_FALLBACK_URL", valueFrom = local.secret_arns.rpc_fallback_url },
       { name = "MM_DATABASE_URL", valueFrom = local.secret_arns.database_url },
     ]
     healthCheck = {
