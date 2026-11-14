@@ -19,7 +19,9 @@ variable "image_market_maker_future_v2" {
   type        = string
   # market-maker main with #44 (American-terms series), built by build-and-push.sh 2026-10-31.
   # 2026-11-04: 364dbfe3afd6 plus the /v1 path change and the fee-schedule fix only (market-maker tag deploy/mm-future-v2-fee-fix), so no strategy change.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:085fc2b413c5"
+  # 2026-11-13: ddfe910d67ea = deploy/mm-future-v2-rpc-count, the previous image plus only market-maker aa70ebe9
+  # (rpc_calls logged per minute by host, method and status), so no strategy change.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:ddfe910d67ea"
 }
 
 variable "mm_future_v2_subaccount_ids" {

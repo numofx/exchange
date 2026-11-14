@@ -22,7 +22,9 @@ variable "image_market_maker_eurc" {
   type        = string
   # market-maker main with #43 (the chainlink anchor); quoting since 2026-10-26.
   # 2026-11-04: 54d7ae630278 plus the /v1 path change and the fee-schedule fix only (market-maker tag deploy/mm-eurc-fee-fix), so no strategy change.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:2bdbf9a1d3b9"
+  # 2026-11-13: 5d579b278892 = deploy/mm-eurc-rpc-count, the previous image plus only market-maker aa70ebe9 (rpc_calls
+  # logged per minute by host, method and status), so no strategy change.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:5d579b278892"
 }
 
 variable "mm_eurc_subaccount_id" {

@@ -14,7 +14,9 @@ variable "image_market_maker_options" {
   type        = string
   # market-maker main 697d70e9 (options mode, per-strike pool cap), built by build-and-push.sh 2026-11-02.
   # 2026-11-04: 697d70e95773 plus the /v1 path change and the fee-schedule fix only (market-maker tag deploy/mm-options-fee-fix), so no strategy change.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:63616ac6b7ea"
+  # 2026-11-13: aa70ebe99d18 = market-maker main: strikes share identical chain reads (c7e60178; ten copies a cycle
+  # exhausted the RPC plan on 2026-11-12) and rpc_calls logging (aa70ebe9).
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:aa70ebe99d18"
 }
 
 variable "mm_options_subaccount_id" {

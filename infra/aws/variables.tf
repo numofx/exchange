@@ -477,7 +477,9 @@ variable "image_market_maker" {
   # the old image could pick it at startup and refuse to run). Everything else in it already runs as the future
   # maker's 91ad6ac7462e. EURC rollout step 0.
   # 2026-11-04: d3a78aa3a2df plus the /v1 path change and the fee-schedule fix only (market-maker tag deploy/mm-spot-fee-fix), so no strategy change.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:02d731887851"
+  # 2026-11-13: 15f4c5f401de = deploy/mm-spot-rpc-count, the previous image plus only market-maker aa70ebe9 (rpc_calls
+  # logged per minute by host, method and status), so no strategy change.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:15f4c5f401de"
 }
 
 variable "image_market_maker_perp" {
