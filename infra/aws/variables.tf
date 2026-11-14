@@ -74,7 +74,7 @@ variable "image_markets" {
   # with an 18-minute matcher outage and an RDS restart; rollout completed ~19:44. Rollback is e5567ec40f97, in one apply.
   # 2026-11-03: main b2951be (219ac60: no limit price backfill at boot). Applied 20:16 UTC: markets td :56, matcher td :55, migrate td :49, 0 failed tasks. Every older image scans active_orders at boot, so a rollback
   # to 7235bbc7f41b brings that back.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:269aaeab8729"
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:3fe2553fb2d2"
 }
 
 variable "image_execution" {
@@ -82,7 +82,7 @@ variable "image_execution" {
   type        = string
   # 2026-10-19: main a74cec2c (#237: the settlement canary sums wrapper backing across the SRM and the MarginEngine,
   # probes each account through its own manager, and watches 34 and 32), on top of 45144dff (#231).
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/execution:a74cec2c6bb5"
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/execution:3fe2553fb2d2"
 }
 
 variable "secret_backend" {
