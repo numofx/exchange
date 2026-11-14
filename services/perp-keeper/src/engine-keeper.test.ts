@@ -9,6 +9,7 @@ import {
   encodeFunctionResult,
   getAddress,
   keccak256,
+  multicall3Abi,
   parseAbi,
   toHex,
   type Address,
@@ -16,7 +17,7 @@ import {
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
-import { createKeeperChain } from './chain.js';
+import { createKeeperChain, MULTICALL3 } from './chain.js';
 import { loadConfig, type Config } from './config.js';
 import { runOnce } from './keeper.js';
 
@@ -31,7 +32,6 @@ const base = {
   CASH: '0xA74E49b4Ed7cb176bc02ef4D8a1A3240C9aD4272',
   PERP: '0xC74EfC8B4808803dBCF439E76Fde076d56625b8E',
   SECURITY_MODULE_ACCOUNT: '21',
-  START_BLOCK: '100',
 };
 
 describe('the manager a keeper liquidates', () => {
@@ -106,7 +106,7 @@ describe('an engine with no perp (MarginEngine v2)', () => {
   test('reads its health with no perp, each future\'s cap on its own, and never the perp index', async () => {
     const { transport, indexReads } = staleEurcChain(V2);
     const config = loadConfig({
-      ...noPerp, MANAGER: V2, CHAIN_ID: '31337', START_BLOCK: '900', CNGN_ESCROW, CNGN_SPOT_FEED, EURC_ESCROW, EURC_SPOT_FEED,
+      ...noPerp, MANAGER: V2, CHAIN_ID: '31337', CNGN_ESCROW, CNGN_SPOT_FEED, EURC_ESCROW, EURC_SPOT_FEED,
       FUTURE: `${CNGN_FUTURE},${EURC_FUTURE}`,
     });
     const chain = createKeeperChain(config, transport);
@@ -132,6 +132,7 @@ function staleEurcChain(manager: Address = ENGINE) {
     'function getBalance(uint256 accountId, address asset, uint256 subId) view returns (int256)',
     'function ownerOf(uint256 accountId) view returns (address)',
     'function manager(uint256 accountId) view returns (address)',
+    'function lastAccountId() view returns (uint256)',
     'function getMarginAndMarkToMarket(uint256 accountId, uint256 scenarioId) view returns (int256 mm, int256 bm, int256 mtm)',
     'function getAuction(uint256 accountId) view returns ((uint256 accountId, uint256 scenarioId, bool insolvent, bool ongoing, uint256 cachedMM, uint256 startTime, uint256 reservedCash))',
     'function startAuction(uint256 accountId, uint256 scenarioId)',
@@ -147,23 +148,18 @@ function staleEurcChain(manager: Address = ENGINE) {
   const spotReads: string[] = [];
   const indexReads: string[] = [];
   const balances: Record<string, bigint> = { [`50:${EURC_ESCROW}`]: 1_000n * E18, [`52:${CNGN_ESCROW}`]: 1_000_000n * E18, [`40:${EURC_ESCROW}`]: 300n * E18 };
-  const created = [50n, 51n, 52n].map((accountId) => ({
-    address: base.SUB_ACCOUNTS, data: '0x', blockNumber: '0x64', transactionHash: keccak256('0x02'), transactionIndex: '0x0',
-    blockHash: keccak256('0x03'), logIndex: toHex(Number(accountId)), removed: false,
-    topics: encodeEventTopics({
-      abi: parseAbi(['event AccountCreated(address indexed owner, uint256 indexed accountId, address indexed manager)']),
-      eventName: 'AccountCreated',
-      args: { owner: '0x0000000000000000000000000000000000000001', accountId, manager },
-    }),
-  }));
+  // Accounts 1-52 exist; the manager's are #40 (the keeper's funding account, its own) and #50-#52.
+  const managed = new Set([40n, 50n, 51n, 52n]);
+  const someone: Address = '0x0000000000000000000000000000000000000001';
   const result = (functionName: string, value: unknown) => encodeFunctionResult({ abi, functionName: functionName as never, result: value as never });
   const call = (to: Address, data: Hex): Hex => {
     const { functionName, args } = decodeFunctionData({ abi, data });
     const a = (args ?? []) as readonly unknown[];
     switch (functionName) {
       case 'getBalance': return result(functionName, balances[`${a[0]}:${getAddress(a[1] as string)}`] ?? 0n);
-      case 'ownerOf': return result(functionName, keeperAddress);
-      case 'manager': return result(functionName, manager);
+      case 'ownerOf': return result(functionName, a[0] === 40n ? keeperAddress : someone);
+      case 'manager': return result(functionName, managed.has(a[0] as bigint) ? manager : someone);
+      case 'lastAccountId': return result(functionName, 52n);
       case 'getMarginAndMarkToMarket':
         if (a[0] === 50n) throw new Error('execution reverted: CLF_DataTooOld()');
         return result(functionName, a[0] === 51n ? [-1n * E18, -2n * E18, 500n * E18] : [100n * E18, 50n * E18, 1_000n * E18]);
@@ -187,12 +183,16 @@ function staleEurcChain(manager: Address = ENGINE) {
       case 'eth_chainId': return toHex(31337);
       case 'eth_blockNumber': return toHex(1_000n);
       case 'eth_getBalance': return toHex(E18);
-      case 'eth_getLogs': {
-        // Only the AccountCreated query (topic0 = AccountCreated) has entries; the manager moves have none.
-        const topic0 = (p[0].topics as Hex[] | undefined)?.[0];
-        return topic0 === created[0]!.topics[0] ? created : [];
+      case 'eth_call': {
+        const to = getAddress(p[0].to as string);
+        if (to !== MULTICALL3) return call(to, p[0].data as Hex);
+        const { args } = decodeFunctionData({ abi: multicall3Abi, data: p[0].data as Hex });
+        const results = (args[0] as readonly { target: Address; callData: Hex }[]).map(({ target, callData }) => ({
+          success: true,
+          returnData: call(getAddress(target), callData),
+        }));
+        return encodeFunctionResult({ abi: multicall3Abi, functionName: 'aggregate3', result: results });
       }
-      case 'eth_call': return call(getAddress(p[0].to as string), p[0].data as Hex);
       default: throw new Error(`unexpected ${method}`);
     }
   };
@@ -202,7 +202,7 @@ function staleEurcChain(manager: Address = ENGINE) {
 
 describe('a stale EURC feed', () => {
   const config = () =>
-    loadConfig({ ...base, MANAGER: ENGINE, CHAIN_ID: '31337', START_BLOCK: '900', CNGN_ESCROW, EURC_ESCROW, EURC_SPOT_FEED, MAX_EURC_INVENTORY: '250' });
+    loadConfig({ ...base, MANAGER: ENGINE, CHAIN_ID: '31337', CNGN_ESCROW, EURC_ESCROW, EURC_SPOT_FEED, MAX_EURC_INVENTORY: '250' });
 
   test('holds back only the account holding EURC, with a note and an alert, and the pass goes on', async () => {
     const { transport, spotReads } = staleEurcChain();
@@ -224,7 +224,7 @@ describe('a stale EURC feed', () => {
   test('an account whose margin is unreadable for any other reason is still margin-unreadable', async () => {
     const { transport } = staleEurcChain();
     // Without EURC configured, #50's revert is an ordinary unreadable margin, as it always was.
-    const cngnOnly = loadConfig({ ...base, MANAGER: ENGINE, CHAIN_ID: '31337', START_BLOCK: '900', CNGN_ESCROW });
+    const cngnOnly = loadConfig({ ...base, MANAGER: ENGINE, CHAIN_ID: '31337', CNGN_ESCROW });
     const alerts: string[] = [];
     const actions = await runOnce(cngnOnly, createKeeperChain(cngnOnly, transport), async (key) => void alerts.push(key));
     assert.deepEqual(actions.map((a) => a.accountId), [51n, 52n]);
@@ -281,14 +281,6 @@ function rpc(head: bigint) {
 }
 
 describe('the keeper behind a load-balanced RPC', () => {
-  test('account discovery never scans the last SCAN_CONFIRMATIONS blocks', async () => {
-    const { transport, ranges } = rpc(1_000n);
-    const config: Config = loadConfig({ ...base, MANAGER: ENGINE, CHAIN_ID: '31337', START_BLOCK: '900' });
-    await createKeeperChain(config, transport).discoverAccounts();
-    assert.ok(ranges.length > 0, 'it scanned');
-    assert.equal(ranges.at(-1)!.to, 997n, 'up to head - 3, where a lagging node already has the logs');
-  });
-
   test('cash read after its own funding transfer is the new balance, not the lagging node\'s', async () => {
     const { transport, calls } = rpc(1_000n);
     const config: Config = loadConfig({ ...base, MANAGER: ENGINE, CHAIN_ID: '31337' });
@@ -301,3 +293,58 @@ describe('the keeper behind a load-balanced RPC', () => {
 });
 
 export type { Address };
+
+describe('account discovery', () => {
+  const subAccounts = parseAbi([
+    'function lastAccountId() view returns (uint256)',
+    'function manager(uint256 accountId) view returns (address)',
+    'function ownerOf(uint256 accountId) view returns (address)',
+  ]);
+  const keeperAddress = privateKeyToAccount(base.KEEPER_KEY as Hex).address;
+  const someone: Address = '0x0000000000000000000000000000000000000001';
+
+  // SubAccounts' state, read the way discovery reads it: lastAccountId directly, managers and owners through
+  // Multicall3's aggregate3. Every method asked for is recorded.
+  function chainState(state: Map<bigint, { manager: Address; owner: Address }>) {
+    const methods: string[] = [];
+    const request = async ({ method, params }: { method: string; params?: unknown[] }) => {
+      methods.push(method);
+      if (method === 'eth_chainId') return toHex(31337);
+      if (method !== 'eth_call') throw new Error(`unexpected ${method}`);
+      const { to, data } = (params as [{ to: Address; data: Hex }])[0];
+      if (getAddress(to) === getAddress(base.SUB_ACCOUNTS)) {
+        return encodeFunctionResult({ abi: subAccounts, functionName: 'lastAccountId', result: BigInt(state.size) });
+      }
+      assert.equal(getAddress(to), MULTICALL3);
+      const { args } = decodeFunctionData({ abi: multicall3Abi, data });
+      const results = (args[0] as readonly { callData: Hex }[]).map(({ callData }) => {
+        const call = decodeFunctionData({ abi: subAccounts, data: callData });
+        const account = state.get((call.args as readonly [bigint])[0])!;
+        const result = call.functionName === 'manager' ? account.manager : account.owner;
+        return { success: true, returnData: encodeFunctionResult({ abi: subAccounts, functionName: call.functionName as 'manager', result }) };
+      });
+      return encodeFunctionResult({ abi: multicall3Abi, functionName: 'aggregate3', result: results });
+    };
+    return { transport: custom({ request } as never), methods };
+  }
+
+  test('finds the manager\'s accounts from SubAccounts\' state, in one multicall, with no log query', async () => {
+    const state = new Map<bigint, { manager: Address; owner: Address }>([
+      [1n, { manager: ENGINE, owner: someone }],
+      [2n, { manager: SRM, owner: someone }],
+      [3n, { manager: ENGINE, owner: keeperAddress }],
+      [4n, { manager: ENGINE, owner: someone }],
+      [5n, { manager: ENGINE, owner: someone }],
+    ]);
+    const { transport, methods } = chainState(state);
+    const chain = createKeeperChain(loadConfig({ ...base, MANAGER: ENGINE, CHAIN_ID: '31337' }), transport);
+
+    assert.deepEqual(await chain.discoverAccounts(), [1n, 4n, 5n], 'another manager\'s and the keeper\'s own are left out');
+    assert.equal(methods.filter((m) => m === 'eth_call').length, 2, 'lastAccountId, then one multicall');
+    assert.ok(!methods.includes('eth_getLogs'));
+
+    state.set(4n, { manager: SRM, owner: someone });
+    state.set(6n, { manager: ENGINE, owner: someone });
+    assert.deepEqual(await chain.discoverAccounts(), [1n, 5n, 6n], 'an account moved off is dropped, a new one found');
+  });
+});

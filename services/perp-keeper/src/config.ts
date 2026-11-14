@@ -67,15 +67,6 @@ const envSchema = z.object({
   SECURITY_MODULE_ACCOUNT: z.coerce.bigint(),
   /** The MarginEngine's VM pool (MARGIN_ENGINE.json poolAccount): never auctioned, never a candidate. */
   POOL_ACCOUNT: z.coerce.bigint().optional(),
-  /** Block the stack was deployed at: account discovery scans logs from here. */
-  START_BLOCK: z.coerce.bigint(),
-  LOG_CHUNK_BLOCKS: z.coerce.bigint().default(10_000n),
-  /**
-   * Account discovery scans logs only this many blocks behind the head it read. The RPC is load-balanced:
-   * the head comes from one node and the logs from another, and a node behind returns no logs, not an
-   * error, for blocks it has not imported, so a scan up to the head can skip an AccountCreated for good.
-   */
-  SCAN_CONFIRMATIONS: z.coerce.bigint().nonnegative().default(3n),
 
   POLL_INTERVAL_MS: z.coerce.number().int().positive().default(15_000),
   /**

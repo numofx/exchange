@@ -7,9 +7,10 @@ manager-specific: DutchAuction settles an account through its manager before an 
 every bid (`settlePerpsWithIndex`, which on the engine also realises every future's VM), and reads its margin
 through the manager. The engine's VM pool (`POOL_ACCOUNT`) is never a candidate. Every 15 seconds it:
 
-1. **Finds every account** under `MANAGER` from `AccountCreated` / `AccountManagerChanged` logs, up to
-   `SCAN_CONFIRMATIONS` (3) blocks behind the head: a load-balanced RPC's lagging node returns no logs, not
-   an error, for blocks it has not imported, and a scan up to the head would skip them for good.
+1. **Finds every account** under `MANAGER` from SubAccounts' own state: `lastAccountId`, then every
+   account's `manager` and `ownerOf` in one Multicall3 call (two requests a pass, on any RPC). It scanned
+   `AccountCreated` / `AccountManagerChanged` logs until 2026-11-14; the public Base RPC refuses
+   `eth_getLogs` outright, and a keyed plan bills log queries heavily.
 2. **Reads each one's margin and auction** through DutchAuction, and decides (`src/decide.ts`):
    - below maintenance margin, no auction → `startAuction`
    - recovered → `terminateAuction`
@@ -149,7 +150,6 @@ AUCTION=<auction>
 CASH=<cash>
 PERP=<perp>
 SECURITY_MODULE_ACCOUNT=<securityModuleAccount>
-START_BLOCK=<block the stack was deployed at>
 DRY_RUN=true
 MAX_BID_USD=2500
 HEALTH_PORT=9464

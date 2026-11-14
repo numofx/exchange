@@ -6,7 +6,6 @@ import {
   defineChain,
   http,
   parseAbi,
-  parseAbiItem,
   type Address,
   type Hex,
   type Transport,
@@ -137,6 +136,7 @@ const subAccountsAbi = parseAbi([
   'function createAccount(address owner, address manager) returns (uint256)',
   'function ownerOf(uint256 accountId) view returns (address)',
   'function manager(uint256 accountId) view returns (address)',
+  'function lastAccountId() view returns (uint256)',
   'function getAccountBalances(uint256 accountId) view returns ((address asset, uint256 subId, int256 balance)[])',
   'function submitTransfer((uint256 fromAcc, uint256 toAcc, address asset, uint256 subId, int256 amount, bytes32 assetData) assetTransfer, bytes managerData) returns (uint256)',
   'event AccountCreated(address indexed owner, uint256 indexed accountId, address indexed manager)',
@@ -156,12 +156,10 @@ const settleOptionsAbi = parseAbi(['function settleOptions(address option, uint2
 const optionAbi = parseAbi(['function calcSettlementValue(uint256 subId, int256 balance) view returns (int256 payout, bool priceSettled)']);
 const spotFeedAbi = parseAbi(['function getSpot() view returns (uint256, uint256)', 'error CLF_DataTooOld()', 'error CLF_InvalidPrice()']);
 
-const accountCreated = parseAbiItem(
-  'event AccountCreated(address indexed owner, uint256 indexed accountId, address indexed manager)',
-);
-const managerChanged = parseAbiItem(
-  'event AccountManagerChanged(uint256 indexed accountId, address indexed oldManager, address indexed newManager)',
-);
+/** Multicall3, at the same address on Base and on every fork of it. */
+export const MULTICALL3: Address = '0xcA11bde05977b3631167028862bE2a173976CA11';
+/** Calldata bytes per multicall: about 900 accounts' manager and owner reads in one eth_call. */
+const DISCOVERY_BATCH_BYTES = 64_000;
 
 export type AuctionCall =
   | { functionName: 'startAuction'; args: readonly [bigint, bigint] }
@@ -210,7 +208,6 @@ export function createKeeperChain(config: Config, transportOverride?: Transport)
   // Bid accounts that were created but never bid from (funding or the bid itself failed): still
   // cash-only, so still valid bidders. Reused before creating another.
   const spareBidAccounts: bigint[] = [];
-  let scannedTo = config.START_BLOCK - 1n;
 
   async function send(request: Parameters<typeof wallet.writeContract>[0]) {
     // Every keeper transaction touches the perp cash (bid-account funding moves it directly), so
@@ -298,24 +295,31 @@ export function createKeeperChain(config: Config, transportOverride?: Transport)
     keeper,
 
     /**
-     * Every account the perp SRM manages: created under it, or moved onto it, less any moved off.
-     * Scans incrementally, so each poll reads only the blocks since the last one.
+     * Every account MANAGER manages, read from SubAccounts' own state: `lastAccountId`, then each account's manager
+     * and owner in one multicall. It replaced a scan of AccountCreated and AccountManagerChanged logs on 2026-11-14:
+     * the public Base RPC refuses eth_getLogs at any range, and a keyed plan bills a log query heavily. Accounts are
+     * numbered from 1 and never burned, so the id range is complete, and a node that lags only delays an account by a
+     * pass instead of skipping it for good, as a missed log did.
      */
     async discoverAccounts(): Promise<bigint[]> {
-      const head = (await client.getBlockNumber({ cacheTime: 0 })) - config.SCAN_CONFIRMATIONS;
-      while (scannedTo < head) {
-        const from = scannedTo + 1n;
-        const to = from + config.LOG_CHUNK_BLOCKS - 1n < head ? from + config.LOG_CHUNK_BLOCKS - 1n : head;
-        const [created, movedIn, movedOut] = await Promise.all([
-          client.getLogs({ address: config.SUB_ACCOUNTS, event: accountCreated, args: { manager: config.MANAGER }, fromBlock: from, toBlock: to }),
-          client.getLogs({ address: config.SUB_ACCOUNTS, event: managerChanged, args: { newManager: config.MANAGER }, fromBlock: from, toBlock: to }),
-          client.getLogs({ address: config.SUB_ACCOUNTS, event: managerChanged, args: { oldManager: config.MANAGER }, fromBlock: from, toBlock: to }),
-        ]);
-        for (const log of [...created, ...movedIn]) accounts.add(log.args.accountId!);
-        for (const log of movedOut) accounts.delete(log.args.accountId!);
-        for (const log of created) if (log.args.owner === keeper.address) ownAccounts.add(log.args.accountId!);
-        scannedTo = to;
-      }
+      const last = await client.readContract({ address: config.SUB_ACCOUNTS, abi: subAccountsAbi, functionName: 'lastAccountId' });
+      const ids = Array.from({ length: Number(last) }, (_, i) => BigInt(i + 1));
+      const reads = await client.multicall({
+        multicallAddress: MULTICALL3,
+        allowFailure: false,
+        batchSize: DISCOVERY_BATCH_BYTES,
+        contracts: ids.flatMap((id) => [
+          { address: config.SUB_ACCOUNTS, abi: subAccountsAbi, functionName: 'manager', args: [id] } as const,
+          { address: config.SUB_ACCOUNTS, abi: subAccountsAbi, functionName: 'ownerOf', args: [id] } as const,
+        ]),
+      });
+      accounts.clear();
+      ids.forEach((id, i) => {
+        const [manager, owner] = [reads[2 * i] as Address, reads[2 * i + 1] as Address];
+        if (manager.toLowerCase() !== config.MANAGER.toLowerCase()) return;
+        accounts.add(id);
+        if (owner.toLowerCase() === keeper.address.toLowerCase()) ownAccounts.add(id);
+      });
       // The security module's account, the engine's VM pool and the keeper's own are never the keeper's to
       // liquidate; its own are watched in readHealth instead.
       return [...accounts]
