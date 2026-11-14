@@ -44,10 +44,17 @@ export async function runOnce(
     collateral: collateralRules(config, await chain.keeperCollateral()),
   };
 
-  for (const accountId of accounts) {
+  // Every account is read at once, so the client batches the reads into a few multicalls. Once a keeper transaction
+  // lands in this pass, the accounts after it are read again before deciding, so none is acted on from before it.
+  const prefetched = await Promise.allSettled(accounts.map((accountId) => chain.readAccount(accountId)));
+  let landedThisPass = false;
+
+  for (const [index, accountId] of accounts.entries()) {
     let action: Action;
     try {
-      const view = await chain.readAccount(accountId);
+      const read = prefetched[index]!;
+      if (read.status === 'rejected') throw read.reason;
+      const view = landedThisPass ? await chain.readAccount(accountId) : read.value;
       if (view.mm < 0n) summary.liquidatable.push(accountId);
       if (view.mtm < 0n) summary.insolvent.push(accountId);
       if (view.auction.ongoing) {
@@ -90,10 +97,14 @@ export async function runOnce(
         action.kind === 'bid' && !config.DRY_RUN
           ? await chain.createBidAccount((action.bidderCash * 102n) / 100n + 1n)
           : config.KEEPER_ACCOUNT;
-      if (action.kind === 'bid' && !config.DRY_RUN) freshBidder = bidder;
+      if (action.kind === 'bid' && !config.DRY_RUN) {
+        freshBidder = bidder;
+        landedThisPass = true; // its funding transfer landed, whether or not the bid does
+      }
       const call = toCall(action, bidder);
       const { sent } = await chain.execute(call, config.DRY_RUN);
       console.log(`[keeper] #${accountId}: ${describe(action)} ${sent ? `tx=${sent}` : '(dry-run, simulated ok)'}`);
+      if (sent) landedThisPass = true;
       await alert(`action-${action.kind}-${accountId}`, `${config.DRY_RUN ? 'DRY-RUN ' : ''}${describe(action)} on account ${accountId}`);
       // A bid spends keeper cash and may pay it in any collateral; re-read both before sizing the next one.
       if (action.kind === 'bid' && sent) {

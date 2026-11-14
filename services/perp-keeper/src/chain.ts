@@ -178,7 +178,10 @@ export function createKeeperChain(config: Config, transportOverride?: Transport)
           nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
           rpcUrls: { default: { http: [config.RPC_URL] } },
         });
-  const client = createPublicClient({ chain, transport });
+  // Reads made in the same tick go out as one Multicall3 eth_call (viem's default 1 KB of calldata a batch), so a
+  // pass that reads every account at once costs a few requests, not one per read. A chain without Multicall3
+  // configured (a test chain) reads one call at a time, as before.
+  const client = createPublicClient({ chain, transport, batch: { multicall: true } });
   const keeper = privateKeyToAccount(config.KEEPER_KEY as Hex);
   const wallet = createWalletClient({ account: keeper, chain, transport });
 
