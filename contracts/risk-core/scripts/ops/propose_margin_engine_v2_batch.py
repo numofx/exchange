@@ -609,10 +609,16 @@ def eurc_cap_bounds_gate(cap18: int, current18: int, oi18: int) -> Gate:
   return Gate("cap", True, f"v2 {current18 / 1e18:,.0f} -> {cap18 / 1e18:,.0f} EURC (open interest {oi18 / 1e18:,.4f})")
 
 
-def eurc_total_depth_gate(row: dict, v1_18: int, cap18: int) -> Gate:
-  """The EURC enable's depth stress gate, at the venue's total: what v1 can hold plus v2's new cap."""
+def eurc_total_depth_gate(row: dict, v1_18: int, cap18: int, current18: int | None = None) -> Gate:
+  """The EURC enable's depth stress gate, at the venue's total: what v1 can hold plus v2's new cap. It gates a rise
+  only: a cap lowered toward what the pools can absorb is safer whatever the reading says, so a lower cap reports the
+  depth and passes (2026-11-15: 2% sell depth had fallen to 10,665 EURC under an 18,000 cap, and the largest-LP read
+  was unreadable, holding the very decrease it argued for)."""
   g = eurc.depth_stress_gate(row, v1_18 + cap18)
-  return Gate(g.name, g.ok, f"v1 {v1_18 / 1e18:,.0f} + v2 {cap18 / 1e18:,.0f} EURC; {g.detail}")
+  lowers = current18 is not None and cap18 < current18
+  ok = g.ok or lowers
+  note = f" (informational: the cap lowers from {current18 / 1e18:,.0f})" if lowers and not g.ok else ""
+  return Gate(g.name, ok, f"v1 {v1_18 / 1e18:,.0f} + v2 {cap18 / 1e18:,.0f} EURC; {g.detail}{note}")
 
 
 def eurc_inventory_gate(health: dict, engine: str, total18: int) -> Gate:
@@ -643,15 +649,16 @@ def gate_eurc_cap(chain: Chain, d: dict, vault: str, cap18: int) -> list[Gate]:
              ([f"vault does not own the EURC escrow (owner {owner})"] if owner != vault.lower() else []) + \
              ([] if wired else ["v2 is not whitelisted on it: setup has not landed"])
   v1_18 = v1_eurc_capacity(chain, d, escrow)
+  current18 = chain.word(escrow, selector("totalPositionCap") + v2)
   gates = [Gate("custody", not problems, "; ".join(problems) or f"vault owns EURC escrow {escrow}; v2 is wired to it"),
-           eurc_cap_bounds_gate(cap18, chain.word(escrow, selector("totalPositionCap") + v2),
-                                chain.word(escrow, selector("totalPosition") + v2))]
+           eurc_cap_bounds_gate(cap18, current18, chain.word(escrow, selector("totalPosition") + v2))]
   try:  # a fresh reading, as the EURC enable takes: the depth timer's 7 days have ended
     depth = eurc._depth()
     reader = depth.P.Rpc(chain.url)
-    gates.append(eurc_total_depth_gate(depth.reading(reader, reader.head() - 2), v1_18, cap18))
-  except Exception as exc:  # noqa: BLE001 -- unreadable holds, as at the EURC enable
-    gates.append(Gate("depth stress", False, f"unreadable: {exc}"))
+    gates.append(eurc_total_depth_gate(depth.reading(reader, reader.head() - 2), v1_18, cap18, current18))
+  except Exception as exc:  # noqa: BLE001 -- unreadable holds a rise, as at the EURC enable; a decrease goes ahead
+    gates.append(Gate("depth stress", cap18 < current18, f"unreadable: {exc}"
+                      + (" (informational: the cap lowers)" if cap18 < current18 else "")))
   try:
     health = http_json(os.environ.get("ENGINE_V2_KEEPER_HEALTH_URL", "http://127.0.0.1:9466/health"))
     gates.append(eurc_inventory_gate(health, d["manager"], v1_18 + cap18))
@@ -934,6 +941,11 @@ def self_test() -> int:
   assert eurc_total_depth_gate(row, 0, 43_000 * e18).ok and not eurc_total_depth_gate(row, 0, 44_000 * e18).ok
   assert eurc_total_depth_gate(row, 5_000 * e18, 38_000 * e18).ok and not eurc_total_depth_gate(row, 5_000 * e18, 39_000 * e18).ok
   assert not eurc_total_depth_gate({**row, "total_sell_eurc_ex_largest_lp": ""}, 0, e18).ok, "unknown depth holds"
+  # A decrease is never held by depth: unknown or failing, lowering 18,000 -> 5,000 passes; raising does not.
+  assert eurc_total_depth_gate({**row, "total_sell_eurc_ex_largest_lp": ""}, 0, 5_000 * e18, 18_000 * e18).ok
+  assert eurc_total_depth_gate(row, 0, 44_000 * e18, 50_000 * e18).ok, "a failing depth, but the cap lowers"
+  assert not eurc_total_depth_gate(row, 0, 44_000 * e18, 40_000 * e18).ok, "a failing depth and the cap rises"
+  assert not eurc_total_depth_gate({**row, "total_sell_eurc_ex_largest_lp": ""}, 0, 5_000 * e18, 5_000 * e18).ok
   # The engine keeper's MAX_EURC_INVENTORY: v2's keeper, set, and at least the total.
   v2e = a(9)
   health = {"manager": v2e.lower(), "maxEurcInventory": str(40_000 * e18)}
