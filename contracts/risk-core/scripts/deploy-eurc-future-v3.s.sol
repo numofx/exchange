@@ -53,13 +53,17 @@ interface ITypeAndVersion {
  *
  * @dev FIXING PARAMETERS are the spec's proposals, awaiting decision (B14): feed timelock 24 h, window 30 min, max
  *      sample gap 2 min, recovery delay 1 h, index max age 60 s. Each is an env override. The OI cap has no default:
- *      FUTURE_OI_CAP is required, from the A6.0a measurement.
+ *      exactly one of FUTURE_OI_CAP (from the A6.0a measurement) or FUTURE_OI_UNCAPPED=true. Uncapped is the owner's
+ *      decision of 2026-11-15 (spec A6.0a): the cap is type(uint256).max, so open interest is bounded by nothing on
+ *      chain; the SecurityModule and keeper are watched against actual open interest instead.
  *
  * Usage (a fresh keystore account, or a used one named in USED_DEPLOYER):
- *   FORWARD_SIGNER=<forward key> FUTURE_OI_CAP=<2n e18> forge script scripts/deploy-eurc-future-v3.s.sol \
+ *   FORWARD_SIGNER=<forward key> FUTURE_OI_UNCAPPED=true forge script scripts/deploy-eurc-future-v3.s.sol \
  *     --rpc-url $BASE_RPC_URL --account <keystore> --broadcast
  */
 contract DeployEurcFutureV3 is Utils {
+  /// @dev The cap that never binds: no limit on open interest (spec A6.0a, decided 2026-11-15).
+  uint public constant UNCAPPED = type(uint).max;
   string internal constant ARTIFACT_NAME = "EURC_FUTURE_V3";
   string internal constant VAULT_ACTIONS_NAME = "EURC_FUTURE_V3_VAULT_ACTIONS";
   string internal constant ENABLE_ACTIONS_NAME = "EURC_FUTURE_V3_ENABLE_VAULT_ACTIONS";
@@ -166,7 +170,7 @@ contract DeployEurcFutureV3 is Utils {
     params.initialMarkTolerance = vm.envOr("INITIAL_MARK_TOLERANCE", params.initialMarkTolerance);
     params.imReq = vm.envOr("FUTURE_IM_REQ", params.imReq);
     params.mmReq = vm.envOr("FUTURE_MM_REQ", params.mmReq);
-    params.futureOICap = vm.envUint("FUTURE_OI_CAP");
+    params.futureOICap = resolveOICap(vm.envOr("FUTURE_OI_UNCAPPED", false), vm.envOr("FUTURE_OI_CAP", uint(0)));
     params.feedTimelock = vm.envOr("FEED_TIMELOCK", params.feedTimelock);
     params.maxSampleGap = vm.envOr("MAX_SAMPLE_GAP", params.maxSampleGap);
     params.recoveryDelay = vm.envOr("RECOVERY_DELAY", params.recoveryDelay);
@@ -178,6 +182,12 @@ contract DeployEurcFutureV3 is Utils {
   }
 
   /// @dev Chain reads and defaults; no environment, no checks. The fork test builds on this.
+  /// @dev Exactly one of a cap or "uncapped": never a silent default either way.
+  function resolveOICap(bool uncapped, uint cap) public pure returns (uint) {
+    if (uncapped == (cap != 0)) revert("set exactly one of FUTURE_OI_CAP or FUTURE_OI_UNCAPPED=true");
+    return uncapped ? UNCAPPED : cap;
+  }
+
   function loadChainParams() public view returns (Params memory params) {
     string memory v2 = _readDeploymentFile("MARGIN_ENGINE_V2");
     params.subAccounts = vm.parseJsonAddress(_readDeploymentFile("core"), ".subAccounts");
@@ -256,7 +266,7 @@ contract DeployEurcFutureV3 is Utils {
     }
     _checkNoSharedSeries(engine, params.expiry);
     if (params.contractSize == 0) revert("CONTRACT_SIZE is zero");
-    if (params.futureOICap == 0 || params.futureOICap % 2e18 != 0) {
+    if (params.futureOICap != UNCAPPED && (params.futureOICap == 0 || params.futureOICap % 2e18 != 0)) {
       revert("FUTURE_OI_CAP must be a positive, even number of whole contracts (it counts both sides)");
     }
     if (params.mmReq == 0 || params.mmReq > params.imReq || params.imReq >= 1e18) {

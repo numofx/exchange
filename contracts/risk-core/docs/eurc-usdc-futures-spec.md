@@ -47,8 +47,9 @@ swapping the feed; reports reach the index through `managerData` (A2.2); the per
   meant to reflect, and would let an attacker force a gap in a fixing. EUR/USD is an operator alert only.
 - **Trading:** 24/7.
 - **Consequences:**
-  - the settlement price comes from thin on-chain markets with no external guard, so open interest is capped below
-    the cost of manipulating them at any size and any hour (A6.0a). This is the binding limit on the market's size;
+  - the settlement price comes from thin on-chain markets with no external guard. Open interest was to be capped below
+    the cost of manipulating them (A6.0a); **the owner decided on 2026-11-15 to list the pilot uncapped**, accepting
+    that risk (A6.0a, "Decision");
   - margin, marks and the SecurityModule are sized for a depeg jump, not for EUR/USD moves (A7);
   - a fixing must always be able to complete, or the series freezes permanently (A8).
 
@@ -97,7 +98,7 @@ on the trade module, only on the manager.
   that share one (A1.1).
 - **Keyed by address and subId, never by name.** The indexer, markets service and `@numo/abis` key the series by
   (asset address, subId); two assets will both read as "EURC-30NOV26".
-- **OI cap** well under the A6.0a manipulation cost, for both stages.
+- **OI cap:** none, by the owner's decision of 2026-11-15 (A6.0a), for both stages.
 
 **Stage 1: new `FutureAsset`, `StreamsIndexAdapter` and `EurcIndexFeed` on mainnet, traded through `Matching`.**
 Target 2026-11-18/19. Opens only when all of these hold:
@@ -289,6 +290,23 @@ Main Slipstream pool (ts50) sell depth 484,445 → 1,687 EURC. The largest-LP ch
 - **Also found:** the EURC **spot** cap on v2 (18,000 EURC) now fails its own gate (50% of 2% sell depth, about 5,300
   EURC). 3,281 EURC is held, under that. The depth timer stopped sampling at its 7-day window on 2026-10-28, so this
   raised no alert.
+
+**Decision, 2026-11-15: no OI cap.** The owner chose to list the pilot uncapped (`FUTURE_OI_UNCAPPED=true`: the cap is
+`type(uint256).max`) and accepts, in full:
+- **index manipulation:** above roughly 2 contracts a side (measurement 1, Base-only), pushing the index can pay for
+  itself; the loss falls on the other side, then the SecurityModule;
+- **SecurityModule:** a jump larger than margin is covered only up to what the module holds after cNGN-30NOV26; beyond
+  it, winners are paid short. The module is shared, so EURC losses can also use cover sized for cNGN;
+- **liquidation:** v2's keeper takes over accounts only up to its cash; beyond it, an under-margin account may wait for
+  another liquidator.
+
+What still holds: the enable batch's `sm` and `keeper` gates block for cNGN-30NOV26 at its cap, and two informational
+gates report how many EURC contracts each backstop covers (`sm-capacity`, `keeper-capacity`). The pager pages on actual
+open interest: `sm-coverage` (already summed every v2 series) and `keeper-capacity-v2` (new). Both need the v3 artifact
+in the pager's `FUTURE_V2_ARTIFACTS`, which is a cutover step, and a drill on the box. The remedy either names is to fund
+the backstop, or to set a cap at current open interest (one vault transaction, which makes the market close-only). Rehearsed
+by `testUncappedDeploysAndFillsFarOverTheMeasuredCap` (a 50-contract position fills; under an 18-contract cap it
+reverts `BM_AssetCapExceeded`).
 
 **A6.1 Band floor.** `minMarkIndexDeviation ≥ the index's measured error + the forward's distance from spot near
 expiry`.
@@ -574,7 +592,7 @@ v1 structures the take loop so a second liquidity source can be added without a 
 - **Blocking Stage 1:** the old EURC-30NOV26 is open with positions and holds market 2's only future slot (A1.1).
   Where the new series lives (a new futures-only market, or market 2 after the old one settles and closes out) and
   what happens to the old one.
-- Pilot OI cap, from the A6.0a measurement.
+- ~~Pilot OI cap, from the A6.0a measurement~~: decided 2026-11-15, none (A6.0a).
 - Fixing parameters, proposed 2026-11-14 and awaiting decision: `feedTimelock` 24 h, `fixingWindow` 30 min,
   `maxSampleGap` 2 min, `recoveryDelay` 1 h, `indexMaxAge` 60 s.
 

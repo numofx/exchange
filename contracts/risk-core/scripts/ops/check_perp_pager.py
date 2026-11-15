@@ -55,6 +55,9 @@ cash through the engine's pool, so no reserve target and no escrow cap: the pool
   future-pool-deficit-stuck-v2  that cash has stayed below zero for FUTURE_POOL_DEFICIT_STUCK_SEC, at any size.
   keeper-unhealthy-v2 / insolvent-account-v2  v2's liquidation keeper (ENGINE_V2_KEEPER_HEALTH_URL, unset: not
                      watched), as keeper-unhealthy and insolvent-account; armed once healthy or a v2 future is open.
+  keeper-capacity-v2  v2's keeper account holds less cash than the IM to take over one whole side of every v2 series at
+                     its actual open interest. The enable gates size the keeper to each cap; an uncapped series
+                     (EURC-30NOV26 v3, decided 2026-11-15) is watched here instead.
 
 cNGN options on MarginEngine v2 (OPTIONS_ARTIFACTS, comma-separated, default deployments/8453/CNGN_OPTIONS_V2.json; skipped
 while missing). Live once the option's cap is open or anyone holds one:
@@ -409,6 +412,18 @@ def sm_future_condition(one_side_usd: float, mm: float, premium: float, sm_cash_
 
 def sm_future_warning(one_side_usd: float, mm: float, premium: float, sm_cash_usd: float) -> str | None:
   return sm_coverage_warning({v1_coverage_label(one_side_usd, mm): sm_required_usd(one_side_usd, mm, premium)}, sm_cash_usd)
+
+
+def keeper_capacity_condition(need_by: dict[str, float], keeper_cash_usd: float) -> Condition | None:
+  """keeper-capacity-v2: the keeper account cannot take over one whole side of every v2 series at IM, at actual open
+  interest (not the cap: an uncapped series has none)."""
+  required = sum(need_by.values())
+  if required <= keeper_cash_usd:
+    return None
+  parts = ", ".join(f"{label} ${need:,.0f}" for label, need in need_by.items() if need > 0)
+  return Condition("keeper-capacity-v2", f"MarginEngine v2 keeper account holds ${keeper_cash_usd:,.0f}, short of the "
+                   f"${required:,.0f} IM to take over one side of every v2 future ({parts}). Fund the keeper account, "
+                   "or set cap = current OI.")
 
 
 def perp_oi_condition(one_side_usd: float) -> Condition | None:
@@ -1025,6 +1040,7 @@ def check_and_page(stack_path: Path, state: dict) -> int:
   # MarginEngine v2: each series' side for the SecurityModule, and each engine's cash-only pool, once.
   v2_open: dict[str, bool] = {}
   v2_pools: dict[str, dict] = {}
+  v2_keeper_need: dict[str, float] = {}  # IM to take over one side of each series, at actual open interest
   try:
     for path, series in future_v2_artifacts():
       label = series_label(series)
@@ -1032,6 +1048,7 @@ def check_and_page(stack_path: Path, state: dict) -> int:
       record_watched(state, series)
       need = sm_required_usd_linear(f2["one_side_usd"])
       coverage_parts[f"{label} one side ${f2['one_side_usd']:,.0f}"] = need
+      v2_keeper_need[label] = f2["one_side_usd"] * f2["im"]
       futures_read = True
       engine = series["manager"].lower()
       v2_open[engine] = v2_open.get(engine, False) or f2["open"]
@@ -1101,6 +1118,15 @@ def check_and_page(stack_path: Path, state: dict) -> int:
     v2_armed = state.get("keeperV2SeenAt") is not None or any(v2_open.values())
     v2_keeper = [keeper_condition(v2_health, now, v2_armed, "MarginEngine v2", "keeper-unhealthy-v2"),
                  insolvent_condition(v2_health, "MarginEngine v2", "insolvent-account-v2")]
+    if v2_health is not None and v2_health.get("keeperAccount") is not None and v2_pools:
+      try:
+        cash_asset = next(iter(v2_pools.values()))["cash"]
+        keeper_cash = account_balance(url, int(v2_health["keeperAccount"]), cash_asset) / 1e18
+        v2_keeper.append(keeper_capacity_condition(v2_keeper_need, keeper_cash))
+        print(f"v2 keeper capacity: ${keeper_cash:,.0f} against ${sum(v2_keeper_need.values()):,.0f} IM for one side of "
+              f"every v2 future")
+      except Exception as exc:  # noqa: BLE001
+        print(f"v2 keeper capacity: unreadable ({str(exc)[:80]})")
     print(f"v2 keeper: {'unreachable' if v2_health is None else ('ok' if keeper_healthy(v2_health, now) else 'unhealthy')}")
 
   negative_cash = None
@@ -1368,6 +1394,11 @@ def self_test() -> int:
   os.environ["PERP_MANAGER"] = "0xengine"
   assert perp_manager({"srm": "0xsrm"}) == "0xengine"
   os.environ.pop("PERP_MANAGER")
+  # keeper-capacity-v2 at actual open interest: covered is quiet, short pages with each series' share.
+  assert keeper_capacity_condition({"cNGN-30NOV26": 2_160.0, "EURC-30NOV26": 2_784.0}, 5_000.0) is None
+  short = keeper_capacity_condition({"cNGN-30NOV26": 2_160.0, "EURC-30NOV26": 3_480.0}, 5_000.0)
+  assert short is not None and short.key == "keeper-capacity-v2" and "EURC-30NOV26 $3,480" in short.message
+  assert keeper_capacity_condition({}, 0.0) is None, "no open interest, nothing to take over"
   # Selectors against their signatures, so a hand-typed one cannot ship (one did, in review).
   from resolve_cngn_action6 import keccak
   assert SEL_PERP_MARGIN_REQUIREMENTS == "0x" + keccak(b"perpMarginRequirements(uint256)").hex()[:8]

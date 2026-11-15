@@ -259,6 +259,33 @@ contract EurcFutureV3Fork is Test {
     assertEq(subAccounts.getBalance(aliceAcc, d.future, d.subId), 1e18);
   }
 
+  /// @dev Uncapped (spec A6.0a, decided 2026-11-15): the enable batch opens the cap at type(uint).max, and a position
+  ///      far over any measured cap (50 contracts, against the measurement's 4) fills. Nothing else bounds it on chain.
+  function testUncappedDeploysAndFillsFarOverTheMeasuredCap() public {
+    params.futureOICap = script.UNCAPPED();
+    script.checkParams(params);
+    d = script.deploy(params);
+    _setup();
+    _enable();
+    assertEq(d.future.totalPositionCap(engine), type(uint).max);
+    _holdPushFeeds();
+    (uint aliceAcc, uint bobAcc) = _fundedAccounts();
+    _depositUsdc(alice, aliceAcc, 9_000e6);
+    _depositUsdc(bob, bobAcc, 9_000e6);
+    _postReports(block.timestamp, int(refPrice), 1e18);
+    _trade(bobAcc, aliceAcc, 50e18, params.initialMark);
+    assertEq(subAccounts.getBalance(aliceAcc, d.future, d.subId), 50e18);
+  }
+
+  function testTheCapMustBeChosenNotDefaulted() public {
+    assertEq(script.resolveOICap(true, 0), type(uint).max);
+    assertEq(script.resolveOICap(false, 4e18), 4e18);
+    vm.expectRevert("set exactly one of FUTURE_OI_CAP or FUTURE_OI_UNCAPPED=true");
+    script.resolveOICap(false, 0);
+    vm.expectRevert("set exactly one of FUTURE_OI_CAP or FUTURE_OI_UNCAPPED=true");
+    script.resolveOICap(true, 4e18);
+  }
+
   ///////////////////
   //  live Matching //
   ///////////////////

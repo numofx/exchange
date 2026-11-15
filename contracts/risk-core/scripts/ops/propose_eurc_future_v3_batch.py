@@ -27,7 +27,10 @@ Enable gates (all read live, all required unless marked):
   series     as at setup
   index      EurcIndexFeed answers: both streams' reports are within indexMaxAge, so the v3 keeper is posting
   marks      the future was marked within 2h and its mark sits inside the index band: the forward publisher runs
-  oi-cap     the artifact's cap is no more than the latest A6.0a measurement allows (OI_CAP_LIMIT, with its date)
+  oi-cap     the artifact's cap is no more than the latest A6.0a measurement allows (OI_CAP_LIMIT, with its date), or is
+             UNCAPPED, the owner's recorded decision (OI_UNCAPPED_DECIDED). Uncapped, sm and keeper still hold for
+             cNGN-30NOV26 at its cap, and sm-capacity / keeper-capacity report how many EURC contracts each covers;
+             the pager pages when open interest passes them (sm-coverage, keeper-capacity-v2)
   sm, gaps   SecurityModule cover, as for the v2 series (gaps informational)
   pager      the pager's last run read this future
   keeper     v2's liquidation keeper reports this future, with the floor for one side of each series at its cap
@@ -50,6 +53,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from dataclasses import asdict
@@ -80,6 +84,10 @@ MARK_MAX_AGE_SEC = e2.MARK_MAX_AGE_SEC
 # allows a cap of 4 contracts (both sides). Raise it only with a newer measurement recorded in the spec.
 OI_CAP_LIMIT = 4 * 10**18
 OI_CAP_MEASURED = "2026-11-15 (A6.0a measurement 1)"
+# No cap at all: setTotalPositionCap(engine, type(uint256).max). Accepted only because it is recorded here and in the spec.
+UNCAPPED = 2**256 - 1
+OI_UNCAPPED_DECIDED = ("2026-11-15: the owner chose no OI cap, accepting index-manipulation, SecurityModule and keeper "
+                       "risk beyond what they hold (spec A6.0a)")
 # The Data Streams verifier proxy and feeds the adapter must use (spec A2.1)
 VERIFIER_PROXY = "0xDE1A28D87Afd0f546505B28AB50410A5c3a7387a"
 EURC_USD_FEED = 0x00030f2b89e4498002a62638cc61ae91a9690c33830601fc64bc131a07f0c5cb
@@ -303,10 +311,52 @@ def gate_marks(chain: Chain, d: dict) -> Gate:
 
 
 def oi_cap_gate(cap18: int) -> Gate:
+  if cap18 == UNCAPPED:
+    return Gate("oi-cap", True, f"no cap, as decided: {OI_UNCAPPED_DECIDED}")
   if cap18 > OI_CAP_LIMIT:
     return Gate("oi-cap", False, f"the artifact's cap {cap18 / 1e18:g} is over {OI_CAP_LIMIT / 1e18:g}, the most the latest "
                                  f"manipulation-cost measurement allows ({OI_CAP_MEASURED}): re-measure first")
   return Gate("oi-cap", True, f"cap {cap18 / 1e18:g} within {OI_CAP_LIMIT / 1e18:g} ({OI_CAP_MEASURED})")
+
+
+def contracts_covered(budget_usd: float, per_contract_usd: float) -> float:
+  """Contracts on one side a backstop with `budget_usd` left covers, at `per_contract_usd` each."""
+  return max(budget_usd, 0.0) / per_contract_usd if per_contract_usd > 0 else math.inf
+
+
+def sm_capacity_gate(chain: Chain, d: dict, cngn: dict, stack: dict) -> Gate:
+  """Informational, uncapped only: the EURC contracts on one side the SecurityModule covers for an SM_MOVE step, after
+  cNGN-30NOV26 at its cap. Never fails: the blocking sm gate still holds for cNGN."""
+  try:
+    sm_cash = chain.balance(int(stack["securityModuleAccount"]), d["cash"]) / 1e18
+    held = v2p.series_sm_usd(chain, cngn)
+    contract_usd = chain.word(d["future"], selector("contractSize")) / 1e18 * e2.mark(chain, d)
+    n = contracts_covered(sm_cash - held, v2p.sm_required_usd_linear(contract_usd))
+    return Gate("sm-capacity", True, f"uncapped: SecurityModule ${sm_cash:,.0f} (less ${held:,.0f} for cNGN-30NOV26) covers "
+                                     f"{n:,.1f} EURC contracts on one side for a {v2p.SM_MOVE * 100:.0f}% step; the pager "
+                                     "pages past it (sm-coverage)")
+  except Exception as exc:  # noqa: BLE001
+    return Gate("sm-capacity", True, f"uncapped: SecurityModule capacity unreadable ({str(exc)[:80]})")
+
+
+def keeper_capacity_gate(chain: Chain, d: dict, cngn: dict) -> Gate:
+  """Informational, uncapped only: the EURC contracts on one side v2's keeper can take over at IM, after cNGN-30NOV26's
+  side at its cap. Never fails: the blocking keeper gate still checks it is live and covers cNGN."""
+  try:
+    health = e2.http_json(os.environ["ENGINE_V2_KEEPER_HEALTH_URL"])
+    cash = chain.balance(int(health["keeperAccount"]), d["cash"]) / 1e18
+    m = word_address(cngn["manager"])
+    cngn_floor = e2.keeper_floor([(
+      chain.word(cngn["future"], selector("totalPositionCap") + m) / 1e18,
+      chain.word(cngn["future"], selector("contractSize")) / 1e18, v2p.mark_usdc_per_cngn(chain, cngn),
+      chain.word(cngn["manager"], selector("futureMarginRequirements") + word_uint(int(cngn["marketId"])), 1) / 1e18)])
+    contract_im = int(d["contractSize"]) / 1e18 * e2.mark(chain, d) * int(d["futureIMReq"]) / 1e18
+    n = contracts_covered(cash - cngn_floor, contract_im)
+    return Gate("keeper-capacity", True, f"uncapped: keeper account ${cash:,.0f} (less ${cngn_floor:,.0f} for cNGN-30NOV26) takes "
+                                         f"over {n:,.1f} EURC contracts on one side at IM; the pager pages past it "
+                                         "(keeper-capacity-v2)")
+  except Exception as exc:  # noqa: BLE001
+    return Gate("keeper-capacity", True, f"uncapped: keeper capacity unreadable ({str(exc)[:80]})")
 
 
 def gate_enable(chain: Chain, d: dict, cngn: dict, stack: dict, vault: str) -> list[Gate]:
@@ -318,11 +368,14 @@ def gate_enable(chain: Chain, d: dict, cngn: dict, stack: dict, vault: str) -> l
   problems = ([f"vault does not own {', '.join(not_owned)}"] if not_owned else []) + \
              ([f"{SETUP} actions {unwired} have not landed"] if unwired else []) + \
              ([f"the future is not closed (cap {cap}, registered {bool(registered)})"] if cap or registered else [])
-  oi_cap = int(d["futureOICap"]) / 1e18
+  uncapped = int(d["futureOICap"]) == UNCAPPED
+  # Uncapped, the blocking sm and keeper gates are sized for cNGN-30NOV26 alone (EURC at 0), and capacity is reported.
+  oi_cap = 0.0 if uncapped else int(d["futureOICap"]) / 1e18
+  capacity = [sm_capacity_gate(chain, d, cngn, stack), keeper_capacity_gate(chain, d, cngn)] if uncapped else []
   return [Gate("custody", not problems, "; ".join(problems) or "vault owns both; setup landed; the future closed"),
           engine_gate(chain, d, vault, attached=True), e2.series_gate(chain, d), gate_index(chain, d),
           gate_marks(chain, d), oi_cap_gate(int(d["futureOICap"])), *e2.gate_sm(chain, d, cngn, stack, oi_cap),
-          e2.gate_pager_reads_eurc(d), e2.gate_keeper(chain, d, cngn, oi_cap),
+          e2.gate_pager_reads_eurc(d), e2.gate_keeper(chain, d, cngn, oi_cap), *capacity,
           e2.gate_fills(chain, d, os.environ.get("MARKETS_URL", "https://api.numofx.com")),
           v1p.gate_rfq(chain, {"perpTradeModule": d["tradeModule"]}), gate_parity(chain, d, vault, attached=True)]
 
@@ -401,6 +454,37 @@ def self_test() -> int:
   assert marks_verdict(60, 1_133 * 10**15, 1_100 * 10**15, 3 * 10**16).ok, "3% exactly"
   assert not marks_verdict(60, 1_134 * 10**15, 1_100 * 10**15, 3 * 10**16).ok, "over 3%"
   assert oi_cap_gate(4 * e18).ok and not oi_cap_gate(6 * e18).ok
+  assert oi_cap_gate(UNCAPPED).ok and "decided" in oi_cap_gate(UNCAPPED).detail, "uncapped passes only as the decision"
+  assert not oi_cap_gate(UNCAPPED - 1).ok, "a huge cap that is not exactly UNCAPPED is still measured"
+  assert contracts_covered(1_000.0, 100.0) == 10.0 and contracts_covered(-5.0, 100.0) == 0.0
+  # the capacity reports against a stub chain: they swallow errors into "unreadable", so prove they compute.
+  # EURC 1,000 a contract at 1.16, IM 6%; cNGN-30NOV26 cap 30 (15 a side) of 1M at 0.00072, IM 20%: a $10,800 side.
+  # SecurityModule $10,000 less cNGN's 15% step ($1,620) over $174 a contract (15% of $1,160): 48.2 contracts.
+  # Keeper $5,000 less cNGN's side at IM ($2,160) over $69.60 a contract (6% of $1,160): 40.8 contracts.
+  cngn = {"future": a(20), "manager": a(21), "subId": 1796047200, "marketId": 1}
+  words = {(a(3), "contractSize"): 1000 * e18, (a(3), "futureContracts", 5): 1_160 * 10**15,
+           (a(20), "totalPositionCap"): 30 * e18, (a(20), "contractSize"): 10**6 * e18,
+           (a(20), "futureContracts", 5): 72 * 10**13, (a(21), "futureMarginRequirements", 1): 2 * 10**17}
+
+  class Stub:
+    def word(self, to, data, index=0):
+      name = next(n for n in SIGNATURES if data.startswith(selector(n)))
+      return words[(to, name, index) if index else (to, name)]
+
+    def balance(self, account, asset):
+      return {9: 10_000 * e18, 77: 5_000 * e18}[account]
+
+  real_http, os.environ["ENGINE_V2_KEEPER_HEALTH_URL"] = e2.http_json, "http://keeper"
+  e2.http_json = lambda url: {"keeperAccount": 77}
+  try:
+    full = {**d, "cash": a(30), "contractSize": str(1000 * e18), "futureIMReq": str(6 * 10**16)}
+    sm = sm_capacity_gate(Stub(), full, cngn, {"securityModuleAccount": 9})
+    keeper = keeper_capacity_gate(Stub(), full, cngn)
+  finally:
+    e2.http_json = real_http
+    os.environ.pop("ENGINE_V2_KEEPER_HEALTH_URL")
+  assert sm.ok and "covers 48.2 EURC contracts" in sm.detail, sm.detail
+  assert keeper.ok and "over 40.8 EURC contracts" in keeper.detail, keeper.detail
 
   import inspect
   for fn in (main, run_batch):
