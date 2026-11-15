@@ -1,0 +1,32 @@
+# The keeper for a MarginEngine v2 dated future on the v3 FutureAsset (services/perp-feeds, dist/forward-main.js with
+# FUTURE_VERSION=v3): Data Streams reports, forward and index marks, fixing with recovery windows, close-out. One
+# instance per series: numo-future-feeds-v3@eurc-30nov26 reads /etc/numo/future-feeds-v3-eurc-30nov26.env, and the
+# canary (spec A1.4) is numo-future-feeds-v3@eurc-canary.
+#
+# Its own checkout, /home/ec2-user/exchange-future-v3: exchange-future-v2 runs the v2 keepers at 840526a, and
+# building v3 there would move their code on their next restart.
+#
+# Install (2026-11-15): git clone https://github.com/numofx/exchange /home/ec2-user/exchange-future-v3 && checkout <sha>
+#          (cd /home/ec2-user/exchange-future-v3 && pnpm install --frozen-lockfile --filter perp-feeds... && pnpm --filter @numo/kms-signer build && pnpm --filter perp-feeds build)
+#          cp contracts/risk-core/scripts/ops/numo-future-feeds-v3@.service /etc/systemd/system/ && systemctl daemon-reload
+#          cp future-feeds-v3-eurc-<series>.env /etc/numo/ (DRY_RUN=true first), systemctl enable --now numo-future-feeds-v3@eurc-<series>
+# and record it in OPS_BOX_CHANGES.md the same day.
+[Unit]
+Description=Numo v3 future keeper %i: forward marks, fixing, close-out (Base mainnet, KMS signer, SSM relayer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/home/ec2-user/exchange-future-v3/services/perp-feeds
+EnvironmentFile=/etc/numo/future-feeds-v3-%i.env
+ExecStart=/home/ec2-user/exchange-future-v3/contracts/risk-core/scripts/ops/run-with-ssm-forward.sh /usr/bin/node dist/forward-main.js
+Environment=AWS_REGION=us-east-1
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
