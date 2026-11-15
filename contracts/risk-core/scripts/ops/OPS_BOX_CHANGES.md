@@ -5,6 +5,14 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-15 ~19:00 UTC: EURC futures maker quoting v3
+
+Laptop, terraform 1.13.3: `eurc-v3-mm.plan` from `8649d1c`. The EURC v2 maker's inventory went 9 → 6 and skew-full-at
+6 → 4, because the v3 IM is 15% (about $165 a contract) against #40's $1,300 at 0.8 IM usage. The image is unchanged.
+`counts.auto.tfvars` (gitignored, the laptop's copy) moved `desired_count_market_maker_future_v2.eurc` from 0 to 1.
+The cNGN maker and the matcher were untouched. The maker resolves `EURC-30NOV26` through markets-service to
+`0xc350…b227`. It quotes 10 a side from #40; `/book?symbol=EURC-30NOV26` read best 1.09990 / 1.10166, 116 EURC each.
+
 ## 2026-11-15 ~18:50 UTC: EURC-30NOV26 v3 open to public trading, before the canary settles
 
 By the owner's decision: the canary's 21:00 expiry would have held the listing until about 21:20, and it now runs
