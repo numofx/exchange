@@ -6,6 +6,7 @@ import {IERC20Metadata} from "openzeppelin/token/ERC20/extensions/IERC20Metadata
 import {MessageHashUtils} from "openzeppelin/utils/cryptography/MessageHashUtils.sol";
 
 import {DeployEurcFutureV3} from "../../scripts/deploy-eurc-future-v3.s.sol";
+import {CanaryEurcV3} from "../../scripts/canary-eurc-v3.s.sol";
 import {SubAccounts} from "../../src/SubAccounts.sol";
 import {ISubAccounts} from "../../src/interfaces/ISubAccounts.sol";
 import {CashAsset} from "../../src/assets/CashAsset.sol";
@@ -428,6 +429,168 @@ contract EurcFutureV3Fork is Test {
   }
 
   ///////////////////
+  //  the canary   //
+  ///////////////////
+
+  /// @dev Spec A1.4: the Stage 1 drill on mainnet. The deployer lists a short canary before the production series;
+  ///      one contract trades on it, reports stop for longer than the sample gap inside its window, anyone opens a
+  ///      recovery window 5 minutes later, it settles from fresh reports, both close out and USDC comes out. The
+  ///      production series keeps its own fixing params throughout and trades after the canary has settled.
+  function testTheCanarySettlesThroughRecoveryAndLeavesProductionUntouched() public {
+    _deployWithCanary(uint64(block.timestamp + 3 hours));
+    script.assertDeployment(d, params);
+    _setup();
+    _enable();
+    _holdPushFeeds();
+    _postReports(block.timestamp, int(refPrice), 1e18);
+    (uint aliceAcc, uint bobAcc) = _fundedAccounts();
+    _tradeSeries(d.canarySubId, bobAcc, aliceAcc, 1e18, params.canaryInitialMark);
+
+    uint64 expiry = params.canaryExpiry;
+    for (uint t = expiry - 15 minutes; t <= expiry; t += 1 minutes) {
+      if (t > expiry - 9 minutes && t < expiry - 5 minutes) continue; // keeper down for 4 minutes > the 2-minute gap
+      vm.warp(t);
+      _holdPushFeeds();
+      _postReports(t, 1.1e18, 1e18);
+      d.future.recordFixingSample(d.canarySubId);
+    }
+    vm.warp(expiry + 1);
+    _holdPushFeeds();
+    vm.expectRevert(IFutureAssetV3.FA_FixingIncomplete.selector);
+    d.future.fixSettlementFromIndex(d.canarySubId);
+
+    vm.prank(address(0xf2)); // anyone
+    d.future.openRecoveryWindow(d.canarySubId);
+    IFutureAssetV3.Fixing memory f = d.future.fixings(d.canarySubId);
+    assertEq(f.windowStart, expiry + 1 + 5 minutes, "the canary's 5-minute recovery delay");
+    assertEq(f.windowEnd - f.windowStart, 15 minutes, "the canary's 15-minute window");
+    for (uint t = f.windowStart; t <= f.windowEnd; t += 1 minutes) {
+      vm.warp(t);
+      _holdPushFeeds();
+      _postReports(t, 1.17e18, 1e18);
+      d.future.recordFixingSample(d.canarySubId);
+    }
+    vm.warp(f.windowEnd + 1);
+    _holdPushFeeds();
+    _postReports(block.timestamp, 1.17e18, 1e18);
+    d.future.fixSettlementFromIndex(d.canarySubId);
+    assertEq(d.future.futureContracts(d.canarySubId).markPrice, 1.17e18, "settled at the recovery window's price");
+
+    // conservation across the close-out alone, in one block: interest on the USDC accrues over the hours before it
+    uint pool = engine.accId();
+    int before = _settledCash(aliceAcc) + _settledCash(bobAcc) + _settledCash(pool);
+    int aliceBefore = _cash(aliceAcc);
+    int alicePending = d.future.getPendingVM(aliceAcc, d.canarySubId);
+    assertEq(alicePending + d.future.getPendingVM(bobAcc, d.canarySubId), 0, "the VM nets to zero");
+    engine.closeOutExpired(bobAcc, d.canarySubId);
+    engine.closeOutExpired(aliceAcc, d.canarySubId);
+    assertEq(d.future.totalPosition(engine), 0, "no open interest left");
+    assertEq(_cash(aliceAcc) + _cash(bobAcc) + _cash(pool), before, "cash conserved: alice + bob + pool");
+    assertEq(_cash(aliceAcc) - aliceBefore, alicePending, "alice is paid her pending VM");
+
+    // the production series: its own params, unsettled, and it trades
+    IFutureAssetV3.FixingParams memory pf = d.future.seriesFixing(d.subId);
+    assertEq(pf.fixingWindow, 30 minutes);
+    assertEq(pf.maxSampleGap, 2 minutes);
+    assertEq(pf.recoveryDelay, 1 hours);
+    assertEq(d.future.fixingWindow(), 30 minutes, "defaults for later series are production's");
+    assertEq(d.future.recoveryDelay(), 1 hours);
+    assertFalse(d.future.futureContracts(d.subId).settled);
+    (uint index,) = d.indexFeed.getSpot();
+    _tradeSeries(d.subId, bobAcc, aliceAcc, 1e18, index);
+    assertEq(subAccounts.getBalance(aliceAcc, d.future, d.subId), 1e18, "production fills after the canary");
+
+    uint out = uint(_cash(bobAcc)) / 1e12 / 2;
+    vm.prank(bob);
+    CashAsset(params.cash).withdraw(bobAcc, out, bob);
+    assertEq(IERC20Metadata(USDC).balanceOf(bob), out, "real USDC out");
+  }
+
+  /// @dev The drill as it runs on mainnet: scripts/canary-eurc-v3.s.sol's own openOn and closeOutOn, broadcast from
+  ///      one throwaway key. Every whole cent of its USDC comes back, the VM between its two accounts netting to zero.
+  function testTheCanaryDrillScriptOpensClosesAndReturnsTheUsdc() public {
+    _deployWithCanary(uint64(block.timestamp + 3 hours));
+    _setup();
+    _enable();
+    _holdPushFeeds();
+    _postReports(block.timestamp, int(refPrice), 1e18);
+
+    CanaryEurcV3 drill = new CanaryEurcV3();
+    uint key = uint(keccak256("numo.eurc-v3-canary.throwaway"));
+    address owner = vm.addr(key);
+    address returnTo = address(0x7e7);
+    deal(USDC, owner, 600e6);
+    CanaryEurcV3.Series memory c = CanaryEurcV3.Series({
+      future: d.future, engine: engine, cash: CashAsset(params.cash), indexFeed: d.indexFeed, subId: d.canarySubId
+    });
+    (uint long, uint short,) = drill.openOn(c, key, 300e6);
+    assertEq(subAccounts.getBalance(long, d.future, d.canarySubId), 1e18);
+    assertEq(subAccounts.ownerOf(long), owner, "the throwaway key's own accounts");
+
+    vm.expectRevert("canary not settled yet");
+    drill.closeOutOn(c, key, long, short, returnTo);
+
+    _breakAndRecoverCanary(1.17e18);
+    uint returned = drill.closeOutOn(c, key, long, short, returnTo);
+    assertEq(IERC20Metadata(USDC).balanceOf(returnTo), returned, "all of it to RETURN_TO");
+    assertApproxEqAbs(returned, 600e6, 1e6, "600 USDC back, within interest and dust");
+    assertEq(d.future.totalPosition(engine), 0);
+  }
+
+  function testTheCanaryDrillRefusesBeforeEnableAndAfterLastTrade() public {
+    _deployWithCanary(uint64(block.timestamp + 3 hours));
+    CanaryEurcV3 drill = new CanaryEurcV3();
+    uint key = uint(keccak256("numo.eurc-v3-canary.throwaway"));
+    deal(USDC, vm.addr(key), 600e6);
+    CanaryEurcV3.Series memory c = CanaryEurcV3.Series({
+      future: d.future, engine: engine, cash: CashAsset(params.cash), indexFeed: d.indexFeed, subId: d.canarySubId
+    });
+    vm.expectRevert("setup has not landed");
+    drill.openOn(c, key, 300e6);
+    _setup();
+    vm.expectRevert("enable has not landed: the cap is 0");
+    drill.openOn(c, key, 300e6);
+    _enable();
+    vm.warp(params.canaryExpiry - 15 minutes);
+    vm.expectRevert("canary past its last trade");
+    drill.openOn(c, key, 300e6);
+  }
+
+  function testTheCanaryMustBeChosenNotDefaulted() public {
+    vm.expectRevert("set exactly one of CANARY_EXPIRY or NO_CANARY=true");
+    script.resolveCanary(false, 0);
+    vm.expectRevert("set exactly one of CANARY_EXPIRY or NO_CANARY=true");
+    script.resolveCanary(true, 1796000000);
+    assertEq(script.resolveCanary(true, 0), 0);
+    assertEq(script.resolveCanary(false, 1796000000), 1796000000);
+  }
+
+  function testTheCanaryScheduleIsChecked() public {
+    params.canaryInitialMark = script.fairForward(params);
+    params.canaryExpiry = uint64(block.timestamp + 1 hours);
+    vm.expectRevert("CANARY_EXPIRY too soon: the vault's setup and enable must land before its last trade");
+    script.checkParams(params);
+    params.canaryExpiry = uint64(block.timestamp + 8 days);
+    vm.expectRevert("CANARY_EXPIRY over a week out");
+    script.checkParams(params);
+    // the cNGN series' expiry: closeOutExpired would couple them
+    vm.warp(CNGN_EXPIRY - 3 days);
+    _holdPushFeeds();
+    params.canaryExpiry = CNGN_EXPIRY;
+    vm.expectRevert("EXPIRY is a series another market lists: closeOutExpired would couple them");
+    script.checkParams(params);
+    // too close to the production fixing
+    params.canaryExpiry = params.expiry - 30 minutes;
+    vm.expectRevert("the canary must settle, recovery included, before the production series' fixing");
+    script.checkParams(params);
+  }
+
+  function testWithoutACanaryNoneIsListed() public view {
+    assertEq(d.canarySubId, 0);
+    assertEq(d.future.seriesFixing(uint96(block.timestamp + 3 hours)).fixingWindow, 0);
+  }
+
+  ///////////////////
   //   helpers     //
   ///////////////////
 
@@ -520,6 +683,49 @@ contract EurcFutureV3Fork is Test {
       }),
       ""
     );
+  }
+
+  function _tradeSeries(uint96 subId, uint seller, uint buyer, int amount, uint price) internal {
+    subAccounts.submitTransfer(
+      ISubAccounts.AssetTransfer({
+        fromAcc: seller, toAcc: buyer, asset: d.future, subId: subId, amount: amount, assetData: bytes32(price)
+      }),
+      ""
+    );
+  }
+
+  /// @dev Reports every minute through the canary's window except a 4-minute outage; anyone opens a recovery window;
+  ///      reports through it at `price`; it settles.
+  function _breakAndRecoverCanary(int price) internal {
+    uint64 expiry = params.canaryExpiry;
+    for (uint t = expiry - 15 minutes; t <= expiry; t += 1 minutes) {
+      if (t > expiry - 9 minutes && t < expiry - 5 minutes) continue;
+      vm.warp(t);
+      _holdPushFeeds();
+      _postReports(t, 1.1e18, 1e18);
+      d.future.recordFixingSample(d.canarySubId);
+    }
+    vm.warp(expiry + 1);
+    _holdPushFeeds();
+    d.future.openRecoveryWindow(d.canarySubId);
+    IFutureAssetV3.Fixing memory f = d.future.fixings(d.canarySubId);
+    for (uint t = f.windowStart; t <= f.windowEnd; t += 1 minutes) {
+      vm.warp(t);
+      _holdPushFeeds();
+      _postReports(t, price, 1e18);
+      d.future.recordFixingSample(d.canarySubId);
+    }
+    vm.warp(f.windowEnd + 1);
+    _holdPushFeeds();
+    _postReports(block.timestamp, price, 1e18);
+    d.future.fixSettlementFromIndex(d.canarySubId);
+  }
+
+  function _deployWithCanary(uint64 canaryExpiry) internal {
+    params.canaryExpiry = canaryExpiry;
+    params.canaryInitialMark = script.canaryFairForward(params);
+    script.checkParams(params);
+    d = script.deploy(params);
   }
 
   function _settledCash(uint acc) internal returns (int) {

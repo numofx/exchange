@@ -58,7 +58,7 @@ interface ITypeAndVersion {
  *      chain; the SecurityModule and keeper are watched against actual open interest instead.
  *
  * Usage (a fresh keystore account, or a used one named in USED_DEPLOYER):
- *   FORWARD_SIGNER=<forward key> FUTURE_OI_UNCAPPED=true forge script scripts/deploy-eurc-future-v3.s.sol \
+ *   FORWARD_SIGNER=<forward key> FUTURE_OI_UNCAPPED=true CANARY_EXPIRY=<unix, spec A1.4> forge script scripts/deploy-eurc-future-v3.s.sol \
  *     --rpc-url $BASE_RPC_URL --account <keystore> --broadcast
  */
 contract DeployEurcFutureV3 is Utils {
@@ -104,6 +104,15 @@ contract DeployEurcFutureV3 is Utils {
   uint internal constant DEFAULT_RECOVERY_DELAY = 1 hours;
   uint internal constant DEFAULT_INDEX_MAX_AGE = 60;
 
+  /// @dev The mainnet canary (spec A1.4): a short series the deployer lists before the production one, on the same
+  ///      contract, so the Stage 1 drill (a broken fixing that settles through recovery) runs against the real Data
+  ///      Streams verifier in under an hour. The contract's shortest window; the production sample gap.
+  uint internal constant CANARY_FIXING_WINDOW = 15 minutes;
+  uint internal constant CANARY_RECOVERY_DELAY = 5 minutes;
+  /// @dev Time for the vault's setup and enable batches before the canary's last trade, and an upper bound.
+  uint internal constant CANARY_MIN_LEAD = 2 hours;
+  uint internal constant CANARY_MAX_LEAD = 7 days;
+
   uint internal constant DEFAULT_INITIAL_MARK_TOLERANCE = 0.01e18;
   uint internal constant MAX_CARRY = 0.2e18;
   uint internal constant MIN_INDEX = 0.8e18;
@@ -137,6 +146,9 @@ contract DeployEurcFutureV3 is Utils {
     /// @dev The Data Streams verifier proxy: VERIFIER_PROXY on Base, required so by checkParams. Only the Sepolia
     ///      rehearsal (rehearse-eurc-v3-sepolia.s.sol) sets another, its stand-in.
     address verifierProxy;
+    /// @dev The canary series' expiry (spec A1.4), or 0 for none. Listed before the production series.
+    uint64 canaryExpiry;
+    uint canaryInitialMark;
   }
 
   struct Deployment {
@@ -145,6 +157,8 @@ contract DeployEurcFutureV3 is Utils {
     FutureAsset future;
     LyraForwardFeed forwardFeed;
     uint96 subId;
+    /// @dev 0 when deployed without a canary
+    uint96 canarySubId;
   }
 
   function run() external {
@@ -180,6 +194,8 @@ contract DeployEurcFutureV3 is Utils {
     params.indexMaxAge = vm.envOr("INDEX_MAX_AGE", params.indexMaxAge);
     params.forwardSigner = vm.envAddress("FORWARD_SIGNER");
     params.initialMark = vm.envOr("INITIAL_MARK", fairForward(params));
+    params.canaryExpiry = uint64(resolveCanary(vm.envOr("NO_CANARY", false), vm.envOr("CANARY_EXPIRY", uint(0))));
+    if (params.canaryExpiry != 0) params.canaryInitialMark = canaryFairForward(params);
 
     checkParams(params);
   }
@@ -189,6 +205,22 @@ contract DeployEurcFutureV3 is Utils {
   function resolveOICap(bool uncapped, uint cap) public pure returns (uint) {
     if (uncapped == (cap != 0)) revert("set exactly one of FUTURE_OI_CAP or FUTURE_OI_UNCAPPED=true");
     return uncapped ? UNCAPPED : cap;
+  }
+
+  /// @dev Exactly one of a canary expiry or NO_CANARY=true: the canary is the Stage 1 gate (spec A1.4), never dropped
+  ///      by leaving a variable unset.
+  function resolveCanary(bool none, uint expiry) public pure returns (uint) {
+    if (none == (expiry != 0)) revert("set exactly one of CANARY_EXPIRY or NO_CANARY=true");
+    return expiry;
+  }
+
+  function canaryFairForward(Params memory params) public view returns (uint) {
+    Params memory c = params;
+    uint64 expiry = c.expiry;
+    c.expiry = params.canaryExpiry;
+    uint mark = fairForward(c);
+    c.expiry = expiry;
+    return mark;
   }
 
   function loadChainParams() public view returns (Params memory params) {
@@ -270,6 +302,7 @@ contract DeployEurcFutureV3 is Utils {
       revert("last trade must be no later than the fixing window's start");
     }
     _checkNoSharedSeries(engine, params.expiry);
+    if (params.canaryExpiry != 0) checkCanary(params, engine);
     if (params.contractSize == 0) revert("CONTRACT_SIZE is zero");
     if (params.futureOICap != UNCAPPED && (params.futureOICap == 0 || params.futureOICap % 2e18 != 0)) {
       revert("FUTURE_OI_CAP must be a positive, even number of whole contracts (it counts both sides)");
@@ -328,6 +361,19 @@ contract DeployEurcFutureV3 is Utils {
     }
   }
 
+  function checkCanary(Params memory params, MarginEngine engine) public view {
+    if (params.canaryExpiry < block.timestamp + CANARY_MIN_LEAD) {
+      revert("CANARY_EXPIRY too soon: the vault's setup and enable must land before its last trade");
+    }
+    if (params.canaryExpiry > block.timestamp + CANARY_MAX_LEAD) revert("CANARY_EXPIRY over a week out");
+    if (params.canaryExpiry + CANARY_RECOVERY_DELAY + CANARY_FIXING_WINDOW >= params.expiry - params.fixingWindow) {
+      revert("the canary must settle, recovery included, before the production series' fixing");
+    }
+    if (params.maxSampleGap * 4 > CANARY_FIXING_WINDOW) revert("MAX_SAMPLE_GAP too long for the canary's window");
+    if (params.canaryInitialMark == 0) revert("canary initial mark is zero");
+    _checkNoSharedSeries(engine, params.canaryExpiry);
+  }
+
   function _checkNoSharedSeries(MarginEngine engine, uint64 expiry) internal view {
     for (uint id = 1; id <= engine.lastMarketId(); ++id) {
       IFutureAsset other = IFutureAsset(address(engine.assetMap(id, IMarginEngine.AssetType.Future)));
@@ -368,25 +414,30 @@ contract DeployEurcFutureV3 is Utils {
     d.future.setWhitelistManager(address(engine), true);
     d.future.setTotalPositionCap(engine, 0);
     d.future.setMarkBounds(MAX_MARK_DEVIATION, MAX_MARK_DELAY);
-    d.future
-      .setIndexParams(
-        MAX_MARK_INDEX_DEVIATION,
-        MIN_MARK_INDEX_DEVIATION,
-        BAND_NARROWING_PERIOD,
-        params.fixingWindow,
-        params.maxSampleGap,
-        params.recoveryDelay
-      );
     // Marks read the index plus a signed forward difference: stale index, no mark, as for fills.
     d.forwardFeed = new LyraForwardFeed(d.indexFeed);
     d.forwardFeed.setHeartbeat(FORWARD_HEARTBEAT);
     d.forwardFeed.addSigner(params.forwardSigner, true);
     d.forwardFeed.setRequiredSigners(1);
     d.future.setForwardFeed(IForwardFeed(address(d.forwardFeed)), MIN_MARK_INTERVAL);
+    // Each series copies the fixing params set when it is listed. The canary first, on its short ones; then the
+    // production params, which stay the contract's defaults for any series listed later.
+    if (params.canaryExpiry != 0) {
+      _setFixing(d.future, CANARY_FIXING_WINDOW, params.maxSampleGap, CANARY_RECOVERY_DELAY);
+      d.canarySubId = d.future
+        .setContract(params.canaryExpiry, params.canaryExpiry - uint64(CANARY_FIXING_WINDOW), params.canaryInitialMark);
+    }
+    _setFixing(d.future, params.fixingWindow, params.maxSampleGap, params.recoveryDelay);
     d.subId = d.future.setContract(params.expiry, params.lastTradeTime, params.initialMark);
 
     d.future.transferOwnership(params.vault);
     d.forwardFeed.transferOwnership(params.vault);
+  }
+
+  function _setFixing(FutureAsset future, uint window, uint gap, uint recovery) internal {
+    future.setIndexParams(
+      MAX_MARK_INDEX_DEVIATION, MIN_MARK_INDEX_DEVIATION, BAND_NARROWING_PERIOD, window, gap, recovery
+    );
   }
 
   function ownedContracts(Deployment memory d) public pure returns (address[] memory owned) {
@@ -432,6 +483,18 @@ contract DeployEurcFutureV3 is Utils {
     IFutureAsset.FutureContract memory c = d.future.futureContracts(d.subId);
     if (!c.listed || c.expiry != params.expiry || c.markPrice != params.initialMark) revert("contract not listed");
     if (d.subId != params.expiry) revert("subId is not the expiry");
+    if (params.canaryExpiry == 0) {
+      if (d.canarySubId != 0) revert("a canary nobody asked for");
+    } else {
+      if (d.canarySubId != params.canaryExpiry) revert("canary subId is not its expiry");
+      IFutureAsset.FutureContract memory k = d.future.futureContracts(d.canarySubId);
+      if (!k.listed || k.lastTradeTime != params.canaryExpiry - CANARY_FIXING_WINDOW) revert("canary not listed");
+      IFutureAssetV3.FixingParams memory kf = d.future.seriesFixing(d.canarySubId);
+      if (kf.fixingWindow != CANARY_FIXING_WINDOW || kf.recoveryDelay != CANARY_RECOVERY_DELAY) {
+        revert("canary fixing params");
+      }
+      if (kf.maxSampleGap != params.maxSampleGap) revert("canary sample gap must be production's");
+    }
 
     // Nothing the vault owns is changed by the deployer.
     if (address(engine.assetMap(MARKET_ID, IMarginEngine.AssetType.Future)) == address(d.future)) {
@@ -479,6 +542,10 @@ contract DeployEurcFutureV3 is Utils {
     vm.serializeUint(obj, "marketId", MARKET_ID);
     vm.serializeUint(obj, "poolAccount", params.poolAccount);
     vm.serializeUint(obj, "subId", d.subId);
+    vm.serializeUint(obj, "canarySubId", d.canarySubId);
+    vm.serializeUint(obj, "canaryFixingWindow", params.canaryExpiry == 0 ? 0 : CANARY_FIXING_WINDOW);
+    vm.serializeUint(obj, "canaryRecoveryDelay", params.canaryExpiry == 0 ? 0 : CANARY_RECOVERY_DELAY);
+    vm.serializeUint(obj, "canaryInitialMark", params.canaryInitialMark);
     vm.serializeUint(obj, "expiry", params.expiry);
     vm.serializeUint(obj, "lastTradeTime", params.lastTradeTime);
     vm.serializeUint(obj, "contractSize", params.contractSize);

@@ -19,7 +19,9 @@ Setup gates (all read live, all required):
              on its series (every account scanned). whitelistAsset de-lists it, so an account still holding it, or owed
              VM on it, would be cut off. Re-read immediately before the whitelistAsset action.
   series     no other market lists this expiry: one subId on two futures couples their close-outs
-  parity     the adapter, index feed, future and forward feed as deployed; the deployer has sent nothing unaudited
+  parity     the adapter, index feed, future and forward feed as deployed; the deployer has sent nothing unaudited;
+             the canary series (spec A1.4), if deployed, listed on its own short fixing params and settling before
+             the production series' window opens
 
 Enable gates (all read live, all required unless marked):
   custody    the vault owns both; setup has landed; the future is closed (cap 0, not on the TradeModule)
@@ -165,6 +167,9 @@ def check_artifact(d: dict, engine: dict, retired: dict) -> None:
     raise SystemExit(f"{NAME}.json: subId {d['subId']} is not its expiry")
   if d["replaces"].lower() != retired["future"].lower():
     raise SystemExit(f"{NAME}.json replaces {d['replaces']}, not {RETIRED_NAME}.json's {retired['future']}")
+  canary = int(d.get("canarySubId", 0))
+  if canary and not canary + int(d["canaryRecoveryDelay"]) + int(d["canaryFixingWindow"]) < int(d["lastTradeTime"]):
+    raise SystemExit(f"{NAME}.json: canary {canary} does not settle before the production series' last trade")
   if int(d["futureMMReq"]) <= 0 or int(d["futureMMReq"]) > int(d["futureIMReq"]) or int(d["futureIMReq"]) >= 10**18:
     raise SystemExit(f"{NAME}.json: futures margin MM {d['futureMMReq']} / IM {d['futureIMReq']} is not 0 < MM <= IM < 1")
 
@@ -215,6 +220,17 @@ def gate_slot(chain: Chain, d: dict, retired: dict) -> Gate:
     return Gate("slot", False, f"the retired series unreadable: {str(exc)[:120]}")
 
 
+def canary_expected(d: dict) -> list[tuple[str, int, int]]:
+  """The canary series as the artifact records it: (name, field index in its getter, expected), or none."""
+  canary = int(d.get("canarySubId", 0))
+  if not canary:
+    return []
+  window = int(d["canaryFixingWindow"])
+  return [("futureContracts", 0, 1), ("futureContracts", 2, canary), ("futureContracts", 3, canary - window),
+          ("seriesFixing", 0, window), ("seriesFixing", 1, int(d["maxSampleGap"])),
+          ("seriesFixing", 2, int(d["canaryRecoveryDelay"]))]
+
+
 def gate_parity(chain: Chain, d: dict, vault: str, attached: bool) -> Gate:
   future, feed, index, adapter = d["future"], d["forwardFeed"], d["indexFeed"], d["adapter"]
   w = lambda to, name, *args, index=0: chain.word(to, selector(name) + "".join(args), index)  # noqa: E731
@@ -244,6 +260,8 @@ def gate_parity(chain: Chain, d: dict, vault: str, attached: bool) -> Gate:
     ("series fixing window", w(future, "seriesFixing", s, index=0), int(d["fixingWindow"])),
     ("series sample gap", w(future, "seriesFixing", s, index=1), int(d["maxSampleGap"])),
     ("series recovery delay", w(future, "seriesFixing", s, index=2), int(d["recoveryDelay"])),
+    *[(f"canary {name}[{i}]", w(future, name, word_uint(int(d["canarySubId"])), index=i), want)
+      for name, i, want in canary_expected(d)],
     # the reverting index is never the market's spot feed (spec A2.3): margin checks would stop
     ("EUR's spot feed is not the index", a(d["manager"], "getMarketFeeds", word_uint(MARKET_ID)).lower() != index.lower(), True),
   ]
@@ -439,6 +457,21 @@ def self_test() -> int:
     except SystemExit:
       continue
     raise AssertionError(f"artifact {bad} accepted")
+
+  # the canary: none for an artifact without one; listed on its short params, ending before production's last trade
+  assert canary_expected(d) == []
+  k = {**d, "canarySubId": 1795000000, "canaryFixingWindow": 900, "canaryRecoveryDelay": 300, "maxSampleGap": 120,
+       "lastTradeTime": 1796049000}
+  check_artifact(k, engine, retired)
+  assert canary_expected(k) == [("futureContracts", 0, 1), ("futureContracts", 2, 1795000000),
+                                ("futureContracts", 3, 1795000000 - 900), ("seriesFixing", 0, 900),
+                                ("seriesFixing", 1, 120), ("seriesFixing", 2, 300)], canary_expected(k)
+  try:
+    check_artifact({**k, "canarySubId": 1796049000 - 1000}, engine, retired)
+  except SystemExit:
+    pass
+  else:
+    raise AssertionError("a canary that settles into the production window was accepted")
 
   # the slot: empty retired series passes; each way it is still in use holds; a stranger holds; already-this passes
   assert slot_verdict(a(7), a(7), a(3), 0, 0, False, {}).ok

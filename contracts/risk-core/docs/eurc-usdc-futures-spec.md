@@ -1,6 +1,6 @@
 # EURC-USDC futures and on-chain matching
 
-Status: **v3.4**, 2026-11-15. Supersedes v1 (written against `DatedFutureAsset` and `StandardManager`, which are not the
+Status: **v3.5**, 2026-11-15. Supersedes v1 (written against `DatedFutureAsset` and `StandardManager`, which are not the
 live contracts) and v2.x–v3.0 (reviewed in conversation, not committed).
 
 - **Step 1** (build now): a new `FutureAsset` version with recovery fixing and no owner price, `StreamsIndexAdapter`,
@@ -9,8 +9,11 @@ live contracts) and v2.x–v3.0 (reviewed in conversation, not committed).
 - **Step 2** (`OnchainBook`, oracle-pegged maker curves): gated on a concrete taker, **except for the EURC-30NOV26
   pilot (A1.2)**, for which the gate is lifted.
 
-The pilot ships in two stages (A1.2): Stage 1 lists the new series on `Matching` as soon as its Sepolia rehearsal
-passes; Stage 2 adds `OnchainBook` to the same market behind its own gate. The market never waits for `OnchainBook`.
+The pilot ships in two stages (A1.2): Stage 1 lists the new series on `Matching` as soon as its mainnet canary
+(A1.4) passes; Stage 2 adds `OnchainBook` to the same market behind its own gate. The market never waits for `OnchainBook`.
+
+**v3.5 changes from v3.4:** the Stage 1 gate is a mainnet canary (A1.4) in place of the Base Sepolia run: a short
+series the deployer lists on the same contract, drilled with a broken fixing against Chainlink's real verifier.
 
 **v3.4 changes from v3.3:** the Stage 1 independent review is done and its owner-lever findings are fixed in
 `FutureAsset` (A8.8): each series keeps the fixing parameters it was listed with, with tighter bounds; a feed change
@@ -102,8 +105,10 @@ on the trade module, only on the manager.
 
 **Stage 1: new `FutureAsset`, `StreamsIndexAdapter` and `EurcIndexFeed` on mainnet, traded through `Matching`.**
 Target 2026-11-18/19. Opens only when all of these hold:
-- the Base Sepolia short-dated series passes, including a **deliberately broken fixing** recovered by A8. Run with
-  a stand-in verifier (decided 2026-11-15: no testnet Data Streams credentials); procedure and results in A1.3;
+- the **mainnet canary** passes (A1.4): a short series on the same contract, one contract between two of our own
+  accounts, a **deliberately broken fixing** recovered by A8 against Chainlink's real verifier, close-out with cash
+  conserved and the USDC back. Decided 2026-11-15, in place of the Base Sepolia run: Sepolia could only use a
+  stand-in verifier, and the canary tests the real one. The Sepolia tooling and the local drills stay (A1.3);
 - the full `./scripts/verify.sh` is green;
 - a fast independent review of `FutureAsset`'s fixing and recovery code, the adapter and the feed is done. Stopgap
   until a human reviewer can start: a fresh Claude session given only those files and this spec. **Done 2026-11-15**:
@@ -120,7 +125,7 @@ priority-fee tax off. Step 2's concrete-taker gate is lifted for this pilot only
 `OnchainBook` targets the next expiry. Nothing is redeployed either way.
 
 
-**A1.3 The Sepolia rehearsal (Stage 1 gate).** `scripts/rehearse-eurc-v3-sepolia.s.sol` deploys the series with the
+**A1.3 The Sepolia rehearsal (no longer the gate: replaced by A1.4 on 2026-11-15).** `scripts/rehearse-eurc-v3-sepolia.s.sol` deploys the series with the
 production `DeployEurcFutureV3.deploy` (fixing parameters, 15% / 10% margin, no cap) into a minimal stack: real
 `SubAccounts` and `MarginEngine` v2, the unit tests' mock cash, auction and spot feed, and
 `scripts/rehearsal/StandInStreamsVerifier.sol` in place of Chainlink's verifier. The stand-in checks one signature
@@ -139,6 +144,41 @@ Local dress rehearsals on anvil, with the chain clock advanced 5–10x, 2026-11-
   −100, pool 0, cash conserved.
 - **Found and fixed by them:** the keeper stopped marking at last trade, so nothing pulled the v3 index marks A8.3
   relies on (`ForwardPublisher.indexMark`); and the stand-in reports are stamped with chain time.
+
+**A1.4 The mainnet canary (Stage 1 gate, decided 2026-11-15).** `deploy-eurc-future-v3.s.sol` with
+`CANARY_EXPIRY=<unix>` has the deployer, while it still owns the future, list a canary series before the production
+one: a 15-minute fixing window (the contract's minimum), a 5-minute recovery delay, and production's 2-minute sample
+gap and 60 s index age, so the drill's outage is judged by the real limits. The production series is listed after it on
+30 min / 2 min / 1 h, which stay the contract's defaults. No extra vault action: the canary rides the same setup and
+enable batches. The deploy refuses a canary less than 2 h out (setup and enable must land before its last trade), more
+than a week out, on an expiry another market lists, or one that would settle, recovery included, after the production
+series' fixing opens. Exactly one of `CANARY_EXPIRY` or `NO_CANARY=true` must be set. The proposer's parity gate checks
+the canary's listing and fixing params against the artifact.
+
+What it covers that nothing else has: Chainlink's verifier on real reports in real transactions, the production
+keeper unit with the KMS forward signer and the subscription's credentials, and mainnet block times. Not covered: the
+`TradeModule` and `Matching` fill path, because the canary moves its one contract by a priced transfer (the
+fork tests cover that path; the first public fill is its first mainnet use).
+
+Order:
+1. **Deploy** with `CANARY_EXPIRY` 3–4 h out, then write `future-feeds-v3-eurc-30nov26.env` and
+   `future-feeds-v3-eurc-canary.env` from the artifact. Each keeper instance (`numo-future-feeds-v2@…`,
+   `FUTURE_VERSION=v3`) has its own funded relayer under `/numo/feeds`: two keepers sharing one race for nonces.
+2. **Setup batch** (`eurc-v3-setup`), start both keepers (a dry run first), then the **enable batch**. Enable opens
+   the whole contract, the production series included, but nothing fills it in public: the markets service does not
+   list it until the canary has passed.
+3. **Open**: `CANARY_KEY=<throwaway key> forge script scripts/canary-eurc-v3.s.sol --sig "open()"`. Two accounts,
+   300 USDC each, one contract (1,000 EURC) at the index.
+4. **Break**: inside the canary's window, stop the canary keeper for over 2 minutes, then restart it. Round 0 cannot
+   complete; after expiry the keeper opens a recovery window 5 minutes out, samples it, and settles.
+5. **Close**: `... RETURN_TO=<address> --sig "closeOut()"`. Both close out; the VM must net to zero and cash be
+   conserved across the close-out; every whole cent goes to `RETURN_TO`. Read balances back after broadcasting.
+6. **Then** list the production series in the markets service.
+
+About 40 minutes from the canary's last trade to close-out; the wait before that is the vault's approvals. If the
+canary is missed (its last trade passes before enable), its fixing and recovery still run, unpositioned, and a
+second canary needs the vault's `setContract`. If it fails: the vault sets the cap to 0 before anything is listed.
+`EurcFutureV3Fork` runs the drill script's own `openOn` and `closeOutOn` on a fork, with only the verifier mocked.
 
 ## A2. New code in Step 1
 
