@@ -440,11 +440,26 @@ def open_interest(chain: Chain, d: dict) -> int:
   return chain.word(d["future"], selector("totalPosition") + word_address(d["manager"]))
 
 
+def patient_word(chain: Chain, to: str, data: str, tries: int = 6) -> int:
+  """chain.word, paced and retried on HTTP 429: the box's RPC rate-limits a burst of reads (2026-11-14)."""
+  import time
+  import urllib.error
+  for attempt in range(tries):
+    time.sleep(0.15)
+    try:
+      return chain.word(to, data)
+    except urllib.error.HTTPError as e:
+      if e.code != 429 or attempt == tries - 1:
+        raise
+      time.sleep(2 ** attempt)
+  raise AssertionError("unreachable")
+
+
 def pending_vm_accounts(chain: Chain, d: dict) -> dict[int, int]:
   """Every account with VM pending on the series, signed 18dp USDC."""
   out = {}
-  for acc in range(1, chain.word(v1p.SUB_ACCOUNTS, selector("lastAccountId")) + 1):
-    value = chain.word(d["future"], selector("getPendingVM") + word_uint(acc) + word_uint(int(d["subId"])))
+  for acc in range(1, patient_word(chain, v1p.SUB_ACCOUNTS, selector("lastAccountId")) + 1):
+    value = patient_word(chain, d["future"], selector("getPendingVM") + word_uint(acc) + word_uint(int(d["subId"])))
     value = value - (1 << 256) if value >= 1 << 255 else value
     if value:
       out[acc] = value
