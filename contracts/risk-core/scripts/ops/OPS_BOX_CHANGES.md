@@ -5,6 +5,23 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-15: EURC v3 canary funded from keeper wallets (laptop, `cast send`)
+
+The owner said to fund the v3 deploy and canary from the market maker's or keepers' funds. The market maker's accounts
+are held by Matching and back live quotes, so they were left alone. Keys were read from SSM into a subshell, never
+printed.
+
+- **ETH from the perp liquidation keeper** (`/numo/keeper/keeper_key`, `0xdE57…3f18`; the perp has been delisted since
+  2026-10-21). It keeps 0.000995 ETH.
+  - 0.0015 to the v3 deployer `0xea4B76158a5463Dd433B5e7caBca3939BeE7d693` (tx `0x805e5839…e239`)
+  - 0.002 to the v3 relayer `0x0AbA…12e5` (tx `0xd83c585a…17ea`)
+  - 0.001 to the canary relayer `0x35ee…bDD5` (tx `0xf7770019…d85d`)
+  - 0.0005 to the canary trader `0x1b01341B8dCaF986247e371a8D5c742F826d9Ca7` (tx `0xf5825d70…72be`)
+- **600 USDC lent by the engine keeper** (account #38, owner `0x753f…f83b`): `CashAsset.withdraw(38, 600e6, canary
+  trader)`, tx `0x5cc5b3701593667bf882590b195630e67c9f7c2d409ecfbb2cee89f7f56c27a1`. Account #38's cash went from
+  $5,000 to $4,400, which still covers cNGN-30NOV26's $2,160 side at its cap. **To be returned:** the canary's
+  `closeOut()` runs with `RETURN_TO=0x753f…f83b`, and the keeper re-deposits the USDC to #38.
+
 ## 2026-11-15: EURC v3 keeper relayers created in SSM (laptop)
 
 For the v3 pilot's two keeper instances (spec A1.4): EURC-30NOV26 v3 and its mainnet canary each get a relayer of
