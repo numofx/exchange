@@ -1,6 +1,6 @@
 # EURC-USDC futures and on-chain matching
 
-Status: **v3.2**, 2026-11-14. Supersedes v1 (written against `DatedFutureAsset` and `StandardManager`, which are not the
+Status: **v3.3**, 2026-11-14. Supersedes v1 (written against `DatedFutureAsset` and `StandardManager`, which are not the
 live contracts) and v2.x–v3.0 (reviewed in conversation, not committed).
 
 - **Step 1** (build now): a new `FutureAsset` version with recovery fixing and no owner price, `StreamsIndexAdapter`,
@@ -9,8 +9,13 @@ live contracts) and v2.x–v3.0 (reviewed in conversation, not committed).
 - **Step 2** (`OnchainBook`, oracle-pegged maker curves): gated on a concrete taker, **except for the EURC-30NOV26
   pilot (A1.2)**, for which the gate is lifted.
 
-Shipped separately so one audit doesn't carry a new market, a new matching model and new oracle infrastructure at
-once. The pilot is the exception, bounded by its scope, its cap and the November 24 go/no-go (A1.2).
+The pilot ships in two stages (A1.2): Stage 1 lists the new series on `Matching` as soon as its Sepolia rehearsal
+passes; Stage 2 adds `OnchainBook` to the same market behind its own gate. The market never waits for `OnchainBook`.
+
+**v3.3 changes from v3.2:** the pilot ships in two stages and the market no longer waits for `OnchainBook` (A1.2);
+pilot expiry decided, 2026-11-30 15:00 UTC (A1.2); `acceptData` skips an old report instead of reverting, the
+verifier is called with no value so any fee fails closed, and `indexMaxAge` is immutable (A2.2, A2.3); Stage 1 keeps
+the index fresh with a keeper rather than executor-attached reports (A2.2).
 
 **v3.2 changes from v3.1:** the old EURC-30NOV26 expires unopened and a pilot series on the new version with
 `OnchainBook` replaces it (A1.1, A1.2); the Base verifier proxy and its fee manager are recorded: verification is
@@ -72,25 +77,35 @@ Carried forward from it: **a series is its subId (the expiry), and `closeOutExpi
 that expiry.** A recovery fixing (A8) can delay settlement by hours, so every EURC expiry must have a subId no other
 market lists. The existing deploy script already refuses a shared expiry; keep that check in the new one.
 
-### A1.2 Pilot: EURC-30NOV26 on the new version, executed through `OnchainBook` (decided 2026-11-14)
+### A1.2 Pilot: EURC-30NOV26 on the new version, in two stages (decided 2026-11-14)
 
-A new series replaces the unopened one, as a pilot of both steps at once.
+A new series replaces the unopened one: one asset and one subId, first traded through `Matching` (Stage 1), then also
+through `OnchainBook` (Stage 2). Adding `OnchainBook` needs no redeploy: `FutureAsset.handleAdjustment` does not gate
+on the trade module, only on the manager.
 
-- **New asset, new subId.** A subId is the expiry timestamp (`getSubId(expiry)`), so the pilot needs a **different
-  expiry time on 2026-11-30**: 16:00 UTC (1796054400) is held by the unopened series and 14:00 (1796047200) by
-  cNGN-30NOV26. Open (B14): the pilot's expiry time.
+- **Expiry 2026-11-30 15:00 UTC, subId `1796050800` (a Monday).** 16:00 (1796054400) is held by the unopened series
+  and 14:00 (1796047200) by cNGN-30NOV26; a subId is the expiry (`getSubId`), and `closeOutExpired` couples markets
+  that share one (A1.1).
 - **Keyed by address and subId, never by name.** The indexer, markets service and `@numo/abis` key the series by
   (asset address, subId); two assets will both read as "EURC-30NOV26".
-- **Scope:** splines only (no order book), a maker allowlist, priority-fee tax off, and an open-interest cap well
-  under the A6.0a manipulation cost.
-- **Step 2's concrete-taker gate is lifted for this pilot only.**
-- **Before mainnet:**
-  - the full A5, A8.7 and B11 suites, including every guard-firing and griefing test;
-  - a targeted review of the allowance handling (B3, B5a pre-checks), the per-maker `try/catch` and gas floor
-    (B5a), newest-report-only (A2.2, B6), and recovery fixing (A8);
-  - a Base Sepolia rehearsal on a short-dated series that includes a **deliberately broken fixing** recovered by A8.
-- **Go/no-go: 2026-11-24.** If Data Streams access, the review or the Sepolia rehearsal isn't done, the pilot does not
-  open, and the code is reused for the next expiry. (Data Streams access is done as of 2026-11-14, A2.1.)
+- **OI cap** well under the A6.0a manipulation cost, for both stages.
+
+**Stage 1: new `FutureAsset`, `StreamsIndexAdapter` and `EurcIndexFeed` on mainnet, traded through `Matching`.**
+Target 2026-11-18/19. Opens only when all of these hold:
+- the Base Sepolia short-dated series passes, including a **deliberately broken fixing** recovered by A8;
+- the full `./scripts/verify.sh` is green;
+- a fast independent review of `FutureAsset`'s fixing and recovery code, the adapter and the feed is done. Stopgap
+  until a human reviewer can start: a fresh Claude session given only those files and this spec.
+
+**Stage 2: `OnchainBook` added to the same market.** Scope: splines only (no order book), a maker allowlist,
+priority-fee tax off. Step 2's concrete-taker gate is lifted for this pilot only. Before it is enabled:
+- the full B11 suite, including every guard-firing and griefing test;
+- a targeted independent review of the allowance handling (B3, B5a pre-checks), the per-maker `try/catch` and gas
+  floor (B5a), and its use of the index (B6);
+- a full Base Sepolia rehearsal with `OnchainBook` on a short-dated series.
+
+**Go/no-go for Stage 2: 2026-11-24.** If it isn't ready, the market runs on `Matching` through expiry and
+`OnchainBook` targets the next expiry. Nothing is redeployed either way.
 
 ## A2. New code in Step 1
 
@@ -139,11 +154,24 @@ observation time.
   not per second.
 - Between trades, a keeper posts reports only where something needs a fresh index: each `pullMark`
   (`minMarkInterval`) and each fixing sample (`maxSampleGap`). Anyone may post.
+- **Stage 1 (A1.2) keeps the index fresh with the keeper alone**, posting well inside `indexMaxAge`, because a fill is
+  checked against the index and attaching reports to matches needs executor changes. Attaching through `managerData`
+  can follow without a contract change.
+- **An old or equal report is skipped, not reverted.** Reverting would let anyone who posts a newer report first make
+  an attached report, and so the trade carrying it, fail. A report for any other feed ID, or with a non-positive
+  price, reverts.
+- **No owner, nothing settable.** The verifier proxy and both feed IDs are immutable; a change is a new adapter and
+  feed, through the `FutureAsset` feed timelock (A8.5).
+- **Fees fail closed:** the adapter calls `verify` with no value and holds no tokens or approvals, so if Chainlink
+  repoints the fee manager to one that charges, verification reverts. Checked 2026-11-14 by `eth_call` on Base:
+  `verify` of a saved live report, with zero value from an arbitrary address, returns the report data.
 
 ### A2.3 `EurcIndexFeed` (`ISpotFeed`), used as `FutureAsset.indexFeed`
 
-`getSpot()` returns the stored ratio and **reverts only on staleness**: no verified report within `indexMaxAge`
-(seconds, set from the 1 s cadence plus delivery margin).
+`getSpot()` returns the stored ratio and **reverts only on staleness**: either stream's newest verified report older
+than `indexMaxAge` (seconds, set from the 1 s cadence plus delivery margin). `indexMaxAge` is **immutable**: an owner
+who could set it could hold the index stale and keep fixings failing, or loosen it so a stale price settles. A
+change is a new feed through the timelock.
 
 Divergence checks (EUR/USD, the push-feed ratio, the Aerodrome TWAP) **never revert**. They raise operator alerts.
 
@@ -452,12 +480,13 @@ v1 structures the take loop so a second liquidity source can be added without a 
 
 ## B14. Open questions
 
-- **Pilot expiry time on 2026-11-30** (A1.2): not 14:00 or 16:00 UTC, which existing series hold.
 - Pilot OI cap, from the A6.0a measurement.
-- `timelock` length for feed changes, `recoveryDelay`, `indexMaxAge`.
+- Fixing parameters, proposed 2026-11-14 and awaiting decision: `feedTimelock` 24 h, `fixingWindow` 30 min,
+  `maxSampleGap` 2 min, `recoveryDelay` 1 h, `indexMaxAge` 60 s.
 
 Decided 2026-11-14 (kept for the record):
 - the old EURC-30NOV26 expires unopened at cap 0; the pilot replaces it (A1.1, A1.2);
+- the pilot ships in two stages, `Matching` first; pilot expiry 2026-11-30 15:00 UTC, subId `1796050800` (A1.2);
 - file placement: today's `FutureAsset.sol` moves to `src/legacy/v2/FutureAssetV2.sol` (the v1 precedent), the new
   version is `src/assets/FutureAsset.sol` (A8.1);
 - Base verifier proxy and fee: recorded in A2.1, no fee today.
