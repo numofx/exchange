@@ -84,13 +84,15 @@ locals {
       max_inventory = "15"
       skew_full_at  = "10"
     }
+    # EURC-30NOV26 is the v3 series since 2026-11-15 (0xC350…B227, by symbol through markets-service): IM 15%, not 6%,
+    # so a contract takes about 165 USDC and #40's 1,300 at the 0.8 IM usage holds about 6. Inventory +/- 6, was 9.
     eurc = {
       symbol        = "EURC-30NOV26"
       carry         = "0.015"
       half_spread   = "8"
       spread_step   = "3"
-      max_inventory = "9"
-      skew_full_at  = "6"
+      max_inventory = "6"
+      skew_full_at  = "4"
     }
   }
   mm_future_v2_enabled = var.image_market_maker_future_v2 == "" ? {} : local.mm_future_v2
