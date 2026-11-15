@@ -5,6 +5,16 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-15: ops box may read /numo/data-streams (terraform apply of `38c8806`)
+
+- **`terraform apply`** (1.13.3) from `main` at `38c8806`, a saved plan: `1 to add, 1 to change, 0 to destroy`:
+  `aws_iam_role_policy.ops_box_ssm_read["data-streams"]` created (read `/numo/data-streams/*`), and
+  `ops_box_ssm_deny_outside_paths` gained that path in its `NotResource`. Nothing else changed.
+- **Read back from the box** (SSM `443f7f5a`): `/numo/data-streams/username` and `/hmac_secret` readable (lengths 36
+  and 128; values not printed); `/numo/exchange/database_url` still `AccessDeniedException`.
+- **Used by:** `run-with-ssm-forward.sh` for a unit with `FUTURE_VERSION=v3` only. No such unit exists yet.
+- **Undo:** remove `data-streams` from `ops_box_ssm_paths` and apply.
+
 ## 2026-11-15 ~04:57–05:00 UTC: EURC depth monitor sampling again, judged against the live cap
 
 - **`exchange-eurc-depth`** moved `8c5e60a6` → `acd87d4` (SSM `b567966d`), clean. `acd87d4`: `depth.py --once` no
