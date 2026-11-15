@@ -85,9 +85,9 @@ contract DeployEurcFutureV3 is Utils {
 
   uint64 internal constant DEFAULT_EXPIRY = 1796050800;
   uint internal constant DEFAULT_CONTRACT_SIZE = 1_000e18;
-  /// @dev v2's EURC margin; A7 (depeg sizing) may raise it before enable
-  uint internal constant DEFAULT_FUTURE_IM_REQ = 0.06e18;
-  uint internal constant DEFAULT_FUTURE_MM_REQ = 0.04e18;
+  /// @dev Sized for a depeg, not EUR/USD (spec A7, decided 2026-11-15): IM 15%, MM 10%
+  uint internal constant DEFAULT_FUTURE_IM_REQ = 0.15e18;
+  uint internal constant DEFAULT_FUTURE_MM_REQ = 0.1e18;
   int internal constant DEFAULT_CARRY = -0.015e18;
 
   uint internal constant MAX_MARK_DEVIATION = 0.02e18;
@@ -134,6 +134,9 @@ contract DeployEurcFutureV3 is Utils {
     uint recoveryDelay;
     uint indexMaxAge;
     address forwardSigner;
+    /// @dev The Data Streams verifier proxy: VERIFIER_PROXY on Base, required so by checkParams. Only the Sepolia
+    ///      rehearsal (rehearse-eurc-v3-sepolia.s.sol) sets another, its stand-in.
+    address verifierProxy;
   }
 
   struct Deployment {
@@ -208,6 +211,7 @@ contract DeployEurcFutureV3 is Utils {
     params.contractSize = DEFAULT_CONTRACT_SIZE;
     params.carry = DEFAULT_CARRY;
     params.initialMarkTolerance = DEFAULT_INITIAL_MARK_TOLERANCE;
+    params.verifierProxy = VERIFIER_PROXY;
     params.imReq = DEFAULT_FUTURE_IM_REQ;
     params.mmReq = DEFAULT_FUTURE_MM_REQ;
     params.feedTimelock = DEFAULT_FEED_TIMELOCK;
@@ -229,6 +233,7 @@ contract DeployEurcFutureV3 is Utils {
   /// @dev Each check is a way the deployment lands and then cannot be attached, trade, or settle.
   function checkParams(Params memory params) public view {
     if (params.subAccounts.code.length == 0) revert("subAccounts has no code - wrong chain?");
+    if (params.verifierProxy != VERIFIER_PROXY) revert("verifierProxy must be the Base VerifierProxy");
     MarginEngine engine = MarginEngine(params.engine);
     if (engine.owner() != params.vault) revert("v2 engine is not owned by the vault");
     if (engine.lastMarketId() != MARKET_ID) revert("v2 must list exactly NGN and EUR");
@@ -356,7 +361,7 @@ contract DeployEurcFutureV3 is Utils {
 
   function deploy(Params memory params) public returns (Deployment memory d) {
     MarginEngine engine = MarginEngine(params.engine);
-    d.adapter = new StreamsIndexAdapter(IStreamsVerifierProxy(VERIFIER_PROXY), LINK, EURC_USD_FEED, USDC_USD_FEED);
+    d.adapter = new StreamsIndexAdapter(IStreamsVerifierProxy(params.verifierProxy), LINK, EURC_USD_FEED, USDC_USD_FEED);
     d.indexFeed = new EurcIndexFeed(d.adapter, params.indexMaxAge);
 
     d.future = new FutureAsset(SubAccounts(params.subAccounts), params.contractSize, d.indexFeed, params.feedTimelock);
@@ -400,7 +405,8 @@ contract DeployEurcFutureV3 is Utils {
       if (IOwnable2Step(owned[i]).pendingOwner() != params.vault) revert("contract not nominated to vault");
     }
     MarginEngine engine = MarginEngine(params.engine);
-    if (address(d.adapter.verifierProxy()) != VERIFIER_PROXY) revert("adapter verifier");
+    if (address(d.adapter.verifierProxy()) != params.verifierProxy) revert("adapter verifier");
+    if (block.chainid == 8453 && params.verifierProxy != VERIFIER_PROXY) revert("adapter verifier on Base");
     if (d.adapter.baseFeedId() != EURC_USD_FEED || d.adapter.quoteFeedId() != USDC_USD_FEED) revert("adapter feeds");
     if (d.adapter.feeToken() != LINK) revert("adapter fee token");
     if (address(d.indexFeed.adapter()) != address(d.adapter)) revert("index feed adapter");
@@ -452,7 +458,7 @@ contract DeployEurcFutureV3 is Utils {
     vm.serializeAddress(obj, "manager", params.engine);
     vm.serializeString(obj, "symbol", string.concat("EURC-", _expiryCode(params.expiry)));
     vm.serializeString(obj, "units", "USDC per EURC; contractSize in EURC; VM in USDC cash");
-    vm.serializeAddress(obj, "verifierProxy", VERIFIER_PROXY);
+    vm.serializeAddress(obj, "verifierProxy", params.verifierProxy);
     vm.serializeBytes32(obj, "baseFeedId", EURC_USD_FEED);
     vm.serializeBytes32(obj, "quoteFeedId", USDC_USD_FEED);
     vm.serializeAddress(obj, "replaces", RETIRED_FUTURE);

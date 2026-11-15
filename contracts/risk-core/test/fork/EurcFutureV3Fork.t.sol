@@ -234,8 +234,8 @@ contract EurcFutureV3Fork is Test {
     assertTrue(engine.assetDetails(d.future).isWhitelisted);
     assertEq(address(engine.assetMap(1, IMarginEngine.AssetType.Future)), cngnFuture, "cNGN untouched");
     (uint mm, uint im) = engine.futureMarginRequirements(2);
-    assertEq(mm, 0.04e18);
-    assertEq(im, 0.06e18);
+    assertEq(mm, 0.1e18, "MM 10%, sized for a depeg (A7)");
+    assertEq(im, 0.15e18, "IM 15%");
     assertEq(d.future.totalPositionCap(engine), 0, "still closed");
     assertFalse(IV3TradeModule(params.tradeModule).isDatedFutureAsset(address(d.future)));
 

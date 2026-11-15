@@ -189,6 +189,18 @@ describe('forward publisher', () => {
     assert.deepEqual(calls, []);
   });
 
+  it('v3: from last trade until settlement, pulls an index mark every minMarkInterval, signing nothing', async () => {
+    const v3 = { ...config, FUTURE_VERSION: 'v3' as const };
+    const due = run(base({ head: LAST_TRADE, lastMarkTime: LAST_TRADE - 3_600n }), v3);
+    assert.equal(await due.publisher.tick(), 'index-marked');
+    assert.deepEqual(due.calls, ['pullMark'], 'no forward signed or submitted');
+    const early = run(base({ head: EXPIRY + 600n, lastMarkTime: EXPIRY }), v3);
+    assert.equal(await early.publisher.tick(), 'waiting', 'during a recovery too, at the interval');
+    assert.deepEqual(early.calls, []);
+    const settled = run(base({ head: EXPIRY + 9_000n, settled: true }), v3);
+    assert.equal(await settled.publisher.tick(), 'settled');
+  });
+
   it('stops once settled', async () => {
     const { publisher, calls } = run(base({ settled: true }));
     assert.equal(await publisher.tick(), 'settled');

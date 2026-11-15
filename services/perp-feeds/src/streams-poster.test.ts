@@ -2,12 +2,12 @@ import assert from 'node:assert/strict';
 import { createHash, createHmac } from 'node:crypto';
 import { describe, it } from 'node:test';
 
-import { keccak256, toHex, type Address, type Hex } from 'viem';
+import { concat, decodeAbiParameters, keccak256, recoverAddress, toHex, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 import type { ContractChain } from './chain.js';
 import { loadForwardConfig } from './forward-config.js';
-import { StreamsPoster, signedReportSource, type StreamsReport } from './streams-poster.js';
+import { StreamsPoster, signedReportSource, standInReportSource, type StreamsReport } from './streams-poster.js';
 
 const INDEX = '0x00000000000000000000000000000000000000A1' as Address;
 const ADAPTER = '0x00000000000000000000000000000000000000AD' as Address;
@@ -156,5 +156,50 @@ describe('signedReportSource', () => {
     await assert.rejects(signedReportSource('https://api.example', 'a', 'b', failing)(EURC), /Data Streams 403/);
     const wrong = (async () => new Response(JSON.stringify({ report: report(USDC, HEAD) }), { status: 200 })) as unknown as typeof fetch;
     await assert.rejects(signedReportSource('https://api.example', 'a', 'b', wrong)(EURC), /without a report for it/);
+  });
+});
+
+describe('standInReportSource (testnet only)', () => {
+  const key = keccak256(toHex('stand-in'));
+  it("signs a V3 report as Chainlink's verifier checks it: the digest recovers to our key, v in rawVs' first byte", async () => {
+    const report = await standInReportSource(key, { [EURC.toLowerCase()]: 1_160_000_000_000_000_000n }, () => 1_790_000_000)(EURC);
+    assert.equal(report.feedID, EURC);
+    assert.equal(report.observationsTimestamp, 1_790_000_000);
+    const [context, data, rs, ss, rawVs] = decodeAbiParameters(
+      [{ type: 'bytes32[3]' }, { type: 'bytes' }, { type: 'bytes32[]' }, { type: 'bytes32[]' }, { type: 'bytes32' }],
+      report.fullReport,
+    );
+    assert.equal(rs.length, 1);
+    assert.equal(rawVs.slice(4), '00'.repeat(31), 'only the first byte is used');
+    const v = Number.parseInt(rawVs.slice(2, 4), 16);
+    assert.ok(v === 0 || v === 1);
+    const digest = keccak256(concat([keccak256(data), ...context]));
+    const signer = await recoverAddress({ hash: digest, signature: { r: rs[0], s: ss[0], yParity: v } });
+    assert.equal(signer, privateKeyToAccount(key).address);
+    const [fields] = decodeAbiParameters(
+      [{ type: 'tuple', components: [{ name: 'feedId', type: 'bytes32' }, { name: 'validFromTimestamp', type: 'uint32' },
+        { name: 'observationsTimestamp', type: 'uint32' }, { name: 'nativeFee', type: 'uint192' }, { name: 'linkFee', type: 'uint192' },
+        { name: 'expiresAt', type: 'uint32' }, { name: 'benchmarkPrice', type: 'int192' }, { name: 'bid', type: 'int192' },
+        { name: 'ask', type: 'int192' }] }],
+      data,
+    );
+    assert.equal(fields.feedId, EURC);
+    assert.equal(fields.benchmarkPrice, 1_160_000_000_000_000_000n);
+  });
+
+  it('has no price for a feed it was not given', async () => {
+    await assert.rejects(standInReportSource(key, {})(EURC), /no price/);
+  });
+
+  it('is refused on Base mainnet, and needs both prices', () => {
+    const base = {
+      RPC_URL: 'http://127.0.0.1:8545', RELAYER_KEY: keccak256(toHex('relayer')), FORWARD_SIGNER_KMS_KEY_ID: 'k',
+      DATA_SUBMITTER: INDEX, INDEX_FEED: INDEX, FORWARD_FEED: INDEX, FUTURE_ASSET: INDEX, FUTURE_MANAGER: INDEX,
+      FUTURE_SUB_ID: '1', CARRY: '0', FUTURE_VERSION: 'v3', DATA_STREAMS_STANDIN_KEY: key, STANDIN_BASE_USD: '1', STANDIN_QUOTE_USD: '1',
+    };
+    assert.throws(() => loadForwardConfig({ ...base, CHAIN_ID: '8453' }), /testnet rehearsals only/);
+    assert.equal(loadForwardConfig({ ...base, CHAIN_ID: '84532' }).DATA_STREAMS_STANDIN_KEY, key);
+    const { STANDIN_QUOTE_USD: _q, ...noQuote } = base;
+    assert.throws(() => loadForwardConfig({ ...noQuote, CHAIN_ID: '84532' }), /needs STANDIN_BASE_USD and STANDIN_QUOTE_USD/);
   });
 });

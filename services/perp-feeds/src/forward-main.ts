@@ -1,14 +1,14 @@
 import { createKmsAccount } from '@numo/kms-signer';
 import { privateKeyToAccount, type LocalAccount } from 'viem/accounts';
-import type { Hex } from 'viem';
+import type { Address, Hex } from 'viem';
 
 import { createAlerter, type Alerter } from './alert.js';
-import { createChain } from './chain.js';
+import { createChain, type ContractChain } from './chain.js';
 import { loadForwardConfig, type ForwardConfig } from './forward-config.js';
 import { ForwardPublisher } from './forward-publisher.js';
 import { ExpiryKeeper } from './expiry-keeper.js';
 import { installRpcCounter } from './rpc-count.js';
-import { StreamsPoster, signedReportSource } from './streams-poster.js';
+import { StreamsPoster, adapterAbi, indexFeedAbi, signedReportSource, standInReportSource, type ReportSource } from './streams-poster.js';
 
 /**
  * The keeper for a dated future, one unit per series (numo-future-feeds.service for v1's
@@ -71,6 +71,26 @@ export async function postReports(streams: Pick<StreamsPoster, 'tick'>, alert: A
   }
 }
 
+/**
+ * Where v3 reports come from: Chainlink's API, or, on a testnet rehearsal, our own key at fixed prices (config refuses
+ * the stand-in on mainnet). The stand-in's prices are keyed by the adapter's feed ids, read from the chain.
+ */
+export async function reportSource(config: ForwardConfig, chain: Pick<ContractChain, 'read' | 'headTimestamp'>): Promise<ReportSource> {
+  if (!config.DATA_STREAMS_STANDIN_KEY) {
+    return signedReportSource(config.DATA_STREAMS_HOST, config.DATA_STREAMS_USERNAME!, config.DATA_STREAMS_SECRET!);
+  }
+  const adapter = await chain.read<Address>(config.INDEX_FEED, indexFeedAbi, 'adapter');
+  const [base, quote] = await Promise.all([
+    chain.read<Hex>(adapter, adapterAbi, 'baseFeedId'),
+    chain.read<Hex>(adapter, adapterAbi, 'quoteFeedId'),
+  ]);
+  console.log('[streams] TESTNET stand-in report source: reports signed by DATA_STREAMS_STANDIN_KEY');
+  return standInReportSource(config.DATA_STREAMS_STANDIN_KEY as Hex, {
+    [base.toLowerCase()]: config.STANDIN_BASE_USD!,
+    [quote.toLowerCase()]: config.STANDIN_QUOTE_USD!,
+  }, async () => Number(await chain.headTimestamp()));
+}
+
 /** What heads this instance's alerts: v1 keeps the tag it always had, a v2 series names its base. */
 export function alertTag(config: Pick<ForwardConfig, 'FUTURE_VERSION' | 'BASE_SYMBOL'>): string {
   return config.FUTURE_VERSION === 'v1' ? 'perp-feeds' : `future-feeds ${config.BASE_SYMBOL} ${config.FUTURE_VERSION}`;
@@ -83,24 +103,20 @@ async function main() {
   const alert = createAlerter(config.ALERT_WEBHOOK_URL || undefined, undefined, undefined, undefined, alertTag(config));
   const signer = await obtainSigner(config, alert);
   const chain = createChain(config, signer);
-  const publisher = new ForwardPublisher(config, chain, alert);
-  await publisher.checkLateThreshold();
-  await publisher.checkUnits();
   // v3: the index is a Data Streams adapter, fresh only while reports are posted. Posting runs first each tick,
   // so the mark and the fixing sample read a fresh index.
   const streams =
     config.FUTURE_VERSION === 'v3'
-      ? new StreamsPoster(
-          config,
-          chain,
-          alert,
-          signedReportSource(config.DATA_STREAMS_HOST, config.DATA_STREAMS_USERNAME!, config.DATA_STREAMS_SECRET!),
-        )
+      ? new StreamsPoster(config, chain, alert, await reportSource(config, chain))
       : undefined;
   if (streams) {
     await streams.checkCadence();
     await postReports(streams, alert);
   }
+  // after the first post: the unit check reads the index, which on v3 is fresh only once reports are posted
+  const publisher = new ForwardPublisher(config, chain, alert);
+  await publisher.checkLateThreshold();
+  await publisher.checkUnits();
   const expiry = new ExpiryKeeper(config, chain, alert);
   await expiry.checkSampleInterval();
   console.log(

@@ -31,6 +31,7 @@ type FutureContract = {
 
 export type ForwardOutcome =
   | 'published'
+  | 'index-marked'
   | 'dry-run'
   | 'waiting'
   | 'closed'
@@ -45,7 +46,9 @@ export type ForwardOutcome =
  * Marks a dated future from its forward (v1 USDC-cNGN, or a v2 series on any base, FUTURE_VERSION): each tick, once the contract's minMarkInterval has
  * passed, it works out the forward (forward-targets.ts), signs it into the future's LyraForwardFeed
  * and calls FutureAsset.pullMark, which reads it back, checks it against the index band and move
- * limit, and accrues VM. Stops at last trade.
+ * limit, and accrues VM. Stops at last trade, except on v3: there, from last trade until the series settles, the
+ * contract marks from the index itself (spec A8.3: margin follows the price to expiry and through a recovery), and this
+ * pulls that mark every minMarkInterval with nothing to sign.
  *
  * Every refusal alerts. A mark that has not landed for FORWARD_MARK_LATE_MS while trading is open
  * alerts on its own: the contract's VM is only as fresh as its last mark.
@@ -112,7 +115,9 @@ export class ForwardPublisher {
     if (contract.settled) return 'settled';
 
     const head = await this.chain.headTimestamp();
-    if (head >= contract.lastTradeTime) return 'closed';
+    if (head >= contract.lastTradeTime) {
+      return this.config.FUTURE_VERSION === 'v3' ? this.indexMark(contract, head) : 'closed';
+    }
 
     const lateSec = BigInt(Math.floor(this.config.FORWARD_MARK_LATE_MS / 1000));
     if (head - contract.lastMarkTime > lateSec) {
@@ -200,7 +205,23 @@ export class ForwardPublisher {
       return 'pull-failed';
     }
   }
+
+  /** v3 from last trade: pullMark reads the index; nothing is signed, nor is the forward feed touched. */
+  private async indexMark(contract: FutureContract, head: bigint): Promise<ForwardOutcome> {
+    const minInterval = await this.read<bigint>('minMarkInterval');
+    if (head < contract.lastMarkTime + minInterval) return 'waiting';
+    if (this.config.DRY_RUN) return 'dry-run';
+    try {
+      const tx = await this.chain.write(this.config.FUTURE_ASSET, futureAbi, 'pullMark', [this.config.FUTURE_SUB_ID]);
+      console.log(`[forward] index mark after last trade tx=${tx}`);
+      return 'index-marked';
+    } catch (error) {
+      await this.alert('forward-pull-failed', `future ${this.config.FUTURE_SUB_ID} index mark: ${(error as Error).message.slice(0, 300)}`);
+      return 'pull-failed';
+    }
+  }
 }
+
 
 /** max / min of two positive prices, 18dp: how far apart they are, whichever is larger. */
 function ratio(a: bigint, b: bigint): bigint {

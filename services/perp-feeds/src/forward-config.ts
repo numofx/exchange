@@ -47,6 +47,13 @@ const envSchema = z
     DATA_STREAMS_SECRET: z.string().min(1).optional(),
     DATA_STREAMS_HOST: z.string().url().default('https://api.dataengine.chain.link'),
     STREAMS_REFRESH_S: z.coerce.number().int().positive().default(20),
+    /**
+     * TESTNET ONLY, in place of the credentials: sign reports ourselves for the Sepolia rehearsal's
+     * StandInStreamsVerifier (streams-poster.ts standInReportSource), at fixed prices (18dp). Refused on Base mainnet.
+     */
+    DATA_STREAMS_STANDIN_KEY: privateKey.optional(),
+    STANDIN_BASE_USD: uint.optional(),
+    STANDIN_QUOTE_USD: uint.optional(),
     /** The base the future is on, for log lines and alerts only: two series can share an expiry, so a sub id alone does not name one. */
     BASE_SYMBOL: z.string().min(1).default('cNGN'),
 
@@ -111,7 +118,14 @@ const envSchema = z
     if (env.FUTURE_VERSION === 'v1' && env.CARRY < 0n) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'CARRY must not be negative on v1' });
     }
-    if (env.FUTURE_VERSION === 'v3' && (!env.DATA_STREAMS_USERNAME || !env.DATA_STREAMS_SECRET)) {
+    const standIn = env.DATA_STREAMS_STANDIN_KEY !== undefined;
+    if (standIn && env.CHAIN_ID === BASE_MAINNET) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'DATA_STREAMS_STANDIN_KEY is for testnet rehearsals only, never Base mainnet' });
+    }
+    if (standIn && (env.STANDIN_BASE_USD === undefined || env.STANDIN_QUOTE_USD === undefined)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'DATA_STREAMS_STANDIN_KEY needs STANDIN_BASE_USD and STANDIN_QUOTE_USD' });
+    }
+    if (env.FUTURE_VERSION === 'v3' && !standIn && (!env.DATA_STREAMS_USERNAME || !env.DATA_STREAMS_SECRET)) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'v3 needs DATA_STREAMS_USERNAME and DATA_STREAMS_SECRET' });
     }
     if (raw && env.CHAIN_ID === BASE_MAINNET) {

@@ -102,7 +102,8 @@ on the trade module, only on the manager.
 
 **Stage 1: new `FutureAsset`, `StreamsIndexAdapter` and `EurcIndexFeed` on mainnet, traded through `Matching`.**
 Target 2026-11-18/19. Opens only when all of these hold:
-- the Base Sepolia short-dated series passes, including a **deliberately broken fixing** recovered by A8;
+- the Base Sepolia short-dated series passes, including a **deliberately broken fixing** recovered by A8. Run with
+  a stand-in verifier (decided 2026-11-15: no testnet Data Streams credentials); procedure and results in A1.3;
 - the full `./scripts/verify.sh` is green;
 - a fast independent review of `FutureAsset`'s fixing and recovery code, the adapter and the feed is done. Stopgap
   until a human reviewer can start: a fresh Claude session given only those files and this spec. **Done 2026-11-15**:
@@ -117,6 +118,27 @@ priority-fee tax off. Step 2's concrete-taker gate is lifted for this pilot only
 
 **Go/no-go for Stage 2: 2026-11-24.** If it isn't ready, the market runs on `Matching` through expiry and
 `OnchainBook` targets the next expiry. Nothing is redeployed either way.
+
+
+**A1.3 The Sepolia rehearsal (Stage 1 gate).** `scripts/rehearse-eurc-v3-sepolia.s.sol` deploys the series with the
+production `DeployEurcFutureV3.deploy` (fixing parameters, 15% / 10% margin, no cap) into a minimal stack: real
+`SubAccounts` and `MarginEngine` v2, the unit tests' mock cash, auction and spot feed, and
+`scripts/rehearsal/StandInStreamsVerifier.sol` in place of Chainlink's verifier. The stand-in checks one signature
+exactly as Chainlink's does and refuses Base mainnet; the keeper signs reports with `DATA_STREAMS_STANDIN_KEY`, which
+`forward-config` refuses on mainnet. Not covered by the rehearsal, and covered by the mainnet fork tests instead:
+Chainlink's verifier, the live `TradeModule` and `Matching`. Steps: deploy; start the keeper; open 10 contracts; stop
+the keeper for longer than `maxSampleGap` inside the window and restart it at a different price; after settlement,
+close out and require cash conserved.
+
+Local dress rehearsals on anvil, with the chain clock advanced 5–10x, 2026-11-15:
+- **Run 1:** an outage gave a 276 s gap (limit 120 s); the keeper opened recovery round 1 on restart, the
+  `fixing-recovery-opened` alert reached the webhook, round 1 settled at 1.16; cash conserved.
+- **Run 2, price moved to 1.17 at the restart:** round 0 broke (398 s gap); round 1 also broke (200 s, from the 10x
+  clock outrunning the 60 s index age), and round 2 opened by itself and settled at 1.17. Index marks ran through the
+  recovery and moved the mark to 1.17 before settlement (alice's pending VM +100 USDC). Close-out: alice +100, bob
+  −100, pool 0, cash conserved.
+- **Found and fixed by them:** the keeper stopped marking at last trade, so nothing pulled the v3 index marks A8.3
+  relies on (`ForwardPublisher.indexMark`); and the stand-in reports are stamped with chain time.
 
 ## A2. New code in Step 1
 
@@ -320,7 +342,8 @@ sample reliably; `recoveryDelay` (A8.2).
 ## A7. Sized for a depeg
 
 - **Initial margin** covers a depeg-sized jump (USDC fell ~12% over a weekend in March 2023), not EUR/USD moves.
-  EURC-30NOV26's 6% / 4% was sized to EUR/USD and does not carry over.
+  EURC-30NOV26's 6% / 4% was sized to EUR/USD and does not carry over. **Decided 2026-11-15: IM 15%, MM 10%**, the
+  deploy script's defaults.
 - **Marks follow a jump within a stated time:** `maxMarkDeviation`, `minMarkInterval` and the narrowest band set
   together. In v2 a jump wider than the band plus one deviation step **froze** the mark (one step cannot reach the
   band and every intermediate step is outside it; near expiry, a few percent). v3 lets a mark outside the band move if
@@ -440,8 +463,7 @@ guard broken and seen to fail its test (`TestMarginEngine_FutureV3`):
 | 7 | No permissionless mark from ~expiry − 25 min to expiry | Index marks from last trade (A8.3) | `testMarksRunFromTheIndexFromLastTrade` |
 
 Not changed: (5) a sampler chooses when to sample, and a favourable sample holds until the next; frequent keeper
-samples (every 20 s against a 2-minute gap limit) bound it, as already stated. Margin is still the old 6% / 4% default
-pending the A7 depeg sizing. Residual on (2): the owner runs the only report poster today, so it can let the feed die;
+samples (every 20 s against a 2-minute gap limit) bound it, as already stated. Margin is now 15% / 10% (A7, decided 2026-11-15). Residual on (2): the owner runs the only report poster today, so it can let the feed die;
 a change then still needs a full dead window and the 24-hour public timelock, and anyone else with Data Streams access
 can block it by posting reports.
 

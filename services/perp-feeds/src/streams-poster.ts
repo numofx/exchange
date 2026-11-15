@@ -1,6 +1,7 @@
 import { createHash, createHmac } from 'node:crypto';
 
-import { parseAbi, type Address, type Hex } from 'viem';
+import { encodeAbiParameters, keccak256, parseAbi, parseSignature, concat, type Address, type Hex } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 
 import type { Alerter } from './alert.js';
 import type { ContractChain } from './chain.js';
@@ -53,6 +54,72 @@ export function signedReportSource(
       throw new Error(`Data Streams answered for ${feedId} without a report for it`);
     }
     return report;
+  };
+}
+
+const reportV3 = [
+  {
+    type: 'tuple',
+    components: [
+      { name: 'feedId', type: 'bytes32' },
+      { name: 'validFromTimestamp', type: 'uint32' },
+      { name: 'observationsTimestamp', type: 'uint32' },
+      { name: 'nativeFee', type: 'uint192' },
+      { name: 'linkFee', type: 'uint192' },
+      { name: 'expiresAt', type: 'uint32' },
+      { name: 'benchmarkPrice', type: 'int192' },
+      { name: 'bid', type: 'int192' },
+      { name: 'ask', type: 'int192' },
+    ],
+  },
+] as const;
+
+const fullReportParams = [
+  { type: 'bytes32[3]' },
+  { type: 'bytes' },
+  { type: 'bytes32[]' },
+  { type: 'bytes32[]' },
+  { type: 'bytes32' },
+] as const;
+
+/**
+ * TESTNET ONLY: reports signed by our own key, for the Base Sepolia rehearsal's StandInStreamsVerifier
+ * (contracts/risk-core/scripts/rehearsal), where we hold no testnet Data Streams credentials. Each report is a V3
+ * report at `prices[feedId]` (18dp), observed at `now` (the chain's head time: equal to the wall clock on Sepolia, and
+ * it follows a local chain whose time is advanced, so the whole drill can run there first), in Chainlink's full-report layout, signed as Chainlink's
+ * verifier checks it: keccak256(keccak256(reportData) ‖ reportContext), v - 27 in the first byte of rawVs.
+ * forward-config refuses it on Base mainnet.
+ */
+export function standInReportSource(
+  key: Hex,
+  prices: Record<string, bigint>,
+  now: () => number | Promise<number> = () => Math.floor(Date.now() / 1000),
+): ReportSource {
+  const account = privateKeyToAccount(key);
+  return async (feedId) => {
+    const price = prices[feedId.toLowerCase()];
+    if (price === undefined) throw new Error(`stand-in source has no price for ${feedId}`);
+    const at = await now();
+    const reportData = encodeAbiParameters(reportV3, [
+      {
+        feedId,
+        validFromTimestamp: at,
+        observationsTimestamp: at,
+        nativeFee: 0n,
+        linkFee: 0n,
+        expiresAt: at + 86_400,
+        benchmarkPrice: price,
+        bid: price,
+        ask: price,
+      },
+    ]);
+    const context: [Hex, Hex, Hex] = [keccak256('0x01'), `0x${at.toString(16).padStart(64, '0')}`, `0x${'00'.repeat(32)}`];
+    const digest = keccak256(concat([keccak256(reportData), ...context]));
+    const signature = parseSignature(await account.sign({ hash: digest }));
+    const v = Number(signature.yParity ?? (signature.v! - 27n));
+    const rawVs = `0x${v.toString(16).padStart(2, '0')}${'00'.repeat(31)}` as Hex;
+    const fullReport = encodeAbiParameters(fullReportParams, [context, reportData, [signature.r], [signature.s], rawVs]);
+    return { feedID: feedId, observationsTimestamp: at, fullReport };
   };
 }
 
