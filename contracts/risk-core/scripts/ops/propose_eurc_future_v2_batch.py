@@ -9,6 +9,12 @@
                       TradeModule. Proposed only while every gate below passes, re-read before each action. A later
                       resize is propose_margin_engine_v2_batch.py's `cap`, which reads only the cNGN artifact: until it
                       takes a series, resize by a hand-checked action gated like enable.
+  eurc-future-retire  built here, no artifact file: close the series (docs/eurc-usdc-futures-spec.md, A1.1). (0)
+                      the future's cap under v2 to 0, close-only: v2's viewer skips an asset a trade did not touch, so
+                      a cap below open interest blocks only opening (MarginEnginePortfolioViewer._checkAssetCap). (1)
+                      the future off the TradeModule, which also blocks closing through Matching: proposed only at
+                      zero open interest. Market 2's future slot is left to the next series' deploy, whose gate re-reads
+                      open interest and every account's pending VM (whitelistAsset replaces the slot holder).
 
 Every artifact action is rebuilt here from EURC_FUTURE_V2.json and must match the file exactly (to, calldata, value),
 its digest recomputed (keccak(to || keccak(data))). An action whose postcondition already holds is skipped.
@@ -40,6 +46,13 @@ Enable gates (all read live, all required unless marked):
   rfq        the RfqModule is not on the TradeModule's Matching
   parity     as at setup, and now the engine: market 2's future is this one, at the artifact's margin
 
+Retire gates (all read live, re-read before each action):
+  custody    the vault owns the future, and it is market 2's future
+  oi         the future's open interest under v2 is zero: required for (1) only, informational before (0)
+  vm         informational: accounts with VM still pending on the series (scans every account)
+Stop the EURC-30NOV26 maker quoting first: a fill between the oi read and (1) landing leaves positions that can no
+longer close through Matching, which is why (1) re-reads oi immediately before it is proposed.
+
 It NEVER signs, executes or broadcasts. Without --propose it prints the gates and the sheet. With --propose each action
 goes to the MPCVault app for a human to approve, one at a time, from the vault, through perp_cap_guard.
 
@@ -48,6 +61,8 @@ Env (or ~/.numo-mark-keeper.env): MPCVAULT_TOKEN, MPCVAULT_VAULT, VAULT_ADDRESS,
   python3 scripts/ops/propose_eurc_future_v2_batch.py eurc-future-setup             # check + sheet, proposes nothing
   python3 scripts/ops/propose_eurc_future_v2_batch.py eurc-future-setup --propose
   python3 scripts/ops/propose_eurc_future_v2_batch.py eurc-future-enable
+  python3 scripts/ops/propose_eurc_future_v2_batch.py eurc-future-retire             # check + sheet
+  python3 scripts/ops/propose_eurc_future_v2_batch.py eurc-future-retire --propose
   python3 scripts/ops/propose_eurc_future_v2_batch.py --self-test
   python3 scripts/ops/propose_eurc_future_v2_batch.py eurc-future-enable --local --dir deployments/31337 --json   # a fork
 """
@@ -80,6 +95,8 @@ ROOT = v1p.ROOT
 NAME = "EURC_FUTURE_V2"
 ENGINE_NAME = v2p.NAME
 FILES = {"eurc-future-setup": f"{NAME}_VAULT_ACTIONS.json", "eurc-future-enable": f"{NAME}_ENABLE_VAULT_ACTIONS.json"}
+RETIRE = "eurc-future-retire"
+BATCHES = (*FILES, RETIRE)
 MARK_MAX_AGE_SEC = v1p.MARK_MAX_AGE_SEC
 MARKET_ID = eurc.MARKET_ID
 BASE, FUTURE, PERP = v2p.BASE, v2p.FUTURE, v2p.PERP
@@ -88,8 +105,10 @@ UNIT = "USDC per EURC"
 GAPS = (0.08, 0.10, 0.15)
 
 SIGNATURES = {**v2p.SIGNATURES, "whitelistAsset": "whitelistAsset(address,uint256,uint8)",
-              "setFutureMarginRequirements": "setFutureMarginRequirements(uint256,uint256,uint256)"}
-PINNED = {**v2p.PINNED, "whitelistAsset": "0xbd798569", "setFutureMarginRequirements": "0xe3124388"}
+              "setFutureMarginRequirements": "setFutureMarginRequirements(uint256,uint256,uint256)",
+              "getPendingVM": "getPendingVM(uint256,uint256)", "lastAccountId": "lastAccountId()"}
+PINNED = {**v2p.PINNED, "whitelistAsset": "0xbd798569", "setFutureMarginRequirements": "0xe3124388",
+          "getPendingVM": "0x22b97c45", "lastAccountId": "0x708c3593"}
 
 
 def selector(name: str) -> str:
@@ -112,8 +131,19 @@ def expected_actions(batch: str, d: dict) -> list[tuple[str, str]]:
             (d["manager"], selector("whitelistAsset") + word_address(d["future"]) + word_uint(MARKET_ID) + word_uint(FUTURE)),
             (d["manager"], selector("setFutureMarginRequirements") + word_uint(MARKET_ID)
              + word_uint(int(d["futureMMReq"])) + word_uint(int(d["futureIMReq"])))]
+  if batch == RETIRE:
+    return [(d["future"], selector("setTotalPositionCap") + m + word_uint(0)),
+            (d["tradeModule"], selector("setDatedFutureAsset") + word_address(d["future"]) + word_uint(0))]
   return [(d["future"], selector("setTotalPositionCap") + m + word_uint(int(d["futureOICap"]))),
           (d["tradeModule"], selector("setDatedFutureAsset") + word_address(d["future"]) + word_uint(1))]
+
+
+def retire_actions(d: dict) -> list[dict]:
+  """The retire batch, built from the artifact (there is no file for it)."""
+  descriptions = ["eurcFuture.setTotalPositionCap(engineV2, 0) [EURC-30NOV26 close-only]",
+                  "tradeModule.setDatedFutureAsset(eurcFuture, false) [EURC-30NOV26 off Matching; zero OI only]"]
+  return [{"description": text, "to": to, "value": "0", "data": data, "digest": digest(to, data)}
+          for text, (to, data) in zip(descriptions, expected_actions(RETIRE, d))]
 
 
 def postconditions(chain: Chain, batch: str, d: dict, vault: str) -> list:
@@ -126,6 +156,9 @@ def postconditions(chain: Chain, batch: str, d: dict, vault: str) -> list:
             lambda: (w(d["manager"], "futureMarginRequirements", word_uint(MARKET_ID), index=0),
                      w(d["manager"], "futureMarginRequirements", word_uint(MARKET_ID), index=1))
             == (int(d["futureMMReq"]), int(d["futureIMReq"]))]
+  if batch == RETIRE:
+    return [lambda: w(d["future"], "totalPositionCap", m) == 0,
+            lambda: w(d["tradeModule"], "isDatedFutureAsset", word_address(d["future"])) == 0]
   return [lambda: w(d["future"], "totalPositionCap", m) == int(d["futureOICap"]),
           lambda: w(d["tradeModule"], "isDatedFutureAsset", word_address(d["future"])) == 1]
 
@@ -400,6 +433,76 @@ def gate_enable(chain: Chain, d: dict, cngn: dict, stack: dict, vault: str) -> l
 
 
 # ---------------------------------------------------------------------------------------------
+# retire
+# ---------------------------------------------------------------------------------------------
+
+def open_interest(chain: Chain, d: dict) -> int:
+  return chain.word(d["future"], selector("totalPosition") + word_address(d["manager"]))
+
+
+def pending_vm_accounts(chain: Chain, d: dict) -> dict[int, int]:
+  """Every account with VM pending on the series, signed 18dp USDC."""
+  out = {}
+  for acc in range(1, chain.word(v1p.SUB_ACCOUNTS, selector("lastAccountId")) + 1):
+    value = chain.word(d["future"], selector("getPendingVM") + word_uint(acc) + word_uint(int(d["subId"])))
+    value = value - (1 << 256) if value >= 1 << 255 else value
+    if value:
+      out[acc] = value
+  return out
+
+
+def retire_gates(owner_is_vault: bool, on_market: bool, oi: int, pending: dict[int, int], step: int) -> list[Gate]:
+  """step 0 closes to opening; step 1 takes the future off Matching and needs zero open interest."""
+  return [
+    Gate("custody", owner_is_vault and on_market,
+         f"vault owns the future: {owner_is_vault}; market 2's future: {on_market}"),
+    Gate("oi", oi == 0 or step == 0, f"open interest {oi / 1e18:g} contracts"
+         + ("" if oi == 0 else " (close-only is safe; Matching must stay until it is 0)" if step == 0
+            else ": off Matching now would leave holders unable to close")),
+    Gate("vm", True, "no account has VM pending" if not pending
+         else f"{len(pending)} account(s) with VM pending: {pending} (settled by the engine; re-read before the slot is replaced)"),
+  ]
+
+
+def gate_retire(chain: Chain, d: dict, vault: str, step: int) -> list[Gate]:
+  return retire_gates(chain.address(d["future"], "owner").lower() == vault.lower(),
+                      future_on_market(chain, d).lower() == d["future"].lower(),
+                      open_interest(chain, d), pending_vm_accounts(chain, d), step)
+
+
+def run_retire(args, d: dict, chain: Chain, rpc_url: str, vault: str) -> int:
+  actions = retire_actions(d)
+  verify_actions(RETIRE, d, actions)
+  holds = postconditions(chain, RETIRE, d, vault)
+  done = [h() for h in holds]
+  step = done.index(False) if False in done else len(done) - 1
+  passed = report(gate_retire(chain, d, vault, step))
+  print()
+  for i, a in enumerate(actions):
+    print(f"  {i}  {'landed ' if done[i] else 'pending'}  {a['to']}  {a['digest']}  {a['description']}")
+  if all(done):
+    print(f"\n{RETIRE}: every action has landed; nothing to propose.")
+    return 0
+  if not passed:
+    print("\nGATES FAILED: nothing proposed.")
+    return 1
+  if not args.propose:
+    print("\ndry run: nothing proposed. Stop the EURC-30NOV26 maker, then re-run with --propose; compare each digest "
+          "with MPCVault before approving.")
+    return 0
+  token, vault_uuid = v2p.credentials()
+  for i, a in enumerate(actions):
+    if holds[i]():
+      print(f"  [{i}] already landed, skipped: {a['description']}")
+      continue
+    if not report(gates_after_mining(lambda i=i: gate_retire(chain, d, vault, i))):
+      raise SystemExit(f"a gate failed before action {i}: stop and investigate")
+    v2p.await_approval(token, vault_uuid, vault, a, rpc_url, holds[i])
+  print(f"\n{RETIRE}: done. {d['symbol']} is closed: delist it in markets-service and stop its maker and publisher.")
+  return 0
+
+
+# ---------------------------------------------------------------------------------------------
 # self-test
 # ---------------------------------------------------------------------------------------------
 
@@ -435,6 +538,20 @@ def self_test() -> int:
       except SystemExit:
         continue
       raise AssertionError(f"{batch}: a wrong {what} was accepted")
+  retire = retire_actions(d)
+  verify_actions(RETIRE, d, retire)
+  assert [(x["to"], x["data"]) for x in retire] == [
+    (a(3), "0x40a557bd" + word_address(a(1)) + word_uint(0)),
+    (a(9), "0x0ddd8a04" + word_address(a(3)) + word_uint(0))], retire
+  for x in retire:
+    assert not opens_a_perp_cap({"to": x["to"], "data": x["data"]}), x["description"]
+  # Close-only is proposed with positions open; off Matching only at zero open interest.
+  ok = lambda gates: all(g.ok for g in gates)  # noqa: E731
+  assert ok(retire_gates(True, True, 22 * 10**15, {}, 0))
+  assert not ok(retire_gates(True, True, 22 * 10**15, {}, 1)), "off Matching with positions open"
+  assert ok(retire_gates(True, True, 0, {}, 1))
+  assert ok(retire_gates(True, True, 0, {7: -5}, 1)), "pending VM is informational here"
+  assert not ok(retire_gates(False, True, 0, {}, 0)) and not ok(retire_gates(True, False, 0, {}, 0))
   setup = expected_actions("eurc-future-setup", d)
   assert setup == [
     (a(3), "0x79ba5097"), (a(4), "0x79ba5097"),
@@ -489,7 +606,7 @@ def self_test() -> int:
     "an inverted (EURC per USDC) band is refused"
 
   import inspect
-  for fn in (main, run_batch):
+  for fn in (main, run_batch, run_retire):
     assert "propose(token" not in inspect.getsource(fn), f"{fn.__name__} calls propose() directly"
   print("self-test ok: selectors compiled and pinned; a wrong target, calldata, value, digest, count or order is refused; "
         "a shared expiry is refused; SecurityModule cover counts cNGN's draw; keeper, pager and fill band read the EURC "
@@ -547,7 +664,7 @@ def run_batch(args, d: dict, cngn: dict, stack: dict, chain: Chain, rpc_url: str
 
 def main() -> int:
   ap = argparse.ArgumentParser(description="Propose the EURC future's vault batches on MarginEngine v2")
-  ap.add_argument("batch", nargs="?", choices=tuple(FILES))
+  ap.add_argument("batch", nargs="?", choices=BATCHES)
   ap.add_argument("--propose", action="store_true", help="create MPCVault signing requests, one at a time")
   ap.add_argument("--self-test", action="store_true")
   ap.add_argument("--local", action="store_true", help="a fork (chain 31337) only; never proposes")
@@ -559,7 +676,7 @@ def main() -> int:
   if args.self_test:
     return self_test()
   if not args.batch:
-    ap.error("name a batch: eurc-future-setup or eurc-future-enable")
+    ap.error("name a batch: " + ", ".join(BATCHES))
 
   load_env_file(Path.home() / ".numo-mark-keeper.env")
   load_env_file(Path("/etc/numo/perp-pager.env"))
@@ -581,6 +698,8 @@ def main() -> int:
   d = json.loads(artifact.read_text())
   cngn = json.loads((args.dir / f"{ENGINE_NAME}.json").read_text())
   check_artifact(d, cngn)
+  if args.batch == RETIRE:
+    return run_retire(args, d, Chain(rpc_url), rpc_url, vault)
   return run_batch(args, d, cngn, json.loads(args.stack.read_text()), Chain(rpc_url), rpc_url, vault)
 
 
