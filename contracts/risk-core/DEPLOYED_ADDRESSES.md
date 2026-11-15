@@ -176,11 +176,13 @@ Artifacts: `deployments/8453/MARGIN_ENGINE_V2.json`, `MARGIN_ENGINE_V2_VAULT_ACT
   the liquidation keeper, the pager and SM coverage, and markets-service listing a second series (#228) under a
   `cNGN-<expiry>` symbol, not `USDC-cNGN-30NOV26`, which v1's series holds.
 
-### EURC-30NOV26 on MarginEngine v2 — DEPLOYED and SET UP 2026-10-30 (closed)
+### EURC-30NOV26 on MarginEngine v2 — OPEN 2026-10-31 (cap 18)
 
-**Intentionally unopened (decided 2026-11-14).** This series expires at cap 0; `eurc-future-enable` is never proposed.
-A pilot EURC-30NOV26 on the new `FutureAsset` version, at a different expiry time and so a different subId, replaces
-it (`docs/eurc-usdc-futures-spec.md`, A1.1–A1.2). Key the two by asset address and subId, never by name.
+**Correction 2026-11-14.** `c09a69b` recorded this series as intentionally unopened at cap 0. It is not: it was
+enabled 2026-10-31 16:26 UTC (step 4, `scripts/ops/OPS_BOX_CHANGES.md`), and this heading still said "closed".
+Read on chain 2026-11-14: `totalPositionCap(v2)` 18e18, `totalPosition(v2)` 0.022e18, `TradeModule.isDatedFutureAsset`
+true, and it holds market 2's future slot (`assetMap(2, Future)`). What replaces it, and when, is open
+(`docs/eurc-usdc-futures-spec.md`, A1.1). Key any second EURC series by asset address and subId, never by name.
 
 A second v2 series, on v2's market 2 (EUR): USDC per EURC, 1,000 EURC a contract, VM in USDC through pool #37, expiry
 1796054400 (2026-11-30 16:00 UTC; last trade 15:00), IM 6% / MM 4%, carry -1.5% (an assumption), cap 0 until enable
@@ -203,7 +205,8 @@ two owner-only engine setters in the vault's setup batch.
    `engineV2.setFutureMarginRequirements(2, 0.04e18, 0.06e18)`. The deployer is free again.
 3. Off chain: forward publisher for this feed, pager and v2 keeper reading the future, markets-service listing
    `EURC-30NOV26`.
-4. `eurc-future-enable`: `future.setTotalPositionCap(v2, 18e18)`, `tradeModule.setDatedFutureAsset(future, true)`.
+4. **Enabled 2026-10-31 16:26 UTC** (`eurc-future-enable`, approved by hand in MPCVault):
+   `future.setTotalPositionCap(v2, 18e18)`, `tradeModule.setDatedFutureAsset(future, true)`.
 
 ### cNGN options on MarginEngine v2 — OPEN 2026-11-02 (cap 2M cNGN)
 

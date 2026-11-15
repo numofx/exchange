@@ -60,18 +60,22 @@ swapping the feed; reports reach the index through `managerData` (A2.2); the per
 - `BaseManager._processManagerData` and `TradeModule._processManagerData`: pass data to whitelisted `IDataReceiver`s
   (`setWhitelistedCallee`). Used to deliver stream reports with trades (A2.2).
 
-### A1.1 Already deployed: EURC-30NOV26 (closed)
+### A1.1 Already live: EURC-30NOV26 (open since 2026-10-31)
 
 `DEPLOYED_ADDRESSES.md` and `docs/margin-engine-v2.md` record a series built on the current `FutureAsset`:
 
 - `FutureAsset` `0x6Ff7084D6F1760a57b9475a41F54b12279cD7744`, market 2 (EUR) on MarginEngine v2, 1,000 EURC a
-  contract, expiry 2026-11-30 16:00 UTC. Set up 2026-10-30; IM 6% / MM 4%; cap 0 until `eurc-future-enable` (18).
+  contract, expiry 2026-11-30 16:00 UTC. Set up 2026-10-30; IM 6% / MM 4%; **enabled 2026-10-31 at cap 18**.
 - Index: the EUR market's spot feed `0xaaE6…C435` (Chainlink EURC/USD push). The same feed is the market's spot feed.
 - Owner fallback 24 h after expiry within 2%.
 
-It predates every decision in this spec. **Decided 2026-11-14: it expires unopened at cap 0.** It is not enabled
-under the old design; `eurc-future-enable` is never proposed. It stays whitelisted on market 2 with no positions,
-which is harmless because nothing shares its subId (below). `DEPLOYED_ADDRESSES.md` marks it intentionally unopened.
+It predates every decision in this spec. **Correction 2026-11-14:** v3.1 and v3.2 called it closed, from a stale
+heading in `DEPLOYED_ADDRESSES.md`, and the decision to let it "expire unopened at cap 0" rested on that. On chain it
+is open: cap 18e18, open interest 0.022e18, registered on the `TradeModule`, makers quoting since 2026-10-31.
+
+**It also blocks the pilot on market 2.** `MarginEngine` holds one future per market (`assetMap[marketId][Future]`),
+and `whitelistAsset` *replaces* the holder: listing the new asset on market 2 would de-list this one while accounts
+hold it. Open (B14): where the new series lives, and what happens to this one, before Stage 1 deploys.
 
 Carried forward from it: **a series is its subId (the expiry), and `closeOutExpired` couples every market that lists
 that expiry.** A recovery fixing (A8) can delay settlement by hours, so every EURC expiry must have a subId no other
@@ -79,11 +83,11 @@ market lists. The existing deploy script already refuses a shared expiry; keep t
 
 ### A1.2 Pilot: EURC-30NOV26 on the new version, in two stages (decided 2026-11-14)
 
-A new series replaces the unopened one: one asset and one subId, first traded through `Matching` (Stage 1), then also
+A new series beside the live old one (A1.1): one asset and one subId, first traded through `Matching` (Stage 1), then also
 through `OnchainBook` (Stage 2). Adding `OnchainBook` needs no redeploy: `FutureAsset.handleAdjustment` does not gate
 on the trade module, only on the manager.
 
-- **Expiry 2026-11-30 15:00 UTC, subId `1796050800` (a Monday).** 16:00 (1796054400) is held by the unopened series
+- **Expiry 2026-11-30 15:00 UTC, subId `1796050800` (a Monday).** 16:00 (1796054400) is held by the old, live series
   and 14:00 (1796047200) by cNGN-30NOV26; a subId is the expiry (`getSubId`), and `closeOutExpired` couples markets
   that share one (A1.1).
 - **Keyed by address and subId, never by name.** The indexer, markets service and `@numo/abis` key the series by
@@ -488,12 +492,15 @@ v1 structures the take loop so a second liquidity source can be added without a 
 
 ## B14. Open questions
 
+- **Blocking Stage 1:** the old EURC-30NOV26 is open with positions and holds market 2's only future slot (A1.1).
+  Where the new series lives (a new futures-only market, or market 2 after the old one settles and closes out) and
+  what happens to the old one.
 - Pilot OI cap, from the A6.0a measurement.
 - Fixing parameters, proposed 2026-11-14 and awaiting decision: `feedTimelock` 24 h, `fixingWindow` 30 min,
   `maxSampleGap` 2 min, `recoveryDelay` 1 h, `indexMaxAge` 60 s.
 
 Decided 2026-11-14 (kept for the record):
-- the old EURC-30NOV26 expires unopened at cap 0; the pilot replaces it (A1.1, A1.2);
+- ~~the old EURC-30NOV26 expires unopened at cap 0~~: withdrawn, it is live (A1.1);
 - the pilot ships in two stages, `Matching` first; pilot expiry 2026-11-30 15:00 UTC, subId `1796050800` (A1.2);
 - file placement: today's `FutureAsset.sol` moves to `src/legacy/v2/FutureAssetV2.sol` (the v1 precedent), the new
   version is `src/assets/FutureAsset.sol` (A8.1);
