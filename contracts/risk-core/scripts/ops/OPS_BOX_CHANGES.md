@@ -5,6 +5,33 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-15 17:21–18:05 UTC: EURC v3 setup and enable landed; markets lists it close-only; canary open
+
+- **Setup** (`numo-eurc-v3-setup`, approved by hand in MPCVault). All four actions landed, the last at about 17:45 UTC.
+  Market 2's future slot (`assetMap(2, Future=4)`) now holds `0xC350…B227`, replacing the retired v2 series.
+  - The first rerun stopped on the deployer-audit parity gate: the box ran `33ad5a2`, which predates `21dc423`'s
+    multi-deployer audit.
+  - One rerun stopped on the same gate after a stale RPC read, and passed on the next. A missed read counts as
+    unaudited, which fails closed.
+- **Enable** (`numo-eurc-v3-enable`). Action 0, `setDatedFutureAsset`, landed (tx `0xf254d0d9…0ddf`). The unit then
+  stopped: its postconditions were in the pre-`2156c49` order, cap first, so the landed registration read back as
+  pending. A rerun from `af343f1` proposed action 0 again (MPCVault request `3f2d8b6c`, **declined**).
+  - Fixed in `e4b01d0`: postconditions follow the action order, and the self-test pins each one to its action.
+  - Action 1, `setTotalPositionCap(engineV2, uint max)`, landed (tx `0xf0ecf621…e538`). The series is open on chain,
+    uncapped.
+- **Markets** (laptop, terraform 1.13.3, `eurc-v3.plan` from `4e5302f` via `with-matcher-mute.sh`, run by the owner):
+  `FUTURE_SERIES` swaps the retired v2 EURC entry for v3 with `close_only: true`. Only the markets and matcher task
+  definitions changed. The old matcher STOPPED and the new one was matching. `/markets` lists EURC-30NOV26 at
+  `0xc350…b227` with the fill band enforced (1.0669–1.1329).
+- **`/etc/numo/engine-keeper-v2.env`**: `FUTURE` swaps `0x6Ff7…7744` for `0xC350…B227` (backup
+  `.bak-20261115-eurcv3`). Restarted; `/health` lists both futures, and its first pass was OK.
+- **`/etc/numo/perp-pager.env`**: `FUTURE_V2_ARTIFACTS` dropped `EURC_FUTURE_V2.json` (the retired series is off the
+  engine, with no open interest), to cut the pager's RPC load. It now holds MARGIN_ENGINE_V2 and EURC_FUTURE_V3.
+- **`exchange-ops`**: moved through `8423748`, `af343f1` and `e4b01d0`, detached.
+- **Canary open** (laptop, `canary-eurc-v3.s.sol open()`): accounts #54 (long) and #55 (short) belong to
+  `0x1b01…9Ca7`, with 300 USDC each and one contract at 1.09997 on series `1794776400`
+  (`EURC_FUTURE_V3_CANARY.json`). The drill stops `numo-future-feeds-v3@eurc-canary` from 20:49:00 to 20:53:30 UTC.
+
 ## 2026-11-15 17:01–17:20 UTC: EURC-30NOV26 v3 deployed with its canary; keepers live, pager reads it
 
 Deployed `c208858` from the laptop by the single-use deployer `0xea4B…d693`: future `0xC350243c1d07Ff598770ECe12323799D2EFbB227`,
