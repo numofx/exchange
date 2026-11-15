@@ -339,16 +339,18 @@ variable "future_series" {
     amount_scale    = "1000000000000000" # 1,000 cNGN: 1e18 per 1,000,000 cNGN contract
     taker_fee_bps   = 15                 # 2026-10-31, from 25
     }, {
-    # EURC-30NOV26 (risk-core EURC_FUTURE_V2.json), listed closed 2026-10-30: USDC per EURC, 1,000 EURC a contract,
-    # 16:00 UTC so its sub id is not cNGN's.
-    asset_address   = "0x6Ff7084D6F1760a57b9475a41F54b12279cD7744"
-    expiry          = 1796054400
+    # EURC-30NOV26 v3 (risk-core EURC_FUTURE_V3.json, deployed 2026-11-15), replacing the retired v2 series
+    # 0x6Ff7…7744 (1796054400, no open interest, off Matching): USDC per EURC, 1,000 EURC a contract, settled from Data
+    # Streams. close_only until the mainnet canary passes (spec A1.4); then false, opening it.
+    asset_address   = "0xC350243c1d07Ff598770ECe12323799D2EFbB227"
+    expiry          = 1796050800
     manager_address = "0x0705219a1594d5Fc5dC2573da4082cAf3e1B0950"
     kind            = "linear"
     base_asset      = "EURC"
     contract_size   = "1000"
     amount_scale    = "1000000000000000" # 1 EURC: 1e18 per 1,000 EURC contract
-    taker_fee_bps   = 5                  # 2026-10-31, from 25: EURC-USDC spot's 5
+    close_only      = true
+    taker_fee_bps   = 5 # as v2's: EURC-USDC spot's 5
   }]
 
   validation {
