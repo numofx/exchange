@@ -255,6 +255,33 @@ Base today) (A2.1).
 3. Cap open interest below the cheapest attack's cost with a safety factor, with the existing asset caps.
 4. Re-measure on a schedule; lower the cap when depth falls. Record each measurement in the repo.
 
+**Measurement 1, 2026-11-15 04:39 UTC (Base block 57635919).** `scripts/ops/eurc_depth/depth.py --once` on the ops
+box (provider RPC, scratch CSV, no webhook), the depth tool the EURC spot cap uses: the input whose marginal price is
+2% worse than a $10 trade's, summed over every Base EURC/USDC pool.
+
+| 2% depth, Base | 2026-10-21 | 2026-10-28 | 2026-11-15 |
+|---|---|---|---|
+| sell (EURC in), EURC | 590,051 | 37,968 | **10,665** |
+| buy (USDC in), USDC | 696,514 | 346,092 | **167,090** |
+
+Main Slipstream pool (ts50) sell depth 484,445 → 1,687 EURC. The largest-LP check was unreadable (RPC 429).
+
+- **Step 1 is not done:** Chainlink does not publish the venues or weights behind `EURC/USD-Streams-DexPrice`. Until
+  they are known, the cap assumes the cheapest case, Base pools alone.
+- **Cost of a skew:** pushing Base's EURC price down 2% sells about 10,665 EURC at an average slippage near 1%:
+  roughly **$120 a push**, before arbitrage undoes it. The sell side is the cheap one.
+- **What one push buys:** a sample the attacker posts and records itself (`recordFixingSample` is permissionless),
+  weighted until the next sample; or a pulled mark, which moves at most one `maxMarkDeviation` step (2%) and moves VM
+  on every position at once.
+- **Cap, Base-only:** one side's notional × δ must stay under the push's cost ÷ a safety factor of 2: one side at most
+  about depth(2%) ÷ 4 ≈ $2,900, **2 contracts a side, a cap of 4** (both sides counted).
+- **Recommendation:** list at 4 only if the pilot's purpose survives it; otherwise get the stream's venue weights from
+  Chainlink first. If Base is a small share of an aggregate across chains, a push costs proportionally more and the
+  cap rises with it.
+- **Also found:** the EURC **spot** cap on v2 (18,000 EURC) now fails its own gate (50% of 2% sell depth, about 5,300
+  EURC). 3,281 EURC is held, under that. The depth timer stopped sampling at its 7-day window on 2026-10-28, so this
+  raised no alert.
+
 **A6.1 Band floor.** `minMarkIndexDeviation ≥ the index's measured error + the forward's distance from spot near
 expiry`.
 
