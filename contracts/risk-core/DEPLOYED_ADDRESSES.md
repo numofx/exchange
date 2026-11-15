@@ -176,7 +176,7 @@ Artifacts: `deployments/8453/MARGIN_ENGINE_V2.json`, `MARGIN_ENGINE_V2_VAULT_ACT
   the liquidation keeper, the pager and SM coverage, and markets-service listing a second series (#228) under a
   `cNGN-<expiry>` symbol, not `USDC-cNGN-30NOV26`, which v1's series holds.
 
-### EURC-30NOV26 on MarginEngine v2 — OPEN 2026-10-31 (cap 18)
+### EURC-30NOV26 on MarginEngine v2 — RETIRED 2026-11-15 (cap 0, off Matching; opened 2026-10-31)
 
 **Correction 2026-11-14.** `c09a69b` recorded this series as intentionally unopened at cap 0. It is not: it was
 enabled 2026-10-31 16:26 UTC (step 4, `scripts/ops/OPS_BOX_CHANGES.md`), and this heading still said "closed".
@@ -207,6 +207,9 @@ two owner-only engine setters in the vault's setup batch.
    `EURC-30NOV26`.
 4. **Enabled 2026-10-31 16:26 UTC** (`eurc-future-enable`, approved by hand in MPCVault):
    `future.setTotalPositionCap(v2, 18e18)`, `tradeModule.setDatedFutureAsset(future, true)`.
+5. **Retired 2026-11-15 03:54–03:59 UTC** at zero open interest (`eurc-future-retire`): cap 0, then off the
+   TradeModule (tx `0xd662e005…efe3`). Still market 2's future until the new series' deploy replaces it
+   (`scripts/ops/OPS_BOX_CHANGES.md`).
 
 ### cNGN options on MarginEngine v2 — OPEN 2026-11-02 (cap 2M cNGN)
 

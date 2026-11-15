@@ -5,6 +5,32 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-15 03:54–03:59 UTC: old EURC-30NOV26 (v2) retired: close-only, then off Matching
+
+The v2 series `0x6Ff7…7744` was open (cap 18) with zero open interest and no pending VM on any of accounts 1–53. Its
+retirement frees market 2's one future slot for the new FutureAsset series (`docs/eurc-usdc-futures-spec.md`, A1.1).
+
+- **`exchange-ops`** moved `4ef4702` → `efa32ef` → `5431271` → `e77f336`, detached, fast-forward, clean each time (SSM
+  `8f257a19`, `064ebce6`, `7cb38a48`). Nothing runs from this checkout: the pager runs from `exchange-pager`, the feeds
+  and keeper from `exchange-future-v2` and `exchange-perp`.
+- **Dry run on the box** (`propose_eurc_future_v2_batch.py eurc-future-retire`): custody, oi (0) and vm (none) PASS;
+  digests `0xa24b6fb0…f008b` and `0x700001b6…0f008b`, the laptop's and `cast`'s. The first dry run died on HTTP 429
+  in the per-account VM scan: paced and retried in `5431271`.
+- **`numo-eurc-future-retire`** (transient unit, `run-with-ssm-mark.sh python3 propose_eurc_future_v2_batch.py
+  eurc-future-retire --propose`), approved by hand in MPCVault:
+  - (0) `eurcFuture.setTotalPositionCap(engineV2, 0)` landed 03:54:16 UTC (seen by a chain watcher). The unit then died
+    on HTTP 429 fetching the receipt; the shared `rpc()` in `propose_cngn_spot_batch.py` now retries 429 (`e77f336`).
+  - (1) rerun from `e77f336`: (0) skipped as landed, gates re-read (oi 0), request `7daaecbf`;
+    `tradeModule.setDatedFutureAsset(eurcFuture, false)` landed in block 57623890, tx `0xd662e005…efe3`, 03:59:22 UTC.
+    The unit exited `done`.
+- **After:** cap 0, off the TradeModule, open interest 0; still market 2's future until the new series' deploy
+  replaces it. The EURC-30NOV26 maker (#40) was still quoting at 04:0x UTC (10 a side); its fills can no longer
+  execute. Not yet done: maker to 0 replicas, markets-service delisting, the forward publisher
+  (`numo-future-feeds-v2@eurc-30nov26`), and the pager's and keeper's EURC entries.
+- **Not swept:** a dozen other ops scripts carry their own `rpc()` without the 429 retry (older proposers and the
+  checkers).
+- **Undo:** the vault can restore both (`setTotalPositionCap(v2, 18e18)`, `setDatedFutureAsset(future, true)`).
+
 ## 2026-11-02 ~03:20–03:45 UTC: options maker account #44 opened and funded from #43; maker started in dry run
 
 Under the MM-key grant (`terraform apply -var ops_box_mm_key_grant=true` from `aab44b8`, which also created
