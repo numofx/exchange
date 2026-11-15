@@ -149,9 +149,15 @@ one value up to a day old and partly known in advance.
 Verifies Data Streams EURC/USD and USDC/USD reports and stores the latest ratio (USDC per EURC, 18 dp) with its
 observation time.
 - **Newest-report-only:** a report is accepted only if its observation time is strictly newer than the stored one.
-- **An `IDataReceiver`.** The executor attaches fresh reports to each match through `managerData`; the manager and
-  `TradeModule` hand them to the adapter (whitelisted with `setWhitelistedCallee`). Verification is paid per trade,
-  not per second.
+- **An `IDataReceiver`.** The executor attaches fresh reports to each match through `managerData`. Verification is paid
+  per trade, not per second.
+  - **Order matters.** `SubAccounts` runs every asset hook before the manager hook, so the manager's pass over
+    `managerData` (`BaseManager._processManagerData`) comes after `FutureAsset` has checked the fill against the
+    index: too late. `TradeModule` hands `managerData` to each receiver *before* submitting the transfers
+    (`execution/src/modules/TradeModule.sol:108`), which is what makes attached reports work on `Matching`.
+    `OnchainBook` must likewise post reports before its transfers (B6).
+  - The manager then passes the same data again, so the adapter must be whitelisted on `MarginEngine` with
+    `setWhitelistedCallee` or the trade reverts; that second pass finds equal reports and skips them unverified.
 - Between trades, a keeper posts reports only where something needs a fresh index: each `pullMark`
   (`minMarkInterval`) and each fixing sample (`maxSampleGap`). Anyone may post.
 - **Stage 1 (A1.2) keeps the index fresh with the keeper alone**, posting well inside `indexMaxAge`, because a fill is
@@ -397,6 +403,8 @@ The same transfers `TradeModule` builds for a dated future: position transfer wi
   it. With no external guard, a DEX skew moves every spline at any hour within the index band. Open (B14): spreads
   sized for skews up to the OI cap, or quoting only in deep-liquidity hours.
 - **Newest-report-only** on every path; each fill uses the stored price at the time of the take.
+- **Post before transferring.** Reports a taker supplies go to the adapter before `submitTransfers`, as `TradeModule`
+  does; the manager's `managerData` pass runs after the asset hooks and is too late for the fill check (A2.2).
 - **Index band:** read `indexFeed.getSpot()` and `markIndexBand(expiry)`; stop the walk at the band edge.
 
 ## B6a. The stale-price option (main economic risk)
