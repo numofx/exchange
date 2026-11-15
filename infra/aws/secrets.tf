@@ -38,6 +38,17 @@ resource "aws_ssm_parameter" "database_url" {
 #
 # The cost is that a missing parameter is no longer caught at plan time; it surfaces
 # when ECS cannot start the task. preflight.sh checks for both before a cutover.
+#
+# Chainlink Data Streams credentials, placed out of band on 2026-11-14 for the EURC-USDC
+# index and fixing (Data Streams subscription on the app.chain.link org):
+#
+#   /numo/data-streams/hmac_secret   SecureString  HMAC secret for the core Data Streams API
+#   /numo/data-streams/username      String        Data Streams username (the API key id)
+#
+# Deliberately NOT in local.secret_arns yet: nothing in this stack calls Data Streams, and
+# adding an entry there grants every task's execution role read access (ecs.tf scopes the
+# policy to values(local.secret_arns)). Add them when the first consumer (the fixing and
+# mark keeper) lands, as "${local.ssm_arn_prefix}/numo/data-streams/<key>".
 data "aws_caller_identity" "current" {}
 
 locals {
