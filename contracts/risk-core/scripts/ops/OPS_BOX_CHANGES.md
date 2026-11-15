@@ -5,6 +5,23 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-15 04:53:59 UTC: EURC spot cap on v2 lowered 18,000 → 5,000 EURC
+
+The 2% sell depth on Base had fallen to 10,665 EURC (measurement 1, `docs/eurc-usdc-futures-spec.md` A6.0a), so the
+18,000 cap failed its own gate (50% of that depth, about 5,300). 3,281.44 EURC was held (#43, the EURC maker), under 5,000.
+
+- **`exchange-ops`** `e77f336` → `c10d1b8` (SSM `acd75f01`), clean, fast-forward. `c10d1b8` makes `eurc-cap`'s depth
+  gate hold a rise only: the largest-LP read was unreadable (RPC 429 on `eth_getLogs`), which held the decrease.
+- **Depth reading** (SSM `50971e19`): `depth.py --once` from `exchange-eurc-depth` with the provider RPC, a scratch
+  CSV and no webhook, so no alert was sent.
+- **`numo-eurc-cap-lower`** (transient unit, `run-with-ssm-mark.sh python3 propose_margin_engine_v2_batch.py eurc-cap
+  --eurc 5000 --propose`): custody, cap, depth stress (informational, lowers) and keeper inventory PASS; request
+  `db0ecbfd`, digest `0x8c2504ab…c45c24` (recomputed with `cast`), approved by hand in MPCVault; tx `0x0dae9bc1…85fa`,
+  block 57640321. Reads back 5,000e18.
+- **Not fixed:** the depth timer stopped at its 7-day window on 2026-10-28 and has not sampled since; the largest-LP
+  read fails on the box's RPC (429).
+- **Undo:** `eurc-cap --eurc 18000` (a rise: held by the depth gate as it should be).
+
 ## 2026-11-15 03:53–03:59 UTC: old EURC-30NOV26 (v2) retired: close-only, then off Matching
 
 The v2 series `0x6Ff7…7744` was open (cap 18) with zero open interest and no pending VM on any of accounts 1–53. Its
