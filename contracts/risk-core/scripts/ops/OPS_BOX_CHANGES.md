@@ -5,6 +5,17 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-15: EURC v3 keeper relayers created in SSM (laptop)
+
+For the v3 pilot's two keeper instances (spec A1.4): EURC-30NOV26 v3 and its mainnet canary each get a relayer of
+their own, since two keepers on one relayer race for nonces. Each was piped from `cast wallet new` into SSM as a
+SecureString; the key was never printed.
+
+- `/numo/feeds/forward_relayer_key_v3_eurc`: relayer `0x0AbAac33E5ab7E62dED100Be465032A3636b12e5`
+- `/numo/feeds/forward_relayer_key_v3_eurc_canary`: relayer `0x35eeBd8E94F9c4a6b13EBa9fD676f7d0fDa8bDD5`
+
+Both are unfunded so far, no keeper reads them yet, and nothing on the box changed.
+
 ## 2026-11-15: ops box may read /numo/data-streams (terraform apply of `38c8806`)
 
 - **`terraform apply`** (1.13.3) from `main` at `38c8806`, a saved plan: `1 to add, 1 to change, 0 to destroy`:
