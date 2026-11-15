@@ -46,6 +46,7 @@ import json
 import os
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -84,13 +85,26 @@ def http_post(url: str, token: str, body: dict) -> dict:
     return json.loads(resp.read())
 
 
+RPC_TRIES = 6
+RPC_BACKOFF_SEC = 1.0
+
+
 def rpc(url: str, method: str, params: list):
   body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
   req = urllib.request.Request(
     url, data=body,
     headers={"Content-Type": "application/json", "User-Agent": "numo-ops/1.0"}, method="POST")
-  with urllib.request.urlopen(req, timeout=20) as resp:
-    payload = json.loads(resp.read())
+  # The box's RPC answers a burst with HTTP 429; a proposer that dies there leaves a landed action unconfirmed and the
+  # rest of its batch unproposed (eurc-future-retire, 2026-11-14). Back off and retry; anything else still raises.
+  for attempt in range(RPC_TRIES):
+    try:
+      with urllib.request.urlopen(req, timeout=20) as resp:
+        payload = json.loads(resp.read())
+      break
+    except urllib.error.HTTPError as e:
+      if e.code != 429 or attempt == RPC_TRIES - 1:
+        raise
+      time.sleep(RPC_BACKOFF_SEC * 2 ** attempt)
   if "error" in payload:
     raise RuntimeError(f"{method}: {payload['error']}")
   return payload["result"]
