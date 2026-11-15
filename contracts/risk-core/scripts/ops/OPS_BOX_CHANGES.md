@@ -25,8 +25,13 @@ retirement frees market 2's one future slot for the new FutureAsset series (`doc
     The unit exited `done`.
 - **After:** cap 0, off the TradeModule, open interest 0; still market 2's future until the new series' deploy
   replaces it. The EURC-30NOV26 maker (#40) was still quoting at 04:0x UTC (10 a side); its fills can no longer
-  execute. Not yet done: maker to 0 replicas, markets-service delisting, the forward publisher
-  (`numo-future-feeds-v2@eurc-30nov26`), and the pager's and keeper's EURC entries.
+  execute.
+- **Maker stopped (04:10 UTC):** `counts.auto.tfvars` (gitignored, the laptop's copy) `desired_count_market_maker_future_v2.eurc` 1 → 0, `terraform
+  apply` (1.13.3) of a saved plan from `main`: `0 to add, 1 to change, 0 to destroy`, the one change
+  `aws_ecs_service.market_maker_future_v2["eurc"].desired_count 1 -> 0`. Task `4e9bae50…` read `lastStatus RUNNING`
+  after the apply and STOPPED at 04:10:24 (`wait-for-rollout.sh wait`). Its last 20 quotes were left to expire.
+- **Not yet done, deliberately:** markets-service listing, the forward publisher (`numo-future-feeds-v2@eurc-30nov26`),
+  and the pager's and keeper's EURC entries stay until the Stage 1 cutover swaps each to the new series in one step.
 - **Not swept:** a dozen other ops scripts carry their own `rpc()` without the 429 retry (older proposers and the
   checkers).
 - **Undo:** the vault can restore both (`setTotalPositionCap(v2, 18e18)`, `setDatedFutureAsset(future, true)`).
