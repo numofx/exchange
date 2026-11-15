@@ -138,5 +138,17 @@
       "hash": "0x11b03242baa6ddcbcdfe85f7082b4297948a8aed1e70ecbb9cc89c84349cbd43",
       "note": "Robert, from a wallet app, 2026-11-02 01:16 UTC: execute() through the delegation, 20.920393 USDC swapped for 0.009154 ETH."
     }
+  ],
+  "others": [
+    {
+      "deployer": "0xea4B76158a5463Dd433B5e7caBca3939BeE7d693",
+      "transactions": [
+        {
+          "nonce": 17,
+          "hash": "0xfd9aecc69a6b97ae7a6bbc88bc52d104c0d3c8dd668cea58817f4e45fecf7134",
+          "note": "EURC v3 deployer (single-use, 2026-11-15): 0.0012 ETH gas top-up to the canary keeper relayer 0x35ee\u2026bDD5, after the deploy. Reviewed: a plain transfer, no contract call."
+        }
+      ]
+    }
   ]
 }

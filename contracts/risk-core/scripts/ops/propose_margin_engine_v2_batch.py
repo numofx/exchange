@@ -781,8 +781,11 @@ def unaudited_deployer_txs(url: str, deployer: str, deployer_nonce: int, path: P
   verified: set[int] = set()
   if path.exists():
     audit = json.loads(path.read_text())
-    if audit.get("deployer", "").lower() == deployer.lower():
-      for entry in audit.get("transactions", []):
+    # the file's own deployer, then any other deployer's list under "others" (one-off deploy keys, e.g. EURC v3)
+    for listing in [audit, *audit.get("others", [])]:
+      if listing.get("deployer", "").lower() != deployer.lower():
+        continue
+      for entry in listing.get("transactions", []):
         nonce = int(entry["nonce"])
         if not deployer_nonce <= nonce < sent:
           continue
