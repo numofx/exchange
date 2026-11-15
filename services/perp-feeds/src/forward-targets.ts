@@ -28,7 +28,12 @@ export const ONE = 10n ** 18n;
 const YEAR = 365n * 24n * 60n * 60n;
 
 /** Which FutureAsset is marked: v1 (inverse, a USDC contract) or v2 (linear, a contract of the base). */
-export type FutureVersion = 'v1' | 'v2';
+export type FutureVersion = 'v1' | 'v2' | 'v3';
+
+/** v2 and v3 are linear, any base quoted in USDC, VM in USDC cash; v1 is inverse (USDC-cNGN). */
+export function isLinear(version: FutureVersion): boolean {
+  return version !== 'v1';
+}
 
 export type ForwardInputs = {
   /** Defaults to v1. */
@@ -85,7 +90,7 @@ export function discountForward(index: bigint, carry: bigint, secondsToExpiry: b
  */
 export function depthPrice(side: RestingOrder[], contractSize: bigint, minDepthUsdc: bigint, version: FutureVersion = 'v1'): bigint | null {
   if (contractSize <= 0n) throw new Error('contract size must be positive');
-  if (version === 'v2') return depthPriceLinear(side, contractSize, minDepthUsdc);
+  if (isLinear(version)) return depthPriceLinear(side, contractSize, minDepthUsdc);
   // contracts (18dp) needed, rounded up
   let needed = (minDepthUsdc * ONE + contractSize - 1n) / contractSize;
   if (needed === 0n) needed = 1n;
@@ -146,7 +151,7 @@ function clampTo(price: bigint, reference: bigint, fraction: bigint): bigint {
 }
 
 export function computeForwardTarget(inputs: ForwardInputs): ForwardTarget {
-  const v2 = inputs.version === 'v2';
+  const v2 = isLinear(inputs.version ?? 'v1');
   // the index and the forward in the future's own units
   const index = v2 ? inputs.indexUsdc : invert(inputs.indexUsdc);
   const fair = v2

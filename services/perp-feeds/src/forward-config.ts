@@ -33,8 +33,20 @@ const envSchema = z
     ALERT_WEBHOOK_URL: z.string().url().optional().or(z.literal('')),
     DRY_RUN: bool.default('false'),
 
-    /** v1: FutureAssetV1 (src/legacy/v1). v2: FutureAssetV2 (src/legacy/v2), linear, VM in USDC cash. */
-    FUTURE_VERSION: z.enum(['v1', 'v2']).default('v1'),
+    /**
+     * v1: FutureAssetV1 (src/legacy/v1). v2: FutureAssetV2 (src/legacy/v2), linear, VM in USDC cash. v3: FutureAsset
+     * (src/assets), linear, its index a Data Streams adapter kept fresh by this process (streams-poster.ts) and its
+     * fixing settled through recovery windows (fixing-v3.ts).
+     */
+    FUTURE_VERSION: z.enum(['v1', 'v2', 'v3']).default('v1'),
+    /**
+     * v3 only. Data Streams credentials (SSM /numo/data-streams/username and /hmac_secret, via the unit's wrapper),
+     * the API host, and how old either stored report may get before this process posts newer ones.
+     */
+    DATA_STREAMS_USERNAME: z.string().min(1).optional(),
+    DATA_STREAMS_SECRET: z.string().min(1).optional(),
+    DATA_STREAMS_HOST: z.string().url().default('https://api.dataengine.chain.link'),
+    STREAMS_REFRESH_S: z.coerce.number().int().positive().default(20),
     /** The base the future is on, for log lines and alerts only: two series can share an expiry, so a sub id alone does not name one. */
     BASE_SYMBOL: z.string().min(1).default('cNGN'),
 
@@ -98,6 +110,9 @@ const envSchema = z
     }
     if (env.FUTURE_VERSION === 'v1' && env.CARRY < 0n) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'CARRY must not be negative on v1' });
+    }
+    if (env.FUTURE_VERSION === 'v3' && (!env.DATA_STREAMS_USERNAME || !env.DATA_STREAMS_SECRET)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'v3 needs DATA_STREAMS_USERNAME and DATA_STREAMS_SECRET' });
     }
     if (raw && env.CHAIN_ID === BASE_MAINNET) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'on Base mainnet the forward signer must be a KMS key, not FORWARD_SIGNER_KEY' });

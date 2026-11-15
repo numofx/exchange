@@ -8,6 +8,7 @@ import { loadForwardConfig, type ForwardConfig } from './forward-config.js';
 import { ForwardPublisher } from './forward-publisher.js';
 import { ExpiryKeeper } from './expiry-keeper.js';
 import { installRpcCounter } from './rpc-count.js';
+import { StreamsPoster, signedReportSource } from './streams-poster.js';
 
 /**
  * The keeper for a dated future, one unit per series (numo-future-feeds.service for v1's
@@ -61,9 +62,18 @@ export async function coverDeficit(expiry: Pick<ExpiryKeeper, 'coverPoolDeficit'
   }
 }
 
+/** One pass of the v3 report poster; it alerts on its own failures, and anything else it throws alerts here. */
+export async function postReports(streams: Pick<StreamsPoster, 'tick'>, alert: Alerter): Promise<void> {
+  try {
+    await streams.tick();
+  } catch (error) {
+    await alert('streams-tick-error', `streams poster tick failed: ${(error as Error).message.slice(0, 300)}`);
+  }
+}
+
 /** What heads this instance's alerts: v1 keeps the tag it always had, a v2 series names its base. */
 export function alertTag(config: Pick<ForwardConfig, 'FUTURE_VERSION' | 'BASE_SYMBOL'>): string {
-  return config.FUTURE_VERSION === 'v2' ? `future-feeds ${config.BASE_SYMBOL} v2` : 'perp-feeds';
+  return config.FUTURE_VERSION === 'v1' ? 'perp-feeds' : `future-feeds ${config.BASE_SYMBOL} ${config.FUTURE_VERSION}`;
 }
 
 async function main() {
@@ -76,6 +86,21 @@ async function main() {
   const publisher = new ForwardPublisher(config, chain, alert);
   await publisher.checkLateThreshold();
   await publisher.checkUnits();
+  // v3: the index is a Data Streams adapter, fresh only while reports are posted. Posting runs first each tick,
+  // so the mark and the fixing sample read a fresh index.
+  const streams =
+    config.FUTURE_VERSION === 'v3'
+      ? new StreamsPoster(
+          config,
+          chain,
+          alert,
+          signedReportSource(config.DATA_STREAMS_HOST, config.DATA_STREAMS_USERNAME!, config.DATA_STREAMS_SECRET!),
+        )
+      : undefined;
+  if (streams) {
+    await streams.checkCadence();
+    await postReports(streams, alert);
+  }
   const expiry = new ExpiryKeeper(config, chain, alert);
   await expiry.checkSampleInterval();
   console.log(
@@ -84,6 +109,7 @@ async function main() {
   );
 
   for (;;) {
+    if (streams) await postReports(streams, alert);
     try {
       const outcome = await publisher.tick();
       // After settlement there is nothing to mark, but the unit keeps running: exiting would only be

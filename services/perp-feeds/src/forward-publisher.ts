@@ -4,7 +4,7 @@ import type { Alerter } from './alert.js';
 import { fetchBook } from './book.js';
 import type { ContractChain } from './chain.js';
 import type { ForwardConfig } from './forward-config.js';
-import { computeForwardTarget, invert } from './forward-targets.js';
+import { computeForwardTarget, invert, isLinear } from './forward-targets.js';
 import { encodeForwardData, encodeManagerData, signFeedUpdate } from './feed-data.js';
 import type { RestingOrder } from './mark-targets.js';
 
@@ -93,7 +93,7 @@ export class ForwardPublisher {
       console.warn('[forward] units not checked: the contract is unlisted or the index is unreadable');
       return;
     }
-    const v2 = this.config.FUTURE_VERSION === 'v2';
+    const v2 = isLinear(this.config.FUTURE_VERSION);
     const index = v2 ? indexUsdc : invert(indexUsdc);
     const other = v2 ? invert(indexUsdc) : indexUsdc;
     if (ratio(contract.markPrice, other) < ratio(contract.markPrice, index)) {

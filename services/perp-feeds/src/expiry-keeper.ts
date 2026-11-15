@@ -4,6 +4,8 @@ import type { Alerter } from './alert.js';
 import type { ContractChain } from './chain.js';
 import type { ForwardConfig } from './forward-config.js';
 import { futureAbi } from './forward-publisher.js';
+import { isLinear } from './forward-targets.js';
+import { FixingKeeperV3, type FixingV3Outcome } from './fixing-v3.js';
 
 export const fixingAbi = parseAbi([
   'struct Fixing { uint64 windowStart; uint64 maxSampleGap; uint64 firstSampleTime; uint64 lastSampleTime; uint64 largestGap; uint256 lastPrice; uint256 accumulator; }',
@@ -58,7 +60,8 @@ export type ExpiryOutcome =
   | 'fix-failed'
   | 'closing-out'
   | 'closed-out'
-  | 'done';
+  | 'done'
+  | FixingV3Outcome;
 
 /** What one coverPoolDeficit call did. `netUsd` is the pool's net after it, 18dp; null when not read. */
 export type DeficitOutcome = { netUsd: bigint | null; settled: number; failed: number; stranded: boolean };
@@ -98,11 +101,16 @@ export class ExpiryKeeper {
   /** Set once a deficit is left with no loser to settle, so it alerts once per episode; cleared at net >= 0. */
   private stranded = false;
 
+  /** v3's fixing (recovery windows, no owner fallback); deficit cover and close-out are shared. */
+  private readonly v3?: FixingKeeperV3;
+
   constructor(
     private readonly config: ForwardConfig,
     private readonly chain: ContractChain,
     private readonly alert: Alerter,
-  ) {}
+  ) {
+    if (config.FUTURE_VERSION === 'v3') this.v3 = new FixingKeeperV3(config, chain, alert);
+  }
 
   private future<T>(abi: typeof futureAbi | typeof fixingAbi | typeof pendingAbi, functionName: string, args: readonly unknown[] = []) {
     return this.chain.read<T>(this.config.FUTURE_ASSET, abi, functionName, args);
@@ -115,6 +123,7 @@ export class ExpiryKeeper {
     const head = await this.chain.headTimestamp();
 
     if (contract.settled) return this.closeOut();
+    if (this.v3) return this.v3.tick(head, contract.expiry);
 
     if (head < contract.expiry) {
       const window = await this.future<bigint>(fixingAbi, 'fixingWindow');
@@ -126,6 +135,7 @@ export class ExpiryKeeper {
 
   /** Refuses a sample interval that could break the fixing on its own. Run once at startup. */
   async checkSampleInterval(): Promise<void> {
+    if (this.v3) return this.v3.checkSampleInterval();
     const gap = await this.future<bigint>(fixingAbi, 'maxSampleGap');
     const interval = BigInt(Math.floor(this.config.FIXING_SAMPLE_INTERVAL_MS / 1000));
     // at most half the gap: one failed sample must still leave the next one inside it
@@ -265,7 +275,7 @@ export class ExpiryKeeper {
     const contract = await this.future<FutureContract>(futureAbi, 'futureContracts', [this.config.FUTURE_SUB_ID]);
     // after settlement, close-out realises every account's VM at the settlement price
     if (!contract.listed || contract.settled) return { netUsd: null, settled: 0, failed: 0, stranded: false };
-    if (this.config.FUTURE_VERSION === 'v2') return this.coverCashPool();
+    if (isLinear(this.config.FUTURE_VERSION)) return this.coverCashPool();
     const pool = await this.pool();
     const spot = await this.spot(pool);
     let net = await this.net(pool, spot);
