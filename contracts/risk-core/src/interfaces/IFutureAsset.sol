@@ -6,7 +6,7 @@ import {IPositionTracking} from "./IPositionTracking.sol";
 
 /**
  * @notice cNGN dated future. Shared by both deployed versions, whose units differ:
- *         - v2 (src/assets/FutureAsset, cNGN-<expiry>): prices USDC per cNGN, contract size in cNGN, VM in USDC.
+ *         - v2 (src/legacy/v2/FutureAssetV2, cNGN-<expiry>): prices USDC per cNGN, contract size in cNGN, VM in USDC.
  *         - v1 (src/legacy/v1/FutureAssetV1, USDC-cNGN-<expiry>): prices cNGN per USDC, contract size in USDC, VM in cNGN.
  * @dev    All 18dp. Either way a long gains `contractSize * (newMark - oldMark)` per contract, in the VM unit.
  */

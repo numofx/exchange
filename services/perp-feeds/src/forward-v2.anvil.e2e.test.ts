@@ -1,7 +1,7 @@
 /**
  * The forward publisher in v2 mode against the REAL v2 contracts, deployed from risk-core's compiled
  * artifacts onto a local anvil: per series a LyraSpotFeed index, a LyraForwardFeed on it, a v2
- * FutureAsset (src/assets/FutureAsset.sol: USDC per unit of the base, a contract of the base, nothing
+ * FutureAsset (src/legacy/v2/FutureAssetV2.sol: USDC per unit of the base, a contract of the base, nothing
  * inverted) reading both, and the OracleDataSubmitter. The v1 suite (forward.anvil.e2e.test.ts) keeps
  * FutureAssetV1 until USDC-cNGN-30NOV26 settles.
  *
@@ -165,7 +165,7 @@ describe('v2 forward publisher against real contracts on anvil', { skip: !RPC },
       before(async () => {
         at.index = await deploy('LyraSpotFeed.sol', 'LyraSpotFeed');
         at.forward = await deploy('LyraForwardFeed.sol', 'LyraForwardFeed', [at.index]);
-        at.future = await deploy('FutureAsset.sol', 'FutureAsset', [subAccounts, series.contractSize]);
+        at.future = await deploy('FutureAssetV2.sol', 'FutureAssetV2', [subAccounts, series.contractSize]);
 
         await send(at.index, 'addSigner', [privateKeyToAccount(INDEX_SIGNER_KEY).address, true]);
         await send(at.index, 'setHeartbeat', [86_400n]);

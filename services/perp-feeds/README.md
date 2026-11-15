@@ -177,7 +177,7 @@ skips its fixing window.
 
 ### v2 series (`FUTURE_VERSION=v2`)
 
-The same process marks a MarginEngine v2 future (`src/assets/FutureAsset.sol`: cNGN-30NOV26, and
+The same process marks a MarginEngine v2 future (`src/legacy/v2/FutureAssetV2.sol`: cNGN-30NOV26, and
 EURC-30NOV26 once deployed), one instance per series (`numo-future-feeds-v2@<series>.service`,
 `/etc/numo/future-feeds-v2-<series>.env`; `future-feeds-v2-cngn-30nov26.env` is the first). v1's
 USDC-cNGN-30NOV26 keeps its unit and code path, unchanged, until it settles. What v2 changes:

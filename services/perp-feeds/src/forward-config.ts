@@ -33,7 +33,7 @@ const envSchema = z
     ALERT_WEBHOOK_URL: z.string().url().optional().or(z.literal('')),
     DRY_RUN: bool.default('false'),
 
-    /** v1: FutureAssetV1 (src/legacy/v1). v2: FutureAsset (src/assets), linear, VM in USDC cash. */
+    /** v1: FutureAssetV1 (src/legacy/v1). v2: FutureAssetV2 (src/legacy/v2), linear, VM in USDC cash. */
     FUTURE_VERSION: z.enum(['v1', 'v2']).default('v1'),
     /** The base the future is on, for log lines and alerts only: two series can share an expiry, so a sub id alone does not name one. */
     BASE_SYMBOL: z.string().min(1).default('cNGN'),

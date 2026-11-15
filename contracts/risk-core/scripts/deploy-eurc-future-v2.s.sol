@@ -2,7 +2,7 @@
 pragma solidity ^0.8.0;
 
 import {SubAccounts} from "../src/SubAccounts.sol";
-import {FutureAsset} from "../src/assets/FutureAsset.sol";
+import {FutureAssetV2 as FutureAsset} from "../src/legacy/v2/FutureAssetV2.sol";
 import {MarginEngine} from "../src/risk-managers/MarginEngine.sol";
 import {LyraForwardFeed} from "../src/feeds/LyraForwardFeed.sol";
 import {LyraSpotFeed} from "../src/feeds/LyraSpotFeed.sol";

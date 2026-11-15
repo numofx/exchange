@@ -6,7 +6,7 @@
  *    future's own denomination, unless named `...Usdc` (USDC per cNGN, the index and forward feeds'
  *    denomination). One contract is contractSize USDC. The feed stores the forward as `index + diff` in
  *    USDC per cNGN; pullMark inverts that back. The carry forward is index * (1 + carry * tau).
- *  - v2 (src/assets/FutureAsset, <BASE>-<expiry>: cNGN-30NOV26, and EURC-30NOV26 to come): every price is
+ *  - v2 (src/legacy/v2/FutureAssetV2, <BASE>-<expiry>: cNGN-30NOV26, and EURC-30NOV26 to come): every price is
  *    USDC per unit of the base, the feeds' units and the future's, so nothing is inverted and pullMark
  *    reads index + diff as is. One contract is contractSize of the base, worth contractSize * price USDC.
  *    The carry forward is index / (1 + carry * tau), carry being the base's rate over USD's: positive for

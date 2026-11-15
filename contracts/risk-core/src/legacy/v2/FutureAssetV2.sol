@@ -1,17 +1,21 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.18;
 
+// FROZEN: the source of the v2 contract deployed on Base as cNGN-30NOV26 0xcACEe66ad41fD1472a47D7D5Fe372FFbFac9AA75 and
+// EURC-30NOV26 0x6Ff7084D6F1760a57b9475a41F54b12279cD7744 under MarginEngine v2. Do not edit. It is kept compiling so the
+// live series stay testable and their ABI checkable; the next version lives in src/assets/FutureAsset.sol.
+
 import "openzeppelin/utils/math/SafeCast.sol";
 import "openzeppelin/utils/math/SignedMath.sol";
 
-import {ISubAccounts} from "../interfaces/ISubAccounts.sol";
-import {IManager} from "../interfaces/IManager.sol";
-import {IFutureAsset} from "../interfaces/IFutureAsset.sol";
-import {ISpotFeed} from "../interfaces/ISpotFeed.sol";
-import {IForwardFeed} from "../interfaces/IForwardFeed.sol";
+import {ISubAccounts} from "../../interfaces/ISubAccounts.sol";
+import {IManager} from "../../interfaces/IManager.sol";
+import {IFutureAsset} from "../../interfaces/IFutureAsset.sol";
+import {ISpotFeed} from "../../interfaces/ISpotFeed.sol";
+import {IForwardFeed} from "../../interfaces/IForwardFeed.sol";
 
-import {ManagerWhitelist} from "./utils/ManagerWhitelist.sol";
-import {PositionTracking} from "./utils/PositionTracking.sol";
+import {ManagerWhitelist} from "../../assets/utils/ManagerWhitelist.sol";
+import {PositionTracking} from "../../assets/utils/PositionTracking.sol";
 
 /**
  * @title FutureAsset
@@ -35,7 +39,7 @@ import {PositionTracking} from "./utils/PositionTracking.sol";
  *        after expiry anyone may fix the price to their time-weighted average. The owner may set the price by hand
  *        only if that fixing could not be made, only `fallbackDelay` after expiry, and only within FALLBACK_BAND.
  */
-contract FutureAsset is IFutureAsset, PositionTracking, ManagerWhitelist {
+contract FutureAssetV2 is IFutureAsset, PositionTracking, ManagerWhitelist {
   using SafeCast for uint;
 
   /// @dev cNGN (18dp) per contract.

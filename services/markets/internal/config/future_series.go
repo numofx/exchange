@@ -17,7 +17,7 @@ const (
 	// FutureKindInverse is MarginEngine v1's USDC-cNGN-<expiry> (src/legacy/v1): priced in cNGN per USDC,
 	// the index 1e36 / the feed, one contract a fixed number of USDC, variation margin in cNGN.
 	FutureKindInverse = "inverse"
-	// FutureKindLinear is MarginEngine v2's <BASE>-<expiry> (src/assets/FutureAsset): priced in USDC per
+	// FutureKindLinear is MarginEngine v2's <BASE>-<expiry> (src/legacy/v2/FutureAssetV2): priced in USDC per
 	// base, the index the feed as is, one contract a number of base units, variation margin in USDC.
 	FutureKindLinear = "linear"
 )

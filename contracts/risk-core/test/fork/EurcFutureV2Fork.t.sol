@@ -9,7 +9,7 @@ import {DeployEurcFutureV2} from "../../scripts/deploy-eurc-future-v2.s.sol";
 import {SubAccounts} from "../../src/SubAccounts.sol";
 import {ISubAccounts} from "../../src/interfaces/ISubAccounts.sol";
 import {CashAsset} from "../../src/assets/CashAsset.sol";
-import {FutureAsset} from "../../src/assets/FutureAsset.sol";
+import {FutureAssetV2 as FutureAsset} from "../../src/legacy/v2/FutureAssetV2.sol";
 import {WrappedERC20Asset} from "../../src/assets/WrappedERC20Asset.sol";
 import {MarginEngine} from "../../src/risk-managers/MarginEngine.sol";
 import {IAsset} from "../../src/interfaces/IAsset.sol";

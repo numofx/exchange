@@ -1,5 +1,5 @@
 /**
- * The expiry keeper in v2 mode against a REAL v2 FutureAsset (src/assets/FutureAsset.sol) on anvil, for
+ * The expiry keeper in v2 mode against a REAL v2 FutureAsset (src/legacy/v2/FutureAssetV2.sol) on anvil, for
  * two series, cNGN and EURC, apart only in config: it samples the index through a fixing window and
  * fixes the settlement price from those samples, in USDC per unit of the base, nothing inverted. The
  * v1 suite (expiry.anvil.e2e.test.ts) keeps FutureAssetV1 until USDC-cNGN-30NOV26 settles.
@@ -105,7 +105,7 @@ for (const series of SERIES) describe(`v2 expiry keeper against a real FutureAss
     at.submitter = await deploy('OracleDataSubmitter.sol', 'OracleDataSubmitter');
     at.subAccounts = await deploy('SubAccounts.sol', 'SubAccounts', ['Accounts', 'ACC']);
     at.index = await deploy('LyraSpotFeed.sol', 'LyraSpotFeed');
-    at.future = await deploy('FutureAsset.sol', 'FutureAsset', [at.subAccounts, series.contractSize]);
+    at.future = await deploy('FutureAssetV2.sol', 'FutureAssetV2', [at.subAccounts, series.contractSize]);
     await send(at.index, 'addSigner', [privateKeyToAccount(INDEX_SIGNER_KEY).address, true]);
     await send(at.index, 'setHeartbeat', [86_400n]);
 

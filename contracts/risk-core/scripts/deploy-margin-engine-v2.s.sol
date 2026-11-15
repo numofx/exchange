@@ -3,7 +3,7 @@ pragma solidity ^0.8.0;
 
 import {SubAccounts} from "../src/SubAccounts.sol";
 import {CashAsset} from "../src/assets/CashAsset.sol";
-import {FutureAsset} from "../src/assets/FutureAsset.sol";
+import {FutureAssetV2 as FutureAsset} from "../src/legacy/v2/FutureAssetV2.sol";
 import {WrappedERC20Asset} from "../src/assets/WrappedERC20Asset.sol";
 import {MarginEngine} from "../src/risk-managers/MarginEngine.sol";
 import {MarginEngineV1} from "../src/legacy/v1/MarginEngineV1.sol";

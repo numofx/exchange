@@ -7,7 +7,7 @@ import {MessageHashUtils} from "openzeppelin/utils/cryptography/MessageHashUtils
 
 import {SubAccounts} from "../../src/SubAccounts.sol";
 import {CashAsset} from "../../src/assets/CashAsset.sol";
-import {FutureAsset} from "../../src/assets/FutureAsset.sol";
+import {FutureAssetV2 as FutureAsset} from "../../src/legacy/v2/FutureAssetV2.sol";
 import {MarginEngine} from "../../src/risk-managers/MarginEngine.sol";
 import {IAsset} from "../../src/interfaces/IAsset.sol";
 import {IFutureAsset} from "../../src/interfaces/IFutureAsset.sol";
