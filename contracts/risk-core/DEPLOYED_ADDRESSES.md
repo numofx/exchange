@@ -178,6 +178,10 @@ Artifacts: `deployments/8453/MARGIN_ENGINE_V2.json`, `MARGIN_ENGINE_V2_VAULT_ACT
 
 ### EURC-30NOV26 on MarginEngine v2 — DEPLOYED and SET UP 2026-10-30 (closed)
 
+**Intentionally unopened (decided 2026-11-14).** This series expires at cap 0; `eurc-future-enable` is never proposed.
+A pilot EURC-30NOV26 on the new `FutureAsset` version, at a different expiry time and so a different subId, replaces
+it (`docs/eurc-usdc-futures-spec.md`, A1.1–A1.2). Key the two by asset address and subId, never by name.
+
 A second v2 series, on v2's market 2 (EUR): USDC per EURC, 1,000 EURC a contract, VM in USDC through pool #37, expiry
 1796054400 (2026-11-30 16:00 UTC; last trade 15:00), IM 6% / MM 4%, carry -1.5% (an assumption), cap 0 until enable
 (18 contracts). Runbook and sizing: `docs/margin-engine-v2.md`, EURC-30NOV26. Needs no engine change: attaching it is

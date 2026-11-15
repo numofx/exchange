@@ -1,15 +1,21 @@
 # EURC-USDC futures and on-chain matching
 
-Status: **v3.1**, 2026-11-14. Supersedes v1 (written against `DatedFutureAsset` and `StandardManager`, which are not the
+Status: **v3.2**, 2026-11-14. Supersedes v1 (written against `DatedFutureAsset` and `StandardManager`, which are not the
 live contracts) and v2.x–v3.0 (reviewed in conversation, not committed).
 
 - **Step 1** (build now): a new `FutureAsset` version with recovery fixing and no owner price, `StreamsIndexAdapter`,
   a staleness-only `EurcIndexFeed`, traded through the existing `Matching` path. Listing waits on the measurements in
   A6 and A7. Data Streams access is in place (A2.1).
-- **Step 2** (`OnchainBook`, oracle-pegged maker curves): waits on a concrete taker that needs atomic trading.
+- **Step 2** (`OnchainBook`, oracle-pegged maker curves): gated on a concrete taker, **except for the EURC-30NOV26
+  pilot (A1.2)**, for which the gate is lifted.
 
 Shipped separately so one audit doesn't carry a new market, a new matching model and new oracle infrastructure at
-once.
+once. The pilot is the exception, bounded by its scope, its cap and the November 24 go/no-go (A1.2).
+
+**v3.2 changes from v3.1:** the old EURC-30NOV26 expires unopened and a pilot series on the new version with
+`OnchainBook` replaces it (A1.1, A1.2); the Base verifier proxy and its fee manager are recorded: verification is
+free on Base today (A2.1), so the per-second keeper is no longer ruled out on cost (B6a); file placement decided
+(A8.1).
 
 **v3.1 changes from v3.0:** the existing EURC-30NOV26 deployment is recorded (A1.1); Data Streams feed IDs, schema,
 cadence and per-report fee are recorded (A2.1); the owner fallback is removed and `indexFeed` changes are timelocked
@@ -58,12 +64,33 @@ swapping the feed; reports reach the index through `managerData` (A2.2); the per
 - Index: the EUR market's spot feed `0xaaE6…C435` (Chainlink EURC/USD push). The same feed is the market's spot feed.
 - Owner fallback 24 h after expiry within 2%.
 
-It predates every decision in this spec. **Open (B14):** let it expire unopened at cap 0 (recommended), or enable it
-as a small first series under the old design.
+It predates every decision in this spec. **Decided 2026-11-14: it expires unopened at cap 0.** It is not enabled
+under the old design; `eurc-future-enable` is never proposed. It stays whitelisted on market 2 with no positions,
+which is harmless because nothing shares its subId (below). `DEPLOYED_ADDRESSES.md` marks it intentionally unopened.
 
 Carried forward from it: **a series is its subId (the expiry), and `closeOutExpired` couples every market that lists
 that expiry.** A recovery fixing (A8) can delay settlement by hours, so every EURC expiry must have a subId no other
 market lists. The existing deploy script already refuses a shared expiry; keep that check in the new one.
+
+### A1.2 Pilot: EURC-30NOV26 on the new version, executed through `OnchainBook` (decided 2026-11-14)
+
+A new series replaces the unopened one, as a pilot of both steps at once.
+
+- **New asset, new subId.** A subId is the expiry timestamp (`getSubId(expiry)`), so the pilot needs a **different
+  expiry time on 2026-11-30**: 16:00 UTC (1796054400) is held by the unopened series and 14:00 (1796047200) by
+  cNGN-30NOV26. Open (B14): the pilot's expiry time.
+- **Keyed by address and subId, never by name.** The indexer, markets service and `@numo/abis` key the series by
+  (asset address, subId); two assets will both read as "EURC-30NOV26".
+- **Scope:** splines only (no order book), a maker allowlist, priority-fee tax off, and an open-interest cap well
+  under the A6.0a manipulation cost.
+- **Step 2's concrete-taker gate is lifted for this pilot only.**
+- **Before mainnet:**
+  - the full A5, A8.7 and B11 suites, including every guard-firing and griefing test;
+  - a targeted review of the allowance handling (B3, B5a pre-checks), the per-maker `try/catch` and gas floor
+    (B5a), newest-report-only (A2.2, B6), and recovery fixing (A8);
+  - a Base Sepolia rehearsal on a short-dated series that includes a **deliberately broken fixing** recovered by A8.
+- **Go/no-go: 2026-11-24.** If Data Streams access, the review or the Sepolia rehearsal isn't done, the pilot does not
+  open, and the code is reused for the next expiry. (Data Streams access is done as of 2026-11-14, A2.1.)
 
 ## A2. New code in Step 1
 
@@ -85,10 +112,15 @@ market lists. The existing deploy script already refuses a shared expiry; keep t
 - both streams schema **V3** (`feedId, validFromTimestamp, observationsTimestamp, nativeFee, linkFee, expiresAt,
   benchmarkPrice, bid, ask`), 6 signatures, one report per second for 10 consecutive seconds;
 - EURC/USD reports **bid = ask = benchmark**: the stream carries no spread;
-- **every report carries a verification fee**: ~0.036 LINK or ~0.00018 ETH. The subscription buys API access; it
-  does not make on-chain verification free. Whether the Base verifier's fee manager charges it is `[to verify]`
-  against the verifier contract. Until then, size costs assuming it does;
-- verifier proxy address on Base: `[to record]` from Chainlink's supported-networks page;
+- **verifier proxy on Base: `0xDE1A28D87Afd0f546505B28AB50410A5c3a7387a`**, checked on chain 2026-11-14:
+  `typeAndVersion()` is `VerifierProxy 2.0.0`, and `getVerifier()` resolves the config digest of a live EURC report
+  (`0x00094bae…b17ee`) to verifier `0x223752Eb475098e79d10937480DF93864D7EfB83`;
+- **verification is free on Base today.** `s_feeManager()` is `0xb86d1B8a3Bb1c5d7809F5E9EB009311D51d933c6`,
+  `NoOpFeeManager 0.5.1`; `getFeeAndReward` quotes a zero fee in both LINK (`0x88Fb…e196`) and WETH (`0x4200…0006`)
+  for both feed IDs, with a 100% discount (checked 2026-11-14). The `nativeFee` / `linkFee` fields in each report
+  (~0.00018 ETH, ~0.036 LINK) are not charged. Chainlink can repoint the proxy's fee manager, so:
+  - `StreamsIndexAdapter` fails closed if a fee becomes due rather than paying from its own balance;
+  - an alert watches `s_feeManager()` on the proxy and pages on any change;
 - the EURC stream is premium and absent from the public catalog; it appears only to the subscribed account.
 
 Push-feed settings read from Chainlink's feed directory on 2026-11-14. The `eurc-usd-svr` push variant is not used.
@@ -168,8 +200,8 @@ Each item is an owner or vault transaction, written back to the repo the same da
 
 ## A6. Conditions for listing (must be met)
 
-**A6.0 Data Streams.** Done: subscription, feed IDs, schema, cadence (A2.1). Remaining: verifier proxy on Base, and
-whether its fee manager charges the per-report fee.
+**A6.0 Data Streams.** Done 2026-11-14: subscription, feed IDs, schema, cadence, verifier proxy, and fee (none on
+Base today) (A2.1).
 
 **A6.0a Manipulation cost sets the OI cap (binding).**
 1. Get the DEX venues and weights behind the EURC stream and measure their depth, including the thinnest hours.
@@ -204,7 +236,9 @@ series and every position's margin permanently.
 ### A8.1 A new version beside the old
 
 Live cNGN-30NOV26 and EURC-30NOV26 are deployed from today's `FutureAsset.sol`, which stays reproducible. The new
-version keeps `IFutureAsset` unchanged so `MarginEngine` works with it as is. File placement is open (B14). This is
+version keeps `IFutureAsset` unchanged so `MarginEngine` works with it as is. Placement (decided): today's file moves to
+`src/legacy/v2/FutureAssetV2.sol` in a pure move-and-rename commit whose bytecode must match the deployed cNGN asset,
+then the new version is written as `src/assets/FutureAsset.sol`. This is
 Step 1's risk-core change and sets the audit scope.
 
 ### A8.2 Recovery windows
@@ -329,8 +363,9 @@ A taker can withhold a newer report and trade against a stale stored price.
   the taker attaches a fresh report or fills nothing from splines.
 - Base blocks are 200 ms, timestamps whole seconds: `takeMaxAge = 1` is the floor and means up to ~2 s in real time.
   Makers size `halfSpreadTicks` for a 2-second move.
-- **Freshness comes from takers' and makers' own reports** (each pays verification). **A per-second keeper is ruled
-  out:** at ~0.00018 ETH a verification (A2.1), that is roughly 15 ETH a day per stream.
+- **Freshness comes from takers' and makers' own reports.** Verification is free on Base today (A2.1), so a keeper
+  posting every second costs gas only and is an option again: measure its gas (B10) and choose. If the fee manager
+  ever starts charging, the adapter fails closed (A2.1) and this choice is revisited.
 
 ## B7. Splines
 
@@ -402,10 +437,15 @@ v1 structures the take loop so a second liquidity source can be added without a 
 
 ## B14. Open questions
 
-- EURC-30NOV26: let it expire unopened (recommended) or enable under the old design (A1.1).
-- File placement of the new `FutureAsset`: move today's to `src/legacy/v2/` (the v1 precedent) or add beside it.
-- Base verifier proxy address, and whether its fee manager charges the per-report fee (A2.1).
+- **Pilot expiry time on 2026-11-30** (A1.2): not 14:00 or 16:00 UTC, which existing series hold.
+- Pilot OI cap, from the A6.0a measurement.
 - `timelock` length for feed changes, `recoveryDelay`, `indexMaxAge`.
+
+Decided 2026-11-14 (kept for the record):
+- the old EURC-30NOV26 expires unopened at cap 0; the pilot replaces it (A1.1, A1.2);
+- file placement: today's `FutureAsset.sol` moves to `src/legacy/v2/FutureAssetV2.sol` (the v1 precedent), the new
+  version is `src/assets/FutureAsset.sol` (A8.1);
+- Base verifier proxy and fee: recorded in A2.1, no fee today.
 - Step 2 spline policy for DEX skews (B6); `feeBypassedCaller` (B4).
 - Parameters: tick size, `takeMaxAge`, gas floor, ttl limits, refill rates, makers-per-market cap, tax.
 - Licensing: risk-core files are BUSL-1.1 (Lyra/Derive v2 lineage). Confirm the terms permit this product before
