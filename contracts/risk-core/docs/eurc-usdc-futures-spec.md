@@ -108,7 +108,8 @@ Target 2026-11-18/19. Opens only when all of these hold:
 - the **mainnet canary** passes (A1.4): a short series on the same contract, one contract between two of our own
   accounts, a **deliberately broken fixing** recovered by A8 against Chainlink's real verifier, close-out with cash
   conserved and the USDC back. Decided 2026-11-15, in place of the Base Sepolia run: Sepolia could only use a
-  stand-in verifier, and the canary tests the real one. The Sepolia tooling and the local drills stay (A1.3);
+  stand-in verifier, and the canary tests the real one. The Sepolia tooling and the local drills stay (A1.3).
+  **Passed 2026-11-15** (A1.4, "Result");
 - the full `./scripts/verify.sh` is green;
 - a fast independent review of `FutureAsset`'s fixing and recovery code, the adapter and the feed is done. Stopgap
   until a human reviewer can start: a fresh Claude session given only those files and this spec. **Done 2026-11-15**:
@@ -179,6 +180,25 @@ About 40 minutes from the canary's last trade to close-out; the wait before that
 canary is missed (its last trade passes before enable), its fixing and recovery still run, unpositioned, and a
 second canary needs the vault's `setContract`. If it fails: the vault sets the cap to 0 before anything is listed.
 `EurcFutureV3Fork` runs the drill script's own `openOn` and `closeOutOn` on a fork, with only the verifier mocked.
+
+**Result, 2026-11-15: passed.** Canary `1794776400` (expiry 21:00 UTC) on `0xC350…b227`, accounts 54 (long) and 55
+(short), one contract opened at 1.0999746 by a priced transfer.
+- **Break:** the canary keeper was stopped 20:49:03–20:53:34 UTC. At expiry, round 0 had a 276 s gap (limit 120 s),
+  and the keeper opened recovery round 1 (tx `0xffd18423…0d`); `fixing-recovery-opened` fired.
+- **Settle:** round 1 sampled 21:05–21:20 against Chainlink's verifier and settled at **1.1012790** at 21:20:32 (tx
+  `0x435f78de…3937`). The first attempt hit a 429 from `mainnet.base.org` on `eth_sendRawTransaction` and the
+  keeper's retry landed.
+- **Close-out:** the keeper itself closed out 54 and 55 (`0x50ce1435…`, `0x16015c93…`), so the drill script's
+  `closeOut()` was not used and conservation was read from chain at blocks 57936391 and 57936397. Pending VM was
+  ±2.069421147 USDC and moved exactly between the two accounts. The three-account sum (54, 55 and pool 37) moved by
+  −1.6e-6 USDC across the 6 blocks, which is interest. The long's net was +1.304433 USDC = 1,000 × (1.1012790 −
+  1.0999746).
+- **USDC back:** 301.304433 + 298.695566 withdrawn to the engine keeper wallet, then 599.999999 re-deposited to #38
+  (5,000.006 USDC after). The canary keeper unit is stopped and disabled.
+- **Found:** `closeOutOn` assumes it runs the close-out, but the keeper closes out expired accounts first; the fork
+  test passed only because no keeper ran in it. For a later canary, read conservation from chain as above or make
+  `closeOutOn` skip a closed account. The trading app showed the canary's contract as $1.1K open interest on the
+  production market, so it counts the whole `FutureAsset` and not the series.
 
 ## A2. New code in Step 1
 

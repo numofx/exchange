@@ -5,6 +5,15 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-15 20:49–21:30 UTC: EURC v3 canary drilled, settled, closed out; canary keeper disabled
+
+- 20:49:03 `systemctl stop numo-future-feeds-v3@eurc-canary`, 20:53:34 `start` (the drill's outage, spec A1.4).
+- After settlement and close-out, `systemctl disable --now numo-future-feeds-v3@eurc-canary`. The unit is inactive and
+  disabled; `/etc/numo/future-feeds-v3-eurc-canary.env` and the relayer `forward_relayer_key_v3_eurc_canary` stay, so
+  nothing reads them. `numo-future-feeds-v3@eurc-30nov26` is still active.
+- Laptop, `cast send`: the canary key withdrew 54 and 55 (301.304433 + 298.695566 USDC) to the engine keeper wallet
+  `0x753f…f83b`, which re-deposited 599.999999 USDC into #38 (approve `0x36ce40f3…`, deposit `0x315461f4…`).
+
 ## 2026-11-15 ~19:00 UTC: EURC futures maker quoting v3
 
 Laptop, terraform 1.13.3: `eurc-v3-mm.plan` from `8649d1c`. The EURC v2 maker's inventory went 9 → 6 and skew-full-at
