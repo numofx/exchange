@@ -5,6 +5,19 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-15 ~04:57–05:00 UTC: EURC depth monitor sampling again, judged against the live cap
+
+- **`exchange-eurc-depth`** moved `8c5e60a6` → `acd87d4` (SSM `b567966d`), clean. `acd87d4`: `depth.py --once` no
+  longer refuses after the 7-day window (it had sampled nothing since 2026-10-28), and its stress check reads v2's
+  cap on the EURC escrow at each reading instead of the 40,000 constant; a `cap_eurc` column is appended.
+- **CSV backed up** to `/home/ec2-user/numo-eurc-depth.csv.bak-20261115` before the first run under the new columns.
+- **One run started by hand** (`systemctl start numo-eurc-depth.service`): block 57641858, sell 10,572 EURC, buy
+  167,135 USDC within 2%, cap 5,000; stress `unknown`, and `stress_alerted` moved `hold` → `unknown`, which it does
+  only once the webhook accepted the alert: the alert path delivered. The timer runs it at 00:00 and 12:00 UTC.
+- **Still broken:** the largest-LP read (`eth_getLogs` on the main pool's gauge) fails on the box RPC's 429s even with
+  the saved scan state, so the verdict cannot be `pass` until it is fixed.
+- **Undo:** `git -C /home/ec2-user/exchange-eurc-depth checkout --detach 8c5e60a6` and restore the CSV backup.
+
 ## 2026-11-15 04:53:59 UTC: EURC spot cap on v2 lowered 18,000 → 5,000 EURC
 
 The 2% sell depth on Base had fallen to 10,665 EURC (measurement 1, `docs/eurc-usdc-futures-spec.md` A6.0a), so the
