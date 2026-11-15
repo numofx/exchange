@@ -385,7 +385,9 @@ def gate_enable(chain: Chain, d: dict, cngn: dict, stack: dict, vault: str) -> l
   registered = chain.word(d["tradeModule"], selector("isDatedFutureAsset") + word_address(d["future"]))
   problems = ([f"vault does not own {', '.join(not_owned)}"] if not_owned else []) + \
              ([f"{SETUP} actions {unwired} have not landed"] if unwired else []) + \
-             ([f"the future is not closed (cap {cap}, registered {bool(registered)})"] if cap or registered else [])
+             ([f"the future is not closed (cap {cap}, registered {bool(registered)})"] if cap else [])
+  # Closed is cap 0: nothing fills. Registered on the TradeModule with cap 0 is enable action 0 landed and action 1 not,
+  # which a resumed enable must accept (2026-11-15: the unit's read-back timed out after action 0 and the rerun stopped).
   uncapped = int(d["futureOICap"]) == UNCAPPED
   # Uncapped, the blocking sm and keeper gates are sized for cNGN-30NOV26 alone (EURC at 0), and capacity is reported.
   oi_cap = 0.0 if uncapped else int(d["futureOICap"]) / 1e18
