@@ -224,7 +224,13 @@ sample reliably; `recoveryDelay` (A8.2).
 - **Initial margin** covers a depeg-sized jump (USDC fell ~12% over a weekend in March 2023), not EUR/USD moves.
   EURC-30NOV26's 6% / 4% was sized to EUR/USD and does not carry over.
 - **Marks follow a jump within a stated time:** `maxMarkDeviation`, `minMarkInterval` and the narrowest band set
-  together.
+  together. In v2 a jump wider than the band plus one deviation step **froze** the mark (one step cannot reach the
+  band and every intermediate step is outside it; near expiry, a few percent). v3 lets a mark outside the band move if
+  it is strictly closer to the index, and clamps a feed mark to one step instead of refusing it, so a jump `J` is
+  followed in `ceil(J / maxMarkDeviation) × minMarkInterval`, permissionlessly. Tests:
+  `testADepegStepDuringARecoveryIsMarkedAndPaid`, `testAMarkOutsideTheBandMustMoveTowardsTheIndex`.
+  The live cNGN-30NOV26 (v2: 5% steps, band 10% → 1% over the last 14 days, OI 0.7 contracts on 2026-11-14) has the
+  freeze; the remedy there is an owner `setIndexParams` widening the band.
 - **SecurityModule coverage** sized against the OI cap for a jump larger than margin that lands before marks catch up.
 
 ## A8. Fixing always completes: the new `FutureAsset` version (decided)
@@ -234,6 +240,15 @@ Samples are accepted only between `expiry − fixingWindow` and expiry, and a fi
 series and every position's margin permanently.
 
 ### A8.1 A new version beside the old
+
+Built 2026-11-14 as `src/assets/FutureAsset.sol` with `src/interfaces/IFutureAssetV3.sol`; v2 frozen at
+`src/legacy/v2/FutureAssetV2.sol` (bytecode matches both deployed v2 series). `IFutureAsset` is unchanged: the engine
+calls only `contractSize`, `futureContracts`, `getPendingVM` and `settleAccountVM` (FutureVMLib), and v3 keeps those
+selectors and the `FutureContract` layout; v3 leaves out `setSettlementPrice` and `fallbackReference`. The constructor
+takes the initial index feed and the immutable `feedTimelock`. `setIndexParams` bounds the fixing parameters
+(`recoveryDelay ≤ 7 days`, `fixingWindow ≤ 1 day`, `maxSampleGap ≥ 1 minute`) so no setting can stop a series
+settling. Tests: `TestMarginEngine_FutureV3`; each guard was broken and seen to fail its test.
+
 
 Live cNGN-30NOV26 and EURC-30NOV26 are deployed from today's `FutureAsset.sol`, which stays reproducible. The new
 version keeps `IFutureAsset` unchanged so `MarginEngine` works with it as is. Placement (decided): today's file moves to
