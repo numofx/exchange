@@ -39,6 +39,8 @@ import {StandInStreamsVerifier} from "./rehearsal/StandInStreamsVerifier.sol";
  *
  *   1. deploy:  DEPLOYER_KEY=<key> REPORT_SIGNER=<addr> FORWARD_SIGNER=<addr> STANDIN_BASE_USD=<18dp>
  *               STANDIN_QUOTE_USD=<18dp> [EXPIRY_IN=<seconds, default 5400>]
+ *               [FIXING_WINDOW=<s, default 1800, min 900>] [RECOVERY_DELAY=<s, default 3600>]
+ *               short run (~45 min): EXPIRY_IN=1200 FIXING_WINDOW=900 RECOVERY_DELAY=300
  *               forge script scripts/rehearse-eurc-v3-sepolia.s.sol --sig "rehearse()" --rpc-url <sepolia> --broadcast
  *               writes deployments/<chain>/EURC_FUTURE_V3_REHEARSAL.json; then start the keeper on it.
  *   2. trade:   once the keeper is posting reports, --sig "openPosition()": bob sells alice 10 contracts at the index.
@@ -105,14 +107,16 @@ contract RehearseEurcV3Sepolia is DeployEurcFutureV3 {
     st.verifier = new StandInStreamsVerifier(vm.envAddress("REPORT_SIGNER"));
   }
 
-  /// @dev The production defaults (fixing, margin, timelock, index age), no cap, the stand-in verifier.
+  /// @dev The production defaults unless overridden (fixing, margin, timelock, index age), no cap, the stand-in verifier.
   function _params(Stack memory st, address deployer, uint price) internal view returns (Params memory params) {
     params.subAccounts = address(st.subAccounts);
     params.vault = deployer;
     params.engine = address(st.engine);
     params.cash = address(st.cash);
     params.expiry = uint64(block.timestamp + vm.envOr("EXPIRY_IN", uint(5400)));
-    params.fixingWindow = DEFAULT_FIXING_WINDOW;
+    // A short run may shrink the window and the recovery delay to the contract's bounds (FutureAsset reverts outside them);
+    // the sample gap and index age stay production, so the outage the drill causes is judged by the real limits.
+    params.fixingWindow = vm.envOr("FIXING_WINDOW", DEFAULT_FIXING_WINDOW);
     params.lastTradeTime = params.expiry - uint64(params.fixingWindow);
     params.contractSize = DEFAULT_CONTRACT_SIZE;
     params.initialMark = price;
@@ -121,7 +125,7 @@ contract RehearseEurcV3Sepolia is DeployEurcFutureV3 {
     params.futureOICap = UNCAPPED;
     params.feedTimelock = DEFAULT_FEED_TIMELOCK;
     params.maxSampleGap = DEFAULT_MAX_SAMPLE_GAP;
-    params.recoveryDelay = DEFAULT_RECOVERY_DELAY;
+    params.recoveryDelay = vm.envOr("RECOVERY_DELAY", DEFAULT_RECOVERY_DELAY);
     params.indexMaxAge = DEFAULT_INDEX_MAX_AGE;
     params.forwardSigner = vm.envAddress("FORWARD_SIGNER");
     params.verifierProxy = address(st.verifier);
