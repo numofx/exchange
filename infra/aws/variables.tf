@@ -341,7 +341,8 @@ variable "future_series" {
     }, {
     # EURC-30NOV26 v3 (risk-core EURC_FUTURE_V3.json, deployed 2026-11-15), replacing the retired v2 series
     # 0x6Ff7…7744 (1796054400, no open interest, off Matching): USDC per EURC, 1,000 EURC a contract, settled from Data
-    # Streams. close_only until the mainnet canary passes (spec A1.4); then false, opening it.
+    # Streams. Opened 2026-11-15 by the owner before the mainnet canary settled (spec A1.4): the canary finishes
+    # unattended, with the 15 days to Nov 30 to fix anything it finds.
     asset_address   = "0xC350243c1d07Ff598770ECe12323799D2EFbB227"
     expiry          = 1796050800
     manager_address = "0x0705219a1594d5Fc5dC2573da4082cAf3e1B0950"
@@ -349,8 +350,7 @@ variable "future_series" {
     base_asset      = "EURC"
     contract_size   = "1000"
     amount_scale    = "1000000000000000" # 1 EURC: 1e18 per 1,000 EURC contract
-    close_only      = true
-    taker_fee_bps   = 5 # as v2's: EURC-USDC spot's 5
+    taker_fee_bps   = 5                  # as v2's: EURC-USDC spot's 5
   }]
 
   validation {
