@@ -100,8 +100,13 @@ contract MarginEngineV2EnableRehearsalFork is Test {
   /// @dev The enable has landed on chain: either series has a cap under v2.
   bool enabled;
 
+  /// @dev Pinned after the 2026-10-31 enable and before the v2 EURC-30NOV26's retirement (cap 0 from 57,622,309,
+  ///      2026-11-15 03:53:57 UTC): the world this rehearsal describes, both series open together. At head the retirement closes
+  ///      EURC alone, deliberately (CLAUDE.md: chain state moves under tests; EurcFutureV3Fork covers that world).
+  uint constant FORK_BLOCK = 57_622_000;
+
   function setUp() public {
-    vm.createSelectFork(vm.envString("BASE_RPC_URL"));
+    vm.createSelectFork(vm.envString("BASE_RPC_URL"), FORK_BLOCK);
     string memory v2 = _artifact("MARGIN_ENGINE_V2");
     string memory e = _artifact("EURC_FUTURE_V2");
     string memory v1 = _artifact("MARGIN_ENGINE");

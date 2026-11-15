@@ -5,7 +5,7 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
-## 2026-11-15 03:54–03:59 UTC: old EURC-30NOV26 (v2) retired: close-only, then off Matching
+## 2026-11-15 03:53–03:59 UTC: old EURC-30NOV26 (v2) retired: close-only, then off Matching
 
 The v2 series `0x6Ff7…7744` was open (cap 18) with zero open interest and no pending VM on any of accounts 1–53. Its
 retirement frees market 2's one future slot for the new FutureAsset series (`docs/eurc-usdc-futures-spec.md`, A1.1).
@@ -18,10 +18,10 @@ retirement frees market 2's one future slot for the new FutureAsset series (`doc
   in the per-account VM scan: paced and retried in `5431271`.
 - **`numo-eurc-future-retire`** (transient unit, `run-with-ssm-mark.sh python3 propose_eurc_future_v2_batch.py
   eurc-future-retire --propose`), approved by hand in MPCVault:
-  - (0) `eurcFuture.setTotalPositionCap(engineV2, 0)` landed 03:54:16 UTC (seen by a chain watcher). The unit then died
+  - (0) `eurcFuture.setTotalPositionCap(engineV2, 0)` landed in block 57622309, tx `0x2b9f57b3…fb5f`, 03:53:57 UTC. The unit then died
     on HTTP 429 fetching the receipt; the shared `rpc()` in `propose_cngn_spot_batch.py` now retries 429 (`e77f336`).
   - (1) rerun from `e77f336`: (0) skipped as landed, gates re-read (oi 0), request `7daaecbf`;
-    `tradeModule.setDatedFutureAsset(eurcFuture, false)` landed in block 57623890, tx `0xd662e005…efe3`, 03:59:22 UTC.
+    `tradeModule.setDatedFutureAsset(eurcFuture, false)` landed in block 57623890, tx `0xd662e005…efe3`, 03:59:13 UTC.
     The unit exited `done`.
 - **After:** cap 0, off the TradeModule, open interest 0; still market 2's future until the new series' deploy
   replaces it. The EURC-30NOV26 maker (#40) was still quoting at 04:0x UTC (10 a side); its fills can no longer

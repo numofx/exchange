@@ -207,8 +207,8 @@ two owner-only engine setters in the vault's setup batch.
    `EURC-30NOV26`.
 4. **Enabled 2026-10-31 16:26 UTC** (`eurc-future-enable`, approved by hand in MPCVault):
    `future.setTotalPositionCap(v2, 18e18)`, `tradeModule.setDatedFutureAsset(future, true)`.
-5. **Retired 2026-11-15 03:54–03:59 UTC** at zero open interest (`eurc-future-retire`): cap 0, then off the
-   TradeModule (tx `0xd662e005…efe3`). Still market 2's future until the new series' deploy replaces it
+5. **Retired 2026-11-15 03:53–03:59 UTC** at zero open interest (`eurc-future-retire`): cap 0 (tx `0x2b9f57b3…fb5f`,
+   block 57622309), then off the TradeModule (tx `0xd662e005…efe3`, block 57623890). Still market 2's future until the new series' deploy replaces it
    (`scripts/ops/OPS_BOX_CHANGES.md`).
 
 ### cNGN options on MarginEngine v2 — OPEN 2026-11-02 (cap 2M cNGN)
