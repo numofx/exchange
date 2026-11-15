@@ -9,6 +9,7 @@ import {MarginEngine} from "../src/risk-managers/MarginEngine.sol";
 import {LyraForwardFeed} from "../src/feeds/LyraForwardFeed.sol";
 import {LyraSpotFeed} from "../src/feeds/LyraSpotFeed.sol";
 import {IFutureAsset} from "../src/interfaces/IFutureAsset.sol";
+import {IFutureAssetV3} from "../src/interfaces/IFutureAssetV3.sol";
 import {IPositionTracking} from "../src/interfaces/IPositionTracking.sol";
 import {ISpotFeed} from "../src/interfaces/ISpotFeed.sol";
 import {IForwardFeed} from "../src/interfaces/IForwardFeed.sol";
@@ -238,9 +239,12 @@ contract DeployEurcFutureV3 is Utils {
     checkSlotFree(params);
     checkVerifier();
 
-    if (params.fixingWindow == 0 || params.fixingWindow > 1 days) revert("FIXING_WINDOW out of range");
-    if (params.maxSampleGap < 1 minutes || params.maxSampleGap > params.fixingWindow) revert("MAX_SAMPLE_GAP");
-    if (params.recoveryDelay > 7 days) revert("RECOVERY_DELAY over the contract's 7-day bound");
+    // the contract's own bounds (FutureAsset.setIndexParams), checked here so a bad env fails before broadcasting
+    if (params.fixingWindow < 15 minutes || params.fixingWindow > 1 days) revert("FIXING_WINDOW out of range");
+    if (params.maxSampleGap < 1 minutes || params.maxSampleGap * 4 > params.fixingWindow) {
+      revert("MAX_SAMPLE_GAP: 1 minute to a quarter of the window");
+    }
+    if (params.recoveryDelay > 6 hours) revert("RECOVERY_DELAY over the contract's 6-hour bound");
     if (params.indexMaxAge == 0 || params.indexMaxAge > params.maxSampleGap) {
       revert("INDEX_MAX_AGE must be positive and no longer than MAX_SAMPLE_GAP");
     }
@@ -400,6 +404,11 @@ contract DeployEurcFutureV3 is Utils {
       revert("fixing params");
     }
     if (d.future.recoveryDelay() != params.recoveryDelay) revert("recovery delay");
+    IFutureAssetV3.FixingParams memory sf = d.future.seriesFixing(d.subId);
+    if (sf.fixingWindow != params.fixingWindow || sf.maxSampleGap != params.maxSampleGap) {
+      revert("series fixing params");
+    }
+    if (sf.recoveryDelay != params.recoveryDelay) revert("series recovery delay");
     if (address(d.future.forwardFeed()) != address(d.forwardFeed)) revert("future does not read the forward feed");
     if (address(d.forwardFeed.spotFeed()) != address(d.indexFeed)) revert("forward feed is not on the index");
     if (!d.forwardFeed.isSigner(params.forwardSigner)) revert("forward feed missing its signer");
@@ -537,18 +546,20 @@ contract DeployEurcFutureV3 is Utils {
   function enableActionsJson(Deployment memory d, Params memory params) public pure returns (string memory json) {
     json = string.concat(
       "[",
+      // TradeModule first: until it is registered, a fill carries no price and skips the band check. With the cap
+      // still 0 nothing can fill in between; the other order opened a block in which an unpriced fill could land.
+      _action(
+        "tradeModule.setDatedFutureAsset(eurcFutureV3, true) [fills carry their price to the future]",
+        params.tradeModule,
+        abi.encodeWithSignature("setDatedFutureAsset(address,bool)", address(d.future), true)
+      ),
+      ",",
       _action(
         string.concat(
           "eurcFutureV3.setTotalPositionCap(engineV2, ", vm.toString(params.futureOICap), ") [opens EURC future v3]"
         ),
         address(d.future),
         abi.encodeWithSignature("setTotalPositionCap(address,uint256)", params.engine, params.futureOICap)
-      ),
-      ",",
-      _action(
-        "tradeModule.setDatedFutureAsset(eurcFutureV3, true) [fills carry their price to the future]",
-        params.tradeModule,
-        abi.encodeWithSignature("setDatedFutureAsset(address,bool)", address(d.future), true)
       ),
       "]"
     );

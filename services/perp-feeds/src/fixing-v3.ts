@@ -7,10 +7,11 @@ import type { ForwardConfig } from './forward-config.js';
 /** FutureAsset v3 (contracts/risk-core/src/assets/FutureAsset.sol): its fixing, recovery windows included. */
 export const fixingV3Abi = parseAbi([
   'struct Fixing { uint32 round; uint64 windowStart; uint64 windowEnd; uint64 maxSampleGap; uint64 firstSampleTime; uint64 lastSampleTime; uint64 largestGap; address feed; uint256 lastPrice; uint256 accumulator; }',
+  'struct FixingParams { uint64 fixingWindow; uint64 maxSampleGap; uint64 recoveryDelay; }',
   'function fixings(uint256 subId) view returns (Fixing)',
-  'function fixingWindow() view returns (uint256)',
-  'function maxSampleGap() view returns (uint256)',
-  'function recoveryDelay() view returns (uint256)',
+  // The series' own fixing parameters, fixed when it was listed. The contract-wide fixingWindow() and friends are
+  // only the defaults for series listed later: reading them would put the keeper on a window the series does not use.
+  'function seriesFixing(uint256 subId) view returns (FixingParams)',
   'function recordFixingSample(uint96 subId)',
   'function fixSettlementFromIndex(uint96 subId)',
   'function openRecoveryWindow(uint96 subId)',
@@ -25,6 +26,8 @@ export type FixingV3 = {
   lastSampleTime: bigint;
   largestGap: bigint;
 };
+
+export type SeriesFixing = { fixingWindow: bigint; maxSampleGap: bigint; recoveryDelay: bigint };
 
 export type FixingV3Outcome =
   | 'before-window'
@@ -76,13 +79,18 @@ export class FixingKeeperV3 {
     return this.chain.read<T>(this.config.FUTURE_ASSET, fixingV3Abi, functionName, args);
   }
 
+  private series() {
+    return this.read<SeriesFixing>('seriesFixing', [this.config.FUTURE_SUB_ID]);
+  }
+
   private write(functionName: string) {
     return this.chain.write(this.config.FUTURE_ASSET, fixingV3Abi, functionName, [this.config.FUTURE_SUB_ID]);
   }
 
-  /** Refuses a sample interval that could break a window on its own: at most half the gap limit. */
+  /** Refuses a sample interval that could break a window on its own: at most half the series' gap limit. */
   async checkSampleInterval(): Promise<void> {
-    const gap = await this.read<bigint>('maxSampleGap');
+    const gap = (await this.series()).maxSampleGap;
+    if (gap === 0n) throw new Error(`series ${this.config.FUTURE_SUB_ID} is not listed on ${this.config.FUTURE_ASSET}`);
     const interval = BigInt(Math.floor(this.config.FIXING_SAMPLE_INTERVAL_MS / 1000));
     if (interval * 2n > gap) {
       throw new Error(`FIXING_SAMPLE_INTERVAL_MS (${interval}s) must be at most half the contract's maxSampleGap (${gap}s)`);
@@ -93,7 +101,8 @@ export class FixingKeeperV3 {
   async tick(head: bigint, expiry: bigint): Promise<FixingV3Outcome> {
     const subId = this.config.FUTURE_SUB_ID;
     const fixing = await this.read<FixingV3>('fixings', [subId]);
-    const window = currentWindow(fixing, expiry, await this.read<bigint>('fixingWindow'));
+    const series = await this.series();
+    const window = currentWindow(fixing, expiry, series.fixingWindow);
 
     if (head < window.start) return 'before-window';
     if (head <= window.end) return this.sample(head, fixing);
@@ -110,7 +119,7 @@ export class FixingKeeperV3 {
     }
     try {
       const tx = await this.write('openRecoveryWindow');
-      const delay = await this.read<bigint>('recoveryDelay');
+      const delay = series.recoveryDelay;
       await this.alert(
         'fixing-recovery-opened',
         `${this.config.BASE_SYMBOL} future ${subId}: round ${fixing.round} did not complete (largest gap ${fixing.largestGap}s, ` +

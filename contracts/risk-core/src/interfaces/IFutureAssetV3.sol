@@ -30,6 +30,13 @@ interface IFutureAssetV3 is IAsset, IPositionTracking {
     uint accumulator;
   }
 
+  /// @dev A series' fixing parameters, fixed when it is listed.
+  struct FixingParams {
+    uint64 fixingWindow;
+    uint64 maxSampleGap;
+    uint64 recoveryDelay;
+  }
+
   /// @dev An index feed and the time it took effect. History is append-only.
   struct FeedChange {
     address feed;
@@ -88,6 +95,8 @@ interface IFutureAssetV3 is IAsset, IPositionTracking {
 
   function fixings(uint subId) external view returns (Fixing memory);
 
+  function seriesFixing(uint subId) external view returns (FixingParams memory);
+
   event FutureContractSet(uint96 indexed subId, uint64 expiry, uint64 lastTradeTime, uint initialMarkPrice);
   event MarkBoundsSet(uint maxMarkDeviation, uint maxMarkDelay);
   event MarkSet(
@@ -110,6 +119,7 @@ interface IFutureAssetV3 is IAsset, IPositionTracking {
   event IndexFeedProposalCancelled(address feed);
   event IndexFeedActivated(address feed, uint64 since);
   event ForwardFeedSet(address forwardFeed, uint minMarkInterval);
+  event SeriesFixingSet(uint96 indexed subId, uint fixingWindow, uint maxSampleGap, uint recoveryDelay);
   event FixingSampled(uint96 indexed subId, uint32 round, uint64 sampleTime, uint indexPrice);
   event RecoveryWindowOpened(uint96 indexed subId, uint32 round, uint64 windowStart, uint64 windowEnd);
   /// @dev `fromIndex` is always true in v3; kept so indexers read v2 and v3 settlements alike.
@@ -139,4 +149,7 @@ interface IFutureAssetV3 is IAsset, IPositionTracking {
   error FA_InvalidFeed();
   error FA_NoPendingFeed();
   error FA_TimelockNotElapsed();
+  error FA_FeedProposalLapsed();
+  /// @dev A feed change while a series is past last trade, with the current feed still alive
+  error FA_FeedChangeAfterLastTrade();
 }

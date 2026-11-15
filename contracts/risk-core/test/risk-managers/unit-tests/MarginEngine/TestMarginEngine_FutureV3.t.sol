@@ -347,14 +347,60 @@ contract TestMarginEngine_FutureV3 is Test {
     future.pullMark(subId);
   }
 
-  /// @dev A window keeps the length and gap limit it was opened with.
+  /// @dev A series keeps the fixing parameters it was listed with: a window under way keeps its gap limit.
   function testParamsCannotMoveAWindowUnderWay() public {
     uint start = expiry - WINDOW;
     _sampleEvery(start, start + 2 * GAP, 1.1e18);
-    future.setIndexParams(0.1e18, 0.01e18, NARROWING, WINDOW, WINDOW, RECOVERY_DELAY); // a gap of the whole window
+    future.setIndexParams(0.1e18, 0.01e18, NARROWING, 4 * WINDOW, WINDOW, RECOVERY_DELAY); // a gap of 30 minutes
     vm.warp(expiry);
     vm.expectRevert(IFutureAssetV3.FA_FixingIncomplete.selector);
     future.fixSettlementFromIndex(subId);
+  }
+
+  /// @dev Review finding 1: the owner shrank the fixing to one sample (window = gap = 60s) just before it opened, and
+  ///      a single sample at expiry settled the series. The setting is now refused, and a setting that is allowed
+  ///      reaches only series listed after it.
+  function testTheOwnerCannotShrinkAListedSeriesFixingToOneSample() public {
+    vm.expectRevert(IFutureAssetV3.FA_InvalidIndexParams.selector);
+    future.setIndexParams(0.1e18, 0.01e18, NARROWING, 60, 60, RECOVERY_DELAY);
+
+    future.setIndexParams(0.1e18, 0.01e18, NARROWING, 15 minutes, 225, RECOVERY_DELAY); // the shortest allowed
+    index.set(1.1e18);
+    vm.warp(expiry - WINDOW);
+    future.recordFixingSample(subId);
+    index.set(1.13e18);
+    vm.warp(expiry); // one sample at the end of the shortest window allowed now
+    future.recordFixingSample(subId);
+    vm.expectRevert(IFutureAssetV3.FA_FixingIncomplete.selector);
+    future.fixSettlementFromIndex(subId);
+    IFutureAssetV3.Fixing memory f = future.fixings(subId);
+    assertEq(f.windowEnd - f.windowStart, WINDOW, "still the 30-minute window it was listed with");
+    assertEq(f.maxSampleGap, GAP);
+  }
+
+  /// @dev Review finding 3: widening the window to a day and the delay to a week, just before round 0, made it fail
+  ///      and each retry a week away. A listed series is untouched, and the delay is now bounded at 6 hours.
+  function testTheOwnerCannotStretchAListedSeriesRecovery() public {
+    vm.expectRevert(IFutureAssetV3.FA_InvalidIndexParams.selector);
+    future.setIndexParams(0.1e18, 0.01e18, NARROWING, 1 days, GAP, 7 days);
+    future.setIndexParams(0.1e18, 0.01e18, NARROWING, 1 days, GAP, 6 hours);
+    _breakOriginalWindow(1.1e18);
+    (uint start, uint end) = _openRecovery();
+    assertEq(start, block.timestamp + RECOVERY_DELAY, "the delay it was listed with");
+    assertEq(end - start, WINDOW, "the window it was listed with");
+
+    uint64 later = uint64(expiry + 60 days);
+    uint96 next = future.setContract(later, later - 1 hours, PRICE);
+    IFutureAssetV3.FixingParams memory p = future.seriesFixing(next);
+    assertEq(p.fixingWindow, 1 days, "a series listed after the change takes it");
+    assertEq(p.recoveryDelay, 6 hours);
+    assertEq(future.seriesFixing(subId).fixingWindow, WINDOW);
+  }
+
+  function testASeriesCannotBeListedBeforeTheFixingParamsAreSet() public {
+    FutureAsset fresh = new FutureAsset(subAccounts, CONTRACT_SIZE, index, TIMELOCK);
+    vm.expectRevert(IFutureAssetV3.FA_InvalidIndexParams.selector);
+    fresh.setContract(uint64(expiry), uint64(expiry - 1 hours), PRICE);
   }
 
   ////////////////////////////////////
@@ -364,16 +410,19 @@ contract TestMarginEngine_FutureV3 is Test {
   /// @dev Bounds stop a setting from preventing settlement: no endless delay, no window too long, no gap too small.
   function testFixingParamsAreBounded() public {
     vm.expectRevert(IFutureAssetV3.FA_InvalidIndexParams.selector);
-    future.setIndexParams(0.1e18, 0.01e18, NARROWING, WINDOW, GAP, 7 days + 1);
+    future.setIndexParams(0.1e18, 0.01e18, NARROWING, WINDOW, GAP, 6 hours + 1);
     vm.expectRevert(IFutureAssetV3.FA_InvalidIndexParams.selector);
     future.setIndexParams(0.1e18, 0.01e18, NARROWING, 1 days + 1, GAP, RECOVERY_DELAY);
     vm.expectRevert(IFutureAssetV3.FA_InvalidIndexParams.selector);
+    future.setIndexParams(0.1e18, 0.01e18, NARROWING, 15 minutes - 1, 1 minutes, RECOVERY_DELAY);
+    vm.expectRevert(IFutureAssetV3.FA_InvalidIndexParams.selector);
     future.setIndexParams(0.1e18, 0.01e18, NARROWING, WINDOW, 1 minutes - 1, RECOVERY_DELAY);
     vm.expectRevert(IFutureAssetV3.FA_InvalidIndexParams.selector);
-    future.setIndexParams(0.1e18, 0.01e18, NARROWING, WINDOW, WINDOW + 1, RECOVERY_DELAY);
+    future.setIndexParams(0.1e18, 0.01e18, NARROWING, WINDOW, WINDOW / 4 + 1, RECOVERY_DELAY);
     vm.expectRevert(IFutureAssetV3.FA_InvalidIndexParams.selector);
     future.setIndexParams(0.1e18, 0.11e18, NARROWING, WINDOW, GAP, RECOVERY_DELAY);
-    future.setIndexParams(0.1e18, 0.01e18, NARROWING, 1 days, 1 minutes, 7 days); // the bounds themselves
+    future.setIndexParams(0.1e18, 0.01e18, NARROWING, 1 days, 1 minutes, 6 hours); // the bounds themselves
+    future.setIndexParams(0.1e18, 0.01e18, NARROWING, 15 minutes, 225, 0);
   }
 
   function testIndexFeedChangeWaitsForTheTimelock() public {
@@ -408,16 +457,25 @@ contract TestMarginEngine_FutureV3 is Test {
     future.cancelIndexFeed();
   }
 
+  /// @dev A series that trades until a second before expiry: its fixing window opens while trading is still on, so a
+  ///      feed change inside the window is not barred by last trade. The setUp series is moved out of the way.
+  function _listLateLastTradeSeries() internal {
+    uint64 early = uint64(block.timestamp + 10 days);
+    subId = future.setContract(early, early - 1, PRICE);
+    expiry = early;
+  }
+
   /// @dev A8.7: a feed activated while a window is open never reaches that window's samples.
   function testAFeedChangeDuringAnOpenWindowDoesNotReachIt() public {
+    _listLateLastTradeSeries();
     StaleableSpotFeed rogue = new StaleableSpotFeed();
     rogue.set(5e18);
-    vm.warp(expiry - WINDOW - TIMELOCK + 1); // the timelock ends inside the window
+    vm.warp(expiry - WINDOW - TIMELOCK + GAP + 1); // the timelock ends inside the window
     future.proposeIndexFeed(rogue);
 
     uint start = expiry - WINDOW;
     _sampleEvery(start, start + GAP, 1.1e18);
-    vm.warp(block.timestamp + TIMELOCK); // past the proposal's effective time, mid-window
+    vm.warp(start + GAP + 1); // past the proposal's effective time, mid-window
     future.activateIndexFeed();
     assertEq(address(future.indexFeed()), address(rogue), "marks and fills now read the new feed");
 
@@ -431,6 +489,7 @@ contract TestMarginEngine_FutureV3 is Test {
 
   /// @dev Activated after the window started but before its first sample: still not the window's feed.
   function testAFeedActivatedAfterTheWindowStartsButBeforeItsFirstSampleDoesNotReachIt() public {
+    _listLateLastTradeSeries();
     StaleableSpotFeed rogue = new StaleableSpotFeed();
     rogue.set(5e18);
     uint start = expiry - WINDOW;
@@ -443,9 +502,11 @@ contract TestMarginEngine_FutureV3 is Test {
     assertEq(future.futureContracts(subId).markPrice, 1.1e18);
   }
 
-  /// @dev A replacement feed announced in time is what the next window samples: how a discontinued stream is handled.
+  /// @dev A replacement for a dead feed is what the next window samples: how a discontinued stream is handled. After
+  ///      last trade that is the only feed change allowed: the current one failing, and silent for a full window.
   function testAFeedActivatedBeforeARecoveryWindowIsTheOneItSamples() public {
     _breakOriginalWindow(1.1e18);
+    index.setStale(true); // the stream is discontinued at expiry
     StaleableSpotFeed replacement = new StaleableSpotFeed();
     replacement.set(1.13e18);
     future.proposeIndexFeed(replacement);
@@ -462,12 +523,83 @@ contract TestMarginEngine_FutureV3 is Test {
     assertEq(future.fixings(subId).feed, address(replacement));
   }
 
+  /// @dev Review finding 2: a proposal made while holders could exit, held in reserve, and activated after last trade
+  ///      against a live feed, settled the series at 1.50 against an honest 1.10. Refused while the feed is alive.
+  function testAFeedProposalCannotBeActivatedAfterLastTradeWhileTheFeedIsAlive() public {
+    StaleableSpotFeed rogue = new StaleableSpotFeed();
+    rogue.set(1.5e18);
+    vm.warp(expiry - 1 hours - TIMELOCK); // effective exactly at last trade
+    future.proposeIndexFeed(rogue);
+    vm.warp(expiry - 1 hours);
+    vm.expectRevert(IFutureAssetV3.FA_FeedChangeAfterLastTrade.selector);
+    future.activateIndexFeed();
+
+    _breakOriginalWindow(1.1e18); // a broken window: the feed is alive, but it was not sampled
+    vm.expectRevert(IFutureAssetV3.FA_FeedChangeAfterLastTrade.selector);
+    future.activateIndexFeed();
+    (uint start, uint end) = _openRecovery();
+    _sampleEvery(start, end, 1.1e18);
+    future.fixSettlementFromIndex(subId);
+    assertEq(future.futureContracts(subId).markPrice, 1.1e18, "the honest index");
+  }
+
+  /// @dev After last trade, a failing feed is not enough: it must have given no price for a full fixing window. Each
+  ///      price read (a mark, a fill, a sample) restarts that, so anyone posting reports keeps the feed and blocks it.
+  function testAfterLastTradeTheFeedMustBeDeadForAFullWindow() public {
+    StaleableSpotFeed replacement = new StaleableSpotFeed();
+    replacement.set(1.1e18);
+    vm.warp(expiry - TIMELOCK);
+    future.proposeIndexFeed(replacement);
+    vm.warp(expiry);
+    future.pullMark(subId); // the current feed answers at expiry
+    index.setStale(true);
+    vm.warp(expiry + WINDOW - 1);
+    vm.expectRevert(IFutureAssetV3.FA_FeedChangeAfterLastTrade.selector);
+    future.activateIndexFeed();
+
+    index.set(1.1e18); // someone posts a report: alive again
+    vm.warp(expiry + WINDOW);
+    vm.expectRevert(IFutureAssetV3.FA_FeedChangeAfterLastTrade.selector);
+    future.activateIndexFeed();
+
+    index.setStale(true);
+    future.activateIndexFeed(); // failing now, and nothing read it for a full window since expiry
+    assertEq(address(future.indexFeed()), address(replacement));
+  }
+
+  /// @dev Before last trade a change needs only the timelock, as before: holders can still exit.
+  function testBeforeLastTradeAFeedChangeNeedsOnlyTheTimelock() public {
+    future.proposeIndexFeed(new StaleableSpotFeed());
+    vm.warp(block.timestamp + TIMELOCK);
+    future.activateIndexFeed();
+  }
+
+  /// @dev A proposal not activated within FEED_ACTIVATION_PERIOD of its timelock ending lapses: none held in reserve.
+  function testAFeedProposalLapses() public {
+    future.proposeIndexFeed(new StaleableSpotFeed());
+    uint effective = block.timestamp + TIMELOCK;
+    vm.warp(effective + 2 days + 1);
+    vm.expectRevert(IFutureAssetV3.FA_FeedProposalLapsed.selector);
+    future.activateIndexFeed();
+    vm.warp(effective + 2 days);
+    future.activateIndexFeed(); // the last second it may
+  }
+
+  /// @dev A settled series no longer bars a change.
+  function testASettledSeriesDoesNotBarAFeedChange() public {
+    _sampleEvery(expiry - WINDOW, expiry, 1.1e18);
+    future.fixSettlementFromIndex(subId);
+    future.proposeIndexFeed(new StaleableSpotFeed());
+    vm.warp(block.timestamp + TIMELOCK);
+    future.activateIndexFeed();
+  }
+
   /// @dev A8.7 ABI check: the full function list, so a new function (an owner price setter, a feed setter outside
   ///      the timelock) cannot be added without this test being changed in the same review.
   function testTheABIHasNoOwnerPriceAndNoFeedSetterOutsideTheTimelock() public view {
     string memory json = vm.readFile(string.concat(vm.projectRoot(), "/out/FutureAsset.sol/FutureAsset.json"));
     string[] memory sigs = vm.parseJsonKeys(json, ".methodIdentifiers");
-    string[56] memory allowed = [
+    string[61] memory allowed = [
       "acceptOwnership()",
       "accountCashToSettle(uint256,uint256)",
       "accountLastCumulativeVM(uint256,uint256)",
@@ -476,6 +608,7 @@ contract TestMarginEngine_FutureV3 is Test {
       "cancelIndexFeed()",
       "contractSize()",
       "feedHistory()",
+      "FEED_ACTIVATION_PERIOD()",
       "feedTimelock()",
       "fixings(uint256)",
       "fixingWindow()",
@@ -488,6 +621,7 @@ contract TestMarginEngine_FutureV3 is Test {
       "handleAdjustment((uint256,address,uint256,int256,bytes32),uint256,int256,address,address)",
       "indexFeed()",
       "indexFeedAt(uint64)",
+      "lastIndexReadAt()",
       "markIndexBand(uint64)",
       "MAX_FIXING_WINDOW()",
       "MAX_RECOVERY_DELAY()",
@@ -495,6 +629,8 @@ contract TestMarginEngine_FutureV3 is Test {
       "maxMarkDeviation()",
       "maxMarkIndexDeviation()",
       "maxSampleGap()",
+      "MIN_FIXING_WINDOW()",
+      "MIN_GAPS_PER_WINDOW()",
       "MIN_SAMPLE_GAP()",
       "minMarkIndexDeviation()",
       "minMarkInterval()",
@@ -509,6 +645,7 @@ contract TestMarginEngine_FutureV3 is Test {
       "recordFixingSample(uint96)",
       "recoveryDelay()",
       "renounceOwnership()",
+      "seriesFixing(uint256)",
       "setContract(uint64,uint64,uint256)",
       "setForwardFeed(address,uint256)",
       "setIndexParams(uint256,uint256,uint256,uint256,uint256,uint256)",
@@ -553,6 +690,36 @@ contract TestMarginEngine_FutureV3 is Test {
   ///////////////////
   //     marks     //
   ///////////////////
+
+  /// @dev Review finding 7: the forward publisher stops at last trade and its forward ages out before expiry, leaving
+  ///      no permissionless mark. From last trade on the mark is the index.
+  function testMarksRunFromTheIndexFromLastTrade() public {
+    forwardFeed.setForwardPrice(expiry, 1.104e18, 1e18);
+    vm.warp(expiry - 1 hours - 1);
+    future.pullMark(subId);
+    assertEq(future.futureContracts(subId).markPrice, 1.104e18, "the forward until last trade");
+
+    forwardFeed.setForwardPrice(expiry, 1.3e18, 1e18); // stale or wrong: ignored from last trade
+    index.set(1.105e18);
+    vm.warp(expiry - 1 hours);
+    future.pullMark(subId);
+    assertEq(future.futureContracts(subId).markPrice, 1.105e18);
+  }
+
+  /// @dev Review finding 4: owner marks were not rate-limited, and each reset pullMark's cooldown. They now obey
+  ///      minMarkInterval as pullMark does: one 2% owner step per interval, and permissionless marks resume after it.
+  function testTheOwnersMarkObeysTheMarkInterval() public {
+    future.setMarkBounds(0.02e18, 0);
+    future.setForwardFeed(forwardFeed, 1 hours);
+    vm.warp(block.timestamp + 1 days);
+    future.setMark(subId, uint64(block.timestamp), 1.12e18);
+    vm.warp(block.timestamp + 1);
+    vm.expectRevert(IFutureAssetV3.FA_MarkTooSoon.selector);
+    future.setMark(subId, uint64(block.timestamp), 1.14e18); // the reviewer's second step, one block later
+    vm.warp(block.timestamp + 1 hours - 1);
+    future.pullMark(subId); // not held off past the interval
+    assertEq(future.futureContracts(subId).markPrice, 1.1e18, "back to the forward");
+  }
 
   /// @dev From expiry on the mark is the index, whatever the forward feed says, until the series settles.
   function testMarksRunAfterExpiryFromTheIndex() public {

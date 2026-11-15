@@ -17,7 +17,7 @@ import {PositionTracking} from "./utils/PositionTracking.sol";
 /**
  * @title FutureAsset
  * @notice Dated futures in American terms (<BASE>-<expiry>), cash settled in the engine's cash, settled only from the
- *         index. v3. The deployed v2 (cNGN-30NOV26, the unopened EURC-30NOV26) is src/legacy/v2/FutureAssetV2; v1 is
+ *         index. v3. The deployed v2 (cNGN-30NOV26, the retired EURC-30NOV26) is src/legacy/v2/FutureAssetV2; v1 is
  *         src/legacy/v1/FutureAssetV1. Spec: docs/eurc-usdc-futures-spec.md, A8.
  * @dev    Quoted in USDC per unit of the base; one contract is `contractSize` of the base. VM is linear in the price and
  *         realised lazily: the manager calls settleAccountVM whenever an account is touched. VM accounting, fills and
@@ -36,8 +36,11 @@ import {PositionTracking} from "./utils/PositionTracking.sol";
  *           In v2, `setIndexParams` replaced the feed at once and the fixing read it live: an owner could have chosen
  *           the settlement price by pointing the index at any contract mid-window.
  *         - Marks run until the series settles, not only until last trade: margin follows the price through a
- *           recovery. From expiry on, the mark is the index (the forward difference is zero), read from the current
- *           feed; before expiry it is the forward feed, as in v2. A stale index stops marks, fills and samples alike.
+ *           recovery. From last trade on, the mark is the index, read from the current feed; before it, the forward
+ *           feed, as in v2. A stale index stops marks, fills and samples alike.
+ *         - Owner levers on the fixing are closed (independent review, 2026-11-15; spec A8.8): a series keeps the
+ *           fixing parameters it was listed with; after last trade a feed change only replaces a dead feed, and a
+ *           proposal lapses; the owner's mark obeys the same interval as anyone's.
  */
 contract FutureAsset is IFutureAssetV3, PositionTracking, ManagerWhitelist {
   using SafeCast for uint;
@@ -69,14 +72,19 @@ contract FutureAsset is IFutureAssetV3, PositionTracking, ManagerWhitelist {
   /// @dev Fewest seconds between marks.
   uint public minMarkInterval;
 
-  /// @dev Length of every fixing window, in seconds. Copied into a window when it is opened.
+  /// @dev Length of every fixing window, in seconds, for series listed from now on. A series keeps the fixing
+  ///      parameters it was listed with (seriesFixing): a later setIndexParams cannot reshape its fixing.
   uint public fixingWindow;
 
-  /// @dev Longest stretch of a window, in seconds, that may pass without a sample. Copied into a window when opened.
+  /// @dev Longest stretch of a window, in seconds, that may pass without a sample. For series listed from now on.
   uint public maxSampleGap;
 
-  /// @dev Seconds between a broken window being found and its recovery window starting.
+  /// @dev Seconds between a broken window being found and its recovery window starting. For series listed from now on.
   uint public recoveryDelay;
+
+  /// @dev The last time a mark, fill or sample read the current index feed and got a price. activateIndexFeed reads it
+  ///      to tell a dead feed from a live one after last trade.
+  uint64 public lastIndexReadAt;
 
   /// @dev A proposed index feed and when it may be activated. Zero when none is pending.
   address public pendingIndexFeed;
@@ -86,11 +94,25 @@ contract FutureAsset is IFutureAssetV3, PositionTracking, ManagerWhitelist {
 
   mapping(uint subId => Fixing) internal _fixings;
 
-  /// @dev Bounds on the fixing parameters, so no setting can stop a series settling: a recovery window always starts
-  ///      within a week, lasts at most a day, and tolerates a gap of at least a minute between samples.
-  uint public constant MAX_RECOVERY_DELAY = 7 days;
+  /// @dev Each series' fixing parameters, copied from the defaults when it is listed and never changed after.
+  mapping(uint subId => FixingParams) internal _seriesFixing;
+
+  /// @dev Every series ever listed, so activateIndexFeed can find those past last trade.
+  uint96[] internal _series;
+
+  /// @dev Bounds on the fixing parameters. No setting can stop a series settling (a recovery window always starts
+  ///      within 6 hours, lasts at most a day, and tolerates a gap of at least a minute), and none can make a fixing
+  ///      a handful of samples (a window is at least 15 minutes, and samples at least every quarter of it).
+  uint public constant MAX_RECOVERY_DELAY = 6 hours;
   uint public constant MAX_FIXING_WINDOW = 1 days;
+  uint public constant MIN_FIXING_WINDOW = 15 minutes;
   uint public constant MIN_SAMPLE_GAP = 1 minutes;
+  /// @dev A window must be at least this many gap limits long.
+  uint public constant MIN_GAPS_PER_WINDOW = 4;
+
+  /// @dev How long a proposed feed stays activatable once its timelock has passed. After that it lapses, so a
+  ///      proposal cannot be held in reserve and activated at a moment of the owner's choosing.
+  uint public constant FEED_ACTIVATION_PERIOD = 2 days;
 
   mapping(uint subId => IFutureAsset.FutureContract) internal _futureContracts;
 
@@ -121,8 +143,8 @@ contract FutureAsset is IFutureAssetV3, PositionTracking, ManagerWhitelist {
     emit MarkBoundsSet(_maxMarkDeviation, _maxMarkDelay);
   }
 
-  /// @notice Band and fixing parameters. The feed is not here: it changes only through the timelock. A window already
-  ///         opened keeps the length and gap limit it was opened with.
+  /// @notice Band parameters, and the fixing parameters for series listed from now on. The feed is not here: it changes
+  ///         only through the timelock. A series already listed keeps the fixing parameters it was listed with.
   function setIndexParams(
     uint _maxMarkIndexDeviation,
     uint _minMarkIndexDeviation,
@@ -132,9 +154,9 @@ contract FutureAsset is IFutureAssetV3, PositionTracking, ManagerWhitelist {
     uint _recoveryDelay
   ) external onlyOwner {
     if (
-      _maxMarkIndexDeviation > 1e18 || _minMarkIndexDeviation > _maxMarkIndexDeviation || _fixingWindow == 0
-        || _fixingWindow > MAX_FIXING_WINDOW || _maxSampleGap < MIN_SAMPLE_GAP || _maxSampleGap > _fixingWindow
-        || _recoveryDelay > MAX_RECOVERY_DELAY
+      _maxMarkIndexDeviation > 1e18 || _minMarkIndexDeviation > _maxMarkIndexDeviation
+        || _fixingWindow < MIN_FIXING_WINDOW || _fixingWindow > MAX_FIXING_WINDOW || _maxSampleGap < MIN_SAMPLE_GAP
+        || _maxSampleGap * MIN_GAPS_PER_WINDOW > _fixingWindow || _recoveryDelay > MAX_RECOVERY_DELAY
     ) revert FA_InvalidIndexParams();
     maxMarkIndexDeviation = _maxMarkIndexDeviation;
     minMarkIndexDeviation = _minMarkIndexDeviation;
@@ -153,6 +175,7 @@ contract FutureAsset is IFutureAssetV3, PositionTracking, ManagerWhitelist {
     emit ForwardFeedSet(address(_forwardFeed), _minMarkInterval);
   }
 
+  /// @notice List a series. It takes the fixing parameters set now, for good: set them first.
   function setContract(uint64 expiry, uint64 lastTradeTime, uint initialMarkPrice)
     external
     onlyOwner
@@ -161,6 +184,7 @@ contract FutureAsset is IFutureAssetV3, PositionTracking, ManagerWhitelist {
     if (expiry <= block.timestamp || lastTradeTime >= expiry || initialMarkPrice == 0) {
       revert FA_InvalidSchedule();
     }
+    if (fixingWindow == 0) revert FA_InvalidIndexParams();
     subId = getSubId(expiry);
 
     IFutureAsset.FutureContract storage market = _futureContracts[subId];
@@ -175,8 +199,15 @@ contract FutureAsset is IFutureAssetV3, PositionTracking, ManagerWhitelist {
       markPrice: initialMarkPrice,
       cumulativeVMPerContract: 0
     });
+    _seriesFixing[subId] = FixingParams({
+      fixingWindow: fixingWindow.toUint64(),
+      maxSampleGap: maxSampleGap.toUint64(),
+      recoveryDelay: recoveryDelay.toUint64()
+    });
+    _series.push(subId);
 
     emit FutureContractSet(subId, expiry, lastTradeTime, initialMarkPrice);
+    emit SeriesFixingSet(subId, fixingWindow, maxSampleGap, recoveryDelay);
   }
 
   //////////////////////////
@@ -200,16 +231,52 @@ contract FutureAsset is IFutureAssetV3, PositionTracking, ManagerWhitelist {
     emit IndexFeedProposalCancelled(feed);
   }
 
-  /// @notice Activate the pending feed once its timelock has passed. Anyone may call. It takes effect now, and so
-  ///         reaches only fixing windows that start from now on.
+  /**
+   * @notice Activate the pending feed once its timelock has passed, within FEED_ACTIVATION_PERIOD. Anyone may call. It
+   *         takes effect now, and so reaches only fixing windows that start from now on.
+   * @dev    While any series is past its last trade and unsettled, its holders cannot exit, so a feed change could be
+   *         aimed at them. Then the change is a rescue only: allowed once the current feed is failing now and has not
+   *         given a price for a full fixing window of every such series. Anyone holding Data Streams reports can keep
+   *         the current feed alive by posting them, and so block it.
+   */
   function activateIndexFeed() external {
     address feed = pendingIndexFeed;
     if (feed == address(0)) revert FA_NoPendingFeed();
-    if (block.timestamp < pendingIndexFeedEffectiveAt) revert FA_TimelockNotElapsed();
+    uint64 effectiveAt = pendingIndexFeedEffectiveAt;
+    if (block.timestamp < effectiveAt) revert FA_TimelockNotElapsed();
+    if (block.timestamp > effectiveAt + FEED_ACTIVATION_PERIOD) revert FA_FeedProposalLapsed();
+    _checkFeedChangeIsARescue();
     delete pendingIndexFeed;
     delete pendingIndexFeedEffectiveAt;
     _feedHistory.push(FeedChange({feed: feed, since: uint64(block.timestamp)}));
     emit IndexFeedActivated(feed, uint64(block.timestamp));
+  }
+
+  /// @dev Reverts FA_FeedChangeAfterLastTrade unless no unsettled series is past last trade, or the current feed is
+  ///      dead: failing now, and without a price for the longest fixing window among those series.
+  function _checkFeedChangeIsARescue() internal view {
+    uint deadFor;
+    bool locked;
+    for (uint i; i < _series.length; ++i) {
+      IFutureAsset.FutureContract storage market = _futureContracts[_series[i]];
+      if (market.settled || block.timestamp < market.lastTradeTime) continue;
+      locked = true;
+      uint window = _seriesFixing[_series[i]].fixingWindow;
+      if (window > deadFor) deadFor = window;
+    }
+    if (!locked) return;
+    if (block.timestamp < uint(lastIndexReadAt) + deadFor || _feedAnswers(indexFeed())) {
+      revert FA_FeedChangeAfterLastTrade();
+    }
+  }
+
+  /// @dev Whether `feed` gives a non-zero price now, without reverting.
+  function _feedAnswers(ISpotFeed feed) internal view returns (bool) {
+    try feed.getSpot() returns (uint spot, uint) {
+      return spot != 0;
+    } catch {
+      return false;
+    }
   }
 
   /// @notice The index feed in effect now: marks and fills read it.
@@ -230,13 +297,20 @@ contract FutureAsset is IFutureAssetV3, PositionTracking, ManagerWhitelist {
     return _feedHistory;
   }
 
+  /// @notice The fixing parameters `subId` was listed with.
+  function seriesFixing(uint subId) external view returns (FixingParams memory) {
+    return _seriesFixing[subId];
+  }
+
   //////////////////////////
   //        Marks         //
   //////////////////////////
 
   /**
-   * @notice Mark the series. Anyone may call, at most every `minMarkInterval`, until it settles. Before expiry the
-   *         mark is the forward feed; from expiry on it is the index, so margin follows the price through a recovery.
+   * @notice Mark the series. Anyone may call, at most every `minMarkInterval`, until it settles. Until last trade the
+   *         mark is the forward feed; from last trade on it is the index, so margin follows the price to expiry and
+   *         through a recovery. (The forward publisher stops at last trade, and its last forward ages out before
+   *         expiry; the forward difference that close to expiry is negligible.)
    */
   function pullMark(uint96 subId) external {
     IFutureAsset.FutureContract storage market = _futureContracts[subId];
@@ -244,7 +318,7 @@ contract FutureAsset is IFutureAssetV3, PositionTracking, ManagerWhitelist {
     if (block.timestamp < uint(market.lastMarkTime) + minMarkInterval) revert FA_MarkTooSoon();
 
     uint price;
-    if (block.timestamp < market.expiry) {
+    if (block.timestamp < market.lastTradeTime) {
       if (address(forwardFeed) == address(0)) revert FA_NoForwardFeed();
       (price,) = forwardFeed.getForwardPrice(market.expiry);
     } else {
@@ -254,10 +328,13 @@ contract FutureAsset is IFutureAssetV3, PositionTracking, ManagerWhitelist {
     _applyMark(subId, market, uint64(block.timestamp), price, true);
   }
 
-  /// @notice The owner's mark, for when the forward feed cannot be used. Same checks as pullMark, until settlement.
+  /// @notice The owner's mark, for when the forward feed cannot be used. Same checks as pullMark, until settlement,
+  ///         including `minMarkInterval`: the owner can neither mark faster than anyone else nor, by marking, hold
+  ///         permissionless marks off for longer than one interval.
   function setMark(uint96 subId, uint64 markTime, uint markPrice) external onlyOwner {
     IFutureAsset.FutureContract storage market = _futureContracts[subId];
     if (!market.listed) revert FA_UnknownFuture();
+    if (block.timestamp < uint(market.lastMarkTime) + minMarkInterval) revert FA_MarkTooSoon();
     if (markTime > block.timestamp) revert FA_InvalidMark();
     if (maxMarkDelay != 0 && uint(markTime) + maxMarkDelay < block.timestamp) revert FA_StaleMark();
     _applyMark(subId, market, markTime, markPrice, false);
@@ -302,12 +379,13 @@ contract FutureAsset is IFutureAssetV3, PositionTracking, ManagerWhitelist {
     if (market.settled) revert FA_AlreadySettled();
 
     Fixing storage fixing = _fixings[subId];
-    if (fixing.windowEnd == 0) _openWindow(fixing, 0, market.expiry - fixingWindow.toUint64());
+    if (fixing.windowEnd == 0) _openWindow(subId, fixing, 0, market.expiry - _seriesFixing[subId].fixingWindow);
     if (block.timestamp < fixing.windowStart || block.timestamp > fixing.windowEnd) revert FA_OutsideFixingWindow();
 
     if (fixing.feed == address(0)) fixing.feed = address(indexFeedAt(fixing.windowStart));
     uint price = _spot(ISpotFeed(fixing.feed));
     uint64 now_ = uint64(block.timestamp);
+    if (fixing.feed == address(indexFeed())) lastIndexReadAt = now_;
 
     if (fixing.firstSampleTime == 0) {
       fixing.firstSampleTime = now_;
@@ -347,8 +425,8 @@ contract FutureAsset is IFutureAssetV3, PositionTracking, ManagerWhitelist {
 
   /**
    * @notice Open a recovery window for a series whose current window has ended without a complete fixing. Anyone may
-   *         call. The window starts `recoveryDelay` from now and runs `fixingWindow`; the broken window's samples are
-   *         discarded. Called again if the recovery window breaks too.
+   *         call. The window starts the series' `recoveryDelay` from now and runs its `fixingWindow`; the broken
+   *         window's samples are discarded. Called again if the recovery window breaks too.
    */
   function openRecoveryWindow(uint96 subId) external {
     IFutureAsset.FutureContract storage market = _futureContracts[subId];
@@ -363,18 +441,17 @@ contract FutureAsset is IFutureAssetV3, PositionTracking, ManagerWhitelist {
     if (fixing.windowEnd != 0 && _fixingComplete(fixing)) revert FA_FixingAvailable();
 
     uint32 round = fixing.windowEnd == 0 ? 1 : fixing.round + 1;
-    _openWindow(fixing, round, (block.timestamp + recoveryDelay).toUint64());
+    _openWindow(subId, fixing, round, (block.timestamp + _seriesFixing[subId].recoveryDelay).toUint64());
     emit RecoveryWindowOpened(subId, round, fixing.windowStart, fixing.windowEnd);
   }
 
-  /// @dev Reset `fixing` to a fresh window. Its length and gap limit are fixed now, its feed at its first sample.
-  function _openWindow(Fixing storage fixing, uint32 round, uint64 windowStart) internal {
-    if (fixingWindow == 0) revert FA_InvalidIndexParams();
-    uint64 length = fixingWindow.toUint64();
+  /// @dev Reset `fixing` to a fresh window, with the series' length and gap limit. Its feed is fixed at its first sample.
+  function _openWindow(uint96 subId, Fixing storage fixing, uint32 round, uint64 windowStart) internal {
+    FixingParams storage params = _seriesFixing[subId];
     fixing.round = round;
     fixing.windowStart = windowStart;
-    fixing.windowEnd = windowStart + length;
-    fixing.maxSampleGap = maxSampleGap.toUint64();
+    fixing.windowEnd = windowStart + params.fixingWindow;
+    fixing.maxSampleGap = params.maxSampleGap;
     fixing.firstSampleTime = 0;
     fixing.lastSampleTime = 0;
     fixing.largestGap = 0;
@@ -404,9 +481,10 @@ contract FutureAsset is IFutureAssetV3, PositionTracking, ManagerWhitelist {
   //        Index         //
   //////////////////////////
 
-  /// @dev The current index. The feed reverts when stale.
-  function _indexPrice() internal view returns (uint) {
-    return _spot(indexFeed());
+  /// @dev The current index. The feed reverts when stale. Records that the feed answered.
+  function _indexPrice() internal returns (uint price) {
+    price = _spot(indexFeed());
+    lastIndexReadAt = uint64(block.timestamp);
   }
 
   function _spot(ISpotFeed feed) internal view returns (uint spot) {

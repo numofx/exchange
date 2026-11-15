@@ -1,6 +1,6 @@
 # EURC-USDC futures and on-chain matching
 
-Status: **v3.3**, 2026-11-14. Supersedes v1 (written against `DatedFutureAsset` and `StandardManager`, which are not the
+Status: **v3.4**, 2026-11-15. Supersedes v1 (written against `DatedFutureAsset` and `StandardManager`, which are not the
 live contracts) and v2.x–v3.0 (reviewed in conversation, not committed).
 
 - **Step 1** (build now): a new `FutureAsset` version with recovery fixing and no owner price, `StreamsIndexAdapter`,
@@ -11,6 +11,11 @@ live contracts) and v2.x–v3.0 (reviewed in conversation, not committed).
 
 The pilot ships in two stages (A1.2): Stage 1 lists the new series on `Matching` as soon as its Sepolia rehearsal
 passes; Stage 2 adds `OnchainBook` to the same market behind its own gate. The market never waits for `OnchainBook`.
+
+**v3.4 changes from v3.3:** the Stage 1 independent review is done and its owner-lever findings are fixed in
+`FutureAsset` (A8.8): each series keeps the fixing parameters it was listed with, with tighter bounds; a feed change
+after last trade is a rescue only and a proposal lapses; `setMark` obeys `minMarkInterval`; marks come from the index
+from last trade; the enable batch registers on `TradeModule` before opening the cap.
 
 **v3.3 changes from v3.2:** the pilot ships in two stages and the market no longer waits for `OnchainBook` (A1.2);
 pilot expiry decided, 2026-11-30 15:00 UTC (A1.2); `acceptData` skips an old report instead of reverting, the
@@ -99,7 +104,8 @@ Target 2026-11-18/19. Opens only when all of these hold:
 - the Base Sepolia short-dated series passes, including a **deliberately broken fixing** recovered by A8;
 - the full `./scripts/verify.sh` is green;
 - a fast independent review of `FutureAsset`'s fixing and recovery code, the adapter and the feed is done. Stopgap
-  until a human reviewer can start: a fresh Claude session given only those files and this spec.
+  until a human reviewer can start: a fresh Claude session given only those files and this spec. **Done 2026-11-15**:
+  no critical or high findings; the owner-lever findings are fixed (A8.8).
 
 **Stage 2: `OnchainBook` added to the same market.** Scope: splines only (no order book), a maker allowlist,
 priority-fee tax off. Step 2's concrete-taker gate is lifted for this pilot only. Before it is enabled:
@@ -210,15 +216,17 @@ Each item is an owner or vault transaction, written back to the repo the same da
 2. Whitelist `MarginEngine` on the asset.
 3. Deploy `StreamsIndexAdapter` (verifier proxy, both feed IDs) and `EurcIndexFeed`. Set the index feed (A8.5) and
    `setIndexParams(maxMarkIndexDeviation, minMarkIndexDeviation, bandNarrowingPeriod, fixingWindow, maxSampleGap,
-   recoveryDelay)`. Confirm each push feed with `cast call <proxy> "description()(string)"` and `"decimals()(uint8)"`.
+   recoveryDelay)`, before step 7: a series takes the fixing parameters in force when it is listed, for good. Confirm each push feed with `cast call <proxy> "description()(string)"` and `"decimals()(uint8)"`.
 4. Stage 1: no `setWhitelistedCallee` (the keeper posts reports). Attaching later needs it on `MarginEngine` and on
    the fee account's manager (A2.2).
 5. Forward feed for marks: `setForwardFeed(forwardFeed, minMarkInterval)`, reusing the cNGN publisher setup.
 6. `setMarkBounds(maxMarkDeviation, maxMarkDelay)`.
-7. `setContract(expiry, lastTradeTime, initialMarkPrice)`.
+7. `setContract(expiry, lastTradeTime, initialMarkPrice)`. Refused until step 3's fixing parameters are set.
 8. `MarginEngine`: `whitelistAsset(future, 2, Future)`, `setFutureMarginRequirements(2, mm, im)` sized per A7.
 9. EURC collateral already exists on market 2 (escrow `0xfD2A…6cD9`); its v2 cap is a separate, depth-gated decision.
-10. `TradeModule.setDatedFutureAsset(future, true)`; `future.setTotalPositionCap(engine, cap)` per A6.0a.
+10. `TradeModule.setDatedFutureAsset(future, true)`, then `future.setTotalPositionCap(engine, cap)` per A6.0a, in that
+    order: until the future is registered a fill carries no price and skips the band check, and the cap of 0 holds
+    fills off until then.
 11. Off-chain: the executor attaches stream reports to matches; mark and fixing keeper; markets service; market-maker
     config; `@numo/abis`.
 
@@ -318,8 +326,9 @@ Built 2026-11-14 as `src/assets/FutureAsset.sol` with `src/interfaces/IFutureAss
 calls only `contractSize`, `futureContracts`, `getPendingVM` and `settleAccountVM` (FutureVMLib), and v3 keeps those
 selectors and the `FutureContract` layout; v3 leaves out `setSettlementPrice` and `fallbackReference`. The constructor
 takes the initial index feed and the immutable `feedTimelock`. `setIndexParams` bounds the fixing parameters
-(`recoveryDelay ≤ 7 days`, `fixingWindow ≤ 1 day`, `maxSampleGap ≥ 1 minute`) so no setting can stop a series
-settling. Tests: `TestMarginEngine_FutureV3`; each guard was broken and seen to fail its test.
+(`recoveryDelay ≤ 6 hours`, `15 minutes ≤ fixingWindow ≤ 1 day`, `1 minute ≤ maxSampleGap ≤ fixingWindow / 4`) so
+no setting can stop a series settling or reduce its fixing to a few samples, and `setContract` copies them into the
+series (`seriesFixing(subId)`): a later `setIndexParams` reaches only series listed after it. Tests: `TestMarginEngine_FutureV3`; each guard was broken and seen to fail its test.
 
 
 Live cNGN-30NOV26 and EURC-30NOV26 are deployed from today's `FutureAsset.sol`, which stays reproducible. The new
@@ -331,7 +340,8 @@ Step 1's risk-core change and sets the audit scope.
 ### A8.2 Recovery windows
 
 - **Trigger:** after expiry, if the fixing is incomplete, anyone opens a recovery window. No owner action.
-- **Window:** same `fixingWindow` and `maxSampleGap`, starting `recoveryDelay` after the break.
+- **Window:** the series' own `fixingWindow` and `maxSampleGap`, starting its `recoveryDelay` after the break (all
+  three fixed at listing, A8.1).
 - **Broken-window samples are discarded,** not merged.
 - **If a recovery window breaks, the next opens.** The series settles once the stream and the chain work for one full
   window.
@@ -340,8 +350,11 @@ Step 1's risk-core change and sets the audit scope.
 ### A8.3 Marks until settlement
 
 `pullMark` runs until the series is settled, not only until `lastTradeTime`, so margin follows the price during a
-recovery. Consequences to state in user-facing docs:
-- after expiry the published forward difference is zero (spot is what the contract converges to);
+recovery. Until `lastTradeTime` it reads the forward feed; from `lastTradeTime` on it reads the index (the forward
+publisher stops at last trade and its last forward ages out before expiry, which left the last ~25 minutes with no
+permissionless mark). Consequences to state in user-facing docs:
+- from last trade the mark is the index: the forward difference that close to expiry is negligible, and after expiry
+  it is zero (spot is what the contract converges to);
 - during the outage that caused the break, marks cannot move either (`pullMark` reads the stale index);
 - holders cannot exit after `lastTradeTime` (only the manager moves positions), so they carry depeg risk until
   settlement. Consistent with A0.
@@ -360,10 +373,20 @@ choose a later settlement time and would need its own analysis.
   and choose the settlement price with no band and no delay. In the new version a feed change is announced, waits a
   timelock, emits an event, and applies only to windows opened after it takes effect; each window records its feed in
   its `Fixing` struct, as `maxSampleGap` is recorded today.
-- **A discontinued stream** is handled by announcing a replacement feed; once the timelock passes, the next recovery
-  window samples it and the series settles from a feed, not from a chosen number.
+- **A proposal lapses** if not activated within `FEED_ACTIVATION_PERIOD` (2 days) of its timelock ending, so none is
+  held in reserve for a moment of the owner's choosing.
+- **After last trade a feed change is a rescue only.** While any series is past `lastTradeTime` and unsettled, its
+  holders cannot exit, so `activateIndexFeed` requires the current feed to be failing now and to have given no price
+  for a full fixing window of every such series (`lastIndexReadAt`, stamped by every mark, priced fill and sample of
+  the current feed). Anyone holding Data Streams reports keeps the current feed alive by posting them, and so blocks a
+  change. Before last trade the timelock alone applies: holders see the proposal and can exit.
+- **A discontinued stream** is handled by announcing a replacement feed; once the timelock passes and the old feed has
+  been dead a full window, the next recovery window samples it and the series settles from a feed, not from a chosen
+  number.
 - **Remaining owner levers on marks** (`setMark`, `setMarkBounds`, band parameters) move VM within bounds but not the
-  settlement price. Review their bounds for a depeg-sized market (A7).
+  settlement price. `setMark` obeys `minMarkInterval` like `pullMark`, so the owner can neither mark faster than anyone
+  else nor hold permissionless marks off for longer than one interval. Review the bounds for a depeg-sized market
+  (A7).
 
 ### A8.6 Not adopted: late-report backfill
 
@@ -381,6 +404,28 @@ guarantee settlement.
 - a 10% step during a recovery → marks follow, liquidations run, no account negative beyond SecurityModule coverage;
 - **ABI check:** no function sets a settlement price, and every function that changes `indexFeed` is behind the
   timelock (on the model of `scripts/ops/abi_selectors.py`).
+
+### A8.8 Independent review, 2026-11-15
+
+A fresh session given only `FutureAsset`, `StreamsIndexAdapter`, `EurcIndexFeed` and this spec. No critical or high
+findings: nobody, the owner included, can name a settlement price. It found owner levers that shaped or delayed the
+fixing, each proven with a throwaway test. Fixed, each with a test reproducing the attack and now failing, and each
+guard broken and seen to fail its test (`TestMarginEngine_FutureV3`):
+
+| # | Finding | Fix | Test |
+|---|---|---|---|
+| 1 | `setIndexParams` could shrink the fixing to one sample (window = gap = 60 s): 1.13 against an index of 1.10 | Per-series params fixed at listing; window ≥ 15 min, gap ≤ window / 4 | `testTheOwnerCannotShrinkAListedSeriesFixingToOneSample` |
+| 2 | A feed proposal never lapsed and anyone could activate it after last trade: 1.50 against 1.10 | Lapses after 2 days; after last trade only a rescue of a dead feed (A8.5) | `testAFeedProposalCannotBeActivatedAfterLastTradeWhileTheFeedIsAlive`, `testAfterLastTradeTheFeedMustBeDeadForAFullWindow`, `testAFeedProposalLapses` |
+| 3 | Widening the window just before round 0 forced it to fail; a 7-day delay pushed each retry a week | Per-series params; `recoveryDelay ≤ 6 h` | `testTheOwnerCannotStretchAListedSeriesRecovery` |
+| 4 | `setMark` was not rate-limited and reset `pullMark`'s cooldown: 8% in one block | `setMark` obeys `minMarkInterval` | `testTheOwnersMarkObeysTheMarkInterval` |
+| 6 | The enable batch opened the cap before `TradeModule` registration | Registration first (A3 step 10) | `propose_eurc_future_v3_batch.py --self-test` |
+| 7 | No permissionless mark from ~expiry − 25 min to expiry | Index marks from last trade (A8.3) | `testMarksRunFromTheIndexFromLastTrade` |
+
+Not changed: (5) a sampler chooses when to sample, and a favourable sample holds until the next; frequent keeper
+samples (every 20 s against a 2-minute gap limit) bound it, as already stated. Margin is still the old 6% / 4% default
+pending the A7 depeg sizing. Residual on (2): the owner runs the only report poster today, so it can let the feed die;
+a change then still needs a full dead window and the 24-hour public timelock, and anyone else with Data Streams access
+can block it by posting reports.
 
 ---
 

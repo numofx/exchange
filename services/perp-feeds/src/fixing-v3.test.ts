@@ -56,7 +56,13 @@ function window(round: number, start: bigint, samples: { first: bigint; last: bi
   };
 }
 
-function run(state: { head: bigint; fixing: FixingV3; settled?: boolean; failWrites?: Set<string> }) {
+function run(state: {
+  head: bigint;
+  fixing: FixingV3;
+  settled?: boolean;
+  failWrites?: Set<string>;
+  series?: { fixingWindow: bigint; maxSampleGap: bigint; recoveryDelay: bigint };
+}) {
   const writes: string[] = [];
   const alerts: string[] = [];
   const chain = {
@@ -68,9 +74,8 @@ function run(state: { head: bigint; fixing: FixingV3; settled?: boolean; failWri
       const values: Record<string, unknown> = {
         futureContracts: { listed: true, settled: state.settled ?? false, expiry: EXPIRY, lastTradeTime: EXPIRY - WINDOW },
         fixings: state.fixing,
-        fixingWindow: WINDOW,
-        maxSampleGap: GAP,
-        recoveryDelay: DELAY,
+        // the series' own parameters; the contract-wide defaults are deliberately not answered (read them and fail)
+        seriesFixing: state.series ?? { fixingWindow: WINDOW, maxSampleGap: GAP, recoveryDelay: DELAY },
       };
       if (!(functionName in values)) throw new Error(`unexpected read ${functionName}`);
       return values[functionName] as T;
@@ -189,6 +194,20 @@ describe('FixingKeeperV3', () => {
     await new FixingKeeperV3(config, chain, alert).checkSampleInterval();
     const slow = { ...config, FIXING_SAMPLE_INTERVAL_MS: 61_000 };
     await assert.rejects(new FixingKeeperV3(slow, chain, alert).checkSampleInterval(), /at most half/);
+  });
+
+  it("checks the interval against the series' own gap limit, and refuses a series that is not listed", async () => {
+    const tight = run({ head: 0n, fixing: unopened, series: { fixingWindow: WINDOW, maxSampleGap: 30n, recoveryDelay: DELAY } });
+    await assert.rejects(new FixingKeeperV3(config, tight.chain, tight.alert).checkSampleInterval(), /at most half/);
+    const none = run({ head: 0n, fixing: unopened, series: { fixingWindow: 0n, maxSampleGap: 0n, recoveryDelay: 0n } });
+    await assert.rejects(new FixingKeeperV3(config, none.chain, none.alert).checkSampleInterval(), /not listed/);
+  });
+
+  it("places round 0 by the series' own window, not the contract default", async () => {
+    const long = { fixingWindow: 3_600n, maxSampleGap: GAP, recoveryDelay: DELAY };
+    const { keeper, writes } = run({ head: EXPIRY - 3_600n, fixing: unopened, series: long });
+    assert.equal(await keeper.tick(EXPIRY - 3_600n, EXPIRY), 'sampled');
+    assert.deepEqual(writes, ['recordFixingSample']);
   });
 
   it('is what ExpiryKeeper runs for an unsettled v3 series', async () => {

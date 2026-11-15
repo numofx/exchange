@@ -87,10 +87,10 @@ USDC_USD_FEED = 0x00038f83323b6b08116d1614cf33a9bd71ab5e0abf0c9f1b783a74a43e7bd9
 
 SIGNATURES = {**e2.SIGNATURES, "adapter": "adapter()", "verifierProxy": "verifierProxy()", "baseFeedId": "baseFeedId()",
               "quoteFeedId": "quoteFeedId()", "indexMaxAge": "indexMaxAge()", "feedTimelock": "feedTimelock()",
-              "recoveryDelay": "recoveryDelay()"}
+              "recoveryDelay": "recoveryDelay()", "seriesFixing": "seriesFixing(uint256)"}
 PINNED = {**e2.PINNED, "adapter": "0x03eadcfc", "verifierProxy": "0x47f77bc0", "baseFeedId": "0x99b447af",
           "quoteFeedId": "0x05cdccbf", "indexMaxAge": "0xf1edb35b", "feedTimelock": "0x5258a69d",
-          "recoveryDelay": "0x3758ca7a"}
+          "recoveryDelay": "0x3758ca7a", "seriesFixing": "0x066f2a37"}
 
 
 def selector(name: str) -> str:
@@ -113,8 +113,9 @@ def expected_actions(batch: str, d: dict) -> list[tuple[str, str]]:
             (d["manager"], selector("whitelistAsset") + word_address(d["future"]) + word_uint(MARKET_ID) + word_uint(FUTURE)),
             (d["manager"], selector("setFutureMarginRequirements") + word_uint(MARKET_ID)
              + word_uint(int(d["futureMMReq"])) + word_uint(int(d["futureIMReq"])))]
-  return [(d["future"], selector("setTotalPositionCap") + m + word_uint(int(d["futureOICap"]))),
-          (d["tradeModule"], selector("setDatedFutureAsset") + word_address(d["future"]) + word_uint(1))]
+  # TradeModule first: until it is registered a fill carries no price and skips the band check, and the cap is still 0
+  return [(d["tradeModule"], selector("setDatedFutureAsset") + word_address(d["future"]) + word_uint(1)),
+          (d["future"], selector("setTotalPositionCap") + m + word_uint(int(d["futureOICap"])))]
 
 
 # The action whose landing replaces market 2's future: the slot gate is re-read right before it.
@@ -231,6 +232,10 @@ def gate_parity(chain: Chain, d: dict, vault: str, attached: bool) -> Gate:
     ("series listed", w(future, "futureContracts", s), 1),
     ("series expiry", w(future, "futureContracts", s, index=2), int(d["expiry"])),
     ("series last trade", w(future, "futureContracts", s, index=3), int(d["lastTradeTime"])),
+    # what the fixing actually runs on: the series' own copy, fixed at listing (the defaults below are for new series)
+    ("series fixing window", w(future, "seriesFixing", s, index=0), int(d["fixingWindow"])),
+    ("series sample gap", w(future, "seriesFixing", s, index=1), int(d["maxSampleGap"])),
+    ("series recovery delay", w(future, "seriesFixing", s, index=2), int(d["recoveryDelay"])),
     # the reverting index is never the market's spot feed (spec A2.3): margin checks would stop
     ("EUR's spot feed is not the index", a(d["manager"], "getMarketFeeds", word_uint(MARKET_ID)).lower() != index.lower(), True),
   ]
@@ -366,8 +371,8 @@ def self_test() -> int:
   ], setup
   assert setup[REPLACING_ACTION][1].startswith(PINNED["whitelistAsset"]), "the slot is re-read before whitelistAsset"
   enable = expected_actions(ENABLE, d)
-  assert enable == [(a(3), "0x40a557bd" + word_address(a(1)) + word_uint(4 * e18)),
-                    (a(9), "0x0ddd8a04" + word_address(a(3)) + word_uint(1))], enable
+  assert enable == [(a(9), "0x0ddd8a04" + word_address(a(3)) + word_uint(1)),
+                    (a(3), "0x40a557bd" + word_address(a(1)) + word_uint(4 * e18))], enable
   for to, data in setup + enable:
     assert not opens_a_perp_cap({"to": to, "data": data}), (to, data[:10])
 
