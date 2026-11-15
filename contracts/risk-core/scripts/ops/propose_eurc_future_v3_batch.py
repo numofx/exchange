@@ -141,8 +141,9 @@ def postconditions(chain: Chain, batch: str, d: dict, vault: str) -> list:
             lambda: (w(d["manager"], "futureMarginRequirements", word_uint(MARKET_ID), index=0),
                      w(d["manager"], "futureMarginRequirements", word_uint(MARKET_ID), index=1))
             == (int(d["futureMMReq"]), int(d["futureIMReq"]))]
-  return [lambda: w(d["future"], "totalPositionCap", m) == int(d["futureOICap"]),
-          lambda: w(d["tradeModule"], "isDatedFutureAsset", word_address(d["future"])) == 1]
+  # In ENABLE's action order (expected_actions): the TradeModule registration, then the cap. Index i is action i's.
+  return [lambda: w(d["tradeModule"], "isDatedFutureAsset", word_address(d["future"])) == 1,
+          lambda: w(d["future"], "totalPositionCap", m) == int(d["futureOICap"])]
 
 
 def verify_actions(batch: str, d: dict, actions: list[dict]) -> None:
@@ -448,6 +449,23 @@ def self_test() -> int:
                     (a(3), "0x40a557bd" + word_address(a(1)) + word_uint(4 * e18))], enable
   for to, data in setup + enable:
     assert not opens_a_perp_cap({"to": to, "data": data}), (to, data[:10])
+
+  # each postcondition reads what its own action writes (2026-11-15: the enable order was swapped and these were not,
+  # so a landed registration read as pending and the cap read as landed)
+  class Reads:
+    def __init__(self, state): self.state = state
+    def word(self, to, data, index=0): return self.state.get((to.lower(), data[:10]), 0)
+    def address(self, to, name): return vault_addr if self.state.get((to.lower(), "owner")) else a(0)
+    def call(self, to, data): return "0" * 64
+  vault_addr = a(77)
+  for landed in range(3):
+    state = {}
+    if landed >= 1:
+      state[(a(9).lower(), selector("isDatedFutureAsset"))] = 1
+    if landed >= 2:
+      state[(a(3).lower(), selector("totalPositionCap"))] = 4 * e18
+    got = [h() for h in postconditions(Reads(state), ENABLE, d, vault_addr)]
+    assert got == [i < landed for i in range(2)], (landed, got)
 
   # the artifact: EUR, subId the expiry, replacing exactly the retired series' recorded address
   engine, retired = {"manager": a(1)}, {"future": a(7)}
