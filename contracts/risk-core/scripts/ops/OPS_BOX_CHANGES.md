@@ -5,6 +5,14 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-15 ~18:50 UTC: EURC-30NOV26 v3 open to public trading, before the canary settles
+
+By the owner's decision: the canary's 21:00 expiry would have held the listing until about 21:20, and it now runs
+unattended, with the 15 days to Nov 30 to fix anything it finds. Terraform 1.13.3 applied `eurc-v3-open.plan` from
+`88e0291` through `with-matcher-mute.sh`. Only `close_only` changed, true to false, on the v3 entry of the markets and
+matcher task definitions. The old matcher STOPPED, the new one was matching, and both rollouts COMPLETED. The live
+matcher task definition reads `close_only False` for `0xC350…B227`. The EURC futures maker is still at 0 replicas.
+
 ## 2026-11-15 17:21–18:05 UTC: EURC v3 setup and enable landed; markets lists it close-only; canary open
 
 - **Setup** (`numo-eurc-v3-setup`, approved by hand in MPCVault). All four actions landed, the last at about 17:45 UTC.
