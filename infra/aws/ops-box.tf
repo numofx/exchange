@@ -17,7 +17,13 @@ locals {
     mark-keeper = "mark-keeper" # mark keeper: mpcvault_token, mpcvault_vault, vault_address
     keeper      = "keeper"      # perp-keeper: keeper_key
     pager       = "pager"       # perp pager: provider, pushover_*/pagerduty_*, heartbeat_url
+    # The v3 future keeper (perp-feeds forward-main, FUTURE_VERSION=v3) posts Data Streams reports: username,
+    # hmac_secret, placed out of band 2026-11-14 (secrets.tf). Read only by run-with-ssm-forward.sh for a v3 series.
+    data-streams = "data-streams"
   }
+  # The policies made by hand before terraform managed them (adopted by the import below). A path added since
+  # creates its policy instead: importing one that does not exist fails the plan.
+  ops_box_ssm_adopted = toset(["feeds", "mark-keeper", "keeper", "pager"])
 }
 
 data "aws_iam_policy_document" "ops_box_ssm_read" {
@@ -57,7 +63,7 @@ resource "aws_iam_role_policy" "ops_box_ssm_read" {
 # The four policies already exist on the role, made by hand. These adopt them into state on the
 # next apply instead of creating duplicates; once applied they are no-ops and may be removed.
 import {
-  for_each = local.ops_box_ssm_paths
+  for_each = { for k, v in local.ops_box_ssm_paths : k => v if contains(local.ops_box_ssm_adopted, k) }
   to       = aws_iam_role_policy.ops_box_ssm_read[each.key]
   id       = "numo-feed-publisher-role:numo-${each.value}-ssm-read"
 }
