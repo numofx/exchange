@@ -30,7 +30,7 @@ is at one block.
 On 2026-10-21 (block 52894906) the sell side ended in a cliff, not a slope: the main pool's USDC is reachable within
 ~0.35% average slippage and then runs out, so the 2% sell depth is close to the USDC sitting in the pools.
 
-  python3 scripts/ops/eurc_depth/depth.py --once       one reading, one CSV row (refuses after the 7-day window)
+  python3 scripts/ops/eurc_depth/depth.py --once       one reading, one CSV row, judged against the live v2 cap
   python3 scripts/ops/eurc_depth/depth.py --summary    median / min / max of the readings and the cap it implies
   python3 scripts/ops/eurc_depth/depth.py --self-test
 
@@ -61,7 +61,26 @@ REF_IN = 10_000_000  # $10 / 10 EURC, 6dp
 MAX_IN = 10**14  # 100M tokens: past this the doubling stops
 CSV_PATH = Path(os.environ.get("EURC_DEPTH_CSV", str(Path.home() / "numo-eurc-depth.csv")))
 STATE_PATH = Path(os.environ.get("EURC_DEPTH_STATE", str(Path.home() / "numo-eurc-depth-state.json")))
-WINDOW_DAYS = float(os.environ.get("EURC_DEPTH_DAYS", "7"))
+WINDOW_DAYS = float(os.environ.get("EURC_DEPTH_DAYS", "7"))  # --summary's look-back; sampling never stops
+
+# The cap the stress check is judged against is the one on chain, read at each reading: v2's cap on the EURC escrow.
+# A constant here (MAX_CAP, 40,000) kept the check red after the cap was lowered to 5,000 on 2026-11-15, and would have
+# kept it green had the cap been raised past it.
+ROOT = Path(__file__).resolve().parents[3]
+TOTAL_POSITION_CAP = "0x745ab570"  # totalPositionCap(address), cast sig
+
+
+def cap_addresses(root: Path = ROOT) -> tuple[str, str]:
+  """(EURC escrow, MarginEngine v2) from the deploy artifacts."""
+  escrow = json.loads((root / "deployments" / "8453" / "EURC_SPOT.json").read_text())["escrow"]
+  engine = json.loads((root / "deployments" / "8453" / "MARGIN_ENGINE_V2.json").read_text())["manager"]
+  return escrow, engine
+
+
+def live_cap_eurc(rpc, block: int, root: Path = ROOT) -> float:
+  escrow, engine = cap_addresses(root)
+  word = rpc.call(escrow, TOTAL_POSITION_CAP + engine.lower().removeprefix("0x").rjust(64, "0"), block)
+  return int(word, 16) / 1e18
 CAP_FRACTION = 0.5
 
 COLUMNS = (["timestamp_utc", "block", "block_time_utc"]
@@ -71,7 +90,9 @@ COLUMNS = (["timestamp_utc", "block", "block_time_utc"]
               "main_pool_largest_lp_share", "main_pool_unattributed_share", "lp_check",
               # appended 2026-10-24: older files are rewritten with these columns empty (read_rows, append)
               "main_pool_sell_eurc_ex_largest_lp", "total_sell_eurc_ex_largest_lp", "sim_check", "stress",
-              "stress_alerted"])
+              "stress_alerted",
+              # appended 2026-11-15: the live v2 cap the stress check was judged against
+              "cap_eurc"])
 STRESS_STATES = ("pass", "hold", "unknown")
 
 
@@ -217,8 +238,9 @@ def judge(rows: list[dict], row: dict, cap_eurc: float, post=post_webhook) -> bo
   if verdict == delivered:
     return True
   was = delivered or "first evaluation"
-  text = (f"[eurc-depth] EURC enable stress check: {was} -> {verdict.upper()}. {why}. {share_context(row)}. "
-          f"Block {row['block']}; {'the enable may proceed' if verdict == 'pass' else 'the enable is held'}.")
+  text = (f"[eurc-depth] EURC cap stress check (cap {cap_eurc:,.0f} EURC): {was} -> {verdict.upper()}. {why}. "
+          f"{share_context(row)}. Block {row['block']}; "
+          f"{'the cap is covered' if verdict == 'pass' else 'the cap is NOT covered by depth: lower it'}.")
   if not post(text):
     return False
   row["stress_alerted"] = verdict
@@ -238,11 +260,12 @@ def read_rows(path: Path) -> list[dict]:
     return [{c: r.get(c) or "" for c in COLUMNS} for r in reader]  # a file from before the stress columns: empty
 
 
-def window_closed(rows: list[dict], now: float, days: float = WINDOW_DAYS) -> bool:
-  if not rows:
-    return False
-  first = datetime.strptime(rows[0]["timestamp_utc"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
-  return now - first >= days * 86400
+def recent(rows: list[dict], now: float, days: float = WINDOW_DAYS) -> list[dict]:
+  """The readings of the last `days`, for --summary. Sampling itself never stops: a monitor that ended after its
+  first 7 days (2026-10-28) missed 2% sell depth falling from 37,968 to 10,665 EURC."""
+  def at(r: dict) -> float:
+    return datetime.strptime(r["timestamp_utc"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+  return [r for r in rows if now - at(r) < days * 86400]
 
 
 def append(path: Path, row: dict) -> None:
@@ -271,7 +294,7 @@ def summary(rows: list[dict]) -> dict:
     return {"readings": 0}
   median = statistics.median(sells)
   latest = rows[-1]
-  verdict, why = stress(latest, MAX_CAP / 1e18)
+  verdict, why = stress(latest, float(latest.get("cap_eurc") or MAX_CAP / 1e18))
   return {"readings": len(sells), "first": rows[0]["timestamp_utc"], "last": latest["timestamp_utc"],
           "median_sell_eurc": round(median), "min_sell_eurc": round(min(sells)), "max_sell_eurc": round(max(sells)),
           "latest_sell_eurc": round(sells[-1]),
@@ -284,14 +307,12 @@ def summary(rows: list[dict]) -> dict:
 
 def once() -> int:
   rows = read_rows(CSV_PATH)
-  if window_closed(rows, time.time()):
-    print(f"window complete: {len(rows)} readings since {rows[0]['timestamp_utc']} ({WINDOW_DAYS:g} days); nothing "
-          "sampled. Disable the timer (systemctl disable --now numo-eurc-depth.timer) and run --summary.")
-    return 0
   rpc = P.rpc_from_env()
   block = rpc.head() - 2  # a couple behind the head, so every node behind the RPC has it
   row = reading(rpc, block)
-  alerted = judge(rows, row, MAX_CAP / 1e18)
+  cap = live_cap_eurc(rpc, block)
+  row["cap_eurc"] = f"{cap:.6f}".rstrip("0").rstrip(".")
+  alerted = judge(rows, row, cap)
   append(CSV_PATH, row)
   print(f"block {block}: sell {row['total_sell_eurc']:,} EURC, buy {row['total_buy_usdc']:,} USDC within 2%; "
         f"main pool LPs {row.get('main_pool_staked_lps', '-')} staked, largest {row.get('main_pool_largest_lp_share', '-')}, "
@@ -412,7 +433,16 @@ def self_test() -> int:
     append(path, row | {"timestamp_utc": "2026-10-22T00:00:00Z", "total_sell_eurc": "480000"})
     rows = read_rows(path)
     start = datetime(2026, 10, 21, 12, tzinfo=timezone.utc).timestamp()
-    assert not window_closed(rows, start + 7 * 86400 - 1) and window_closed(rows, start + 7 * 86400)
+    assert len(recent(rows, start + 12 * 3600 + 1, days=0.5)) == 1 and len(recent(rows, start + 1, days=7)) == 2
+    # The live cap: read from the artifacts' escrow and engine, decoded as 18dp EURC.
+    escrow, engine = cap_addresses()
+    seen = {}
+    class CapRpc:
+      def call(self, to, data, block):
+        seen.update(to=to, data=data, block=block)
+        return hex(5_000 * 10**18)
+    assert live_cap_eurc(CapRpc(), 123) == 5_000 and seen["to"] == escrow and seen["block"] == 123
+    assert seen["data"] == TOTAL_POSITION_CAP + engine.lower()[2:].rjust(64, "0")
     assert summary(rows)["median_sell_eurc"] == 499500 and summary(rows)["cap_at_50pct_of_median_eurc"] == 249750
     assert summary(rows)["latest_sell_eurc"] == 480000 and summary(rows)["cap_at_50pct_of_latest_eurc"] == 240000
     other = Path(d) / "other.csv"
@@ -466,9 +496,9 @@ def self_test() -> int:
     history.append(row)
     return ok, row
   assert take("81600") == (True, history[-1]) and history[-1]["stress_alerted"] == "hold"
-  assert "first evaluation -> HOLD" in sent[-1] and "50.4% of the main pool" in sent[-1] and "held" in sent[-1]
+  assert "first evaluation -> HOLD" in sent[-1] and "50.4% of the main pool" in sent[-1] and "NOT covered" in sent[-1]
   assert take("82000")[0] and len(sent) == 1, "no change, no alert"
-  assert take("120000")[0] and "hold -> PASS" in sent[-1] and "may proceed" in sent[-1]
+  assert take("120000")[0] and "hold -> PASS" in sent[-1] and "is covered" in sent[-1]
   ok, row = take("90000", deliver=lambda text: False)
   assert not ok and row["stress"] == "hold" and row["stress_alerted"] == "pass", "undelivered: still pass delivered"
   assert take("90000")[0] and "pass -> HOLD" in sent[-1] and len(sent) == 3, "retried at the next reading"
