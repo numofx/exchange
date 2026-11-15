@@ -160,13 +160,17 @@ observation time.
     index: too late. `TradeModule` hands `managerData` to each receiver *before* submitting the transfers
     (`execution/src/modules/TradeModule.sol:108`), which is what makes attached reports work on `Matching`.
     `OnchainBook` must likewise post reports before its transfers (B6).
-  - The manager then passes the same data again, so the adapter must be whitelisted on `MarginEngine` with
-    `setWhitelistedCallee` or the trade reverts; that second pass finds equal reports and skips them unverified.
+  - Then **every manager a fill touches** passes the same data again and requires the receiver on its own
+    whitelist. A fill through `TradeModule` pays the taker fee to account #22, which is under the perp SRM
+    (`0xDE04…D5D4`), not v2: attached reports revert `BM_UnauthorizedCall` there even with the adapter whitelisted on
+    v2 (`EurcFutureV3Fork.testAttachedReportsRevertOnTheFeeAccountsManager`, 2026-11-15). Attaching therefore needs the
+    adapter whitelisted on the SRM too, or the fee account moved under v2. Equal reports in the later passes are
+    skipped unverified.
 - Between trades, a keeper posts reports only where something needs a fresh index: each `pullMark`
   (`minMarkInterval`) and each fixing sample (`maxSampleGap`). Anyone may post.
 - **Stage 1 (A1.2) keeps the index fresh with the keeper alone**, posting well inside `indexMaxAge`, because a fill is
-  checked against the index and attaching reports to matches needs executor changes. Attaching through `managerData`
-  can follow without a contract change.
+  checked against the index, and attaching reports needs executor changes and the whitelist above. Its setup batch
+  whitelists the adapter nowhere. Attaching can follow without a contract change.
 - **An old or equal report is skipped, not reverted.** Reverting would let anyone who posts a newer report first make
   an attached report, and so the trade carrying it, fail. A report for any other feed ID, or with a non-positive
   price, reverts.
@@ -200,12 +204,15 @@ keep working. The feed itself needs no risk-core change; Step 1's risk-core chan
 
 Each item is an owner or vault transaction, written back to the repo the same day (CLAUDE.md).
 
-1. Deploy the new `FutureAsset` version (A8) with `contractSize = 1000e18`, on an expiry no other market lists (A1.1).
+1. Deploy the new `FutureAsset` version (A8) with `contractSize = 1000e18`, on an expiry no other market lists (A1.1):
+   `scripts/deploy-eurc-future-v3.s.sol`, rehearsed by `test/fork/EurcFutureV3Fork.t.sol`. Its setup batch lists the
+   future on market 2, replacing the retired series, only while that series is empty (`checkSlotFree`).
 2. Whitelist `MarginEngine` on the asset.
 3. Deploy `StreamsIndexAdapter` (verifier proxy, both feed IDs) and `EurcIndexFeed`. Set the index feed (A8.5) and
    `setIndexParams(maxMarkIndexDeviation, minMarkIndexDeviation, bandNarrowingPeriod, fixingWindow, maxSampleGap,
    recoveryDelay)`. Confirm each push feed with `cast call <proxy> "description()(string)"` and `"decimals()(uint8)"`.
-4. `setWhitelistedCallee(adapter, true)` on `MarginEngine` (and wherever `TradeModule` checks callees).
+4. Stage 1: no `setWhitelistedCallee` (the keeper posts reports). Attaching later needs it on `MarginEngine` and on
+   the fee account's manager (A2.2).
 5. Forward feed for marks: `setForwardFeed(forwardFeed, minMarkInterval)`, reusing the cNGN publisher setup.
 6. `setMarkBounds(maxMarkDeviation, maxMarkDelay)`.
 7. `setContract(expiry, lastTradeTime, initialMarkPrice)`.
