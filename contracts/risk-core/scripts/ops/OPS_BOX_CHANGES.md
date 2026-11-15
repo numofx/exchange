@@ -5,6 +5,30 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-15 17:01–17:20 UTC: EURC-30NOV26 v3 deployed with its canary; keepers live, pager reads it
+
+Deployed `c208858` from the laptop by the single-use deployer `0xea4B…d693`: future `0xC350243c1d07Ff598770ECe12323799D2EFbB227`,
+index feed `0x5658…24D9`, adapter `0x9E9a…FfEB`, forward feed `0x401D…d8e4`. Nominated to the vault, with a cap of 0.
+Canary `1794776400` (21:00 UTC) on 15 min / 2 min / 5 min, production `1796050800` on 30 min / 2 min / 1 h, both read
+back from the chain. After the deploy the deployer sent 0.0012 ETH to the canary relayer (tx `0xfd9aecc6…7134`), listed
+in `DEPLOYER_AUDITED_TXS.json`.
+
+- **`exchange-ops`** moved `c10d1b88` → `62e321e` → `33ad5a2`, detached and clean. The setup dry run on the box matched
+  the laptop's digests.
+- **`numo-eurc-v3-setup`** (transient unit, `run-with-ssm-mark.sh propose_eurc_future_v3_batch.py eurc-v3-setup
+  --propose`): action 0 was proposed at 17:08 UTC (request `6a910e60`) and is awaiting approval.
+- **`/home/ec2-user/exchange-future-v3`** (new clone at `eab54d3`, perp-feeds and kms-signer built) runs the new
+  `numo-future-feeds-v3@.service`, so `exchange-future-v2` (840526a, the v2 keepers) is untouched.
+  - `/etc/numo/future-feeds-v3-eurc-30nov26.env` and `-eurc-canary.env` come from the repo.
+  - The first start failed the keeper's cadence check (20 s refresh + 2 × 60 s tick > 60 s index age). The tick is now
+    15 s in the repo (`33ad5a2`) and on the box.
+  - They ran with `DRY_RUN=true` first, then `false` (backups `.bak-dryrun`). Both instances post Data Streams reports
+    through Chainlink's VerifierProxy on mainnet (first tx `0xadc16809…76b4`, about 74k gas, 4.4e-7 ETH). The index
+    reads 1.0996.
+- **Pager**: `exchange-pager` moved `5cae8100` → `21dc423` (the v3 pager work, `110bb12`). `/etc/numo/perp-pager.env`
+  `FUTURE_V2_ARTIFACTS` gained `EURC_FUTURE_V3.json` (backup `.bak-20261115-eurcv3`). The pager's RPC was already
+  rate-limited (429) every minute before the keepers started (16:36 onward), so some runs read nothing.
+
 ## 2026-11-15: EURC v3 canary funded from keeper wallets (laptop, `cast send`)
 
 The owner said to fund the v3 deploy and canary from the market maker's or keepers' funds. The market maker's accounts
