@@ -5,6 +5,21 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-16 20:50–21:16 UTC: OnchainBook setup batch landed (box, `exchange-ops` → `b8998d7`)
+
+- **`/home/ec2-user/exchange-ops`** fetched and detached at `b8998d7` (was `e4b01d0a`), clean before and after. The
+  proposer and the three `ONCHAIN_BOOK*.json` matched the laptop's sha256. The self-test's ABI step needs `out/`, which
+  the box lacks; the full self-test passed on the laptop at the same commit. The dry run passed nominated, series and
+  parity (22/22). SSM `98337ee0-…`, `6095de3d-…`.
+- **`numo-onchain-book-setup`**, a transient unit (`systemd-run --uid=ec2-user`), ran `run-with-ssm-mark.sh
+  propose_onchain_book_batch.py book-setup --propose` from 20:50 UTC (SSM `10e82853-…`). Both actions approved by hand in
+  MPCVault: `acceptOwnership()` landed (tx `0x86027aca…db26`) and then `setMakerAllowed(0x3448…B47B, true)` (tx
+  `0xd4868d9f…9088`, MPCVault `3b274894-…`) by 21:15:37. The unit exited 0 and is gone.
+- Read back: owner the vault, no pending owner, maker allowed. Market 1 still disabled.
+- The unit's log printed nothing until it exited (Python buffers stdout without a tty); run the next one with
+  `PYTHONUNBUFFERED=1` to see each request as it is made.
+- **Undo** the checkout: `git -C /home/ec2-user/exchange-ops checkout --detach e4b01d0a`.
+
 ## 2026-11-16 ~20:45 UTC: OnchainBook deployed closed (laptop, `forge script`); its deployer key created in SSM
 
 Not a box change; recorded here with the other hand actions of the day.
