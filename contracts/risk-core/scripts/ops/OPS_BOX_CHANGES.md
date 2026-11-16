@@ -5,7 +5,7 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
-## 2026-11-16 ~23:00 UTC: OnchainBook deployed closed (laptop, `forge script`); its deployer key created in SSM
+## 2026-11-16 ~20:45 UTC: OnchainBook deployed closed (laptop, `forge script`); its deployer key created in SSM
 
 Not a box change; recorded here with the other hand actions of the day.
 
