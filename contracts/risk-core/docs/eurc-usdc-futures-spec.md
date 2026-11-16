@@ -1,6 +1,6 @@
 # EURC-USDC futures and on-chain matching
 
-Status: **v3.5**, 2026-11-15. Supersedes v1 (written against `DatedFutureAsset` and `StandardManager`, which are not the
+Status: **v3.6**, 2026-11-15. Supersedes v1 (written against `DatedFutureAsset` and `StandardManager`, which are not the
 live contracts) and v2.x–v3.0 (reviewed in conversation, not committed).
 
 - **Step 1** (build now): a new `FutureAsset` version with recovery fixing and no owner price, `StreamsIndexAdapter`,
@@ -11,6 +11,11 @@ live contracts) and v2.x–v3.0 (reviewed in conversation, not committed).
 
 The pilot ships in two stages (A1.2): Stage 1 lists the new series on `Matching` as soon as its mainnet canary
 (A1.4) passes; Stage 2 adds `OnchainBook` to the same market behind its own gate. The market never waits for `OnchainBook`.
+
+**v3.6 changes from v3.5:** Stage 2 started: `OnchainBook` is built and tested (B15), with four departures from
+this spec (a failed maker's size is re-planned to the others, one transfer per maker at its average price,
+`DecrementTake` excludes the taker's own maker, the tax is its own transfer), two defects found by its tests and fixed
+(a maker-chosen manager on every take; an out-of-gas batch caught as a skip), and B10's gas measured on a Base fork.
 
 **v3.5 changes from v3.4:** the Stage 1 gate is a mainnet canary (A1.4) in place of the Base Sepolia run: a short
 series the deployer lists on the same contract, drilled with a broken fixing against Chainlink's real verifier.
@@ -561,10 +566,18 @@ back to a `Matching`-held account.
 `OnchainBook` is never a `trustedRiskAssessor` (maintenance-only checks, `MarginEngine.sol:418`).
 `feeBypassedCaller`: open, default no.
 
+Every take calls into each maker's manager (the auction check), so a maker's account must be under the market's
+engine, checked at `registerMaker`; a market's engine must be a whitelisted manager of its future, checked at
+`createMarket`. Checked once: `SubAccounts` sets an account's manager at creation and cannot change it (B15).
+
 ## B5. Settlement of a fill
 
 The same transfers `TradeModule` builds for a dated future: position transfer with the fill price in `assetData`,
 `amtQuote = 0`, plus fees. Test: identical balance changes to `TradeModule` for the same fill.
+
+One transfer per maker per take, at the maker's average fill price. `FutureAsset` checks only that average against
+the band, so the walk stops each **level** at the band edge: a level outside it never rides inside an in-band
+average (B15).
 
 ## B5a. One failing maker must not freeze the market
 
@@ -575,7 +588,13 @@ The same transfers `TradeModule` builds for a dated future: position transfer wi
 - **One `submitTransfers` per maker in `try/catch`.** A caught revert only skips the maker for this take and never
   changes stored state: `SRM_PortfolioBelowMargin()` carries no account id and the taker's margin is checked in the
   same batch, so deactivating on catch would let an underfunded taker switch off every maker.
-- **Gas floor** before each `try`; revert the take if lower (the 63/64 rule).
+- **A skipped maker's size goes back to the take** (decided in build, B15): the walk is planned in memory, then
+  re-planned without each maker that failed, at most once per maker. Without it a failing maker at the best price
+  held the whole take away from the others.
+- **Gas floor** before each `try`; revert the take if lower (the 63/64 rule). And **a batch that ran out of gas is
+  not skipped**: if the `catch` is left with about 1/64 of the gas it started with, the take reverts
+  (`OB_BatchOutOfGas`). The floor alone does not cover it: the taker can make every batch heavy through its own
+  account, and then chooses the gas that decides which makers fill.
 - **Permissionless `poke(maker)`** deactivates on `getMargin(maker, true) < 0` or a failed pre-check. It deactivates
   even though position-reducing fills are held only to maintenance (`MarginEngine.sol:393-395`); simpler and safer.
 - `minFill` applies to the total. An inactive spline reactivates only on the maker's next update.
@@ -648,6 +667,22 @@ On a fork of live Base: one `handleAdjustment` for a two-account fill and the co
 maker (gives the gas floor); one report verification, gas plus fee; `updateSplines` for 1 and 10 markets with and
 without a report. Then set targets and the makers-per-take cap.
 
+**Measured 2026-11-15** (`test/fork/OnchainBookFork.t.sol`, block 57,985,892, the live v3 stack and Chainlink's
+verifier, real reports from the keeper's next post):
+
+| | Gas |
+|---|---|
+| Take, 1 maker, reports already posted | 1,125,777 |
+| Same, both reports verified inside the take | 1,259,121 (verification 133,344; fee 0) |
+| Each further maker settled | ~610,000 |
+| Take filling 10 makers | 6,614,741 |
+| 1 maker, 10 levels | 984,409 |
+| `updateSplines`, 1 market, warm | 16,501 |
+| `updateSplines`, 10 markets, first write | 556,522 |
+
+Nearly all of a maker's cost is the engine's margin checks on the two accounts, not the book. Proposed from this:
+gas floor 700,000 (above 64/63 of one batch); makers per market 10 (a worst-case take ~7M gas).
+
 ## B11. Tests
 
 Equivalence with `TradeModule`; invariants (net position zero, cash conserved, no fill past the limit or outside the
@@ -656,6 +691,11 @@ never decreases, bid < ask); adversarial (pool skew within the band, older repor
 updates, max makers and levels, reentrancy via a taker contract); failing makers, exhausted and transferred
 allowances, `TakerAllowanceTooLow`; griefing via catch and via gas; order splitting gets depth only at the refill
 rate; one test per revert path. CI: `./scripts/verify.sh` runs the package; gas snapshots.
+
+**Status 2026-11-15** (B15): unit (`test/periphery/OnchainBook.t.sol`), invariant
+(`test/periphery/OnchainBookInvariant.t.sol`) and fork (`test/fork/OnchainBookFork.t.sol`) suites. Every guard was
+removed in turn and seen to fail a test. Not yet covered: pool skew within the band (needs the Aerodrome pool on a
+fork), reordered updates across makers in one block, and gas snapshots in CI.
 
 ## B12. Rollout
 
@@ -688,3 +728,38 @@ Decided 2026-11-14 (kept for the record):
 - Parameters: tick size, `takeMaxAge`, gas floor, ttl limits, refill rates, makers-per-market cap, tax.
 - Licensing: risk-core files are BUSL-1.1 (Lyra/Derive v2 lineage). Confirm the terms permit this product before
   mainnet.
+
+## B15. Implementation record (Stage 2 started 2026-11-15)
+
+`src/periphery/OnchainBook.sol`. Not deployed; no vault action taken.
+
+**Built as specified:** maker curves (up to 10 regions a side) per owner, splines keyed by (market, account), mid
+`index + offset - skew`, skew from the position at the start of the take and clamped, per-side refill cursors reset on
+update, `seq` strictly increasing, best bid below best ask, ttl capped per market, maker allowlist and makers-per-market
+cap, taker pre-check (`TakerAllowanceTooLow`), maker pre-checks (allowance: deactivate; live auction: skip), one
+`try/catch` per maker, gas floor, `poke`, `takeMaxAge` freshness on the adapter's two stored reports, reports posted
+before any transfer, `maxFee` covering fee and priority tax, `minFill` on the total, priority then registration order.
+
+**Departures, for review:**
+1. A maker skipped on a caught revert has its size re-planned to the others in the same take (B5a).
+2. One transfer per maker at its average price; the band is enforced per level by the walk (B5).
+3. `DecrementTake` cancels the crossing level and excludes the taker's own maker for the rest of the take.
+4. The priority-fee tax is charged as its own cash transfer from the taker, after the makers.
+
+**Defects found by the tests and fixed before commit:**
+- A maker could register an account under a manager it controls; the walk calls that manager on every take, so one
+  revert there froze the market. Now the market's engine is fixed at `createMarket` and required at `registerMaker`.
+- A batch out of gas was caught and skipped like a margin failure. Now it reverts the take (B5a).
+
+**Tests:** 51 unit tests (real `SubAccounts`, `MarginEngine` v2, `FutureAsset` v3, `StreamsIndexAdapter`,
+`EurcIndexFeed`; the verifier, auction and cash mocked), 4 invariants over random takes, updates, price moves and
+pokes, and 6 fork tests on the live stack in which Chainlink's verifier checks real reports inside the take and a
+flipped signature bit is refused (`0x4df18f07`). 36 guards were each removed and seen to turn a test red.
+
+**Parameters used in tests, awaiting decision (B14):** tick 0.000001, lot 1 EURC (0.001 contract), `takeMaxAge`
+1 s, ttl cap 1 h, taker fee 5 bps (the `Matching` path's), tax off, gas floor 700,000, makers per market 10.
+
+**Before the 2026-11-24 go/no-go:** the parameter and DEX-skew decisions and the licence (B14); the targeted
+independent review (A1.2); the Base Sepolia rehearsal with a short-dated series; a deploy script and vault batch;
+off-chain, a curve-quoting mode in the market maker, maker subaccounts outside `Matching`, and indexing `Fill` and
+`TakeExecuted`.
