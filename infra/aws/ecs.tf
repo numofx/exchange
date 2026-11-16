@@ -36,6 +36,7 @@ resource "aws_cloudwatch_log_group" "tasks" {
   for_each = toset(concat(
     ["markets-service", "matcher", "execution-service", "migrate", "market-maker", "market-maker-perp", "market-maker-future"],
     var.image_market_maker_eurc == "" ? [] : ["market-maker-eurc"],
+    var.image_market_maker_book == "" ? [] : ["market-maker-book"],
     [for k in keys(local.mm_future_v2_enabled) : "market-maker-future-v2-${k}"],
     [for k in keys(local.mm_options_enabled) : "market-maker-${k}"],
   ))
