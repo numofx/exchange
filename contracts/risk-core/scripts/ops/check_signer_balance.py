@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Feed-signer gas-balance monitor for the Base deliverable FX market.
+"""Gas-balance monitor for every hot wallet that posts on a timer (feed signer, forward and report relayers).
 
 The feed publisher signs each cNGN/stable acceptData tx from a hot EOA. If that
 wallet runs out of gas the feed stops publishing and getSpot() goes stale, which
@@ -9,12 +9,17 @@ FREEZES all trading. This has now happened three times: 2026-07-21, 2026-09-01
 checks the balance and warns while there's still days of runway, so it's a
 proactive top-up reminder.
 
+It watched one address until 2026-11-16, when the EURC v3 keeper's relayer emptied unwatched and the live
+EURC-30NOV26 index went stale (its burn is 20x the feed signer's: 0.002 ETH lasted ~17 hours). Every wallet in
+WALLETS is checked against its own measured burn; a new keeper's relayer goes in that list the day it is funded.
+
 Env (or ~/.numo-feeds.env):
   RPC_URL             Base mainnet RPC
   ALERT_WEBHOOK_URL   Slack/Discord-compatible webhook (optional; logs only if unset)
-  SIGNER_ADDRESS      feed-signer EOA (default: the live 0xC9F1... wallet)
-  BURN_ETH_PER_DAY    daily gas burn (default 0.0012 ETH, measured 2026-09-09)
-  WARN_RUNWAY_DAYS    alert when runway drops below this many days (default 7)
+  WATCH_WALLETS       optional override of WALLETS: "name=0xaddr@burn_eth_per_day,..."
+  WARN_RUNWAY_DAYS    alert when any wallet's runway drops below this many days (default 7)
+
+  python3 scripts/ops/check_signer_balance.py --self-test
 
 Run every few hours via systemd timer (see numo-signer-balance-alert.timer).
 """
@@ -27,16 +32,20 @@ import sys
 import urllib.request
 from pathlib import Path
 
-DEFAULT_SIGNER = "0xC9F1FfdEd29f7051538ad3a72729C3d07F920FDc"
-
-# Measured, not estimated. Between 2026-09-08 17:50Z and 2026-09-09 13:20Z the signer
-# spent 0.000977 ETH over 1183 transactions (nonce 61552 -> 62735): 0.0012 ETH/day, or
-# 8.3e-7 per tx. The previous 0.0004 was 3x optimistic, which is why the "3-day" warning
-# actually fired with ~24 hours left and the wallet still emptied twice.
-#
-# Re-measure this if the publish cadence changes -- it is the denominator of the runway,
-# so an understated burn silently shortens every warning.
-DEFAULT_BURN_PER_DAY = 0.0012
+# (name, address, ETH burned per day). Measured, not estimated: balance and nonce at Base blocks 57,817,850 and
+# 58,249,850 (2026-11-15 14:45 to 2026-11-16 14:45 UTC); the v3 relayer over 05:41-09:01 UTC on 2026-11-16, while it
+# still posted. Each is rounded UP: the burn is the runway's denominator, so an understated one silently shortens
+# every warning (the feed signer's first 0.0004 was 3x optimistic and the wallet emptied twice). Re-measure when a
+# cadence changes. The v3 canary relayer (0x35ee...bDD5) is left out: its keeper is disabled.
+WALLETS: list[tuple[str, str, float]] = [
+  ("feed signer", "0xC9F1FfdEd29f7051538ad3a72729C3d07F920FDc", 0.0012),  # 0.00063/day measured; 2026-09-09's 0.0012 kept
+  ("vol relayer (v1 forward's key)", "0xE5b8541dC2558f3db65aF88A2374e464AE4ae6de", 0.0002),  # 0.00014/day, 285 tx
+  ("forward relayer v2 EURC", "0xEEa45ea4f68cb62b5eDe84E1d9F82F6d253C5321", 0.00005),  # 0.000023/day, 46 tx
+  ("forward relayer v2 cNGN", "0x3ACeFDe146161D1b9ca2fdB8a3B38122818d763f", 0.00005),  # 0.000020/day, 46 tx
+  ("EURC v3 keeper relayer", "0x0AbAac33E5ab7E62dED100Be465032A3636b12e5", 0.0035),  # 0.0029/day, ~2,700 tx
+  # The vault no longer marks (6 tx/day, 0.0000014 ETH/day), but a dry vault cannot approve a batch at all.
+  ("vault", "0x1dcA42ab54Bd3862853A821F84B29BF65245F435", 0.00001),
+]
 
 # A week, so an alert that lands on a Friday evening is still actionable on Monday.
 # At the measured burn this warns at ~0.0084 ETH.
@@ -78,31 +87,74 @@ def alert(webhook: str | None, msg: str) -> None:
     print(f"webhook delivery failed: {exc}", file=sys.stderr)
 
 
+def parse_wallets(spec: str) -> list[tuple[str, str, float]]:
+  """WATCH_WALLETS: "name=0xaddr@burn,..." -> [(name, address, burn)]. A malformed entry raises: never a silent drop."""
+  out = []
+  for item in filter(None, (x.strip() for x in spec.split(","))):
+    name, rest = item.split("=", 1)
+    address, burn = rest.split("@", 1)
+    if not (address.startswith("0x") and len(address) == 42) or float(burn) <= 0:
+      raise ValueError(f"WATCH_WALLETS entry {item!r}: need name=0x<40 hex>@<burn > 0>")
+    out.append((name.strip(), address, float(burn)))
+  if not out:
+    raise ValueError("WATCH_WALLETS is set but names no wallet")
+  return out
+
+
+def verdict(name: str, address: str, balance_eth: float, burn: float, warn_days: float) -> str | None:
+  """The alert line for a wallet under its runway threshold, or None."""
+  runway = balance_eth / burn
+  if runway >= warn_days:
+    return None
+  return f"{name} {address}: {balance_eth:.6f} ETH, ~{runway:.1f} days at {burn} ETH/day"
+
+
 def main() -> int:
   load_env_file(Path.home() / ".numo-feeds.env")
   url = os.environ.get("RPC_URL", "https://mainnet.base.org")
   webhook = os.environ.get("ALERT_WEBHOOK_URL")
-  signer = os.environ.get("SIGNER_ADDRESS", DEFAULT_SIGNER)
-  burn = float(os.environ.get("BURN_ETH_PER_DAY", DEFAULT_BURN_PER_DAY))
+  wallets = parse_wallets(os.environ["WATCH_WALLETS"]) if os.environ.get("WATCH_WALLETS") else WALLETS
   warn_days = float(os.environ.get("WARN_RUNWAY_DAYS", DEFAULT_WARN_DAYS))
 
-  try:
-    balance_eth = int(rpc(url, "eth_getBalance", [signer, "latest"]), 16) / 1e18
-  except Exception as exc:
-    alert(webhook, f"NUMO FEED-SIGNER BALANCE CHECK FAILED\n{signer}: {exc}")
+  low, failed = [], []
+  for name, address, burn in wallets:
+    try:
+      balance_eth = int(rpc(url, "eth_getBalance", [address, "latest"]), 16) / 1e18
+    except Exception as exc:  # noqa: BLE001 -- one unreadable wallet is reported, the rest still checked
+      failed.append(f"{name} {address}: {exc}")
+      continue
+    line = verdict(name, address, balance_eth, burn, warn_days)
+    if line:
+      low.append(line)
+    else:
+      print(f"ok: {name} {address} {balance_eth:.6f} ETH (~{balance_eth / burn:.1f} days)")
+
+  if low:
+    alert(webhook, "NUMO HOT WALLET LOW GAS\n" + "\n".join(low)
+          + f"\nBelow the {warn_days:.0f}-day threshold: top up, or the feed or keeper stops and its market freezes.")
+  if failed:
+    alert(webhook, "NUMO HOT WALLET BALANCE CHECK FAILED\n" + "\n".join(failed))
     return 2
+  return 1 if low else 0
 
-  runway = balance_eth / burn if burn > 0 else float("inf")
-  if runway < warn_days:
-    alert(
-      webhook,
-      "NUMO FEED-SIGNER LOW GAS\n"
-      f"{signer} has {balance_eth:.6f} ETH (~{runway:.1f} days at {burn} ETH/day).\n"
-      f"Below the {warn_days:.0f}-day warn threshold — top it up or the feed will go stale and freeze trading.",
-    )
-    return 1
 
-  print(f"ok: {signer} balance {balance_eth:.6f} ETH (~{runway:.1f} days runway)")
+def self_test() -> int:
+  assert all(addr.startswith("0x") and len(addr) == 42 and burn > 0 for _, addr, burn in WALLETS)
+  assert len({addr.lower() for _, addr, _ in WALLETS}) == len(WALLETS), "a wallet listed twice"
+  assert "0x0AbAac33E5ab7E62dED100Be465032A3636b12e5" in [a for _, a, _ in WALLETS], "the EURC v3 relayer is watched"
+  # 2026-11-16: the v3 relayer at 0.002 ETH had under a day; the threshold must have fired at funding
+  assert verdict("v3", "0x" + "0" * 40, 0.002, 0.0035, 7.0) is not None
+  assert verdict("x", "0x" + "0" * 40, 0.0084, 0.0012, 7.0) is None, "exactly 7 days is not low"
+  assert verdict("x", "0x" + "0" * 40, 0.0083, 0.0012, 7.0) is not None
+  assert parse_wallets("a=0x" + "1" * 40 + "@0.001, b=0x" + "2" * 40 + "@0.5") == [
+    ("a", "0x" + "1" * 40, 0.001), ("b", "0x" + "2" * 40, 0.5)]
+  for bad in ("a=0x12@0.1", "a=0x" + "1" * 40 + "@0", "a=0x" + "1" * 40, ",", "noequals"):
+    try:
+      parse_wallets(bad)
+    except ValueError:
+      continue
+    raise AssertionError(f"WATCH_WALLETS {bad!r} accepted")
+  print(f"self-test ok: {len(WALLETS)} wallets, each with a measured burn; a malformed override is refused")
   return 0
 
 
@@ -111,7 +163,7 @@ def main() -> int:
 # a missed run -- a monitor that cannot see is not a quiet one).
 if __name__ == "__main__":
   try:
-    sys.exit(main())
+    sys.exit(self_test() if "--self-test" in sys.argv[1:] else main())
   except Exception as exc:  # noqa: BLE001
     print(f"signer balance check FAILED to run: {exc}", file=sys.stderr)
     sys.exit(2)

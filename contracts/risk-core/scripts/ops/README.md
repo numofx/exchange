@@ -120,11 +120,11 @@ on-chain market to fix against. The pool columns exist to catch that changing.
 - The relayer wallet pays ~0.00042 ETH/day (measured 2026-08-02: 1512 tx/day at
   ~0.00000028 ETH each); top it up before it empties — the alert will fire on
   staleness if it runs dry.
-- **Two wallets need gas, not one.** The relayer above submits `acceptData`; the MPC
-  vault `0x1dcA42ab…F435` pays for `setMarkPrice` itself (~48 tx/day, onlyOwner, so it
-  cannot be delegated to the relayer). `check_signer_balance.py` takes one
-  `SIGNER_ADDRESS` — run a second instance against the vault, or a dry vault freezes
-  the mark exactly as a dry relayer freezes the feed.
+- **Every hot wallet needs gas.** `check_signer_balance.py` watches all of them (its
+  `WALLETS`: the feed signer, each forward or report relayer, and the vault), each
+  against its own measured burn. A new keeper's relayer goes in that list the day it
+  is funded: on 2026-11-16 the EURC v3 relayer, unlisted, emptied in ~17 hours and
+  the live index went stale.
 - The signer key never needs ETH and must never set an EIP-7702 delegation.
 - The staleness monitor reads the feeds' packed `spotDetail` storage word
   (slot 6) directly, so it works even while `getSpot()` is reverting.
