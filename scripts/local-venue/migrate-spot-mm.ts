@@ -40,6 +40,8 @@
  *              let its quotes expire first. The wallet's own USDC is not touched, except with --deposit-only:
  *              the deposit alone, from USDC already in the wallet (a move whose withdrawal landed and whose
  *              deposit did not).
+ *   withdraw-usdc <from id> <usdc units>  move-usdc's withdrawal alone: USDC from one of the MM's accounts in
+ *              Matching to the MM wallet, with the same checks (e.g. to fund an OnchainBook test taker).
  *   engine-account <usdc units> [--market=<symbol>]  open a futures market maker's account under the
  *              series' MarginEngine: SubAccountCreator.createAndDepositSubAccount with that much USDC into
  *              the future's cash (the perp's), manager the engine, both read from the series' listing
@@ -95,7 +97,7 @@ const abi = parseAbi([
 const client = createPublicClient({ chain: base, transport: http(RPC) });
 const [phase, ...flags] = process.argv.slice(2);
 const execute = flags.includes('--execute');
-if (!phase) throw new Error('usage: migrate-spot-mm.ts <status|cancel|withdraw|deposit|deposit-cngn|deposit-eurc|perp-cancel|perp-close|perp-withdraw|engine-account|move-usdc> [--market=<symbol>] [--execute]');
+if (!phase) throw new Error('usage: migrate-spot-mm.ts <status|cancel|withdraw|deposit|deposit-cngn|deposit-eurc|perp-cancel|perp-close|perp-withdraw|engine-account|move-usdc|withdraw-usdc> [--market=<symbol>] [--execute]');
 const MARKET = flags.find((f) => f.startsWith('--market='))?.slice('--market='.length);
 if (!KEY) throw new Error('MM_OWNER_PRIVATE_KEY is not in the environment (run through the SSM wrapper on the box)');
 // The relayer's lesson (perp-feeds): a load-balanced RPC can hand out a mined nonce again; viem's
@@ -712,8 +714,27 @@ async function perpWithdraw() {
   await withdrawOne(perp.cash, USDC, 6, PERP_ACCOUNT, units);
 }
 
+/** withdraw-usdc <from id> <usdc units>: move-usdc's withdrawal alone, to the MM wallet, with the same checks on <from>. */
+async function withdrawUsdc() {
+  const [from, units] = flags.filter((f) => /^[0-9]+$/.test(f)).map(BigInt);
+  if (!from || !units) throw new Error('withdraw-usdc needs <from id> <usdc units (6dp)>');
+  const engines = await listedEngines();
+  const markets = (await (await fetch(`${MARKETS}/markets`)).json()) as Record<string, unknown>[];
+  const spot = markets.find((m) => m.contract_type === 'spot' && m.market === SPOT_SYMBOL);
+  if (!spot?.quote_asset_address) throw new Error(`the venue serves no ${SPOT_SYMBOL} with a quote asset`);
+  const cash = getAddress(spot.quote_asset_address as string);
+  const mgr = await client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'manager', args: [from] });
+  if (!engines.has(mgr.toLowerCase())) throw new Error(`#${from} is under ${mgr}, not a MarginEngine the venue lists`);
+  const custodian = await client.readContract({ address: MATCHING, abi, functionName: 'subAccountToOwner', args: [from] });
+  if (custodian.toLowerCase() !== owner.address.toLowerCase()) throw new Error(`#${from} is not the MM's in Matching (owner ${custodian})`);
+  const resting = await restingOrders(null, from);
+  if (resting.length > 0) throw new Error(`${resting.length} order(s) of the MM still rest on #${from}: stop its maker and let them expire first`);
+  console.log(`#${from}: under ${mgr}, cash ${await ledger(from, cash)} (18dp)`);
+  await withdrawOne(cash, USDC, 6, from, units);
+}
+
 const phases: Record<string, () => Promise<void>> = { status, cancel, withdraw, deposit, 'deposit-cngn': depositCngn, 'deposit-eurc': depositEurc,
-  'perp-cancel': perpCancel, 'perp-close': perpClose, 'perp-withdraw': perpWithdraw, 'engine-account': engineAccount, 'move-usdc': moveUsdc,
+  'perp-cancel': perpCancel, 'perp-close': perpClose, 'perp-withdraw': perpWithdraw, 'engine-account': engineAccount, 'move-usdc': moveUsdc, 'withdraw-usdc': withdrawUsdc,
 };
 const run = phases[phase];
 if (!run) throw new Error(`unknown phase ${phase}`);

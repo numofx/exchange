@@ -5,6 +5,18 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-16 22:28–22:41 UTC: matcher indexes the book; canary taker created; a second spot-maker pause moved nothing
+
+- **markets 96974ae** (`d77228f`): migration 000024 run first by hand (`numo-exchange-migrate:55`, task `f673734c…`,
+  exit 0, "applied migration 000024_book_fills.up.sql" 22:30:49), then the markets and matcher task definitions with
+  `ONCHAIN_BOOK_ADDRESS`/`ONCHAIN_BOOK_START_BLOCK` on the matcher, through `with-matcher-mute.sh` (22:31:53–22:35:44;
+  the old matcher STOPPED, a fresh heartbeat after). `book_indexer` on `/health`: started at 58,358,412, caught up to
+  20 blocks behind the head, no error.
+- **Taker** `0x3Fdfc7c750750DcCc19DB31690b62EF0056Da914`, key in SSM `/numo/deploy/onchain_book_taker_key`, 0.0002 ETH
+  from the feed signer (tx `0x7b04eb47…6fc4`). No USDC yet.
+- **`market-maker-eurc` paused again** 22:38:06–22:40:09 for `withdraw-usdc 43 50000000`, which refused: the maker's
+  quotes (300 s expiry) still rested on #43. Nothing was withdrawn (#43 still 2,826.22 USDC). Two-sided again by 22:40:48.
+
 ## 2026-11-16 21:47–22:27 UTC: book-maker on ECS; EURC-30NOV26 open on the OnchainBook
 
 - **ECS `market-maker-book`** (infra `bd5ec07`, `b378fb9`, applied from main with terraform 1.13.3; each plan touched
