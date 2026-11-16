@@ -25,6 +25,7 @@ import "../shared/mocks/MockCash.sol";
 import "../risk-managers/mocks/MockDutchAuction.sol";
 import {ReentrancyGuard} from "openzeppelin/utils/ReentrancyGuard.sol";
 import {IManager} from "../../src/interfaces/IManager.sol";
+import {IBaseManager} from "../../src/interfaces/IBaseManager.sol";
 import {MockStreamsVerifier} from "../feed/unit-tests/StreamsIndexAdapter.t.sol";
 
 /// @dev Looks like the index adapter to the book, and re-enters it from acceptData with whatever call it was given.
@@ -77,6 +78,25 @@ contract GasBurner {
 }
 
 /// @dev A manager a maker might move its account to: any call into it reverts.
+/// @dev A managerData receiver the engine calls once per batch, burning a set amount of gas: out of gas one frame below
+///      SubAccounts (independent review, 2026-11-16).
+contract FiniteBurner {
+  bytes32 public h;
+  uint public n;
+
+  function setN(uint n_) external {
+    n = n_;
+  }
+
+  function acceptData(bytes calldata) external {
+    bytes32 x;
+    for (uint i; i < n; ++i) {
+      x = keccak256(abi.encode(x, i));
+    }
+    h = x;
+  }
+}
+
 contract RevertingManager {
   fallback() external {
     revert("called a maker-chosen manager");
@@ -703,7 +723,7 @@ contract OnchainBookTest is OnchainBookBase {
     (uint filled,) = _take(_order(true, 1000, 2e18));
     assertEq(filled, 1000 * LOT, "the others filled it");
     assertEq(_pos(poor), 0);
-    (,,,,,,,,,, bool active) = book.splines(mkt, poor);
+    (,,,,,,,,,, bool active,) = book.splines(mkt, poor);
     assertTrue(active, "a caught revert changes nothing stored");
   }
 
@@ -714,8 +734,8 @@ contract OnchainBookTest is OnchainBookBase {
     o.takerAccountId = broke;
     (uint filled,) = _take(o);
     assertEq(filled, 0);
-    (,,,,,,,,,, bool aliceActive) = book.splines(mkt, aliceAcc);
-    (,,,,,,,,,, bool carolActive) = book.splines(mkt, carolAcc);
+    (,,,,,,,,,, bool aliceActive,) = book.splines(mkt, aliceAcc);
+    (,,,,,,,,,, bool carolActive,) = book.splines(mkt, carolAcc);
     assertTrue(aliceActive && carolActive);
   }
 
@@ -728,7 +748,7 @@ contract OnchainBookTest is OnchainBookBase {
     assertEq(filled, 500 * LOT, "alice was planned, dropped, and carol filled it in the next round");
     assertEq(_pos(carolAcc), -int(500 * LOT));
     assertEq(_pos(aliceAcc), 0);
-    (,,,,,,,,,, bool active) = book.splines(mkt, aliceAcc);
+    (,,,,,,,,,, bool active,) = book.splines(mkt, aliceAcc);
     assertFalse(active, "an allowance failure is attributable: switched off");
   }
 
@@ -752,18 +772,18 @@ contract OnchainBookTest is OnchainBookBase {
     _take(_order(true, 1000, 2e18)); // poor is short one contract, IM 165 of its 300
     assertEq(_pos(poor), -1e18);
     book.poke(mkt, poor);
-    (,,,,,,,,,, bool active) = book.splines(mkt, poor);
+    (,,,,,,,,,, bool active,) = book.splines(mkt, poor);
     assertTrue(active, "above IM");
     engine.setFutureMarginRequirements(engineMarket, 0.2e18, 0.3e18); // IM 330 > 300
     book.poke(mkt, poor);
-    (,,,,,,,,,, active) = book.splines(mkt, poor);
+    (,,,,,,,,,, active,) = book.splines(mkt, poor);
     assertFalse(active);
   }
 
   function testPokeDeactivatesInAnAuction() public {
     auction.startAuction(aliceAcc, 0);
     book.poke(mkt, aliceAcc);
-    (,,,,,,,,,, bool active) = book.splines(mkt, aliceAcc);
+    (,,,,,,,,,, bool active,) = book.splines(mkt, aliceAcc);
     assertFalse(active);
   }
 
@@ -798,9 +818,13 @@ contract OnchainBookTest is OnchainBookBase {
 
   function _evilMarket() internal returns (ReentrantAdapter evil, uint m2) {
     evil = new ReentrantAdapter(adapter, address(book));
+    // createMarket takes only the adapter behind the future's index; the hostile one stands in there as if the index
+    // had been rotated to it, which is how outside code could still reach the take.
+    vm.mockCall(address(index), abi.encodeWithSignature("adapter()"), abi.encode(address(evil)));
     m2 = book.createMarket(
       future, subId, IOnchainBookManager(address(engine)), StreamsIndexAdapter(address(evil)), TICK, LOT
     );
+    vm.clearMockedCalls();
     book.setMarketParams(m2, FEE_RATE, 1, 1 hours, 8, true);
   }
 
@@ -917,5 +941,134 @@ contract OnchainBookTest is OnchainBookBase {
     assertEq(list.length, 2);
     assertEq(list[0], carolAcc);
     assertEq(list[1], b);
+  }
+
+  ////////////////////////////////////////////////////////
+  // Independent review, 2026-11-16: each finding, fixed //
+  ////////////////////////////////////////////////////////
+
+  /// Finding 1. alice quotes 4% under the index, below the 3% band: her ask cannot fill, and before the fix it ended
+  /// every buy, though carol's ask was in band. Now it is skipped for the take.
+  function testAnAskBelowTheBandIsSkippedNotABlockOnBuys() public {
+    _update(alice, aliceAcc, -44_000, 2);
+    (uint filled, uint avg) = _take(_order(true, 500, 2e18));
+    assertEq(filled, 500 * LOT, "carol's in-band ask fills");
+    assertEq(avg, PRICE + HALF_SPREAD * TICK);
+    assertEq(_pos(aliceAcc), 0, "nothing from the out-of-band quote");
+  }
+
+  function testABidAboveTheBandIsSkippedNotABlockOnSells() public {
+    _update(alice, aliceAcc, 44_000, 2);
+    (uint filled, uint avg) = _take(_order(false, 500, 0));
+    assertEq(filled, 500 * LOT, "carol's in-band bid fills");
+    assertEq(avg, PRICE - HALF_SPREAD * TICK);
+    assertEq(_pos(aliceAcc), 0);
+  }
+
+  /// Past the far edge the walk still stops: every later level is further out.
+  function testPastTheFarEdgeTheWalkStillStops() public {
+    _update(alice, aliceAcc, 44_000, 2);
+    _update(carol, carolAcc, 44_000, 2);
+    (uint filled,) = _take(_order(true, 500, 2e18));
+    assertEq(filled, 0);
+  }
+
+  /// Finding 2. Out of gas one frame below SubAccounts comes back as a revert with no data. Before the fix the maker was
+  /// skipped and the take filled nothing, at a gas limit the taker chose; now the take reverts.
+  function testAnOutOfGasBelowTheBatchRevertsTheTake() public {
+    book.setGasFloor(GAS_FLOOR);
+    book.removeMaker(mkt, carolAcc);
+    FiniteBurner burner = new FiniteBurner();
+    burner.setN(6000);
+    engine.setWhitelistedCallee(address(burner), true);
+    OnchainBook.TakeOrder memory o = _order(true, 500, 2e18);
+    IBaseManager.ManagerData[] memory d = new IBaseManager.ManagerData[](1);
+    d[0] = IBaseManager.ManagerData({receiver: address(burner), data: ""});
+    o.managerData = abi.encode(d);
+    bytes memory call = abi.encodeCall(OnchainBook.take, (o, bytes("")));
+
+    vm.prank(bob);
+    (bool ok, bytes memory ret) = address(book).call{gas: 1_500_000}(call);
+    assertFalse(ok, "the take reverts");
+    assertEq(bytes4(ret), OnchainBook.OB_BatchOutOfGas.selector);
+    assertEq(_pos(bobAcc), 0);
+
+    vm.prank(bob);
+    (ok,) = address(book).call{gas: 10_000_000}(call);
+    assertTrue(ok);
+    assertEq(_pos(bobAcc), int(500 * LOT), "with enough gas the same take fills");
+  }
+
+  /// Finding 3. A subId allowance under the fill plus an asset allowance of max: SubAccounts' checked sum overflows.
+  /// Before the fix the book's pre-check passed and the maker was skipped on every take, never switched off.
+  function testAnAllowanceSumThatOverflowsSwitchesTheMakerOff() public {
+    book.removeMaker(mkt, carolAcc);
+    IAllowances.SubIdAllowance[] memory a = new IAllowances.SubIdAllowance[](1);
+    a[0] = IAllowances.SubIdAllowance(future, subId, 1, 1);
+    vm.prank(alice);
+    subAccounts.setSubIdAllowances(aliceAcc, address(book), a);
+    (uint filled,) = _take(_order(true, 500, 2e18));
+    assertEq(filled, 0);
+    (,,,,,,,,,, bool active,) = book.splines(mkt, aliceAcc);
+    assertFalse(active, "switched off as an allowance failure");
+  }
+
+  /// Finding 4. Before the fix alice's spline kept quoting after she transferred the account, with the new owner's
+  /// curve, though he is not allowlisted. Now a transfer takes it down; the new owner quotes only through an update,
+  /// which the allowlist gates.
+  function testATransferredAccountStopsQuoting() public {
+    book.removeMaker(mkt, carolAcc);
+    address dave = address(0xda7e);
+    vm.prank(alice);
+    subAccounts.transferFrom(alice, dave, aliceAcc);
+    OnchainBook.Region[] memory r = new OnchainBook.Region[](1);
+    r[0] = OnchainBook.Region(100_000, 0);
+    vm.startPrank(dave);
+    book.setCurve(1, r);
+    subAccounts.setApprovalForAll(address(book), true);
+    vm.stopPrank();
+    (uint filled,) = _take(_order(true, 5000, 2e18));
+    assertEq(filled, 0, "the spline went with alice, not the account");
+
+    vm.prank(dave);
+    vm.expectRevert(OnchainBook.OB_MakerNotAllowed.selector);
+    book.updateSplines(_splineUpdate(aliceAcc, 9));
+
+    book.setMakerAllowed(dave, true);
+    vm.prank(dave);
+    book.updateSplines(_splineUpdate(aliceAcc, 9));
+    (filled,) = _take(_order(true, 500, 2e18));
+    assertEq(filled, 500 * LOT, "an allowlisted new owner quotes after its own update");
+  }
+
+  /// Finding 8. The tax is capped, and a take that fills nothing pays none.
+  function testThePriorityTaxIsCappedAndOnlyChargedOnAFill() public {
+    uint cap = book.MAX_PRIORITY_TAX_RATE();
+    vm.expectRevert(OnchainBook.OB_InvalidParams.selector);
+    book.setPriorityTaxRate(cap + 1);
+    book.setPriorityTaxRate(cap);
+
+    vm.fee(1 gwei);
+    vm.txGasPrice(2 gwei);
+    int before = _cash(bobAcc);
+    OnchainBook.TakeOrder memory o = _order(true, 500, PRICE); // under every ask: fills nothing
+    o.maxFee = 100e18;
+    (uint filled,) = _take(o);
+    assertEq(filled, 0);
+    assertEq(_cash(bobAcc), before, "no tax on an empty take");
+    assertEq(_cash(feeAcc), 0);
+  }
+
+  /// Finding 9. A market prices off the adapter behind the future's own index, or not at all.
+  function testCreateMarketRefusesAnAdapterNotBehindTheIndex() public {
+    StreamsIndexAdapter other =
+      new StreamsIndexAdapter(adapter.verifierProxy(), address(0), adapter.baseFeedId(), adapter.quoteFeedId());
+    vm.expectRevert(OnchainBook.OB_InvalidParams.selector);
+    book.createMarket(future, subId, IOnchainBookManager(address(engine)), other, TICK, LOT);
+  }
+
+  function _splineUpdate(uint acc, uint64 seq) internal view returns (OnchainBook.SplineUpdate[] memory u) {
+    u = new OnchainBook.SplineUpdate[](1);
+    u[0] = OnchainBook.SplineUpdate(mkt, acc, 0, uint32(HALF_SPREAD), 1, 1, 0, 0, 0, 1 hours, seq);
   }
 }

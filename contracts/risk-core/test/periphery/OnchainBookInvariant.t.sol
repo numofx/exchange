@@ -57,7 +57,7 @@ contract OnchainBookHandler is Test {
     c.makers = book.makers(mkt);
     c.live = new bool[](c.makers.length);
     for (uint i; i < c.makers.length; ++i) {
-      (,,,,,,, uint40 updatedAt, uint32 ttl,, bool active) = book.splines(mkt, c.makers[i]);
+      (,,,,,,, uint40 updatedAt, uint32 ttl,, bool active,) = book.splines(mkt, c.makers[i]);
       c.live[i] = active && block.timestamp <= uint(updatedAt) + ttl;
     }
 
@@ -243,7 +243,7 @@ contract OnchainBookInvariant is OnchainBookBase {
   function invariant_seqNeverDecreasesAndNoSplineCrossed() public view {
     for (uint i; i < 2; ++i) {
       uint acc = i == 0 ? aliceAcc : carolAcc;
-      (, uint32 hs, uint16 bidCurve, uint16 askCurve,,,,,, uint64 seq,) = book.splines(mkt, acc);
+      (, uint32 hs, uint16 bidCurve, uint16 askCurve,,,,,, uint64 seq,,) = book.splines(mkt, acc);
       assertEq(seq, handler.lastSeq(i), "stored seq is the last accepted one");
       address owner = i == 0 ? alice : carol;
       uint bid0 = book.curve(owner, bidCurve)[0].offsetTicks;

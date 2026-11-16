@@ -13,6 +13,11 @@ import {IFutureAssetV3} from "../interfaces/IFutureAssetV3.sol";
 import {IDutchAuction} from "../interfaces/IDutchAuction.sol";
 import {StreamsIndexAdapter} from "../feeds/StreamsIndexAdapter.sol";
 
+/// @dev EurcIndexFeed's adapter: the book pegs to the reports the future's band check reads.
+interface IIndexFeedAdapter {
+  function adapter() external view returns (address);
+}
+
 /// @dev The two manager reads a maker check needs. Both exist on MarginEngine (BaseManager.liquidation, getMargin).
 interface IOnchainBookManager {
   function liquidation() external view returns (IDutchAuction);
@@ -44,6 +49,8 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
   using SafeCast for int;
 
   uint public constant MAX_REGIONS = 10;
+  /// @dev At a 1 gwei priority fee, at most 10 USDC (18 dp) of tax a take
+  uint public constant MAX_PRIORITY_TAX_RATE = 1e10;
 
   /////////////
   // Structs //
@@ -88,6 +95,9 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
     uint32 ttl;
     uint64 seq;
     bool active;
+    /// @dev the account's owner when the spline was written: a transfer of the account takes the spline down, so a
+    ///      new owner (allowlisted or not) quotes only through its own update
+    address owner;
   }
 
   struct SplineUpdate {
@@ -199,7 +209,6 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
   event GasFloorSet(uint gasFloor);
   event PriorityTaxRateSet(uint rate);
   event MakerAllowedSet(address indexed owner, bool allowed);
-  event MakerRegistered(uint indexed marketId, uint indexed accountId);
   event MakerRemoved(uint indexed marketId, uint indexed accountId);
 
   event CurvesSet(address indexed owner, uint16 indexed curveId, Region[] regions);
@@ -269,6 +278,7 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
     if (
       !c.listed || c.settled || address(adapter) == address(0) || tickSize == 0 || lotSize == 0
         || !IOnchainBookManagerWhitelist(address(future)).whitelistedManager(address(engine))
+        || IIndexFeedAdapter(address(future.indexFeed())).adapter() != address(adapter)
     ) revert OB_InvalidParams();
     marketId = nextMarketId++;
     Market storage m = markets[marketId];
@@ -313,6 +323,7 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
   }
 
   function setPriorityTaxRate(uint rate) external onlyOwner {
+    if (rate > MAX_PRIORITY_TAX_RATE) revert OB_InvalidParams();
     priorityTaxRate = rate;
     emit PriorityTaxRateSet(rate);
   }
@@ -440,13 +451,17 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
       excluded: new bool[](_makers[o.marketId].length),
       filledLots: 0,
       notionalTicks: 0,
-      fee: tax
+      fee: 0
     });
     for (uint round; round <= p.excluded.length && p.remainingLots > 0 && p.levelsLeft > 0; ++round) {
       if (!_settleAll(o, m, _walk(m, o, takerOwner, p), p)) break;
     }
 
-    if (tax > 0) _chargeCash(o.takerAccountId, tax, o.managerData);
+    // The tax prices priority in the block; a take that fills nothing pays none.
+    if (tax > 0 && p.filledLots > 0) {
+      _chargeCash(o.takerAccountId, tax, o.managerData);
+      p.fee += tax;
+    }
     if (p.fee > o.maxFee) revert OB_FeeTooHigh();
     filled = p.filledLots * m.lotSize;
     if (filled < o.minFill) revert OB_BelowMinFill();
@@ -516,7 +531,14 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
       if (best == type(uint).max) break;
       uint price = uint(priceTicks) * m.tickSize;
       if (o.isBuy ? price > o.limitPrice : price < o.limitPrice) break;
-      if (!_insideBand(price, index, band)) break;
+      if (!_insideBand(price, index, band)) {
+        // Past the far edge (an ask above the band, a bid below it) every later level is further out: stop. Short of
+        // the near edge (an ask below the band, a bid above it) this level cannot fill, but a worse one, this maker's
+        // or another's, may: drop it for this take and go on, so one maker's quote cannot close the side.
+        if (o.isBuy ? price > index : price < index) break;
+        _advance(makers[best], makers[best].regionLotsLeft);
+        continue;
+      }
 
       MakerState memory mk = makers[best];
       uint lots = mk.regionLotsLeft < p.remainingLots ? mk.regionLotsLeft : p.remainingLots;
@@ -545,6 +567,7 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
     if (!s.active || block.timestamp > uint(s.updatedAt) + s.ttl) return mk;
 
     mk.owner = subAccounts.ownerOf(accountId);
+    if (mk.owner != s.owner) return mk;
     if (m.engine.liquidation().isAuctionLive(accountId)) return mk;
 
     // Skew from the position at the start of the take, clamped, not recomputed between levels (B7).
@@ -646,9 +669,11 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
       emit Fill(o.marketId, o.takerAccountId, mk.accountId, o.isBuy, amount, price, fee);
       return true;
     } catch (bytes memory reason) {
-      // Out of gas, not a real revert: the call took all it was given, leaving about 1/64. The taker chose the gas,
-      // and can make the batch heavy through its own account, so skipping here would let it pick which makers fill.
-      if (gasleft() <= gasBefore / 63) revert OB_BatchOutOfGas();
+      // Out of gas, not a real revert. In this frame it leaves about 1/64 of the gas; below it (the manager hook, the
+      // viewer, a managerData receiver) it surfaces as a revert with no data. Every real failure on this path carries
+      // a selector (custom errors, panics). The taker chose the gas and can make the batch heavy through its own
+      // account or managerData, so skipping here would let it pick which makers fill (B5a): the take reverts.
+      if (gasleft() <= gasBefore / 63 || reason.length == 0) revert OB_BatchOutOfGas();
       emit MakerSkipped(o.marketId, mk.accountId, reason);
       return false;
     }
@@ -692,6 +717,7 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
     s.ttl = u.ttl;
     s.seq = u.seq;
     s.active = true;
+    s.owner = owner_;
     delete cursors[u.marketId][u.accountId][true];
     delete cursors[u.marketId][u.accountId][false];
     emit SplineUpdated(u.marketId, u.accountId, u.seq);
@@ -755,7 +781,10 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
     uint assetAllowance = positive
       ? a.positiveAssetAllowance(accountId, owner_, asset, address(this))
       : a.negativeAssetAllowance(accountId, owner_, asset, address(this));
-    return subIdAllowance >= amount || assetAllowance >= amount - subIdAllowance;
+    if (subIdAllowance >= amount) return true;
+    // SubAccounts adds the two with checked arithmetic (Allowances._spendAbsAllowance): a sum that overflows reverts
+    // there, so it covers nothing here.
+    return assetAllowance <= type(uint).max - subIdAllowance && subIdAllowance + assetAllowance >= amount;
   }
 
   /// @dev The caller must own the account or be approved for it; returns the owner.
