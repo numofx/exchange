@@ -753,7 +753,9 @@ env (`deploy-onchain-book.s.sol`) or a vault `setMarketParams` later, never a co
 `src/periphery/OnchainBook.sol`. **Deployed closed on Base 2026-11-16** at `0x8Fc63DcB3a173aAF5d2de0F42648D908A519d456`
 (block 58,358,413, `ac3e4b1`, single-use deployer `0xd58a…b0b2`; `deployments/8453/ONCHAIN_BOOK.json`): tick 1e12, lot
 1e15, taker fee 5 bps, `takeMaxAge` 1 s, ttl cap 1 h, 3 makers, gas floor 700,000, tax off, maker owner the market maker
-`0x3448…B47B`. Market 1 disabled, nominated to the vault; no vault action yet. Go-ahead from the owner the same day, on
+`0x3448…B47B`. Setup and enable batches landed (enabled 22:27 UTC); the book-maker quotes from #56 on ECS; the matcher indexes the
+book. **Canary takes passed 22:44–22:45 UTC**: 5 EURC bought at 1.100656 and sold at 1.100036 from #57, both accounts
+flat, fees exact to cash interest, both fills on `/trades` (scripts/ops/OPS_BOX_CHANGES.md). Go-ahead from the owner the same day, on
 the B14a defaults; the licence row was put to the owner with the deploy and not separately answered.
 
 **Built as specified:** maker curves (up to 10 regions a side) per owner, splines keyed by (market, account), mid

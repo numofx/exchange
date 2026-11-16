@@ -5,6 +5,18 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-16 22:42–22:46 UTC: OnchainBook canary takes on mainnet: filled, flat, on the tape
+
+- **Taker funded** from #56 (owner's approval: `CashAsset.withdraw(56, 50 USDC, taker)`, tx `0x6c4f5584…5d5b`; #56 keeps
+  450). Taker account **#57** (owner `0x3Fdf…a914`, engine v2): 50 USDC deposited, the book's allowances granted.
+- **Buy** 5 EURC from #57 (`book-take.ts`, fresh Data Streams reports attached): tx `0xef4d39b8…124c`, block 58,393,580,
+  filled at 1.100656 against #56, fee 0.00275164, 1,225,482 gas. **Sell** 5 back: tx `0x6b90fa3b…8d91`, block
+  58,393,651, at 1.100036, fee 0.00275009, 952,087 gas. (One earlier simulation reverted on reports newer than the
+  head; resimulated, it passed. Nothing was sent.)
+- **Checked:** #56 and #57 flat; #56 +0.0031 USDC (the spread), #57 −0.0086 (spread and fees); fee account 22 +0.00550181
+  against 0.00550173 of fees (the rest is cash interest); `/trades?symbol=EURC-30NOV26` lists both as `source: book`
+  at block time with their hashes, through the matcher's indexer.
+
 ## 2026-11-16 22:28–22:41 UTC: matcher indexes the book; canary taker created; a second spot-maker pause moved nothing
 
 - **markets 96974ae** (`d77228f`): migration 000024 run first by hand (`numo-exchange-migrate:55`, task `f673734c…`,
