@@ -5,6 +5,22 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-16 20:07 UTC: pager fixed (block rate, held pages) and perp keeper floor 0.0005 (box-39/40, SSM)
+
+`check_perp_pager.py` replaced with `main`'s `e950653` (sha256 `bf42ee41…4f33`, checked on the box before the swap; it
+had been `110bb12`'s, `e6b80875…073c`), and `KEEPER_GAS_FLOOR_ETH=0.0005` appended to `/etc/numo/perp-pager.env`.
+Backups: `check_perp_pager.py.bak-202611162007`, `perp-pager.env.bak-202611162007`.
+
+- **Why.** The pager assumed 2 s blocks (43,200 a day); Base's are 0.2 s, so its "last day" was 2.4 h and every burn
+  read a tenth of its size (the v3 relayer 0.0003/day against 0.0021 measured over a real day), and the 7-day
+  warning could not fire. It now times the chain each run. Separately, any read refused with HTTP 429 dropped its
+  condition, which resolved an open page and re-paged it a minute later (the `low-gas-keeper` flapping); a failed read
+  now holds its pages. The perp keeper (delisted perp, ~0 burn, 0.000995 ETH) paged under the 0.002 default.
+- **Seen after.** The first run on the new script read and held, with no page sent; it finished `ok: 0 active`.
+- **Open.** The pager reads `mainnet.base.org` (`/numo/feeds/rpc_url`), which refused about 6 reads a run (2,047 429s
+  in the 6 h to 20:10 UTC). Pointing `run-with-ssm-pager.sh` at `/numo/keeper/rpc_url` (Alchemy, the keepers') was
+  prepared and not applied: awaiting a decision.
+
 ## 2026-11-16 ~15:05 UTC: EURC v3 relayer topped up to 0.02445 ETH from three wallets (laptop, `cast send`)
 
 The owner said to fund it from the market maker's or the relayers' wallets. Each sends what it can spare through the
