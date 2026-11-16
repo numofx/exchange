@@ -159,7 +159,11 @@ OI_WARN_REPEAT_SEC = 6 * 3600
 # top-up moves one window and is ignored; with no burn measured it falls back to the floor. Floors are two days at the worst case measured in the
 # runbook: relayer 0.0013/day (a mark a minute), executor ~0.00001 per settlement, keeper ~100 full
 # liquidation cycles (3M gas ≈ 0.00002 ETH each). `GAS_WATCH` overrides: "name=0xaddr:floorEth,...". `KEEPER_EOA` adds the keeper.
-BLOCKS_PER_DAY = 43_200  # Base, 2s blocks
+# Base's block time, measured each run (blocks_per_day): it moved from 2 s to 0.2 s, and a constant written for 2 s
+# blocks made "the last day" 2.4 hours and every burn a tenth of its size, so the 7-day warning never fired (found
+# 2026-11-16). This is only the fallback when the measurement cannot be read.
+BLOCKS_PER_DAY = 432_000  # 0.2 s blocks
+BLOCK_RATE_SAMPLE = 100_000  # blocks back from the head to time
 GAS_WINDOWS = 4
 GAS_PAGE_DAYS = 2.0
 GAS_WARN_DAYS = 7.0
@@ -760,9 +764,28 @@ def burn_per_day(balances_wei: list[int]) -> float:
   return median * len(drops) / 1e18
 
 
-def read_gas(url: str, head_block: int, address: str) -> tuple[float, float]:
-  """(balance ETH, burn ETH/day) from the balance at GAS_WINDOWS + 1 points over the last ~24h of blocks."""
-  step = BLOCKS_PER_DAY // GAS_WINDOWS
+def blocks_per_day_from(head: int, head_ts: int, past: int, past_ts: int) -> int:
+  """Blocks in 24 h at the rate between two timed blocks."""
+  if head <= past or head_ts <= past_ts:
+    raise ValueError(f"cannot time blocks {past}..{head} ({past_ts}..{head_ts})")
+  return round(86_400 * (head - past) / (head_ts - past_ts))
+
+
+def blocks_per_day(url: str) -> int:
+  """The chain's measured block rate, or BLOCKS_PER_DAY when it cannot be read."""
+  try:
+    head, head_ts = head_block(url)
+    past = max(head - BLOCK_RATE_SAMPLE, 0)
+    past_ts = int(rpc(url, "eth_getBlockByNumber", [hex(past), False])["timestamp"], 16)
+    return blocks_per_day_from(head, head_ts, past, past_ts)
+  except Exception as exc:  # noqa: BLE001
+    print(f"block rate unreadable ({str(exc)[:80]}); assuming {BLOCKS_PER_DAY} blocks a day")
+    return BLOCKS_PER_DAY
+
+
+def read_gas(url: str, head_block: int, address: str, per_day: int = BLOCKS_PER_DAY) -> tuple[float, float]:
+  """(balance ETH, burn ETH/day) from the balance at GAS_WINDOWS + 1 points over the last 24h of blocks."""
+  step = per_day // GAS_WINDOWS
   blocks = [max(head_block - step * i, 0) for i in range(GAS_WINDOWS, 0, -1)]
   balances = [int(rpc(url, "eth_getBalance", [address, hex(b)]), 16) for b in blocks]
   balances.append(int(rpc(url, "eth_getBalance", [address, "latest"]), 16))
@@ -807,8 +830,18 @@ def sm_condition(previous: float | None, current: float) -> Condition | None:
   return Condition("sm-payout", f"cNGN-PERP SecurityModule paid ${previous - current:,.2f} (now ${current:,.2f}).")
 
 
-def step_state(state: dict, active: list[Condition], now: int) -> tuple[list[Condition], list[str]]:
-  """Which conditions to page (new, or due a repage) and which keys resolved. Mutates state."""
+def is_held(key: str, held: set[str]) -> bool:
+  """Whether a page key belongs to a read that failed this run: an exact key, or a prefix written with a trailing *."""
+  return any(key == h or (h.endswith("*") and key.startswith(h[:-1])) for h in held)
+
+
+def step_state(state: dict, active: list[Condition], now: int, held: set[str] | None = None) -> tuple[list[Condition], list[str]]:
+  """Which conditions to page (new, or due a repage) and which keys resolved. Mutates state.
+
+  `held` names the pages whose read failed this run: an open one stays open, neither resolved nor repaged. A failed read
+  says nothing about the condition; resolving on it sent "RESOLVED: low-gas-keeper cleared" on an RPC 429 (2026-11-16),
+  and the page came back a minute later."""
+  held = held or set()
   seen = state.setdefault("active", {})
   to_page = []
   for condition in active:
@@ -818,7 +851,7 @@ def step_state(state: dict, active: list[Condition], now: int) -> tuple[list[Con
       to_page.append(condition)
       seen[condition.key] = {"since": entry["since"] if entry else now, "lastPagedAt": now}
   keys = {c.key for c in active}
-  resolved = [key for key in list(seen) if key not in keys]
+  resolved = [key for key in list(seen) if key not in keys and not is_held(key, held)]
   for key in resolved:
     del seen[key]
   # sm-payout is an event, not a state: once paged it is done, and the baseline has moved.
@@ -959,12 +992,16 @@ def check_and_page(stack_path: Path, state: dict) -> int:
     armed = state.get("keeperSeenAt") is not None
 
   gas = []
+  # Pages whose read failed this run: kept as they were (step_state).
+  held: set[str] = set()
   warned = state.setdefault("gasWarnedAt", {})
+  per_day = blocks_per_day(url)
   for name, address, floor in gas_watch():
     try:
-      balance, burn = read_gas(url, number, address)
+      balance, burn = read_gas(url, number, address, per_day)
     except Exception as exc:  # noqa: BLE001
-      print(f"gas {name}: unreadable ({str(exc)[:80]})")
+      print(f"gas {name}: unreadable ({str(exc)[:80]}); its page stays as it was")
+      held.add(f"low-gas-{name}")
       continue
     gas.append(gas_condition(name, balance, burn, floor))
     warning = gas_warning(name, balance, burn)
@@ -988,6 +1025,7 @@ def check_and_page(stack_path: Path, state: dict) -> int:
       print(f"oi: one side ${one_side_usd:,.0f} vs keeper #{keeper_account} cash ${keeper_cash:,.0f}")
     except Exception as exc:  # noqa: BLE001
       print(f"oi: unreadable ({str(exc)[:80]}); feed-halt covers a stale index")
+      held.add("oi-vs-keeper")
   else:
     print("oi: KEEPER_ACCOUNT unset, not watched")
 
@@ -1003,6 +1041,7 @@ def check_and_page(stack_path: Path, state: dict) -> int:
     print(f"perp: one side ${perp_one_side:,.0f} (wound down: the SecurityModule is not sized for it)")
   except Exception as exc:  # noqa: BLE001
     print(f"perp: unreadable ({str(exc)[:80]})")
+    held.add("perp-oi")
   try:
     future = future_artifact()
     # Which manager's future this run read, for the MarginEngine enable gate: a pager that does not read
@@ -1036,6 +1075,8 @@ def check_and_page(stack_path: Path, state: dict) -> int:
       print("future: not deployed (no artifact)")
   except Exception as exc:  # noqa: BLE001
     print(f"future: unreadable ({str(exc)[:80]})")
+    held.update({"future-pool-reserve", "future-pool-borrowing", "future-pool-deficit-stuck", "future-escrow-cap",
+                 "sm-coverage"})
 
   # MarginEngine v2: each series' side for the SecurityModule, and each engine's cash-only pool, once.
   v2_open: dict[str, bool] = {}
@@ -1071,6 +1112,8 @@ def check_and_page(stack_path: Path, state: dict) -> int:
       state["futureV2WarnedAt"] = time.time()
   except Exception as exc:  # noqa: BLE001
     print(f"v2 futures: unreadable ({str(exc)[:80]})")
+    # A pool page read before the failure is in future_pages and stays active anyway.
+    held.update({"future-pool-borrowing-*", "future-pool-deficit-stuck-*", "sm-coverage", "keeper-capacity-v2"})
 
   # cNGN options on v2: the vol feed while they are live, settlement after expiry, their side for the SecurityModule.
   option_pages: list[Condition] = []
@@ -1082,6 +1125,7 @@ def check_and_page(stack_path: Path, state: dict) -> int:
       o = read_options(url, options)
     except Exception as exc:  # noqa: BLE001
       print(f"options {label}: unreadable ({str(exc)[:80]})")
+      held.update({f"vol-stale-{label.lower()}", f"options-unsettled-{label.lower()}", "sm-coverage"})
       continue
     # Recorded once the feed was read (live or not): the enable gate requires it.
     state.setdefault("volFeeds", []).append(options["volFeed"])
@@ -1127,6 +1171,7 @@ def check_and_page(stack_path: Path, state: dict) -> int:
               f"every v2 future")
       except Exception as exc:  # noqa: BLE001
         print(f"v2 keeper capacity: unreadable ({str(exc)[:80]})")
+        held.add("keeper-capacity-v2")
     print(f"v2 keeper: {'unreachable' if v2_health is None else ('ok' if keeper_healthy(v2_health, now) else 'unhealthy')}")
 
   negative_cash = None
@@ -1140,6 +1185,7 @@ def check_and_page(stack_path: Path, state: dict) -> int:
     print(f"negative cash: ${total_borrow:,.0f} (warn ${NEGATIVE_CASH_WARN_USD:,.0f}, page ${NEGATIVE_CASH_PAGE_USD:,.0f})")
   except Exception as exc:  # noqa: BLE001
     print(f"negative cash: unreadable ({str(exc)[:80]})")
+    held.add("negative-cash")
 
   previous_sm = state.get("smCash")
   active = [c for c in (feed_condition(ages), keeper_condition(health, now, armed), insolvent_condition(health),
@@ -1147,7 +1193,7 @@ def check_and_page(stack_path: Path, state: dict) -> int:
                         peg_condition(read_index_status(), time.time()), coverage, perp_oi, oi, negative_cash, *future_pages, *v2_keeper,
                         *option_pages,
                         *gas, *matcher) if c is not None]
-  to_page, resolved = step_state(state, active, now)
+  to_page, resolved = step_state(state, active, now, held)
   state["smCash"] = sm_cash
 
   failures = 0
@@ -1230,6 +1276,15 @@ def self_test() -> int:
   sent = [int(x * e) for x in (0.00298, 0.002972, 0.001964, 0.001956, 0.001948)]  # 2026-10-30: 0.001 out in window 2
   assert abs(burn_per_day(sent) - 0.000032) < 1e-9, "a send is one window: the median ignores it"
   assert burn_per_day([e, e, 2 * e, 2 * e, 2 * e]) == 0, "a top-up is no burn"
+  # 2026-11-16, measured on Base: 43,200 blocks spanned 8,640 s (0.2 s blocks), so a day is 432,000 blocks.
+  assert blocks_per_day_from(58_345_431, 1_000_008_640, 58_302_231, 1_000_000_000) == 432_000, "0.2 s blocks"
+  assert blocks_per_day_from(100, 200, 0, 0) == 43_200, "2 s blocks"
+  for bad in [(5, 10, 5, 0), (5, 10, 0, 10)]:
+    try:
+      blocks_per_day_from(*bad)
+      raise AssertionError(f"{bad}: an untimeable span must not give a rate")
+    except ValueError:
+      pass
   assert "stops publishing" in gas_condition("forward-relayer-v2-eurc", 0.0001, 0.00003, 0.0003).message
   assert gas_condition("executor", 0.0019, 0.0, 0.002) is not None and "unknown burn" in gas_condition("executor", 0.0019, 0.0, 0.002).message
   assert gas_condition("executor", 0.0079, 0.00003, 0.002) is None
@@ -1379,6 +1434,18 @@ def self_test() -> int:
   assert step_state(state, [halt], now + 60)[0] == []
   assert [c.key for c in step_state(state, [halt], now + REPAGE_SEC)[0]] == ["feed-halt"]
   assert step_state(state, [], now + REPAGE_SEC + 60)[1] == ["feed-halt"]
+  # A failed read holds its page: not resolved, not repaged; once read again, it resolves (2026-11-16, an RPC 429).
+  low = Condition("low-gas-keeper", "low")
+  step_state(state, [low], now)
+  assert step_state(state, [], now + 60, {"low-gas-keeper"}) == ([], []), "an unreadable wallet does not resolve its page"
+  assert "low-gas-keeper" in state["active"]
+  assert step_state(state, [], now + 120)[1] == ["low-gas-keeper"], "read again and fine: resolved"
+  pool = Condition("future-pool-borrowing-eurc-30nov26", "borrowing")
+  step_state(state, [pool], now)
+  assert step_state(state, [], now + 60, {"future-pool-borrowing-*"})[1] == [], "a prefix holds the series' pages"
+  assert step_state(state, [], now + 120, {"future-pool-borrowing"})[1] == ["future-pool-borrowing-eurc-30nov26"], \
+    "an exact key is not a prefix"
+  assert not is_held("low-gas-keeper2", {"low-gas-keeper"})
   # A payout pages every time it happens, never "resolves".
   payout = Condition("sm-payout", "y")
   assert step_state(state, [payout], now)[0] == [payout]
