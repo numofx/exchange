@@ -86,7 +86,8 @@ older reconnects get a fresh snapshot instead (see resume).
 -- Payload is a compact delta, NOT the whole book:
 --   book:   {side, price_ticks, size_delta, order_count_delta, resulting_size}
 --   orders: {order_id, status, filled_amount, ...}
---   trades: {trade_id, price, size, aggressor_side, taker_order_id, maker_order_id}
+--   trades: {trade_id, price, size, aggressor_side, taker_order_id, maker_order_id, created_at, tx_hash, source}
+--           (source 'book': an OnchainBook fill, order ids empty; see README, OnchainBook fills)
 ```
 
 Emit the `book` delta from the order row's before/after so the hub never recomputes the book

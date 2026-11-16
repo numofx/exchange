@@ -135,6 +135,13 @@ locals {
     }],
   )
 
+  # The OnchainBook whose fills the matcher indexes onto the series' tape (markets-service README, OnchainBook fills).
+  # Matcher only. Absent while unset, so neither task definition changes until the book is deployed and both are set.
+  onchain_book_env = var.onchain_book_address == "" ? [] : [
+    { name = "ONCHAIN_BOOK_ADDRESS", value = var.onchain_book_address },
+    { name = "ONCHAIN_BOOK_START_BLOCK", value = tostring(var.onchain_book_start_block) },
+  ]
+
   # EURC-USDC spot, for the api and the matcher alike, and only once the escrow exists. Absent rather than
   # empty when unset: an EURC_SPOT_ASSET_ADDRESS="" entry would read the same to markets-service (not listed)
   # but change both task definitions, and a matcher redeploy is a ~70 s matching gap (with-matcher-mute.sh).
@@ -270,7 +277,7 @@ resource "aws_ecs_task_definition" "matcher" {
       # Hostname preserved from Railway — see internal_namespace.
       { name = "EXECUTOR_URL", value = "http://execution-service.${var.internal_namespace}:8081/execute" },
       { name = "MATCHER_HEALTH_ADDR", value = ":8082" },
-    ], local.future_env, local.eurc_spot_env)
+    ], local.future_env, local.eurc_spot_env, local.onchain_book_env)
 
     secrets = [
       { name = "DATABASE_URL", valueFrom = local.secret_arns.database_url },
@@ -294,6 +301,15 @@ resource "aws_ecs_task_definition" "matcher" {
 
     logConfiguration = local.log_options["matcher"]
   }])
+
+  # The book's fills are indexed from its deploy block; markets-service refuses an address without one, which here
+  # would be a matcher that cannot start.
+  lifecycle {
+    precondition {
+      condition     = var.onchain_book_address == "" || var.onchain_book_start_block > 0
+      error_message = "onchain_book_start_block (the book's deploy block) is required with onchain_book_address."
+    }
+  }
 }
 
 resource "aws_ecs_task_definition" "execution" {

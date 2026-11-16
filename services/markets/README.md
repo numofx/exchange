@@ -276,6 +276,32 @@ is under one manager, so `futures_account` is its margin under whichever listed 
 Terraform: `future_series` and `cngn_future_close_only` (`infra/aws/variables.tf`), both absent from
 the task definitions until set.
 
+## OnchainBook fills
+
+risk-core's `OnchainBook` (Stage 2 of EURC-30NOV26, spec Part B) fills takers against makers' oracle-pegged splines on
+chain, with no order and no matcher. Its fills trade the same series, so the matcher indexes them onto the same tape:
+`/trades`, candles, the 24h stats and the public `trades` stream count both.
+
+- **What is written.** Each `Fill` event is one `trade_fills` row with `source = 'book'`, at its block's time: price in
+  USDC per base, size in the series' order units (`amount / amount_scale`), `taker_fee` in USDC, `tx_hash`, and the
+  taker's and maker's subaccounts. It has no order ids (`taker_order_id` and `maker_order_id` are empty, and omitted from
+  `/trades`), so it is in nobody's signed-order history (`/fills`). Each `TakeExecuted` is a `book_takes` row (filled,
+  average price, fee including any priority tax, and its number of fills). Trades carry `source` (`matching` or `book`)
+  on `/trades` and on the stream.
+- **How.** `internal/matching/book_indexer.go`, one instance inside the matcher. Every 5 s it reads the book's logs up to
+  20 blocks behind the head, in ranges of 2,000 blocks, and writes each range in one transaction with its cursor
+  (`book_index_cursor`). A row is keyed by its transaction and log index, so re-reading a range writes nothing twice.
+  The first run starts at `ONCHAIN_BOOK_START_BLOCK`.
+- **Fails closed.** A range is not written, and the cursor does not move, when a take's fills do not add up to its
+  `filled`, charge more than its fee, or have no `TakeExecuted` after them, or when a book market trades a series that
+  `FUTURE_SERIES` does not list. The error is logged (`book_indexer_tick_failed`) and shown on the matcher's `/healthz`
+  as `book_indexer.last_error`, with the lag in `book_indexer.lag_blocks`.
+- **Not the perp ledger's "venue fill".** The reduce-only ledger skips a `BalanceAdjusted` in a transaction the matcher
+  settled; a book transaction is not one (`source = 'matching'` only).
+
+Config: `ONCHAIN_BOOK_ADDRESS` (from `ONCHAIN_BOOK.json`) and `ONCHAIN_BOOK_START_BLOCK` (its deploy block, required with
+it). Unset, nothing is indexed.
+
 ## Configuration
 
 Copy `.env.example` into your own environment and set the required values.

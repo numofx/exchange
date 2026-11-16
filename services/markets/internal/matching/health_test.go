@@ -10,7 +10,7 @@ import (
 
 func TestMatcherHealthTurnsUnhealthyWhenTicksStop(t *testing.T) {
 	clock := time.Date(2026, 10, 4, 20, 0, 0, 0, time.UTC)
-	h := newMatcherHealth(nil)
+	h := newMatcherHealth(nil, nil)
 	h.now = func() time.Time { return clock }
 	h.ticked()
 	if s := h.status(); !s.Healthy || s.TickAgeSeconds != 0 {
@@ -28,7 +28,7 @@ func TestMatcherHealthTurnsUnhealthyWhenTicksStop(t *testing.T) {
 
 func TestHealthzAnswers503OnceStalled(t *testing.T) {
 	clock := time.Now()
-	h := newMatcherHealth(nil)
+	h := newMatcherHealth(nil, nil)
 	h.now = func() time.Time { return clock }
 	h.ticked()
 	handler := http.NewServeMux()
@@ -61,5 +61,18 @@ func TestIndexerStatusReportsLagAndLastError(t *testing.T) {
 	p.note(func(s *indexerStatus) { s.CursorBlock = 1000; s.LastError = "rpc down" })
 	if s := p.status(); s.LagBlocks != 0 || s.LastError != "rpc down" {
 		t.Fatalf("%+v", s)
+	}
+}
+
+// A book indexer that has stopped on a range it refused says so on /healthz, beside the position indexer.
+func TestHealthCarriesTheBookIndexer(t *testing.T) {
+	b := &bookIndexer{}
+	b.note(func(s *indexerStatus) { s.HeadBlock = 500; s.CursorBlock = 100; s.LastError = "fills sum to 1" })
+	status := newMatcherHealth(nil, b).status()
+	if status.BookIndexer == nil || status.BookIndexer.LagBlocks != 400 || status.BookIndexer.LastError != "fills sum to 1" {
+		t.Fatalf("book indexer %+v", status.BookIndexer)
+	}
+	if newMatcherHealth(nil, nil).status().BookIndexer != nil {
+		t.Fatal("no book, no book_indexer")
 	}
 }

@@ -641,3 +641,22 @@ variable "ops_box_mm_key_grant" {
   type        = bool
   default     = false
 }
+
+# risk-core's OnchainBook (ONCHAIN_BOOK.json, from deploy-onchain-book.s.sol) and its deploy block. Set both once it is
+# deployed: the matcher then indexes its Fill and TakeExecuted events onto the series' tape from that block. Empty
+# leaves both out of the matcher's task definition.
+variable "onchain_book_address" {
+  type    = string
+  default = ""
+  validation {
+    condition     = var.onchain_book_address == "" || can(regex("^0x[0-9a-fA-F]{40}$", var.onchain_book_address))
+    error_message = "onchain_book_address must be an address or empty."
+  }
+}
+
+# Required with the address (a precondition on the matcher's task definition: variable validations cannot read
+# another variable before Terraform 1.9).
+variable "onchain_book_start_block" {
+  type    = number
+  default = 0
+}

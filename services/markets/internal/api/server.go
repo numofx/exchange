@@ -190,7 +190,9 @@ type presentedTrade struct {
 	CreatedAt     time.Time   `json:"created_at"`
 	// TxHash is the settling transaction, for a link to the explorer; omitted for fills recorded
 	// before it was stored. Owner fills (/fills) carry the same field.
-	TxHash         string                 `json:"tx_hash,omitempty"`
+	TxHash string `json:"tx_hash,omitempty"`
+	// Source is the tape: "matching" (signed orders through the matcher) or "book" (the OnchainBook, no order ids).
+	Source         string                 `json:"source,omitempty"`
 	ContractType   string                 `json:"contract_type,omitempty"`
 	SettlementType string                 `json:"settlement_type,omitempty"`
 	Market         string                 `json:"market,omitempty"`
@@ -1071,6 +1073,7 @@ func presentTrades(items []orders.TradeFill, instrument instruments.Metadata) []
 			MakerOrderID:   item.MakerOrderID,
 			CreatedAt:      item.CreatedAt,
 			TxHash:         txHash,
+			Source:         item.Source,
 			ContractType:   instrument.ContractType,
 			SettlementType: instrument.SettlementType,
 			Market:         instrument.Symbol,

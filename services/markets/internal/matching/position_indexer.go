@@ -39,26 +39,31 @@ type positionIndexer struct {
 	confirmations uint64
 	chunk         uint64
 
+	indexerTracker
+}
+
+// indexerTracker is what a chain indexer last saw, for the matcher's health: the head it read, the cursor it
+// reached, and the last error.
+type indexerTracker struct {
 	mu   sync.Mutex
 	last indexerStatus
 }
 
-// status is what the indexer last saw: the head it read, the cursor it reached, and the last error.
-func (p *positionIndexer) status() indexerStatus {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.last
+func (t *indexerTracker) status() indexerStatus {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.last
 }
 
-func (p *positionIndexer) note(update func(*indexerStatus)) {
-	p.mu.Lock()
-	update(&p.last)
-	if p.last.HeadBlock > p.last.CursorBlock {
-		p.last.LagBlocks = p.last.HeadBlock - p.last.CursorBlock
+func (t *indexerTracker) note(update func(*indexerStatus)) {
+	t.mu.Lock()
+	update(&t.last)
+	if t.last.HeadBlock > t.last.CursorBlock {
+		t.last.LagBlocks = t.last.HeadBlock - t.last.CursorBlock
 	} else {
-		p.last.LagBlocks = 0
+		t.last.LagBlocks = 0
 	}
-	p.mu.Unlock()
+	t.mu.Unlock()
 }
 
 func newPositionIndexer(cfg config.Config, repo *orders.Repository, margin marginChecker) *positionIndexer {

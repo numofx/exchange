@@ -822,3 +822,7 @@ flipped signature bit is refused (`0x4df18f07`). 48 guards (36, then 7 and 5 fro
 independent review (A1.2); the Base Sepolia rehearsal with a short-dated series; a deploy script and vault batch;
 off-chain, a curve-quoting mode in the market maker, maker subaccounts outside `Matching`, and indexing `Fill` and
 `TakeExecuted`.
+
+Indexing is built (2026-11-16, markets-service, README "OnchainBook fills"): the matcher writes each `Fill` onto the
+series' tape (`trade_fills`, source `book`, at block time) and each `TakeExecuted` to `book_takes`, refusing a range
+whose fills do not add up to their take. It waits on the deploy for `ONCHAIN_BOOK_ADDRESS` and its start block.

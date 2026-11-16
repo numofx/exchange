@@ -195,7 +195,7 @@ type ChainPositionAdjustment struct {
 
 // ApplyChainAdjustments brings the ledger up to the chain through block `through`, in one
 // transaction with the cursor. An adjustment made by one of the venue's own fills (its transaction
-// is in trade_fills) is skipped: FinalizeMatchWithPrice already moved the ledger for it, or is about
+// is in trade_fills as a matcher fill) is skipped: FinalizeMatchWithPrice already moved the ledger for it, or is about
 // to, and setting the post-balance here as well would count the fill twice. Every other adjustment
 // (a liquidation, settlement, a transfer) sets the position to what the chain says it is afterwards.
 func (r *Repository) ApplyChainAdjustments(ctx context.Context, assetAddress string, adjustments []ChainPositionAdjustment, through uint64) (applied int, skipped int, err error) {
@@ -207,7 +207,7 @@ func (r *Repository) ApplyChainAdjustments(ctx context.Context, assetAddress str
 	defer func() { _ = tx.Rollback(ctx) }()
 	for _, adjustment := range adjustments {
 		var venueFill bool
-		if err := tx.QueryRow(ctx, `select exists (select 1 from trade_fills where lower(tx_hash) = lower($1))`, adjustment.TxHash).Scan(&venueFill); err != nil {
+		if err := tx.QueryRow(ctx, `select exists (select 1 from trade_fills where source = 'matching' and lower(tx_hash) = lower($1))`, adjustment.TxHash).Scan(&venueFill); err != nil {
 			return 0, 0, mapPGError(err)
 		}
 		if venueFill {

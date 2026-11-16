@@ -14,7 +14,15 @@ type TradeFill struct {
 	CreatedAt     time.Time
 	// TxHash is the settling transaction; nil for fills recorded before it was stored.
 	TxHash *string
+	// Source is the tape: SourceMatching (the matcher's signed orders) or SourceBook (the OnchainBook, no orders:
+	// TakerOrderID and MakerOrderID are empty).
+	Source string
 }
+
+const (
+	SourceMatching = "matching"
+	SourceBook     = "book"
+)
 
 type TradeStats24h struct {
 	Change string

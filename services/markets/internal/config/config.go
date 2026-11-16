@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -142,6 +143,12 @@ type Config struct {
 	// FutureSeries (FUTURE_SERIES, a JSON array) are the series listed beside the one above: MarginEngine
 	// v2's <BASE>-<expiry> series. Each is read, admitted and matched through its own reader.
 	FutureSeries []FutureSeries
+	// OnchainBookAddress (ONCHAIN_BOOK_ADDRESS) is risk-core's OnchainBook, whose Fill and TakeExecuted events the
+	// matcher indexes onto the series' tape (matching/book_indexer.go). Empty, nothing is indexed.
+	// OnchainBookStartBlock (ONCHAIN_BOOK_START_BLOCK, required with it) is where the first read starts: the book's
+	// deploy block, so no fill before the indexer's first run is missed.
+	OnchainBookAddress    string
+	OnchainBookStartBlock uint64
 	// OptionSeries (OPTION_SERIES, a JSON array) are the listed option expiries, each strike a call and a put market
 	// (option_series.go). Unset, no options are listed.
 	OptionSeries []OptionSeries
@@ -336,6 +343,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if err := cfg.validatePerpStack(); err != nil {
+		return Config{}, err
+	}
+	if err := cfg.loadOnchainBook(os.Getenv("ONCHAIN_BOOK_ADDRESS"), os.Getenv("ONCHAIN_BOOK_START_BLOCK")); err != nil {
 		return Config{}, err
 	}
 
@@ -743,4 +753,32 @@ func parseDepositAssets(spec string, fallbackAddresses []string, fallbackMin *bi
 		out = append(out, DepositAsset{Address: address, Symbol: symbol, MinAmount: minimum})
 	}
 	return out, nil
+}
+
+// loadOnchainBook reads the book's address and start block. An address without a start block is refused rather than
+// started from the head: the fills between the deploy and the first run would never be on the tape.
+func (c *Config) loadOnchainBook(address, startBlock string) error {
+	address = strings.ToLower(strings.TrimSpace(address))
+	startBlock = strings.TrimSpace(startBlock)
+	if address == "" {
+		if startBlock != "" {
+			return errors.New("ONCHAIN_BOOK_START_BLOCK is set without ONCHAIN_BOOK_ADDRESS")
+		}
+		return nil
+	}
+	if _, err := hex.DecodeString(strings.TrimPrefix(address, "0x")); err != nil || !isConfiguredAddress(address) {
+		return fmt.Errorf("ONCHAIN_BOOK_ADDRESS %q is not an address", address)
+	}
+	block, err := strconv.ParseUint(startBlock, 10, 64)
+	if err != nil || block == 0 {
+		return fmt.Errorf("ONCHAIN_BOOK_START_BLOCK %q: the book's deploy block is required with ONCHAIN_BOOK_ADDRESS", startBlock)
+	}
+	c.OnchainBookAddress = address
+	c.OnchainBookStartBlock = block
+	return nil
+}
+
+// OnchainBookEnabled reports whether the book's fills are indexed.
+func (c Config) OnchainBookEnabled() bool {
+	return c.OnchainBookAddress != ""
 }
