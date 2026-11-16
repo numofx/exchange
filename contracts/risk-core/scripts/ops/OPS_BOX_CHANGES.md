@@ -22,9 +22,19 @@ the only place the box's real state is written down. Newest first.
     ETH/day), tx `0x4c1d236bf2bc9ed5cdf7f88f03284fe5c459e799084de0c9836c9a96de2de445`
   - The v3 relayer holds 0.01386 ETH, ~4.8 days. The keeper resumed by itself (nonce 1927 by 14:50 UTC);
     `getSpot()` read 1.10108. The market maker's wallet (0.0019 ETH) was left alone.
-- **Watching (repo, `d9101f8`; NOT yet on the box).** `perp-pager.env` `GAS_WATCH` gains
-  `eurc-v3-relayer=0x0AbA…12e5:0.01`; `check_signer_balance.py` watches six wallets with measured burns. The box's
-  copies are unchanged until they are copied over.
+- **Watching (`d9101f8`), on the box 14:54 UTC by the owner's go-ahead.** SSM `dc130cab` (box-37), each file backed
+  up as `.bak-202611161454` beside it:
+  - `/etc/numo/perp-pager.env`: `,eurc-v3-relayer=0x0AbAac33E5ab7E62dED100Be465032A3636b12e5:0.01` appended to
+    `GAS_WATCH`, nothing else (as on 2026-11-02, not a copy of the repo's file). The 14:55:06 run reads
+    `gas eurc-v3-relayer: 0.01385 ETH ... floor 0.01`.
+  - `/home/ec2-user/exchange/contracts/risk-core/scripts/ops/check_signer_balance.py` replaced by `d9101f8`'s (sha256
+    `cc752fdf…dc70`), `--self-test` passed on the box's Python first. The box's env sets nothing it reads any more.
+  - Proved (SSM `484f1fe7`, box-38): `numo-signer-balance-alert` started by hand posted `NUMO HOT WALLET LOW GAS` for
+    the v3 relayer (~4.0 days, under the 7-day threshold) and `ok` for the other five. It repeats every 6 h until the
+    relayer holds over ~0.0245 ETH.
+  - Seen, not changed: the pager's standing `low-gas-keeper` (the perp keeper `0xdE57…3f18`, 0.00100 ETH against a
+    0.002 floor, since it funded the v3 deploy on 2026-11-15; the perp is delisted) and one HTTP 429 on a gas read.
+  - **Undo.** `cp -p` each `.bak-202611161454` back over its file.
 
 ## 2026-11-15 20:49–21:30 UTC: EURC v3 canary drilled, settled, closed out; canary keeper disabled
 
