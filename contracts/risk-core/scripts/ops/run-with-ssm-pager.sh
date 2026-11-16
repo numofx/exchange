@@ -22,7 +22,7 @@ get_optional() {
   aws ssm get-parameter --name "$1" --with-decryption --query Parameter.Value --output text --region "$REGION" 2>/dev/null || true
 }
 
-export RPC_URL="$(get /numo/feeds/rpc_url)"
+RPC_URL="$(get /numo/feeds/rpc_url)"; export RPC_URL
 export ALERT_WEBHOOK_URL="$(get_optional /numo/feeds/alert_webhook_url)"
 export PAGER_PROVIDER="$(get_optional /numo/pager/provider)"
 export PUSHOVER_TOKEN="$(get_optional /numo/pager/pushover_token)"

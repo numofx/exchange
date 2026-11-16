@@ -13,7 +13,7 @@ get() {
   aws ssm get-parameter --name "$1" --with-decryption --query Parameter.Value --output text --region "$REGION"
 }
 
-export MM_OWNER_PRIVATE_KEY="$(get /numo/exchange/mm_private_key)"
-export MM_RPC_URL="$(get /numo/exchange/mm_rpc_url)"
+MM_OWNER_PRIVATE_KEY="$(get /numo/exchange/mm_private_key)"; export MM_OWNER_PRIVATE_KEY
+MM_RPC_URL="$(get /numo/exchange/mm_rpc_url)"; export MM_RPC_URL
 
 exec "$@"

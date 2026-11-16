@@ -25,13 +25,13 @@ get_opt() {
   aws ssm get-parameter --name "$1" --with-decryption --query Parameter.Value --output text --region "$REGION" 2>/dev/null || true
 }
 
-export MPCVAULT_TOKEN="$(get "$PREFIX/mpcvault_token")"
-export MPCVAULT_VAULT="$(get "$PREFIX/mpcvault_vault")"
-export VAULT_ADDRESS="$(get "$PREFIX/vault_address")"
+MPCVAULT_TOKEN="$(get "$PREFIX/mpcvault_token")"; export MPCVAULT_TOKEN
+MPCVAULT_VAULT="$(get "$PREFIX/mpcvault_vault")"; export MPCVAULT_VAULT
+VAULT_ADDRESS="$(get "$PREFIX/vault_address")"; export VAULT_ADDRESS
 export CALLBACK_SECRET="$(get_opt "$PREFIX/callback_secret")"
 
 export RPC_URL="$(get_opt "$PREFIX/rpc_url")"
-[ -n "${RPC_URL:-}" ] || export RPC_URL="$(get "$FEEDS/rpc_url")"
+[ -n "${RPC_URL:-}" ] || { RPC_URL="$(get "$FEEDS/rpc_url")"; export RPC_URL; }
 export ALERT_WEBHOOK_URL="$(get_opt "$PREFIX/alert_webhook_url")"
 [ -n "${ALERT_WEBHOOK_URL:-}" ] || export ALERT_WEBHOOK_URL="$(get_opt "$FEEDS/alert_webhook_url")"
 

@@ -18,7 +18,7 @@ ROOT="$(cd "$HERE/../../../.." && pwd)"
 get() {
   aws ssm get-parameter --name "$1" --with-decryption --query Parameter.Value --output text --region "$REGION"
 }
-export MM_OWNER_PRIVATE_KEY="$(get /numo/exchange/mm_private_key)"
+MM_OWNER_PRIVATE_KEY="$(get /numo/exchange/mm_private_key)"; export MM_OWNER_PRIVATE_KEY
 export RPC_URL="${RPC_URL:-$(get /numo/feeds/rpc_url)}"
 export MARKETS_URL="${MARKETS_URL:-https://api.numofx.com}"
 # The box runs the bundle built off-box (ops/migrate-spot-mm-dist, scripts/local-venue/dist/migrate-spot-mm.mjs):

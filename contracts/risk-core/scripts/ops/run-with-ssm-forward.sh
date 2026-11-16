@@ -33,8 +33,8 @@ get_optional() {
     --query Parameter.Value --output text --region "$REGION" 2>/dev/null || true
 }
 
-export RPC_URL="$(get rpc_url)"
-export RELAYER_KEY="$(get "${FORWARD_RELAYER_SSM_NAME:-forward_relayer_key}")"
+RPC_URL="$(get rpc_url)"; export RPC_URL
+RELAYER_KEY="$(get "${FORWARD_RELAYER_SSM_NAME:-forward_relayer_key}")"; export RELAYER_KEY
 export ALERT_WEBHOOK_URL="$(get_optional alert_webhook_url)"
 if [ "${FUTURE_VERSION:-}" = "v3" ]; then
   streams() {

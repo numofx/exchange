@@ -5,6 +5,21 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-16 21:38–21:45 UTC: book-maker built on the box, started, refused its key, stopped (SSM)
+
+- **`exchange-ops`** → `4eec6f7` (clean before), for `run-with-ssm-book-maker.sh`.
+- **Go 1.24.13** in `/home/ec2-user/go1.24` (go.dev tarball, sha256 checked against go.dev's list); the box had no Go.
+- **`/home/ec2-user/market-maker-book`**, a clone of numofx/market-maker detached at `d6c927a7`, with `book-maker` built
+  there (sha256 `026da0c05a5ad64c…`).
+- **`/etc/numo/book-maker.env`** and **`/etc/systemd/system/numo-book-maker.service`** installed from `4eec6f7`. Started
+  21:41:59: the box's role may not read `/numo/exchange/mm_private_key` (only while `ops_box_mm_key_grant=true` is
+  applied, `run-with-ssm-mm.sh`), the wrapper carried on with empty values (`export X="$(get …)"` masks a failed
+  read), and the maker exited on `MM_RPC_URL is required`, restarting every 15 s. **Disabled and stopped at 21:45.**
+  Nothing was sent: #56 has no curve, registration or spline.
+- Left in place, inert: the env file, the disabled unit, the toolchain and the build. Undo: `rm` those four.
+- Fixed in the repo the same hour: every `run-with-ssm*.sh` now stops on a failed required read (old: the command ran,
+  exit 0; new: exit 254, shown with a missing parameter). The box's checkouts still carry the old wrappers.
+
 ## 2026-11-16 21:22–21:35 UTC: OnchainBook maker account #56 funded with 500 USDC from the spot maker's #43 (laptop)
 
 - **#56 created** by the MM wallet `0x3448…B47B`, under engine v2 and held by the wallet itself, outside Matching (tx
