@@ -1,0 +1,16 @@
+[
+  {
+    "description": "acceptOwnership() [OnchainBook]",
+    "to": "0x8Fc63DcB3a173aAF5d2de0F42648D908A519d456",
+    "value": "0",
+    "data": "0x79ba5097",
+    "digest": "0xef72df8a1762b31116df15965fcc99668eb2c95f907db971fdccd87bbe435e3c"
+  },
+  {
+    "description": "book.setMakerAllowed(0x3448ac0A3283951A2AFD5B3A582329ECA43CB47B, true) [the maker, outside Matching]",
+    "to": "0x8Fc63DcB3a173aAF5d2de0F42648D908A519d456",
+    "value": "0",
+    "data": "0x4db8b77b0000000000000000000000003448ac0a3283951a2afd5b3a582329eca43cb47b0000000000000000000000000000000000000000000000000000000000000001",
+    "digest": "0x2434e4c57201d70d2568f34cfc760e7461605d3dd219d8d007343655364b65df"
+  }
+]

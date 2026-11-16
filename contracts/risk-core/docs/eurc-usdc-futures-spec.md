@@ -750,7 +750,11 @@ env (`deploy-onchain-book.s.sol`) or a vault `setMarketParams` later, never a co
 
 ## B15. Implementation record (Stage 2 started 2026-11-15)
 
-`src/periphery/OnchainBook.sol`. Not deployed; no vault action taken.
+`src/periphery/OnchainBook.sol`. **Deployed closed on Base 2026-11-16** at `0x8Fc63DcB3a173aAF5d2de0F42648D908A519d456`
+(block 58,358,413, `ac3e4b1`, single-use deployer `0xd58a…b0b2`; `deployments/8453/ONCHAIN_BOOK.json`): tick 1e12, lot
+1e15, taker fee 5 bps, `takeMaxAge` 1 s, ttl cap 1 h, 3 makers, gas floor 700,000, tax off, maker owner the market maker
+`0x3448…B47B`. Market 1 disabled, nominated to the vault; no vault action yet. Go-ahead from the owner the same day, on
+the B14a defaults; the licence row was put to the owner with the deploy and not separately answered.
 
 **Built as specified:** maker curves (up to 10 regions a side) per owner, splines keyed by (market, account), mid
 `index + offset - skew`, skew from the position at the start of the take and clamped, per-side refill cursors reset on

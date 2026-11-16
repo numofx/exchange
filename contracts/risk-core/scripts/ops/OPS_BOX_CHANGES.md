@@ -5,6 +5,20 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-16 ~23:00 UTC: OnchainBook deployed closed (laptop, `forge script`); its deployer key created in SSM
+
+Not a box change; recorded here with the other hand actions of the day.
+
+- **Key.** `/numo/deploy/onchain_book_deployer_key` (SecureString) created from `cast wallet new`, never printed; it
+  derives `0xd58aa0DD4129B220Df84328f901eC49AE3dbb0b2`. Single use: the deploy script refuses a key with history.
+- **Funded** 0.0002 ETH from the feed signer `0xC9F1…0FDc` (tx `0x1aff4cb4…37a9`), which keeps ~0.0081 (~13 days).
+- **Deployed** `deploy-onchain-book.s.sol` at `ac3e4b1`: book `0x8Fc63DcB3a173aAF5d2de0F42648D908A519d456`, five
+  transactions from block 58,358,413 (`0xa3bc740a…2baa` the create). Read back: owner the deployer, pending owner the
+  vault, market 1 disabled, maker not allowed; the proposer's setup dry run passes nominated, series and parity (22/22).
+  The deployer keeps 0.00017 ETH.
+- **Next:** the setup batch (acceptOwnership, setMakerAllowed(0x3448…B47B)), proposed from the box; digests
+  `0xef72df8a…5e3c` and `0x2434e4c5…65df`.
+
 ## 2026-11-16 20:07 UTC: pager fixed (block rate, held pages) and perp keeper floor 0.0005 (box-39/40, SSM)
 
 `check_perp_pager.py` replaced with `main`'s `e950653` (sha256 `bf42ee41…4f33`, checked on the box before the swap; it
