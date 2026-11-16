@@ -5,6 +5,23 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-16 ~15:05 UTC: EURC v3 relayer topped up to 0.02445 ETH from three wallets (laptop, `cast send`)
+
+The owner said to fund it from the market maker's or the relayers' wallets. Each sends what it can spare through the
+30 Nov expiry while staying above its own alert floor; keys from SSM into a subshell, each address checked first.
+
+- 0.0077 ETH from the feed signer `0xC9F1…0FDc` (`/numo/feeds/relayer_key`), left 0.00846: ~13 days at its measured
+  0.00063 ETH/day, just over `check_signer_balance.py`'s 7-day line (0.0084), which it crosses within a day. Tx
+  `0x075cad6437ed9c78a501f7f87e1957eda76a3941442ad132f1eae9c091afc00e`
+- 0.0015 ETH from the market maker `0x3448…B47B` (`/numo/exchange/mm_private_key`), left 0.00042. Tx
+  `0x38a35ff65a186c2c8be10adc4ef837930fb6b12607e57a5ba67506ca10358cc4`
+- 0.0015 ETH from the v2 cNGN forward relayer `0x3ACe…763f` (`forward_relayer_key_v2_cngn`), left 0.00039 at
+  ~0.00002 ETH/day, over its 0.0003 pager floor to expiry. Tx
+  `0xe378247a8d24401f333854cfe1fb4bdf6ab58af5a066b26c5f38c46dbc3335e3`
+- The v3 relayer holds 0.02445 ETH: ~8.4 days at 0.0029 ETH/day, to about 2026-11-24. Expiry needs ~0.015 ETH more,
+  which no hot wallet can spare: it must come from outside. Untouched: the vol relayer (needs its 0.0024 to expiry),
+  the executor, both keepers.
+
 ## 2026-11-16 11:32–14:50 UTC: EURC v3 relayer ran dry, index stale 3 h 18 m; refunded from two relayers (laptop, `cast send`)
 
 - **What happened.** The EURC v3 keeper's relayer `0x0AbA…12e5` (`/numo/feeds/forward_relayer_key_v3_eurc`) was
