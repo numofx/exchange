@@ -5,6 +5,20 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-16 21:22–21:35 UTC: OnchainBook maker account #56 funded with 500 USDC from the spot maker's #43 (laptop)
+
+- **#56 created** by the MM wallet `0x3448…B47B`, under engine v2 and held by the wallet itself, outside Matching (tx
+  `0x482f03c3…e7c8`). The book's allowances were granted on it, future and cash both ways at uint max (tx
+  `0xec816e1d…9b38`).
+- **`market-maker-eurc` paused** (ECS desired count 1 → 0 at 21:24:56; task `a6708256…` STOPPED 21:25:48, via
+  `wait-for-rollout.sh`) so no EURC-USDC quote rested on #43. `migrate-spot-mm.ts move-usdc 43 56 500000000` (new: a
+  destination the wallet holds itself) withdrew 500 USDC through `/withdrawals` (tx `0xaa1f8c68…a5b0`, block 58,370,524)
+  and deposited it to #56 (tx `0xb6705860…9474`). Restored to 1 at 21:28:10; its new task quoted again by about 21:30
+  (3 bids, 4 asks). **EURC-USDC spot had no quotes for about 5 minutes.** Same task definition (`:5`): no drift.
+- After: #43 holds 2,826 USDC and 3,272 EURC; #56 holds 500 USDC. The MM wallet keeps 0.00041 ETH for gas.
+- The book-maker's preflight against mainnet passes in dry run (owner, engine, allowlist, allowances, feeds); it would
+  quote at +618 ticks with a 300-tick half-spread. Nothing sent.
+
 ## 2026-11-16 20:50–21:16 UTC: OnchainBook setup batch landed (box, `exchange-ops` → `b8998d7`)
 
 - **`/home/ec2-user/exchange-ops`** fetched and detached at `b8998d7` (was `e4b01d0a`), clean before and after. The

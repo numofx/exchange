@@ -34,7 +34,8 @@
  *              is at least --min-im-surplus (default $4). Either way, refused while any of the MM's perp
  *              orders rest: stop market-maker-perp and perp-cancel first, or it quotes from what is left.
  *   move-usdc <from id> <to id> <usdc units>  USDC from one of the MM's MarginEngine accounts to another
- *              (v1 or v2 engine): a WithdrawalModule withdrawal from <from> to the MM wallet, then the cash's
+ *              (v1 or v2 engine; <to> may also be one the MM wallet holds itself, outside Matching, as the
+ *              OnchainBook maker's is): a WithdrawalModule withdrawal from <from> to the MM wallet, then the cash's
  *              deposit into <to>. Refused while any of the MM's orders rest on <from>: stop that maker and
  *              let its quotes expire first. The wallet's own USDC is not touched, except with --deposit-only:
  *              the deposit alone, from USDC already in the wallet (a move whose withdrawal landed and whose
@@ -79,6 +80,7 @@ const abi = parseAbi([
   'function balanceOf(address) view returns (uint256)',
   'function getBalance(uint256 accountId, address asset, uint256 subId) view returns (int256)',
   'function manager(uint256 accountId) view returns (address)',
+  'function ownerOf(uint256 tokenId) view returns (address)',
   'function createAndDepositSubAccount(address baseAsset, uint256 initDeposit, address manager) returns (uint256)',
   'function deposit(uint256 recipientAccount, uint256 amount)',
   'function subAccountToOwner(uint256) view returns (address)',
@@ -518,7 +520,10 @@ async function moveUsdc() {
     const mgr = await client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'manager', args: [id] });
     if (!engines.has(mgr.toLowerCase())) throw new Error(`#${id} is under ${mgr}, not a MarginEngine the venue lists`);
     const custodian = await client.readContract({ address: MATCHING, abi, functionName: 'subAccountToOwner', args: [id] });
-    if (custodian.toLowerCase() !== owner.address.toLowerCase()) throw new Error(`#${id} is not the MM's in Matching (owner ${custodian})`);
+    const held = custodian.toLowerCase() === owner.address.toLowerCase();
+    // The destination may also be an account the MM wallet holds itself, outside Matching: the OnchainBook maker's.
+    const direct = id === to && (await client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'ownerOf', args: [id] })).toLowerCase() === owner.address.toLowerCase();
+    if (!held && !direct) throw new Error(`#${id} is neither the MM's in Matching (owner ${custodian}) nor ${id === to ? "held by the MM wallet" : "a destination"}`);
     console.log(`#${id}: under ${mgr}, cash ${await ledger(id, cash)} (18dp)`);
   }
   const depositOnly = flags.includes('--deposit-only');
