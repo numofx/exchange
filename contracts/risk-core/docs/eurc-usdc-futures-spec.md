@@ -729,6 +729,25 @@ Decided 2026-11-14 (kept for the record):
 - Licensing: risk-core files are BUSL-1.1 (Lyra/Derive v2 lineage). Confirm the terms permit this product before
   mainnet.
 
+### B14a. Stage 2 decision sheet (2026-11-16, for the 2026-11-24 go/no-go)
+
+Each row is the owner's call; the recommendation is the reviewer's, with its reason. Every value is a deploy-script
+env (`deploy-onchain-book.s.sol`) or a vault `setMarketParams` later, never a code change.
+
+| Decision | Recommended | Why | Alternative |
+|---|---|---|---|
+| `takeMaxAge` | **1 s** (tested) | B6a's stale-price option is the main economic risk. The keeper posts every 20 s, so at 1 s only a taker that attaches reports fills (+133k gas, B10). The only taker is our own (no outside integrators), and it holds Data Streams credentials. | 30 s: fills on the keeper's reports, no credentials needed; makers carry a 20–30 s stale option, which a depeg widens. |
+| Tick | **1e12** (0.000001 USDC per EURC, ~0.01 bp) | Finer than any useful quote; the walk's cost does not depend on it. | 1e13 if quotes should be coarser. |
+| Lot | **1e15** (1 EURC) | One contract is 1,000 EURC; a lot of 1 EURC lets small takes fill. | 1e17 (100 EURC) for fewer, larger fills. |
+| `maxTtl` | **1 h** | A maker that stops updating stops quoting within the hour. | 10 min, tighter, but the maker must reprice at least that often. |
+| Makers per market | **3** | Makers are allowlisted, so the cap bounds gas (B10: 1 maker 1.13M, about +0.61M each; 3 makers about 2.4M), not spam. Raised by the vault when a second maker exists. | 10 (tested; 6.6M gas worst case). |
+| Gas floor | **700,000** (tested) | Above a measured settlement batch (~600k) with margin; the out-of-gas revert (B5a) covers what the floor misses. | — |
+| Priority tax | **off** (B12) | The script refuses anything else at rollout. | — |
+| Taker fee | **the registry's, today 5 bps** | Not chosen here: the proposer refuses an enable whose fee differs from `/markets`. | — |
+| DEX-skew policy (B6) | **Maker-side: widen the half-spread when the Aerodrome pool is thin or the EURC dexprice stream diverges from the push feed; stop quoting past a set divergence.** No contract change. | The index is a DEX-weighted stream; the book cannot tell a skew from a move. | Quote only in deep-liquidity hours (a schedule in the maker). |
+| Rehearsal | **Mainnet canary**, as Stage 1 (A1.4): deploy closed, enable with our maker quoting one small curve, take against it from a throwaway account, then raise size. | The 2026-11-15 precedent; Sepolia lacks the verifier and the live engine. | Base Sepolia with a short-dated series (B12 as written; ~3 h). |
+| Licence | **Owner to confirm** | `LICENSE` names Numo Foundation as licensor, Additional Use Grant: none, Change Date 2029-03-20 for code from 2025-02-17 (GPL-3.0-or-later after). Whether the upstream Lyra/Derive v2 BUSL permits Numo's production use is outside this repo. | — |
+
 ## B15. Implementation record (Stage 2 started 2026-11-15)
 
 `src/periphery/OnchainBook.sol`. Not deployed; no vault action taken.
