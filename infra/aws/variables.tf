@@ -74,7 +74,10 @@ variable "image_markets" {
   # with an 18-minute matcher outage and an RDS restart; rollout completed ~19:44. Rollback is e5567ec40f97, in one apply.
   # 2026-11-03: main b2951be (219ac60: no limit price backfill at boot). Applied 20:16 UTC: markets td :56, matcher td :55, migrate td :49, 0 failed tasks. Every older image scans active_orders at boot, so a rollback
   # to 7235bbc7f41b brings that back.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:2fd91925220b"
+  # 2026-11-16: main 96974ae (0d8fc68: the matcher indexes the OnchainBook's Fill and TakeExecuted onto the series tape;
+  # migration 000024 run first, migrate td :55). Rollback is 2fd91925220b, in one apply (000024 only adds, so the old
+  # image runs on the migrated schema).
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:96974ae8e208"
 }
 
 variable "image_execution" {
@@ -646,8 +649,9 @@ variable "ops_box_mm_key_grant" {
 # deployed: the matcher then indexes its Fill and TakeExecuted events onto the series' tape from that block. Empty
 # leaves both out of the matcher's task definition.
 variable "onchain_book_address" {
-  type    = string
-  default = ""
+  type = string
+  # Deployed 2026-11-16 (risk-core deployments/8453/ONCHAIN_BOOK.json), enabled 22:27 UTC.
+  default = "0x8Fc63DcB3a173aAF5d2de0F42648D908A519d456"
   validation {
     condition     = var.onchain_book_address == "" || can(regex("^0x[0-9a-fA-F]{40}$", var.onchain_book_address))
     error_message = "onchain_book_address must be an address or empty."
@@ -657,6 +661,7 @@ variable "onchain_book_address" {
 # Required with the address (a precondition on the matcher's task definition: variable validations cannot read
 # another variable before Terraform 1.9).
 variable "onchain_book_start_block" {
-  type    = number
-  default = 0
+  type = number
+  # The book's create transaction (0xa3bc740a…2baa).
+  default = 58358413
 }
