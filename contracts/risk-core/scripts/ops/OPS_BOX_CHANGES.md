@@ -5,6 +5,18 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-16 23:38 UTC: gas watch covers the MM wallet (OnchainBook maker) (SSM)
+
+- `/etc/numo/perp-pager.env`: `GAS_WATCH` gains `book-maker=0x3448…B47B:0.0001` (backup `.bak-202611162338`).
+- `/home/ec2-user/exchange/…/check_signer_balance.py` replaced with `140597e`'s (sha256 `895f6c6f…0dac`; it was
+  `cc752fdf…dc70`, checked before the swap; backup `.bak-202611162338`): the wallet at 0.00005 ETH/day.
+- **Why.** The wallet pays every `updateSplines`: ~0.00000042 ETH each with the L1 fee, measured over its first five, up
+  to ~100 a day.
+- **Proved.** Forced (`WARN_RUNWAY_DAYS=100`, webhook blanked): `NUMO HOT WALLET LOW GAS … OnchainBook maker (MM wallet)
+  0.000408 ETH, ~8.2 days`. Normal: ok at ~8.2 days; the same run lists the feed signer (6.5 d) and the v3 relayer
+  (6.7 d) as low, which the timer posts on its own. The pager's 23:39:35 run read `gas book-maker`, refused (HTTP 429)
+  and held, as 5 of its 9 gas reads were: the public RPC (open).
+
 ## 2026-11-16 22:42–22:46 UTC: OnchainBook canary takes on mainnet: filled, flat, on the tape
 
 - **Taker funded** from #56 (owner's approval: `CashAsset.withdraw(56, 50 USDC, taker)`, tx `0x6c4f5584…5d5b`; #56 keeps
