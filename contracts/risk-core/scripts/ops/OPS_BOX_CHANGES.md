@@ -5,6 +5,27 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-16 11:32–14:50 UTC: EURC v3 relayer ran dry, index stale 3 h 18 m; refunded from two relayers (laptop, `cast send`)
+
+- **What happened.** The EURC v3 keeper's relayer `0x0AbA…12e5` (`/numo/feeds/forward_relayer_key_v3_eurc`) was
+  funded with 0.002 ETH on 2026-11-15 and posts reports every 20 s: ~2,700 tx and ~0.0029 ETH a day, 20x the feed
+  signer. It emptied at nonce 1926; the last stored reports are from 11:31:59 UTC, after which `EurcIndexFeed.getSpot()`
+  reverted (`EIF_Stale`), so EURC-30NOV26 fills and marks stopped. Market 2's margin reads the Chainlink push feed and
+  kept working. Nothing paged: the relayer was in neither `GAS_WATCH` nor `check_signer_balance.py`.
+- **Found** by the OnchainBook proposer's enable dry run on an anvil fork (its index gate), not by any alert.
+- **Refunded** by the owner's instruction ("move funds from an existing relayer wallet or market maker wallet"). Keys
+  read from SSM into a subshell, never printed; each key's address checked against its wallet before sending.
+  - 0.001855952828912066 ETH, all but 0.00002, from the canary relayer `0x35ee…bDD5`
+    (`forward_relayer_key_v3_eurc_canary`, idle since the canary's keeper was disabled), tx
+    `0x5dc806565da32aaec2bbdd4eff1873333b1b9a78f021eabc16689a6c6e409b76`
+  - 0.012 ETH from the feed signer `0xC9F1…0FDc` (`relayer_key`; 0.0282 -> 0.0162, ~25 days at its measured 0.00063
+    ETH/day), tx `0x4c1d236bf2bc9ed5cdf7f88f03284fe5c459e799084de0c9836c9a96de2de445`
+  - The v3 relayer holds 0.01386 ETH, ~4.8 days. The keeper resumed by itself (nonce 1927 by 14:50 UTC);
+    `getSpot()` read 1.10108. The market maker's wallet (0.0019 ETH) was left alone.
+- **Watching (repo, `d9101f8`; NOT yet on the box).** `perp-pager.env` `GAS_WATCH` gains
+  `eurc-v3-relayer=0x0AbA…12e5:0.01`; `check_signer_balance.py` watches six wallets with measured burns. The box's
+  copies are unchanged until they are copied over.
+
 ## 2026-11-15 20:49–21:30 UTC: EURC v3 canary drilled, settled, closed out; canary keeper disabled
 
 - 20:49:03 `systemctl stop numo-future-feeds-v3@eurc-canary`, 20:53:34 `start` (the drill's outage, spec A1.4).
