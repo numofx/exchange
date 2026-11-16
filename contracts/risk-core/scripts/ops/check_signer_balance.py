@@ -43,6 +43,9 @@ WALLETS: list[tuple[str, str, float]] = [
   ("forward relayer v2 EURC", "0xEEa45ea4f68cb62b5eDe84E1d9F82F6d253C5321", 0.00005),  # 0.000023/day, 46 tx
   ("forward relayer v2 cNGN", "0x3ACeFDe146161D1b9ca2fdB8a3B38122818d763f", 0.00005),  # 0.000020/day, 46 tx
   ("EURC v3 keeper relayer", "0x0AbAac33E5ab7E62dED100Be465032A3636b12e5", 0.0035),  # 0.0029/day, ~2,700 tx
+  # The MM wallet, as the OnchainBook maker's owner (ECS market-maker-book): it pays every updateSplines, ~0.00000042 ETH
+  # each with the L1 fee (measured 2026-11-16), up to ~100 a day; 0.000042/day rounded up. mm-bot signs off chain.
+  ("OnchainBook maker (MM wallet)", "0x3448ac0A3283951A2AFD5B3A582329ECA43CB47B", 0.00005),
   # The vault no longer marks (6 tx/day, 0.0000014 ETH/day), but a dry vault cannot approve a batch at all.
   ("vault", "0x1dcA42ab54Bd3862853A821F84B29BF65245F435", 0.00001),
 ]
