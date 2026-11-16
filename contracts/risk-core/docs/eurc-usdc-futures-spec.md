@@ -826,3 +826,18 @@ off-chain, a curve-quoting mode in the market maker, maker subaccounts outside `
 Indexing is built (2026-11-16, markets-service, README "OnchainBook fills"): the matcher writes each `Fill` onto the
 series' tape (`trade_fills`, source `book`, at block time) and each `TakeExecuted` to `book_takes`, refusing a range
 whose fills do not add up to their take. It waits on the deploy for `ONCHAIN_BOOK_ADDRESS` and its start block.
+
+**End-to-end on a fork of Base (2026-11-16, block 58,347,197, chain time stepped 1 s a block).** Every Stage 2 piece in
+one run, against the live v3 stack:
+- `deploy-onchain-book.s.sol` deployed the book (`TAKE_MAX_AGE=60` for the fork); the setup and enable batches landed as
+  the vault; the proposer read them as landed, parity 22/22.
+- The book-maker set its curve, registered account 56 and quoted at +555 ticks.
+- Account 57 took three times: bought 150 lots at 1.100823, sold 300 through both curve regions at 1.1006063, and sent
+  a buy limited below the ask, which filled nothing.
+- markets-service's indexer, with the production EURC-30NOV26 listing, wrote both fills to the tape (150 and 300 EURC,
+  block-time, 5 bps fees) and all three takes; a second pass wrote nothing.
+- The fees matched the fee account's credits net of cash interest.
+- Unplanned: mining 25 blocks staled the index, and the book-maker cancelled (`index_unreadable`); at SIGTERM it left
+  the cancelled spline alone.
+
+Not covered: Base Sepolia, and the book under a live keeper's report cadence, where `takeMaxAge` is 1 s.
