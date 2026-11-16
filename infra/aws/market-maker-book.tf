@@ -73,7 +73,10 @@ resource "aws_ecs_task_definition" "market_maker_book" {
     ]
     secrets = [
       { name = "MM_OWNER_PRIVATE_KEY", valueFrom = local.secret_arns.mm_private_key },
-      { name = "MM_RPC_URL", valueFrom = local.secret_arns.mm_rpc_url },
+      # The keyed endpoint, not mm_rpc_url: the maker sends transactions and waits for their receipts, and the public
+      # one (publicnode) refused a fresh receipt as an "archive request" (2026-11-16 21:47, after setCurve had landed).
+      # ~5 reads a 5 s cycle, ~90k calls a day, billed per call (secrets.tf).
+      { name = "MM_RPC_URL", valueFrom = local.secret_arns.rpc_fallback_url },
     ]
 
     logConfiguration = local.log_options["market-maker-book"]
