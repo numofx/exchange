@@ -1,0 +1,25 @@
+# Quotes EURC-30NOV26 on the OnchainBook (risk-core src/periphery/OnchainBook.sol) from account #56, held by the MM
+# wallet outside Matching: one oracle-pegged spline, repriced by updateSplines (market-maker cmd/book-maker,
+# docs/book-maker.md). Non-secret config from /etc/numo/book-maker.env; the key and RPC from SSM in
+# run-with-ssm-book-maker.sh. On SIGTERM it cancels its spline (TimeoutStopSec leaves room for the transaction); if
+# that fails the spline lapses at its ttl.
+[Unit]
+Description=Numo OnchainBook maker (EURC-30NOV26)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Its own checkout and binary: /home/ec2-user/market-maker-book at a pinned commit, built with the Go toolchain in
+# /home/ec2-user/go1.24 (the box has no other Go). Updating it moves nothing else on the box.
+User=ec2-user
+WorkingDirectory=/home/ec2-user/market-maker-book
+EnvironmentFile=/etc/numo/book-maker.env
+Environment=AWS_REGION=us-east-1
+ExecStart=/home/ec2-user/exchange-ops/contracts/risk-core/scripts/ops/run-with-ssm-book-maker.sh /home/ec2-user/market-maker-book/book-maker
+Restart=always
+RestartSec=15
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target
