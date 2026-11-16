@@ -17,13 +17,71 @@ import {ISpotFeed} from "../../src/interfaces/ISpotFeed.sol";
 import {IForwardFeed} from "../../src/interfaces/IForwardFeed.sol";
 import {StreamsIndexAdapter} from "../../src/feeds/StreamsIndexAdapter.sol";
 import {EurcIndexFeed} from "../../src/feeds/EurcIndexFeed.sol";
-import {OnchainBook} from "../../src/periphery/OnchainBook.sol";
+import {OnchainBook, IOnchainBookManager} from "../../src/periphery/OnchainBook.sol";
 
 import "../shared/mocks/MockERC20.sol";
 import "../shared/mocks/MockFeeds.sol";
 import "../shared/mocks/MockCash.sol";
 import "../risk-managers/mocks/MockDutchAuction.sol";
+import {ReentrancyGuard} from "openzeppelin/utils/ReentrancyGuard.sol";
+import {IManager} from "../../src/interfaces/IManager.sol";
 import {MockStreamsVerifier} from "../feed/unit-tests/StreamsIndexAdapter.t.sol";
+
+/// @dev Looks like the index adapter to the book, and re-enters it from acceptData with whatever call it was given.
+contract ReentrantAdapter {
+  StreamsIndexAdapter public immutable real;
+  address public immutable book;
+  bytes public reentry;
+
+  constructor(StreamsIndexAdapter real_, address book_) {
+    real = real_;
+    book = book_;
+  }
+
+  function setReentry(bytes calldata data) external {
+    reentry = data;
+  }
+
+  function baseFeedId() external view returns (bytes32) {
+    return real.baseFeedId();
+  }
+
+  function quoteFeedId() external view returns (bytes32) {
+    return real.quoteFeedId();
+  }
+
+  function latest(bytes32 feedId) external view returns (uint, uint64) {
+    return real.latest(feedId);
+  }
+
+  function acceptData(bytes calldata) external {
+    (bool ok, bytes memory ret) = book.call(reentry);
+    if (!ok) {
+      assembly {
+        revert(add(ret, 32), mload(ret))
+      }
+    }
+  }
+}
+
+/// @dev Stands in for SubAccounts.submitTransfers: uses up all the gas it is given.
+contract GasBurner {
+  uint public sink;
+
+  function submitTransfers(ISubAccounts.AssetTransfer[] calldata, bytes calldata) external returns (uint) {
+    while (true) {
+      sink += 1;
+    }
+    return 0;
+  }
+}
+
+/// @dev A manager a maker might move its account to: any call into it reverts.
+contract RevertingManager {
+  fallback() external {
+    revert("called a maker-chosen manager");
+  }
+}
 
 /**
  * OnchainBook (docs/eurc-usdc-futures-spec.md, Part B) against the real SubAccounts, MarginEngine v2, FutureAsset v3,
@@ -31,7 +89,7 @@ import {MockStreamsVerifier} from "../feed/unit-tests/StreamsIndexAdapter.t.sol"
  *
  * Index 1.10 USDC per EURC, one contract 1,000 EURC, one lot 1 EURC (1e15), one tick 0.000001.
  */
-contract OnchainBookTest is Test {
+abstract contract OnchainBookBase is Test {
   bytes32 constant EURC = 0x00030f2b89e4498002a62638cc61ae91a9690c33830601fc64bc131a07f0c5cb;
   bytes32 constant USDC = 0x00038f83323b6b08116d1614cf33a9bd71ab5e0abf0c9f1b783a74a43e7bd992;
 
@@ -40,6 +98,7 @@ contract OnchainBookTest is Test {
   uint constant LOT = 1e15;
   uint constant FEE_RATE = 0.0005e18;
   uint constant HALF_SPREAD = 100; // 0.0001
+  uint constant GAS_FLOOR = 700_000;
 
   SubAccounts subAccounts;
   MarginEngine engine;
@@ -67,7 +126,7 @@ contract OnchainBookTest is Test {
   uint bobAcc;
   uint feeAcc;
 
-  function setUp() public {
+  function setUp() public virtual {
     vm.warp(1_794_702_400);
     subAccounts = new SubAccounts("Accounts", "ACC");
     usdc = new MockERC20("USDC", "USDC");
@@ -107,7 +166,7 @@ contract OnchainBookTest is Test {
 
     feeAcc = subAccounts.createAccount(address(this), engine);
     book = new OnchainBook(subAccounts, IAsset(address(cash)), feeAcc);
-    mkt = book.createMarket(future, subId, adapter, TICK, LOT);
+    mkt = book.createMarket(future, subId, IOnchainBookManager(address(engine)), adapter, TICK, LOT);
     book.setMarketParams(mkt, FEE_RATE, 1, 1 hours, 8, true);
 
     usdc.approve(address(cash), type(uint).max);
@@ -230,7 +289,9 @@ contract OnchainBookTest is Test {
     uint notional = lots * LOT * 1_000e18 / 1e18 * price / 1e18;
     return (notional * FEE_RATE + 1e18 - 1) / 1e18;
   }
+}
 
+contract OnchainBookTest is OnchainBookBase {
   ///////////
   // Fills //
   ///////////
@@ -711,6 +772,124 @@ contract OnchainBookTest is Test {
     vm.prank(bob);
     vm.expectRevert(OnchainBook.OB_GasFloor.selector);
     book.take(_order(true, 500, 2e18), "");
+  }
+
+  //////////////////////////////////////////
+  // Maker accounts stay on the engine    //
+  //////////////////////////////////////////
+
+  function testAMakerUnderAnotherManagerCannotRegister() public {
+    RevertingManager other = new RevertingManager();
+    uint acc = subAccounts.createAccount(alice, IManager(address(other)));
+    vm.prank(alice);
+    vm.expectRevert(OnchainBook.OB_WrongManager.selector);
+    book.registerMaker(mkt, acc);
+  }
+
+  function testAMarketsEngineMustBeWhitelistedOnTheFuture() public {
+    RevertingManager other = new RevertingManager();
+    vm.expectRevert(OnchainBook.OB_InvalidParams.selector);
+    book.createMarket(future, subId, IOnchainBookManager(address(other)), adapter, TICK, LOT);
+  }
+
+  ////////////////
+  // Reentrancy //
+  ////////////////
+
+  function _evilMarket() internal returns (ReentrantAdapter evil, uint m2) {
+    evil = new ReentrantAdapter(adapter, address(book));
+    m2 = book.createMarket(
+      future, subId, IOnchainBookManager(address(engine)), StreamsIndexAdapter(address(evil)), TICK, LOT
+    );
+    book.setMarketParams(m2, FEE_RATE, 1, 1 hours, 8, true);
+  }
+
+  function testReentryIntoTakeIsRefused() public {
+    (ReentrantAdapter evil, uint m2) = _evilMarket();
+    evil.setReentry(abi.encodeCall(OnchainBook.take, (_order(true, 500, 2e18), bytes(""))));
+    OnchainBook.TakeOrder memory o = _order(true, 500, 2e18);
+    o.marketId = m2;
+    vm.prank(bob);
+    vm.expectRevert(ReentrancyGuard.ReentrancyGuardReentrantCall.selector);
+    book.take(o, hex"01");
+  }
+
+  /// The walk reads splines, cursors and curves: none may change under it.
+  function testReentryIntoMakerStateIsRefused() public {
+    (ReentrantAdapter evil, uint m2) = _evilMarket();
+    OnchainBook.TakeOrder memory o = _order(true, 500, 2e18);
+    o.marketId = m2;
+    OnchainBook.SplineUpdate[] memory u = new OnchainBook.SplineUpdate[](0);
+    OnchainBook.Region[] memory r = new OnchainBook.Region[](0);
+    bytes[5] memory calls = [
+      abi.encodeCall(OnchainBook.updateSplines, (u)),
+      abi.encodeCall(OnchainBook.poke, (mkt, aliceAcc)),
+      abi.encodeCall(OnchainBook.cancelSpline, (mkt, aliceAcc)),
+      abi.encodeCall(OnchainBook.setCurve, (1, r)),
+      abi.encodeCall(OnchainBook.registerMaker, (mkt, aliceAcc))
+    ];
+    for (uint i; i < calls.length; ++i) {
+      evil.setReentry(calls[i]);
+      vm.prank(bob);
+      vm.expectRevert(ReentrancyGuard.ReentrancyGuardReentrantCall.selector);
+      book.take(o, hex"01");
+    }
+  }
+
+  //////////////////////////////
+  // Gas griefing (B5a, B11)  //
+  //////////////////////////////
+
+  /// @dev Whether some gas limit lets a take succeed with a maker skipped by running out of gas inside its batch,
+  ///      the 63/64 rule's grief. Sweeps the limit across the whole range a one-maker take can run in.
+  function _griefable() internal returns (bool found, uint atGas) {
+    book.removeMaker(mkt, carolAcc);
+    bytes memory call = abi.encodeCall(OnchainBook.take, (_order(true, 500, 2e18), bytes("")));
+    for (uint g = 150_000; g <= 2_500_000; g += 5_000) {
+      uint snap = vm.snapshotState();
+      vm.recordLogs();
+      vm.prank(bob);
+      (bool ok,) = address(book).call{gas: g}(call);
+      Vm.Log[] memory logs = vm.getRecordedLogs();
+      vm.revertToState(snap);
+      if (!ok) continue;
+      for (uint i; i < logs.length; ++i) {
+        if (logs[i].emitter == address(book) && logs[i].topics[0] == OnchainBook.MakerSkipped.selector) {
+          return (true, g);
+        }
+      }
+    }
+  }
+
+  /// A batch that runs out of gas reverts the take; it is never caught and skipped. submitTransfers is replaced by
+  /// one that burns everything it is given, as a batch made heavy through the taker's own account would.
+  function testABatchOutOfGasRevertsTheTakeRatherThanSkippingTheMaker() public {
+    GasBurner burner = new GasBurner();
+    vm.mockFunction(
+      address(subAccounts), address(burner), abi.encodeWithSelector(ISubAccounts.submitTransfers.selector)
+    );
+    // tests run with a near-unlimited gas limit (foundry.toml): give the take a real one
+    vm.prank(bob);
+    (bool ok, bytes memory ret) =
+      address(book).call{gas: 5_000_000}(abi.encodeCall(OnchainBook.take, (_order(true, 500, 2e18), bytes(""))));
+    assertFalse(ok);
+    assertEq(bytes4(ret), OnchainBook.OB_BatchOutOfGas.selector);
+  }
+
+  /// A genuine revert is still caught and skipped, however little gas it used.
+  function testAGenuineRevertIsStillSkipped() public {
+    vm.mockCallRevert(
+      address(subAccounts), abi.encodeWithSelector(ISubAccounts.submitTransfers.selector), bytes("margin")
+    );
+    vm.prank(bob);
+    (uint filled,) = book.take(_order(true, 500, 2e18), "");
+    assertEq(filled, 0);
+  }
+
+  function testWithTheGasFloorNoGasLimitSkipsAMaker() public {
+    book.setGasFloor(GAS_FLOOR);
+    (bool found, uint atGas) = _griefable();
+    assertFalse(found, string.concat("skipped at gas ", vm.toString(atGas)));
   }
 
   ///////////

@@ -19,6 +19,10 @@ interface IOnchainBookManager {
   function getMargin(uint accountId, bool isInitial) external view returns (int);
 }
 
+interface IOnchainBookManagerWhitelist {
+  function whitelistedManager(address manager) external view returns (bool);
+}
+
 /**
  * @title OnchainBook
  * @notice On-chain matching for dated futures (docs/eurc-usdc-futures-spec.md, Part B). Makers quote with curves pegged
@@ -47,6 +51,8 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
 
   struct Market {
     IFutureAssetV3 future;
+    /// @dev the margin engine every maker account must be under; the only manager this contract ever calls
+    IOnchainBookManager engine;
     uint96 subId;
     uint64 expiry;
     uint64 lastTradeTime;
@@ -238,6 +244,8 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
   error OB_BelowMinFill();
   error OB_SelfTrade();
   error OB_GasFloor();
+  error OB_WrongManager();
+  error OB_BatchOutOfGas();
 
   constructor(ISubAccounts subAccounts_, IAsset cash_, uint feeRecipient_) Ownable(msg.sender) {
     subAccounts = subAccounts_;
@@ -249,18 +257,23 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
   // Admin //
   ///////////
 
-  function createMarket(IFutureAssetV3 future, uint96 subId, StreamsIndexAdapter adapter, uint tickSize, uint lotSize)
-    external
-    onlyOwner
-    returns (uint marketId)
-  {
+  function createMarket(
+    IFutureAssetV3 future,
+    uint96 subId,
+    IOnchainBookManager engine,
+    StreamsIndexAdapter adapter,
+    uint tickSize,
+    uint lotSize
+  ) external onlyOwner returns (uint marketId) {
     IFutureAsset.FutureContract memory c = future.futureContracts(subId);
-    if (!c.listed || c.settled || address(adapter) == address(0) || tickSize == 0 || lotSize == 0) {
-      revert OB_InvalidParams();
-    }
+    if (
+      !c.listed || c.settled || address(adapter) == address(0) || tickSize == 0 || lotSize == 0
+        || !IOnchainBookManagerWhitelist(address(future)).whitelistedManager(address(engine))
+    ) revert OB_InvalidParams();
     marketId = nextMarketId++;
     Market storage m = markets[marketId];
     m.future = future;
+    m.engine = engine;
     m.subId = subId;
     m.expiry = c.expiry;
     m.lastTradeTime = c.lastTradeTime;
@@ -330,7 +343,7 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
   ///////////
 
   /// @notice Store a curve under the caller. Offsets must not decrease; each region holds at least one lot.
-  function setCurve(uint16 curveId, Region[] calldata regions) external {
+  function setCurve(uint16 curveId, Region[] calldata regions) external nonReentrant {
     if (regions.length == 0 || regions.length > MAX_REGIONS) revert OB_InvalidCurve();
     Region[] storage stored = _curves[msg.sender][curveId];
     while (stored.length > 0) stored.pop();
@@ -343,11 +356,14 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
     emit CurvesSet(msg.sender, curveId, regions);
   }
 
-  function registerMaker(uint marketId, uint accountId) external {
+  function registerMaker(uint marketId, uint accountId) external nonReentrant {
     Market storage m = _market(marketId);
     address owner_ = _authorize(accountId);
     if (!makerAllowed[owner_]) revert OB_MakerNotAllowed();
     if (isRegistered[marketId][accountId]) revert OB_AlreadyRegistered();
+    // Every take calls into a maker's manager: only the market's engine, never one the maker chose. Checked once:
+    // SubAccounts sets an account's manager at creation and has no way to change it.
+    if (address(subAccounts.manager(accountId)) != address(m.engine)) revert OB_WrongManager();
     if (_makers[marketId].length >= m.maxMakers) revert OB_TooManyMakers();
     _makers[marketId].push(accountId);
     isRegistered[marketId][accountId] = true;
@@ -356,13 +372,13 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
 
   /// @notice Reprice any number of splines. Each update's seq must exceed the stored one; it resets both cursors and
   ///         reactivates the spline.
-  function updateSplines(SplineUpdate[] calldata updates) external {
+  function updateSplines(SplineUpdate[] calldata updates) external nonReentrant {
     for (uint i; i < updates.length; ++i) {
       _updateSpline(updates[i]);
     }
   }
 
-  function cancelSpline(uint marketId, uint accountId) external {
+  function cancelSpline(uint marketId, uint accountId) external nonReentrant {
     _authorize(accountId);
     splines[marketId][accountId].active = false;
     emit SplineCancelled(marketId, accountId);
@@ -370,11 +386,11 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
 
   /// @notice Anyone may switch off a maker that is below initial margin, in an auction, or has withdrawn its
   ///         allowance. Position-reducing fills are held only to maintenance, but deactivating here is simpler (B5a).
-  function poke(uint marketId, uint accountId) external {
+  function poke(uint marketId, uint accountId) external nonReentrant {
     Market storage m = _market(marketId);
     Spline storage s = splines[marketId][accountId];
     if (!s.active) return;
-    IOnchainBookManager mgr = IOnchainBookManager(address(subAccounts.manager(accountId)));
+    IOnchainBookManager mgr = m.engine;
     if (mgr.liquidation().isAuctionLive(accountId)) {
       _deactivate(marketId, accountId, DeactivationReason.AuctionLive);
     } else if (mgr.getMargin(accountId, true) < 0) {
@@ -529,8 +545,7 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
     if (!s.active || block.timestamp > uint(s.updatedAt) + s.ttl) return mk;
 
     mk.owner = subAccounts.ownerOf(accountId);
-    IOnchainBookManager mgr = IOnchainBookManager(address(subAccounts.manager(accountId)));
-    if (mgr.liquidation().isAuctionLive(accountId)) return mk;
+    if (m.engine.liquidation().isAuctionLive(accountId)) return mk;
 
     // Skew from the position at the start of the take, clamped, not recomputed between levels (B7).
     int posLots = subAccounts.getBalance(accountId, m.future, m.subId) / int(m.lotSize);
@@ -622,6 +637,7 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
         assetData: bytes32(0)
       });
     }
+    uint gasBefore = gasleft();
     try subAccounts.submitTransfers(batch, o.managerData) {
       Cursor storage c = cursors[o.marketId][mk.accountId][!o.isBuy];
       uint consumed = _consumedNow(c, splines[o.marketId][mk.accountId].refillLotsPerSecond);
@@ -630,6 +646,9 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
       emit Fill(o.marketId, o.takerAccountId, mk.accountId, o.isBuy, amount, price, fee);
       return true;
     } catch (bytes memory reason) {
+      // Out of gas, not a real revert: the call took all it was given, leaving about 1/64. The taker chose the gas,
+      // and can make the batch heavy through its own account, so skipping here would let it pick which makers fill.
+      if (gasleft() <= gasBefore / 63) revert OB_BatchOutOfGas();
       emit MakerSkipped(o.marketId, mk.accountId, reason);
       return false;
     }

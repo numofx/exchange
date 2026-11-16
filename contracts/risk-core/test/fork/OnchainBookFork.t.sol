@@ -13,7 +13,7 @@ import {MarginEngine} from "../../src/risk-managers/MarginEngine.sol";
 import {IAsset} from "../../src/interfaces/IAsset.sol";
 import {IManager} from "../../src/interfaces/IManager.sol";
 import {IFutureAssetV3} from "../../src/interfaces/IFutureAssetV3.sol";
-import {OnchainBook} from "../../src/periphery/OnchainBook.sol";
+import {OnchainBook, IOnchainBookManager} from "../../src/periphery/OnchainBook.sol";
 
 /**
  * OnchainBook against the live EURC-30NOV26 v3 stack on Base (docs/eurc-usdc-futures-spec.md, B10, B11): the
@@ -80,7 +80,7 @@ contract OnchainBookFork is Test {
     if (takeMaxAge == 0) takeMaxAge = 1;
 
     book = new OnchainBook(subAccounts, IAsset(address(CASH)), FEE_ACCOUNT);
-    mkt = book.createMarket(FUTURE, SUB_ID, ADAPTER, TICK, LOT);
+    mkt = book.createMarket(FUTURE, SUB_ID, IOnchainBookManager(address(ENGINE)), ADAPTER, TICK, LOT);
     book.setMarketParams(mkt, FEE_RATE, takeMaxAge, 1 hours, 10, true);
     bobAcc = _account(bob, 10_000e6);
   }
@@ -258,7 +258,7 @@ contract OnchainBookFork is Test {
     uint[] memory ids = new uint[](10);
     ids[0] = mkt;
     for (uint i = 1; i < 10; ++i) {
-      ids[i] = book.createMarket(FUTURE, SUB_ID, ADAPTER, TICK, LOT);
+      ids[i] = book.createMarket(FUTURE, SUB_ID, IOnchainBookManager(address(ENGINE)), ADAPTER, TICK, LOT);
       book.setMarketParams(ids[i], FEE_RATE, takeMaxAge, 1 hours, 10, true);
       vm.prank(owner);
       book.registerMaker(ids[i], makerAccs[0]);
