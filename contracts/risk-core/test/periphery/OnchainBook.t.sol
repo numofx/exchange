@@ -583,6 +583,24 @@ contract OnchainBookTest is OnchainBookBase {
     assertEq(_pos(bobMaker), 0);
   }
 
+  /// A level cancelled by DecrementTake counts against maxLevels, as a fill does: it is a level the walk dealt with.
+  function testASelfTradeCancelledLevelCountsAgainstMaxLevels() public {
+    book.setMakerAllowed(bob, true);
+    uint bobMaker = _account(bob, 10_000e18);
+    OnchainBook.Region[] memory r = new OnchainBook.Region[](1);
+    r[0] = OnchainBook.Region(300, 0);
+    vm.startPrank(bob);
+    book.setCurve(1, r);
+    book.registerMaker(mkt, bobMaker);
+    vm.stopPrank();
+    _update(bob, bobMaker, -10, 1);
+    OnchainBook.TakeOrder memory o = _order(true, 1000, 2e18);
+    o.selfTradeMode = OnchainBook.SelfTradeMode.DecrementTake;
+    o.maxLevels = 1;
+    (uint filled,) = _take(o);
+    assertEq(filled, 0, "the one level allowed was bob's own, cancelled");
+  }
+
   ////////////////////////
   // Splines and curves //
   ////////////////////////
@@ -1070,5 +1088,55 @@ contract OnchainBookTest is OnchainBookBase {
   function _splineUpdate(uint acc, uint64 seq) internal view returns (OnchainBook.SplineUpdate[] memory u) {
     u = new OnchainBook.SplineUpdate[](1);
     u[0] = OnchainBook.SplineUpdate(mkt, acc, 0, uint32(HALF_SPREAD), 1, 1, 0, 0, 0, 1 hours, seq);
+  }
+
+  ///////////////////////////////////////////////////////////
+  // Second review, 2026-11-16: the follow-ups, each tested //
+  ///////////////////////////////////////////////////////////
+
+  /// An empty revert that did not use the gas up (a feed with no code in a maker's margin check, say) is that
+  /// maker's failure: skipped, the take goes on. Only an empty revert that took nearly all the gas is out of gas
+  /// (testAnOutOfGasBelowTheBatchRevertsTheTake).
+  function testAQuickEmptyRevertSkipsTheMakerRatherThanFreezingTheSide() public {
+    vm.mockCallRevert(address(subAccounts), abi.encodeWithSelector(subAccounts.submitTransfers.selector), "");
+    vm.recordLogs();
+    (uint filled,) = _take(_order(true, 500, 2e18));
+    assertEq(filled, 0, "both batches reverted, so nothing filled");
+    Vm.Log[] memory logs = vm.getRecordedLogs();
+    uint skipped;
+    for (uint i; i < logs.length; ++i) {
+      if (logs[i].emitter == address(book) && logs[i].topics[0] == OnchainBook.MakerSkipped.selector) ++skipped;
+    }
+    assertEq(skipped, 2, "each maker skipped, the take not reverted");
+  }
+
+  /// Levels dropped for being short of the band's near edge do not count against maxLevels: alice's ten unfillable
+  /// one-lot levels no longer use up a taker's small maxLevels before carol's in-band ask.
+  function testOutOfBandLevelsDoNotUseUpMaxLevels() public {
+    OnchainBook.Region[] memory r = new OnchainBook.Region[](10);
+    for (uint i; i < 10; ++i) {
+      r[i] = OnchainBook.Region(1, uint32(i));
+    }
+    vm.startPrank(alice);
+    book.setCurve(2, r);
+    OnchainBook.SplineUpdate[] memory u = new OnchainBook.SplineUpdate[](1);
+    u[0] = OnchainBook.SplineUpdate(mkt, aliceAcc, -44_000, uint32(HALF_SPREAD), 2, 2, 0, 0, 0, 1 hours, 5);
+    book.updateSplines(u);
+    vm.stopPrank();
+    OnchainBook.TakeOrder memory o = _order(true, 500, 2e18);
+    o.maxLevels = 1;
+    (uint filled,) = _take(o);
+    assertEq(filled, 500 * LOT, "carol's level is the one level counted");
+  }
+
+  /// After the future's index is rotated to another adapter, the book quotes nothing rather than pricing off reports
+  /// the band check no longer reads.
+  function testAfterTheIndexRotatesToAnotherAdapterNothingIsQuoted() public {
+    vm.mockCall(address(index), abi.encodeWithSignature("adapter()"), abi.encode(address(0xada)));
+    (uint filled,) = _take(_order(true, 500, 2e18));
+    assertEq(filled, 0);
+    vm.clearMockedCalls();
+    (filled,) = _take(_order(true, 500, 2e18));
+    assertEq(filled, 500 * LOT);
   }
 }

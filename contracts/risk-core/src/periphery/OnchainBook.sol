@@ -526,7 +526,10 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
       makers[i] = _loadMaker(m, o.marketId, list[i], !o.isBuy, indexTicks);
     }
 
-    for (; p.levelsLeft > 0 && p.remainingLots > 0; --p.levelsLeft) {
+    // A level counts against maxLevels when it fills or is cancelled by DecrementTake. A level dropped for being short
+    // of the band's near edge does not: it costs the taker nothing, and counting it would let a maker's unfillable
+    // levels use up a small maxLevels. Drops are bounded by MAX_REGIONS per maker.
+    while (p.levelsLeft > 0 && p.remainingLots > 0) {
       (uint best, int priceTicks) = _best(makers, o.isBuy);
       if (best == type(uint).max) break;
       uint price = uint(priceTicks) * m.tickSize;
@@ -548,11 +551,13 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
         // DecrementTake: the crossing level is cancelled from the take, and the maker is out for the whole take.
         mk.done = true;
         p.excluded[best] = true;
+        --p.levelsLeft;
         continue;
       }
       mk.filledLots += lots;
       mk.notionalTicks += lots * uint(priceTicks);
       _advance(mk, lots);
+      --p.levelsLeft;
     }
   }
 
@@ -670,10 +675,15 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
       return true;
     } catch (bytes memory reason) {
       // Out of gas, not a real revert. In this frame it leaves about 1/64 of the gas; below it (the manager hook, the
-      // viewer, a managerData receiver) it surfaces as a revert with no data. Every real failure on this path carries
-      // a selector (custom errors, panics). The taker chose the gas and can make the batch heavy through its own
-      // account or managerData, so skipping here would let it pick which makers fill (B5a): the take reverts.
-      if (gasleft() <= gasBefore / 63 || reason.length == 0) revert OB_BatchOutOfGas();
+      // viewer, a managerData receiver) it surfaces as a revert with no data, after the batch took nearly all it was
+      // given. The taker chose the gas and can make the batch heavy through its own account or managerData, so
+      // skipping here would let it pick which makers fill (B5a): the take reverts. An empty revert that did not use
+      // the gas up (a feed with no code, a return too short to decode, in one maker's margin check) is that maker's
+      // failure: skipped, as any other, so it cannot freeze the side.
+      uint used = gasBefore - gasleft();
+      if (gasleft() <= gasBefore / 63 || (reason.length == 0 && used >= gasBefore * 9 / 10)) {
+        revert OB_BatchOutOfGas();
+      }
       emit MakerSkipped(o.marketId, mk.accountId, reason);
       return false;
     }
@@ -730,6 +740,9 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
 
   /// @dev The index in ticks, and whether both streams' stored reports are within `takeMaxAge` (B6a).
   function _peg(Market memory m) internal view returns (bool fresh, int indexTicks) {
+    // The future's index can be rotated (FutureAsset.proposeIndexFeed, timelocked). Once it reads another adapter,
+    // these reports are not what the band check prices against: quote nothing (a market on the new adapter replaces it).
+    if (IIndexFeedAdapter(address(m.future.indexFeed())).adapter() != address(m.adapter)) return (false, 0);
     (uint base, uint64 baseAt) = m.adapter.latest(m.adapter.baseFeedId());
     (uint quote, uint64 quoteAt) = m.adapter.latest(m.adapter.quoteFeedId());
     if (baseAt == 0 || quoteAt == 0 || quote == 0) return (false, 0);

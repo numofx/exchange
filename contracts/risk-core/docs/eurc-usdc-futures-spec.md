@@ -672,11 +672,11 @@ verifier, real reports from the keeper's next post):
 
 | | Gas |
 |---|---|
-| Take, 1 maker, reports already posted | 1,127,607 |
-| Same, both reports verified inside the take | 1,260,951 (verification 133,344; fee 0) |
+| Take, 1 maker, reports already posted | 1,129,609 |
+| Same, both reports verified inside the take | 1,262,953 (verification 133,344; fee 0) |
 | Each further maker settled | ~610,000 |
-| Take filling 10 makers | 6,617,484 |
-| 1 maker, 10 levels | 984,743 |
+| Take filling 10 makers | 6,619,506 |
+| 1 maker, 10 levels | 986,760 |
 | `updateSplines`, 1 market, warm | 16,789 |
 | `updateSplines`, 10 markets, first write | 756,304 (the spline's owner takes a third slot on first write) |
 
@@ -787,15 +787,33 @@ turned into a test that goes red when the fix is removed:
 - *Low.* `createMarket` requires the adapter behind the future's index (`EurcIndexFeed.adapter()`).
 - Removed the unused `MakerRegistered` event.
 
+**Second review (2026-11-16, of the fixes).** No critical or high issue; each fix judged correct. Three follow-ups,
+fixed and tested the same way:
+- *Medium.* Treating every empty revert as out of gas let one maker whose batch reverts empty for another reason (a
+  feed with no code, a return too short to decode, in its margin check) freeze the side. Now an empty revert reverts
+  the take only when the batch also used at least 9/10 of the gas it was given; otherwise the maker is skipped.
+- *Low.* Levels dropped short of the band's near edge counted against `maxLevels`, so a maker's unfillable levels
+  could use up a small limit. Now only filled and `DecrementTake`-cancelled levels count; drops are bounded by
+  `MAX_REGIONS` per maker.
+- *Low.* The adapter check ran only at `createMarket`. The future's index can be rotated later (timelocked), so `_peg`
+  now quotes nothing once the index reads another adapter (about +2,000 gas a take); a market on the new adapter
+  replaces it.
+
+Informational, not changed: a spline stopped by an account transfer is not deactivated, so it quotes again if the
+account returns to its writer within the ttl (harm to that owner only); `setMakerAllowed(owner, false)` does not stop
+live splines, which lapse at their ttl (at most `maxTtl`). The reviewer's note that `owner` packs into the spline's
+second slot is wrong: the fields before it fill 33 bytes, so it takes a third slot on first write (B10), about 20k gas
+once per maker and market; warm updates are unchanged.
+
 Accepted, not changed: `setCurve` can bring a live spline's best bid level with its best ask when the half-spread is 0
 (harm to the maker only); a re-plan round (departure 1) reloads makers, so their skew is recomputed from round-one
 positions and a maker can settle twice in one take; a maker with a finite allowance can be switched off by a large
 take (the runbook requires max allowances, and book-maker's preflight refuses less than 2^128).
 
-**Tests:** 59 unit tests (8 from the review) (real `SubAccounts`, `MarginEngine` v2, `FutureAsset` v3, `StreamsIndexAdapter`,
+**Tests:** 63 unit tests (12 from the two reviews) (real `SubAccounts`, `MarginEngine` v2, `FutureAsset` v3, `StreamsIndexAdapter`,
 `EurcIndexFeed`; the verifier, auction and cash mocked), 4 invariants over random takes, updates, price moves and
 pokes, and 6 fork tests on the live stack in which Chainlink's verifier checks real reports inside the take and a
-flipped signature bit is refused (`0x4df18f07`). 43 guards (36, then 7 from the review) were each removed and seen to turn a test red.
+flipped signature bit is refused (`0x4df18f07`). 48 guards (36, then 7 and 5 from the two reviews) were each removed and seen to turn a test red.
 
 **Parameters used in tests, awaiting decision (B14):** tick 0.000001, lot 1 EURC (0.001 contract), `takeMaxAge`
 1 s, ttl cap 1 h, taker fee 5 bps (the `Matching` path's), tax off, gas floor 700,000, makers per market 10.
