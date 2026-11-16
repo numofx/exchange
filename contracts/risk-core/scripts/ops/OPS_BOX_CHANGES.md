@@ -5,6 +5,19 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-16 21:47–22:27 UTC: book-maker on ECS; EURC-30NOV26 open on the OnchainBook
+
+- **ECS `market-maker-book`** (infra `bd5ec07`, `b378fb9`, applied from main with terraform 1.13.3; each plan touched
+  only this service): image `market-maker:b8974faa7020` (`/app/book-maker`), #56, curve `20@0,40@50`, half-spread
+  300 ticks, `desired_count_market_maker_book = 1` in counts.auto.tfvars. On `mm_rpc_url` (publicnode) its first two
+  starts set the curve and registered #56 but could not read either receipt ("archive request", 403) and exited;
+  moved to `rpc_fallback_url` (keyed). Since 21:49:11 it quotes at +618 ticks; refreshed 22:19.
+- **Enable** (`numo-onchain-book-enable`, box transient unit, `PYTHONUNBUFFERED=1`; SSM `fbeb4866-…`): MPCVault request
+  `7f572b54-4557-413e-9373-5c9b61b3ea9a` proposed ~21:52 UTC. The unit gave up waiting ("not approved within the
+  timeout") before the approval; `setMarketParams(1, …, enabled = true)` landed at 22:27 (tx `0x78161adc…43a3`). Read
+  back: enabled, parity 22/22, 1 maker, 1 live spline. **EURC-30NOV26 is takeable on the OnchainBook.**
+- Not yet: the test takes, and the matcher's indexer (`onchain_book_address`, start block 58,358,413).
+
 ## 2026-11-16 21:38–21:45 UTC: book-maker built on the box, started, refused its key, stopped (SSM)
 
 - **`exchange-ops`** → `4eec6f7` (clean before), for `run-with-ssm-book-maker.sh`.
