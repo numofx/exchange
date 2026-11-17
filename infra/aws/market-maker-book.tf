@@ -12,7 +12,8 @@ variable "image_market_maker_book" {
   description = "The market-maker image carrying /app/book-maker, tagged by git SHA. Empty creates nothing."
   type        = string
   # market-maker b8974faa (2026-11-16): book-maker d6c927a7 (owner-bound splines) in the image.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:b8974faa7020"
+  # 2026-11-17: 3d77276d, the dead-man heartbeat (MM_BOOK_HEARTBEAT_URL). Rollback is b8974faa7020, in one apply.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:3d77276d2efa"
 }
 
 variable "onchain_book_maker_account_id" {
@@ -77,6 +78,8 @@ resource "aws_ecs_task_definition" "market_maker_book" {
       # one (publicnode) refused a fresh receipt as an "archive request" (2026-11-16 21:47, after setCurve had landed).
       # ~5 reads a 5 s cycle, ~90k calls a day, billed per call (secrets.tf).
       { name = "MM_RPC_URL", valueFrom = local.secret_arns.rpc_fallback_url },
+      # Pinged at most once a minute while the book is quoted; healthchecks.io alerts after 10 minutes without.
+      { name = "MM_BOOK_HEARTBEAT_URL", valueFrom = local.secret_arns.book_maker_heartbeat_url },
     ]
 
     logConfiguration = local.log_options["market-maker-book"]

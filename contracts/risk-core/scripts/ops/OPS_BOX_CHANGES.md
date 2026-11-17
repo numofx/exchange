@@ -5,6 +5,20 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-17 01:13–01:26 UTC: book-maker dead-man check (healthchecks.io, SSM, ECS)
+
+- **Check.** healthchecks.io "book-maker" (`be5e8a4d…`), created in the dashboard (the API key in SSM is read-only):
+  1 min period, 10 min grace, the project's email and Pushover integrations. Its ping URL is SSM
+  `/numo/exchange/book_maker_heartbeat_url` (SecureString), read by the execution role (`secrets.tf`).
+- **Code.** market-maker `3d77276d`: `ShouldBeat` pings, at most once a minute, only when a cycle leaves the book
+  quoted (an update landed, a live spline unchanged, or the deliberate stop before last trade). An error, dry run, a
+  cancel, or a spline held down by an unreadable or diverging feed sends nothing. Seven guards mutation-tested.
+- **Deploy.** market-maker image `3d77276d2efa`, `MM_BOOK_HEARTBEAT_URL` on `market-maker-book` (apply from main;
+  the plan touched its task definition, its service and the execution role's secret list). Old task stopped
+  01:25:56; it cancelled its spline on SIGTERM and the new task re-quoted at 01:24:08 (~1 min unquoted).
+- **Seen.** 01:25: check `up`, 2 pings, no heartbeat errors. Not yet seen: the check going down (needs ~11 min with
+  the book unquoted).
+
 ## 2026-11-17 00:58–01:10 UTC: both settlement canaries green again (ECS deploy; box script and unit, SSM)
 
 - **ECS canary (`settlement-canary-ecs`).** Every invariant check had "failed to run" on every pass since at least

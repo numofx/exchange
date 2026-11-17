@@ -102,6 +102,9 @@ locals {
     # (markets-service, the matcher, the options maker), the OnchainBook maker as its only RPC, and execution-service's
     # transaction sends (SEND_RPC_URL). SSM only.
     rpc_fallback_url = "${local.ssm_arn_prefix}/numo/exchange/rpc_fallback_url"
+    # The OnchainBook maker's dead-man check (healthchecks.io "book-maker", 1 min period, 10 min grace): pinged while
+    # the book is quoted. SSM only.
+    book_maker_heartbeat_url = "${local.ssm_arn_prefix}/numo/exchange/book_maker_heartbeat_url"
     # The index publisher's token for POST /v1/internal/index-status (the index-lag gate). The same
     # value sits at /numo/feeds/index_status_token for the publisher on the ops box. SSM only.
     index_status_token = "${local.ssm_arn_prefix}/numo/markets/index_status_token"
