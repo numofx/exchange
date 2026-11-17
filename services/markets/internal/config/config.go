@@ -146,12 +146,10 @@ type Config struct {
 	// FutureSeries (FUTURE_SERIES, a JSON array) are the series listed beside the one above: MarginEngine
 	// v2's <BASE>-<expiry> series. Each is read, admitted and matched through its own reader.
 	FutureSeries []FutureSeries
-	// OnchainBookAddress (ONCHAIN_BOOK_ADDRESS) is risk-core's OnchainBook, whose Fill and TakeExecuted events the
-	// matcher indexes onto the series' tape (matching/book_indexer.go). Empty, nothing is indexed.
-	// OnchainBookStartBlock (ONCHAIN_BOOK_START_BLOCK, required with it) is where the first read starts: the book's
-	// deploy block, so no fill before the indexer's first run is missed.
-	OnchainBookAddress    string
-	OnchainBookStartBlock uint64
+	// OnchainBooks are risk-core's OnchainBooks whose Fill and TakeExecuted events the matcher indexes onto the series'
+	// tapes (matching/book_indexer.go), one indexer each: ONCHAIN_BOOK_ADDRESS (v1, EURC-30NOV26) and
+	// ONCHAIN_BOOK_V2_ADDRESS (spec C4), each with its <NAME>_START_BLOCK. Empty, nothing is indexed.
+	OnchainBooks []OnchainBookSource
 	// OptionSeries (OPTION_SERIES, a JSON array) are the listed option expiries, each strike a call and a put market
 	// (option_series.go). Unset, no options are listed.
 	OptionSeries []OptionSeries
@@ -349,7 +347,7 @@ func Load() (Config, error) {
 	if err := cfg.validatePerpStack(); err != nil {
 		return Config{}, err
 	}
-	if err := cfg.loadOnchainBook(os.Getenv("ONCHAIN_BOOK_ADDRESS"), os.Getenv("ONCHAIN_BOOK_START_BLOCK")); err != nil {
+	if err := cfg.loadOnchainBooks(os.Getenv); err != nil {
 		return Config{}, err
 	}
 
@@ -759,30 +757,54 @@ func parseDepositAssets(spec string, fallbackAddresses []string, fallbackMin *bi
 	return out, nil
 }
 
-// loadOnchainBook reads the book's address and start block. An address without a start block is refused rather than
-// started from the head: the fills between the deploy and the first run would never be on the tape.
-func (c *Config) loadOnchainBook(address, startBlock string) error {
+// OnchainBookSource is one book the matcher indexes: its address (lower case) and deploy block.
+type OnchainBookSource struct {
+	Address    string
+	StartBlock uint64
+}
+
+// onchainBookEnvNames are the env prefixes of the books, in order: <NAME>_ADDRESS and <NAME>_START_BLOCK.
+var onchainBookEnvNames = []string{"ONCHAIN_BOOK", "ONCHAIN_BOOK_V2"}
+
+func (c *Config) loadOnchainBooks(getenv func(string) string) error {
+	c.OnchainBooks = nil
+	for _, name := range onchainBookEnvNames {
+		if err := c.loadOnchainBook(name, getenv(name+"_ADDRESS"), getenv(name+"_START_BLOCK")); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// loadOnchainBook reads one book's address and start block. An address without a start block is refused rather than
+// started from the head: the fills between the deploy and the first run would never be on the tape. The same book
+// twice is refused: two indexers would race on one cursor.
+func (c *Config) loadOnchainBook(name, address, startBlock string) error {
 	address = strings.ToLower(strings.TrimSpace(address))
 	startBlock = strings.TrimSpace(startBlock)
 	if address == "" {
 		if startBlock != "" {
-			return errors.New("ONCHAIN_BOOK_START_BLOCK is set without ONCHAIN_BOOK_ADDRESS")
+			return fmt.Errorf("%s_START_BLOCK is set without %s_ADDRESS", name, name)
 		}
 		return nil
 	}
 	if _, err := hex.DecodeString(strings.TrimPrefix(address, "0x")); err != nil || !isConfiguredAddress(address) {
-		return fmt.Errorf("ONCHAIN_BOOK_ADDRESS %q is not an address", address)
+		return fmt.Errorf("%s_ADDRESS %q is not an address", name, address)
 	}
 	block, err := strconv.ParseUint(startBlock, 10, 64)
 	if err != nil || block == 0 {
-		return fmt.Errorf("ONCHAIN_BOOK_START_BLOCK %q: the book's deploy block is required with ONCHAIN_BOOK_ADDRESS", startBlock)
+		return fmt.Errorf("%s_START_BLOCK %q: the book's deploy block is required with %s_ADDRESS", name, startBlock, name)
 	}
-	c.OnchainBookAddress = address
-	c.OnchainBookStartBlock = block
+	for _, b := range c.OnchainBooks {
+		if b.Address == address {
+			return fmt.Errorf("%s_ADDRESS %s is already configured: one indexer per book", name, address)
+		}
+	}
+	c.OnchainBooks = append(c.OnchainBooks, OnchainBookSource{Address: address, StartBlock: block})
 	return nil
 }
 
-// OnchainBookEnabled reports whether the book's fills are indexed.
+// OnchainBookEnabled reports whether any book's fills are indexed.
 func (c Config) OnchainBookEnabled() bool {
-	return c.OnchainBookAddress != ""
+	return len(c.OnchainBooks) > 0
 }

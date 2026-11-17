@@ -296,19 +296,27 @@ chain, with no order and no matcher. Its fills trade the same series, so the mat
   `/trades`), so it is in nobody's signed-order history (`/fills`). Each `TakeExecuted` is a `book_takes` row (filled,
   average price, fee including any priority tax, and its number of fills). Trades carry `source` (`matching` or `book`)
   on `/trades` and on the stream.
-- **How.** `internal/matching/book_indexer.go`, one instance inside the matcher. Every 5 s it reads the book's logs up to
+- **How.** `internal/matching/book_indexer.go`, one instance per configured book inside the matcher, each with its own
+  cursor and market cache (a book's market ids are its own). Every 5 s it reads the book's logs up to
   20 blocks behind the head, in ranges of 2,000 blocks, and writes each range in one transaction with its cursor
   (`book_index_cursor`). A row is keyed by its transaction and log index, so re-reading a range writes nothing twice.
-  The first run starts at `ONCHAIN_BOOK_START_BLOCK`.
+  The first run starts at the book's `<NAME>_START_BLOCK`.
 - **Fails closed.** A range is not written, and the cursor does not move, when a take's fills do not add up to its
   `filled`, charge more than its fee, or have no `TakeExecuted` after them, or when a book market trades a series that
   `FUTURE_SERIES` does not list. The error is logged (`book_indexer_tick_failed`) and shown on the matcher's `/healthz`
-  as `book_indexer.last_error`, with the lag in `book_indexer.lag_blocks`.
+  as `book_indexer.last_error`, with the lag in `book_indexer.lag_blocks`. `book_indexer` is the first configured
+  book; `book_indexers` lists every book's, with its address.
 - **Not the perp ledger's "venue fill".** The reduce-only ledger skips a `BalanceAdjusted` in a transaction the matcher
   settled; a book transaction is not one (`source = 'matching'` only).
 
-Config: `ONCHAIN_BOOK_ADDRESS` (from `ONCHAIN_BOOK.json`) and `ONCHAIN_BOOK_START_BLOCK` (its deploy block, required with
-it). Unset, nothing is indexed.
+Config, per book, each address with its deploy block (required with it):
+
+| Book | Address | Start block |
+|---|---|---|
+| v1, EURC-30NOV26 | `ONCHAIN_BOOK_ADDRESS` (from `ONCHAIN_BOOK.json`) | `ONCHAIN_BOOK_START_BLOCK` |
+| v2, spec C4 | `ONCHAIN_BOOK_V2_ADDRESS` (from `ONCHAIN_BOOK_V2.json`) | `ONCHAIN_BOOK_V2_START_BLOCK` (its `deployBlock`) |
+
+Either, both or neither may be set; neither indexes nothing. The same address under both names is refused.
 
 ## Configuration
 

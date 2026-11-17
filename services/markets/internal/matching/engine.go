@@ -89,15 +89,15 @@ func (e *Engine) Run(ctx context.Context) error {
 	// A matcher that silently stops is a venue nobody can close on: it answers its own /healthz for
 	// ECS and writes a heartbeat the pager reads through markets-service.
 	// The OnchainBook's fills go on the same tape as the matcher's: /trades, candles and stats are one series.
-	book := newBookIndexer(e.cfg, e.orders, e.registry)
-	if book != nil {
+	books := newBookIndexers(e.cfg, e.orders, e.registry)
+	for _, book := range books {
 		go book.run(ctx)
 	}
 	// A fill is recorded on the executor's broadcast; this proves each one mined, and takes back any that did not.
 	if verifier := newSettlementVerifier(e.cfg, e.orders, e.registry, e.alerts); verifier != nil {
 		go verifier.run(ctx)
 	}
-	health := newMatcherHealth(indexer, book)
+	health := newMatcherHealth(indexer, books)
 	if e.cfg.MatcherHealthAddr != "" {
 		go health.serve(ctx, e.cfg.MatcherHealthAddr)
 	}

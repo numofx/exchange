@@ -264,8 +264,7 @@ func TestBookIndexerPutsTheBooksFillsOnTheSeriesTape(t *testing.T) {
 		FutureSeries: []config.FutureSeries{{AssetAddress: asset, Expiry: expiry, ManagerAddress: "0x00000000000000000000000000000000000000e9",
 			Kind: config.FutureKindLinear, BaseAsset: "EURC", ContractSize: "1000", TakerFeeBps: &fee}},
 	}
-	cfg.OnchainBookAddress, cfg.OnchainBookStartBlock = book, 400
-	b := newBookIndexer(cfg, repo, instruments.DefaultRegistry(cfg))
+	b := newBookIndexer(cfg, config.OnchainBookSource{Address: book, StartBlock: 400}, repo, instruments.DefaultRegistry(cfg))
 	if b == nil {
 		t.Fatal("a configured book must be indexed")
 	}
@@ -436,5 +435,24 @@ func TestDecodeBookLogsReadsTheContractsOwnLogs(t *testing.T) {
 			weiToDecimal(got[i].price) != w.price || weiToDecimal(got[i].fee) != w.fee || got[i].isTake != (i == 2) {
 			t.Fatalf("log %d: %+v (size %s)", i, got[i], size)
 		}
+	}
+}
+
+// One indexer per configured book, each with its own address and deploy block (its cursor and market cache are keyed
+// by them); none without a chain RPC.
+func TestOneIndexerPerBook(t *testing.T) {
+	var cfg config.Config
+	cfg.ChainRPCURL = "http://127.0.0.1:1"
+	cfg.OnchainBooks = []config.OnchainBookSource{{Address: "0xb1", StartBlock: 100}, {Address: "0xb2", StartBlock: 200}}
+	got := newBookIndexers(cfg, nil, nil)
+	if len(got) != 2 || got[0].book != "0xb1" || got[0].startBlock != 100 || got[1].book != "0xb2" || got[1].startBlock != 200 {
+		t.Fatalf("%+v", got)
+	}
+	if got[0].markets == nil || &got[0].markets == &got[1].markets {
+		t.Fatal("each book has its own market cache")
+	}
+	cfg.ChainRPCURL = ""
+	if n := len(newBookIndexers(cfg, nil, nil)); n != 0 {
+		t.Fatalf("%d indexers without an RPC", n)
 	}
 }

@@ -12,6 +12,8 @@ import {MarginEngine} from "../../src/risk-managers/MarginEngine.sol";
 import {IAsset} from "../../src/interfaces/IAsset.sol";
 import {IManager} from "../../src/interfaces/IManager.sol";
 import {OnchainBook} from "../../src/periphery/OnchainBook.sol";
+import {OnchainBookRouter} from "../../src/periphery/OnchainBookRouter.sol";
+import {FutureAsset} from "../../src/assets/FutureAsset.sol";
 
 import {DeployOnchainBook} from "../../scripts/deploy-onchain-book.s.sol";
 
@@ -31,6 +33,8 @@ contract OnchainBookDeployFork is Test {
   uint constant FORK_BLOCK = 57_985_892;
   uint constant POST_TIME = 1_794_787_554;
   uint constant FEE_RATE = 0.0005e18;
+  /// @dev EURC-30NOV26: the series listed at FORK_BLOCK
+  uint64 constant EXPIRY = 1796050800;
 
   DeployOnchainBook script;
   DeployOnchainBook.Params params;
@@ -47,7 +51,7 @@ contract OnchainBookDeployFork is Test {
     reports = vm.parseBytes(vm.readFile("test/fork/fixtures/eurc-streams-reports-57985893.hex"));
 
     script = new DeployOnchainBook();
-    params = script.loadChainParams();
+    params = script.loadChainParams(EXPIRY);
     params.takerFeeRate = FEE_RATE;
     params.makerOwner = maker;
     // the attached reports' age at POST_TIME (OnchainBookFork derives the same): a take counts them fresh
@@ -256,6 +260,53 @@ contract OnchainBookDeployFork is Test {
     p = params;
     p.maxTtl = 1 days + 1;
     _refuses(p, "MAX_TTL: 1 s to 1 day");
+    p = params;
+    p.selfPricedTtlCap = 0;
+    _refuses(p, "SELF_PRICED_TTL_CAP: 1 to 60 s (C6), and no more than MAX_TTL");
+    p.selfPricedTtlCap = 61;
+    _refuses(p, "SELF_PRICED_TTL_CAP: 1 to 60 s (C6), and no more than MAX_TTL");
+    p = params;
+    p.maxTtl = 30;
+    _refuses(p, "SELF_PRICED_TTL_CAP: 1 to 60 s (C6), and no more than MAX_TTL");
+  }
+
+  /// v2: the deployer sets the self-priced cap (C6: 60 s) while it owns the book, and the router is on the book.
+  function testTheSelfPricedCapAndTheRouter() public {
+    assertEq(params.selfPricedTtlCap, 60);
+    assertEq(book.maxSelfPricedTtl(1), 60);
+    OnchainBookRouter router = script.deployRouter(book, params);
+    script.assertRouter(router, book, params);
+    vm.expectRevert(bytes("router book"));
+    script.assertRouter(router, OnchainBook(address(0xbeef)), params);
+
+    // the postcondition reads the cap: a book left without one is refused
+    vm.prank(address(script));
+    book.setSelfPricedTtlCap(1, 0);
+    vm.expectRevert(bytes("book self-priced ttl cap"));
+    script.assertDeployment(book, params, address(script));
+  }
+
+  /// The series comes from EXPIRY on the future, not from the artifact: an expiry the vault has not listed is refused,
+  /// and one it has listed (here by impersonating it) is taken, with its subId and last trade read from the future.
+  function testTheSeriesIsReadFromTheFuture() public {
+    assertEq(script.symbolOf(params), "EURC-30NOV26");
+    uint64 next = 1798729200; // 2026-12-31 15:00 UTC
+    DeployOnchainBook.Params memory p = script.loadChainParams(next);
+    p.takerFeeRate = FEE_RATE;
+    p.makerOwner = maker;
+    p.takeMaxAge = params.takeMaxAge;
+    _refuses(p, "the series is not listed, or settled: the vault lists EXPIRY first (setContract)");
+
+    vm.prank(VAULT);
+    FutureAsset(params.future).setContract(next, next - 30 minutes, 1.1e18);
+    p = script.loadChainParams(next);
+    p.takerFeeRate = FEE_RATE;
+    p.makerOwner = maker;
+    p.takeMaxAge = params.takeMaxAge;
+    assertEq(p.subId, FutureAsset(params.future).getSubId(next));
+    assertEq(p.lastTradeTime, next - 30 minutes);
+    assertEq(script.symbolOf(p), "EURC-31DEC26");
+    script.checkParams(p);
   }
 
   function testTheMakerOwnerIsChecked() public {
@@ -276,7 +327,10 @@ contract OnchainBookDeployFork is Test {
     _refuses(p, "market 2's future is not the EURC v3 series");
     p = params;
     p.lastTradeTime = params.lastTradeTime - 1;
-    _refuses(p, "the series' last trade is not the artifact's");
+    _refuses(p, "the series' last trade is not the future's");
+    p = params;
+    p.expiry = EXPIRY + 1;
+    _refuses(p, "the series is not EXPIRY");
     p = params;
     p.indexFeed = address(0xbeef);
     _refuses(p, "the future's index is not the artifact's");

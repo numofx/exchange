@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
-"""Propose the OnchainBook's vault batches for EURC-30NOV26 (docs/eurc-usdc-futures-spec.md, B12, B15).
+"""Propose the OnchainBook's vault batches (docs/eurc-usdc-futures-spec.md, B12, B15, C6).
 
-  book-setup   ONCHAIN_BOOK_VAULT_ACTIONS.json, from deploy-onchain-book.s.sol: accept the book, allow the maker
+  --version 2 (default): ONCHAIN_BOOK_V2*.json, the v2 book (quote, self-priced splines) and its router, on the
+                         series EXPIRY chose at deploy. Its parity also covers the self-priced cap the deployer set
+                         (maxSelfPricedTtl, 60 s) and the router (on this book and cash).
+  --version 1:           ONCHAIN_BOOK*.json, EURC-30NOV26's v1 book (both batches landed 2026-11-16).
+
+  book-setup   <NAME>_VAULT_ACTIONS.json, from deploy-onchain-book.s.sol: accept the book, allow the maker
                (MAKER_OWNER, the owner of its account outside Matching). Opens nothing: the market stays disabled.
-  book-enable  ONCHAIN_BOOK_ENABLE_VAULT_ACTIONS.json: setMarketParams with the deployed parameters and enabled.
+  book-enable  <NAME>_ENABLE_VAULT_ACTIONS.json: setMarketParams with the deployed parameters and enabled.
 
-Every action is rebuilt here from ONCHAIN_BOOK.json and must match the file exactly (to, calldata, value), digest
+Every action is rebuilt here from <NAME>.json and must match the file exactly (to, calldata, value), digest
 recomputed (keccak(to || keccak(data))). Every action is on the book: the engine and the future are not touched. An
 action whose postcondition already holds is skipped. Gates are re-read before every action.
 
@@ -57,9 +62,18 @@ Gate, Chain, report = v1p.Gate, v1p.Chain, v1p.report
 word_address, word_uint, digest = v1p.word_address, v1p.word_uint, v1p.digest
 
 ROOT = v1p.ROOT
-NAME = "ONCHAIN_BOOK"
+NAMES = {1: "ONCHAIN_BOOK", 2: "ONCHAIN_BOOK_V2"}
+NAME = NAMES[1]
 SETUP, ENABLE = "book-setup", "book-enable"
-FILES = {SETUP: f"{NAME}_VAULT_ACTIONS.json", ENABLE: f"{NAME}_ENABLE_VAULT_ACTIONS.json"}
+BATCHES = (SETUP, ENABLE)
+MAX_SELF_PRICED_TTL_CAP = 60  # C6
+
+
+def files(name: str) -> dict[str, str]:
+  return {SETUP: f"{name}_VAULT_ACTIONS.json", ENABLE: f"{name}_ENABLE_VAULT_ACTIONS.json"}
+
+
+FILES = files(NAME)
 EUR_MARKET = 2
 FUTURE = 4  # IMarginEngine.AssetType.Future
 BOOK_MARKET = 1
@@ -87,6 +101,8 @@ SIGNATURES = {
   "futureContracts": "futureContracts(uint256)",
   "makers": "makers(uint256)",
   "splines": "splines(uint256,uint256)",
+  "maxSelfPricedTtl": "maxSelfPricedTtl(uint256)",
+  "book": "book()",
 }
 PINNED = {
   "acceptOwnership": "0x79ba5097", "setMakerAllowed": "0x4db8b77b", "setMarketParams": "0x9910da7d",
@@ -95,7 +111,7 @@ PINNED = {
   "nextMarketId": "0x406ef2ef", "subAccounts": "0x779e5012", "cash": "0x961be391",
   "trustedRiskAssessor": "0x5b75ad78", "feeBypassedCaller": "0x3f210eea", "getSpot": "0x2b37269c",
   "totalPositionCap": "0x745ab570", "assetMap": "0xed75d3f3", "futureContracts": "0xc3c74b34",
-  "makers": "0x33f02fa2", "splines": "0xe5dd8989",
+  "makers": "0x33f02fa2", "splines": "0xe5dd8989", "maxSelfPricedTtl": "0x3a1359b6", "book": "0x05a8da72",
 }
 # OnchainBook.Market, as markets(uint256) returns it: field -> word index
 MARKET_WORDS = {"future": 0, "engine": 1, "subId": 2, "expiry": 3, "lastTradeTime": 4, "adapter": 5, "tickSize": 6,
@@ -149,14 +165,30 @@ def verify_actions(batch: str, d: dict, actions: list[dict]) -> None:
       raise SystemExit(f"{batch} action {i}: digest {action['digest']} does not match its own to and data")
 
 
+def version_of(d: dict) -> int:
+  return int(d.get("version", 1))
+
+
 def check_artifact(d: dict, series: dict) -> None:
-  """The book's market is the recorded EURC v3 series, on its engine and adapter."""
+  """The book's market is on the recorded EURC v3 future, engine and adapter. v1: the recorded series itself. v2: the
+  series EXPIRY chose (the series gate reads it on the future); the self-priced cap within C6's 60 s, and a router."""
   for key, other in (("future", "future"), ("manager", "manager"), ("adapter", "adapter"), ("indexFeed", "indexFeed"),
                      ("cash", "cash"), ("tradeModule", "tradeModule")):
     if d[key].lower() != series[other].lower():
       raise SystemExit(f"{NAME}.json {key} {d[key]} is not EURC_FUTURE_V3.json's {series[other]}")
-  if int(d["subId"]) != int(series["subId"]) or int(d["lastTradeTime"]) != int(series["lastTradeTime"]):
-    raise SystemExit(f"{NAME}.json is not on the series {series['subId']}")
+  version = version_of(d)
+  if version not in NAMES:
+    raise SystemExit(f"{NAME}.json: version {version} is unknown")
+  if version == 1:
+    if int(d["subId"]) != int(series["subId"]) or int(d["lastTradeTime"]) != int(series["lastTradeTime"]):
+      raise SystemExit(f"{NAME}.json is not on the series {series['subId']}")
+  else:
+    if int(d["subId"]) != int(d["expiry"]):
+      raise SystemExit(f"{NAMES[2]}.json: subId {d['subId']} is not its expiry {d['expiry']}")
+    if not 0 < int(d["selfPricedTtlCap"]) <= min(MAX_SELF_PRICED_TTL_CAP, int(d["maxTtl"])):
+      raise SystemExit(f"{NAMES[2]}.json: self-priced ttl cap {d['selfPricedTtlCap']} outside 1..60 s (C6)")
+    if int(d["router"], 16) == 0:
+      raise SystemExit(f"{NAMES[2]}.json records no router")
   if int(d["bookMarketId"]) != BOOK_MARKET:
     raise SystemExit(f"{NAME}.json: the book's market is {d['bookMarketId']}, not {BOOK_MARKET}")
   if int(d["priorityTaxRate"]) != 0:
@@ -219,6 +251,10 @@ def gate_parity(chain: Chain, d: dict, vault: str, attached: bool) -> Gate:
     # B4: the engine grants the book nothing
     ("engine trusts the book", w(d["manager"], "trustedRiskAssessor", word_address(book)), 0),
     ("engine fee-bypasses the book", w(d["manager"], "feeBypassedCaller", word_address(book)), 0),
+    *([("book self-priced ttl cap", w(book, "maxSelfPricedTtl", word_uint(BOOK_MARKET)), int(d["selfPricedTtlCap"])),
+       ("router's book", a(d["router"], "book"), book),
+       ("router's cash", a(d["router"], "cash"), d["cash"]),
+       ("router's SubAccounts", a(d["router"], "subAccounts"), d["subAccounts"])] if version_of(d) == 2 else []),
     ("deployer transactions since the deploy, unaudited",
      v2p.unaudited_deployer_txs(chain.url, d["deployer"], int(d["deployerNonce"])), 0),
   ]
@@ -368,6 +404,17 @@ def self_test() -> int:
             "subId": 1796050800, "lastTradeTime": 1796049000}
   full = {**d, **series, "bookMarketId": 1, "priorityTaxRate": 0}
   check_artifact(full, series)
+  # v2: on any series of the future (the series gate reads it live), with the cap and a router recorded
+  v2 = {**full, "version": 2, "subId": 1798729200, "expiry": 1798729200, "lastTradeTime": 1798727400,
+        "selfPricedTtlCap": 60, "router": a(10)}
+  check_artifact(v2, series)
+  for bad in ({"subId": 1}, {"selfPricedTtlCap": 0}, {"selfPricedTtlCap": 61}, {"maxTtl": 30}, {"router": a(0)},
+              {"version": 3}, {"future": a(9)}):
+    try:
+      check_artifact({**v2, **bad}, series)
+    except SystemExit:
+      continue
+    raise AssertionError(f"v2 artifact {bad} accepted")
   for bad in ({"future": a(9)}, {"manager": a(9)}, {"adapter": a(9)}, {"subId": 1}, {"bookMarketId": 2},
               {"priorityTaxRate": 1}, {"takerFeeRate": str(10**16 + 1)}):
     try:
@@ -400,7 +447,7 @@ def self_test() -> int:
   for fn in (main, run_batch):
     assert "propose(token" not in inspect.getsource(fn), f"{fn.__name__} calls propose() directly"
   print("self-test ok: selectors compiled and pinned; a wrong target, calldata, value, digest, count or order is refused; "
-        "the artifact must be on the recorded series with the tax off; the series must be the engine's, listed, open "
+        "the artifact must be on the recorded series with the tax off (v2: any series, cap 1-60 s, a router); the series must be the engine's, listed, open "
         "and over 2 h from last trade; the book's fee must equal the registry's")
   return 0
 
@@ -452,7 +499,8 @@ def run_batch(args, d: dict, chain: Chain, rpc_url: str, vault: str, markets_url
 
 def main() -> int:
   ap = argparse.ArgumentParser(description="Propose the OnchainBook's vault batches")
-  ap.add_argument("batch", nargs="?", choices=tuple(FILES))
+  ap.add_argument("batch", nargs="?", choices=BATCHES)
+  ap.add_argument("--version", type=int, choices=tuple(NAMES), default=2, help="the book version's artifacts (default 2)")
   ap.add_argument("--propose", action="store_true", help="create MPCVault signing requests, one at a time")
   ap.add_argument("--self-test", action="store_true")
   ap.add_argument("--dir", type=Path, default=ROOT / "deployments" / "8453", help="where the deploys wrote their artifacts")
@@ -462,7 +510,9 @@ def main() -> int:
   if args.self_test:
     return self_test()
   if not args.batch:
-    ap.error("name a batch: " + ", ".join(FILES))
+    ap.error("name a batch: " + ", ".join(BATCHES))
+  global NAME, FILES
+  NAME, FILES = NAMES[args.version], files(NAMES[args.version])
 
   load_env_file(Path.home() / ".numo-mark-keeper.env")
   rpc_url = os.environ.get("RPC_URL") or os.environ.get("BASE_RPC_URL", "")
@@ -479,6 +529,8 @@ def main() -> int:
   if not artifact.exists():
     raise SystemExit(f"{artifact} does not exist: the book is not deployed (deploy-onchain-book.s.sol writes it)")
   d = json.loads(artifact.read_text())
+  if version_of(d) != args.version:
+    raise SystemExit(f"{artifact} records version {version_of(d)}, not {args.version}")
   check_artifact(d, json.loads((args.dir / "EURC_FUTURE_V3.json").read_text()))
   return run_batch(args, d, Chain(rpc_url), rpc_url, vault, os.environ.get("MARKETS_URL", "https://api.numofx.com"))
 

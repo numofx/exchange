@@ -63,12 +63,21 @@ type bookIndexer struct {
 	indexerTracker
 }
 
-func newBookIndexer(cfg config.Config, repo *orders.Repository, registry *instruments.Registry) *bookIndexer {
-	if !cfg.OnchainBookEnabled() {
-		return nil
+// newBookIndexers is one indexer per configured book (v1 and v2 run side by side while both have live series), each
+// with its own cursor (book_index_cursor is keyed by book) and its own market cache (market ids are per book).
+func newBookIndexers(cfg config.Config, repo *orders.Repository, registry *instruments.Registry) []*bookIndexer {
+	var out []*bookIndexer
+	for _, src := range cfg.OnchainBooks {
+		if b := newBookIndexer(cfg, src, repo, registry); b != nil {
+			out = append(out, b)
+		}
 	}
+	return out
+}
+
+func newBookIndexer(cfg config.Config, src config.OnchainBookSource, repo *orders.Repository, registry *instruments.Registry) *bookIndexer {
 	if strings.TrimSpace(cfg.ChainRPCURL) == "" {
-		slog.Warn("book_indexer_inert", "reason", "CHAIN_RPC_URL is unset", "book", cfg.OnchainBookAddress,
+		slog.Warn("book_indexer_inert", "reason", "CHAIN_RPC_URL is unset", "book", src.Address,
 			"effect", "the OnchainBook's fills are not on the tape")
 		return nil
 	}
@@ -76,8 +85,8 @@ func newBookIndexer(cfg config.Config, repo *orders.Repository, registry *instru
 		rpc:           &chainFundingChecker{rpcURL: strings.TrimSpace(cfg.ChainRPCURL), httpClient: &http.Client{Timeout: 10 * time.Second}},
 		orders:        repo,
 		registry:      registry,
-		book:          cfg.OnchainBookAddress,
-		startBlock:    cfg.OnchainBookStartBlock,
+		book:          src.Address,
+		startBlock:    src.StartBlock,
 		interval:      bookIndexerInterval,
 		confirmations: bookIndexerConfirmations,
 		chunk:         bookIndexerChunk,

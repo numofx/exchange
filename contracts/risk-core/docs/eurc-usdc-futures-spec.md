@@ -1086,7 +1086,7 @@ falling back to per-maker settlement when the batch reverts, so B5a's isolation 
   - a stale index cancelled it.
 - **Cost.** 73,061 gas per refresh, 17,280 a day: about 0.0076 ETH a day plus the L1 fee. That is roughly 300
   times pegged mode's (at most ~100 updates a day at ~40k gas).
-- **Left for the deploy (a separate go-ahead):**
+- **Left for the deploy (a separate go-ahead; prepared 2026-11-17 in `onchain-book-v2-runsheet.md`: the deploy script takes `EXPIRY` and sets the cap, the proposer takes `--version 2`, the matcher indexes both books):**
   - `deploy-onchain-book.s.sol` targets EURC_FUTURE_V3 and its vault batch has no `setSelfPricedTtlCap(id, 60)`
     yet;
   - the MM wallet (`0x3448…B47B`) holds 0.0004 ETH, under an hour of self-priced quoting, and its

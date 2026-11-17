@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -66,13 +67,24 @@ func TestIndexerStatusReportsLagAndLastError(t *testing.T) {
 
 // A book indexer that has stopped on a range it refused says so on /healthz, beside the position indexer.
 func TestHealthCarriesTheBookIndexer(t *testing.T) {
-	b := &bookIndexer{}
+	b := &bookIndexer{book: "0xb1"}
 	b.note(func(s *indexerStatus) { s.HeadBlock = 500; s.CursorBlock = 100; s.LastError = "fills sum to 1" })
-	status := newMatcherHealth(nil, b).status()
+	b2 := &bookIndexer{book: "0xb2"}
+	b2.note(func(s *indexerStatus) { s.HeadBlock = 500; s.CursorBlock = 490 })
+	status := newMatcherHealth(nil, []*bookIndexer{b, b2}).status()
 	if status.BookIndexer == nil || status.BookIndexer.LagBlocks != 400 || status.BookIndexer.LastError != "fills sum to 1" {
 		t.Fatalf("book indexer %+v", status.BookIndexer)
 	}
-	if newMatcherHealth(nil, nil).status().BookIndexer != nil {
+	// every book, by address: the second book's lag is its own
+	if len(status.BookIndexers) != 2 || status.BookIndexers[0].Book != "0xb1" || status.BookIndexers[1].Book != "0xb2" ||
+		status.BookIndexers[1].LagBlocks != 10 || status.BookIndexers[1].LastError != "" {
+		t.Fatalf("book indexers %+v", status.BookIndexers)
+	}
+	raw, _ := json.Marshal(status)
+	if !strings.Contains(string(raw), `"book_indexers":[{"book":"0xb1","cursor_block":100`) {
+		t.Fatalf("json %s", raw)
+	}
+	if s := newMatcherHealth(nil, nil).status(); s.BookIndexer != nil || s.BookIndexers != nil {
 		t.Fatal("no book, no book_indexer")
 	}
 }

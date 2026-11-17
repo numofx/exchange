@@ -205,4 +205,24 @@ contract Utils is Script {
     string memory file = _readDeploymentFile("shared");
     return abi.decode(vm.parseJson(file, string.concat(".", _toLower(name))), (address));
   }
+
+  /// @dev "30NOV26" for 2026-11-30, the venue's series code.
+  function _expiryCode(uint64 expiry) internal pure returns (string memory) {
+    (uint year, uint month, uint day) = _date(expiry / 1 days);
+    string[12] memory months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+    return string.concat(day < 10 ? "0" : "", vm.toString(day), months[month - 1], vm.toString(year % 100));
+  }
+
+  /// @dev days since 1970-01-01 to (year, month, day): Howard Hinnant's civil_from_days
+  function _date(uint z) internal pure returns (uint year, uint month, uint day) {
+    z += 719468;
+    uint era = z / 146097;
+    uint doe = z - era * 146097;
+    uint yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    uint doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    uint mp = (5 * doy + 2) / 153;
+    day = doy - (153 * mp + 2) / 5 + 1;
+    month = mp < 10 ? mp + 3 : mp - 9;
+    year = yoe + era * 400 + (month <= 2 ? 1 : 0);
+  }
 }

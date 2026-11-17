@@ -41,8 +41,15 @@ type matcherStatus struct {
 	TickAgeSeconds float64        `json:"tick_age_seconds"`
 	Healthy        bool           `json:"healthy"`
 	Indexer        *indexerStatus `json:"indexer,omitempty"`
-	// BookIndexer is the OnchainBook's fills (book_indexer.go), when a book is configured.
-	BookIndexer *indexerStatus `json:"book_indexer,omitempty"`
+	// BookIndexer is the first configured OnchainBook's indexer (book_indexer.go), kept for readers of the one-book
+	// shape; BookIndexers is every book's, by address.
+	BookIndexer  *indexerStatus      `json:"book_indexer,omitempty"`
+	BookIndexers []bookIndexerStatus `json:"book_indexers,omitempty"`
+}
+
+type bookIndexerStatus struct {
+	Book string `json:"book"`
+	indexerStatus
 }
 
 // matcherHealth collects the matcher's liveness from the tick loop and the indexer.
@@ -51,13 +58,13 @@ type matcherHealth struct {
 	startedAt  time.Time
 	lastTickAt time.Time
 	indexer    *positionIndexer
-	book       *bookIndexer
+	books      []*bookIndexer
 	now        func() time.Time
 }
 
-func newMatcherHealth(indexer *positionIndexer, book *bookIndexer) *matcherHealth {
+func newMatcherHealth(indexer *positionIndexer, books []*bookIndexer) *matcherHealth {
 	now := time.Now()
-	return &matcherHealth{startedAt: now, lastTickAt: now, indexer: indexer, book: book, now: time.Now}
+	return &matcherHealth{startedAt: now, lastTickAt: now, indexer: indexer, books: books, now: time.Now}
 }
 
 // ticked records one completed pass over every enabled market.
@@ -77,9 +84,13 @@ func (h *matcherHealth) status() matcherStatus {
 		s := h.indexer.status()
 		status.Indexer = &s
 	}
-	if h.book != nil {
-		s := h.book.status()
-		status.BookIndexer = &s
+	for i, b := range h.books {
+		s := b.status()
+		if i == 0 {
+			first := s
+			status.BookIndexer = &first
+		}
+		status.BookIndexers = append(status.BookIndexers, bookIndexerStatus{Book: b.book, indexerStatus: s})
 	}
 	return status
 }

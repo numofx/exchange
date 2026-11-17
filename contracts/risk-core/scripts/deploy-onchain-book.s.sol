@@ -13,6 +13,7 @@ import {MarginEngine} from "../src/risk-managers/MarginEngine.sol";
 import {StreamsIndexAdapter} from "../src/feeds/StreamsIndexAdapter.sol";
 import {EurcIndexFeed} from "../src/feeds/EurcIndexFeed.sol";
 import {OnchainBook, IOnchainBookManager} from "../src/periphery/OnchainBook.sol";
+import {OnchainBookRouter, IRouterCash} from "../src/periphery/OnchainBookRouter.sol";
 
 import {Utils} from "./utils.sol";
 
@@ -24,9 +25,18 @@ interface ITradeModuleFeeRecipient {
 /**
  * @title DeployOnchainBook
  *
- * @dev EURC-30NOV26 Stage 2 (docs/eurc-usdc-futures-spec.md, B12, B15): OnchainBook beside the live contracts, one
- *      market on the deployed EURC v3 series (EURC_FUTURE_V3.json), under MarginEngine v2, priced off the series' own
- *      StreamsIndexAdapter. The `Matching` path keeps running for the same series.
+ * @dev The OnchainBook, v2 (spec C4: quote, self-priced splines; C6), with its router, beside the live contracts: one
+ *      market on a series of the deployed EURC FutureAsset v3 (EURC_FUTURE_V3.json), chosen by EXPIRY, under
+ *      MarginEngine v2, priced off the future's StreamsIndexAdapter. The `Matching` path keeps running.
+ *
+ * @dev HISTORY. v1 (pegged splines only) was deployed from this script on 2026-11-16 for EURC-30NOV26
+ *      (ONCHAIN_BOOK.json and its two vault-action files). This version writes ONCHAIN_BOOK_V2*.json and refuses to
+ *      overwrite them, so the v1 record stays. The series is read from the future (EXPIRY must be listed there, by
+ *      the vault's `setContract`), not from the artifact, which records the first series only.
+ *
+ * @dev SELF-PRICED CAP. The deployer sets `maxSelfPricedTtl` (60 s, decision C6) while it still owns the book, as it
+ *      sets the market's other parameters; the proposer checks it. The priority-fee tax deploys off (C6: on when
+ *      outside takers arrive, a vault action).
  *
  * @dev NOTHING ON THE ENGINE OR THE FUTURE CHANGES. FutureAsset accepts a priced transfer from any caller holding
  *      the accounts' allowances and band-checks the price as it does a TradeModule fill; the engine margins it as any
@@ -42,14 +52,15 @@ interface ITradeModuleFeeRecipient {
  *      `Matching` (B3). The fee recipient is the TradeModule's, read live: one fee account for both paths.
  *
  * Usage (a fresh keystore account, or a used one named in USED_DEPLOYER):
- *   TAKER_FEE_RATE=500000000000000 MAKER_OWNER=<addr> forge script scripts/deploy-onchain-book.s.sol \
+ *   EXPIRY=<unix> TAKER_FEE_RATE=500000000000000 MAKER_OWNER=<addr> forge script scripts/deploy-onchain-book.s.sol \
  *     --rpc-url $BASE_RPC_URL --account <keystore> --broadcast
  */
 contract DeployOnchainBook is Utils {
-  string internal constant ARTIFACT_NAME = "ONCHAIN_BOOK";
+  string internal constant ARTIFACT_NAME = "ONCHAIN_BOOK_V2";
   string internal constant SERIES_NAME = "EURC_FUTURE_V3";
-  string internal constant VAULT_ACTIONS_NAME = "ONCHAIN_BOOK_VAULT_ACTIONS";
-  string internal constant ENABLE_ACTIONS_NAME = "ONCHAIN_BOOK_ENABLE_VAULT_ACTIONS";
+  string internal constant VAULT_ACTIONS_NAME = "ONCHAIN_BOOK_V2_VAULT_ACTIONS";
+  string internal constant ENABLE_ACTIONS_NAME = "ONCHAIN_BOOK_V2_ENABLE_VAULT_ACTIONS";
+  uint internal constant BOOK_VERSION = 2;
 
   address internal constant EXPECTED_VAULT = 0x1dcA42ab54Bd3862853A821F84B29BF65245F435;
   address internal constant FORGE_DEFAULT_SENDER = 0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38;
@@ -65,6 +76,7 @@ contract DeployOnchainBook is Utils {
   uint16 internal constant DEFAULT_MAX_MAKERS = 10;
   uint internal constant DEFAULT_GAS_FLOOR = 700_000;
   uint internal constant DEFAULT_PRIORITY_TAX_RATE = 0; // B12: tax off at rollout
+  uint32 internal constant DEFAULT_SELF_PRICED_TTL_CAP = 60; // C6
 
   /// @dev Bounds a mistyped env would cross
   uint internal constant MAX_TICK_SIZE = 1e15; // 0.001 USDC per EURC: ~9 bps at 1.10
@@ -72,6 +84,8 @@ contract DeployOnchainBook is Utils {
   uint32 internal constant MAX_TTL_LIMIT = 1 days;
   /// @dev B10: a take walking 10 makers measured 6.6M gas on the Base fork
   uint16 internal constant MAX_MAKERS_LIMIT = 10;
+  /// @dev C6: 60 s is the cap; a self-priced quote is only as fresh as its maker's last update
+  uint32 internal constant MAX_SELF_PRICED_TTL_CAP = 60;
   /// @dev B5a: a settlement batch on the fork measured ~600k; below this the floor skips honest makers
   uint internal constant MIN_GAS_FLOOR = 600_000;
   /// @dev Time before the series' last trade for the vault's two batches and some trading
@@ -88,6 +102,7 @@ contract DeployOnchainBook is Utils {
     address cash;
     address tradeModule;
     uint96 subId;
+    uint64 expiry;
     uint64 lastTradeTime;
     uint feeRecipient;
     uint tickSize;
@@ -98,6 +113,7 @@ contract DeployOnchainBook is Utils {
     uint16 maxMakers;
     uint gasFloor;
     uint priorityTaxRate;
+    uint32 selfPricedTtlCap;
     address makerOwner;
   }
 
@@ -105,12 +121,18 @@ contract DeployOnchainBook is Utils {
     Params memory params = loadParams();
     checkDeployer(params, msg.sender, vm.getNonce(msg.sender), vm.envOr("USED_DEPLOYER", address(0)));
 
+    if (vm.exists(_deploymentPath(ARTIFACT_NAME))) {
+      revert("ONCHAIN_BOOK_V2.json exists: a v2 book is deployed on this chain; move the record aside deliberately");
+    }
+
     vm.startBroadcast();
     OnchainBook book = deploy(params);
+    OnchainBookRouter router = deployRouter(book, params);
     vm.stopBroadcast();
 
     assertDeployment(book, params, msg.sender);
-    _writeArtifacts(book, params);
+    assertRouter(router, book, params);
+    _writeArtifacts(book, router, params);
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -118,7 +140,9 @@ contract DeployOnchainBook is Utils {
   // ---------------------------------------------------------------------------------------------
 
   function loadParams() public view returns (Params memory params) {
-    params = loadChainParams();
+    uint expiry = resolveRequired(vm.envOr("EXPIRY", UNSET), "EXPIRY");
+    if (expiry > type(uint64).max) revert("EXPIRY is not a unix time");
+    params = loadChainParams(uint64(expiry));
     params.tickSize = vm.envOr("TICK_SIZE", params.tickSize);
     params.lotSize = vm.envOr("LOT_SIZE", params.lotSize);
     params.takerFeeRate = resolveRequired(vm.envOr("TAKER_FEE_RATE", UNSET), "TAKER_FEE_RATE");
@@ -127,6 +151,7 @@ contract DeployOnchainBook is Utils {
     params.maxMakers = uint16(vm.envOr("MAX_MAKERS", uint(params.maxMakers)));
     params.gasFloor = vm.envOr("GAS_FLOOR", params.gasFloor);
     params.priorityTaxRate = vm.envOr("PRIORITY_TAX_RATE", params.priorityTaxRate);
+    params.selfPricedTtlCap = uint32(vm.envOr("SELF_PRICED_TTL_CAP", uint(params.selfPricedTtlCap)));
     params.makerOwner = vm.envOr("MAKER_OWNER", address(0));
     checkParams(params);
   }
@@ -138,7 +163,8 @@ contract DeployOnchainBook is Utils {
   }
 
   /// @dev Chain reads, the series' artifact and defaults; no environment, no checks. The fork test builds on this.
-  function loadChainParams() public view returns (Params memory params) {
+  ///      The series is `expiry` on the artifact's future: its subId and last trade are the future's.
+  function loadChainParams(uint64 expiry) public view returns (Params memory params) {
     string memory series = _readDeploymentFile(SERIES_NAME);
     params.subAccounts = vm.parseJsonAddress(_readDeploymentFile("core"), ".subAccounts");
     params.vault = EXPECTED_VAULT;
@@ -148,8 +174,9 @@ contract DeployOnchainBook is Utils {
     params.indexFeed = vm.parseJsonAddress(series, ".indexFeed");
     params.cash = vm.parseJsonAddress(series, ".cash");
     params.tradeModule = vm.parseJsonAddress(series, ".tradeModule");
-    params.subId = uint96(vm.parseJsonUint(series, ".subId"));
-    params.lastTradeTime = uint64(vm.parseJsonUint(series, ".lastTradeTime"));
+    params.expiry = expiry;
+    params.subId = FutureAsset(params.future).getSubId(expiry);
+    params.lastTradeTime = FutureAsset(params.future).futureContracts(params.subId).lastTradeTime;
     params.feeRecipient = ITradeModuleFeeRecipient(params.tradeModule).feeRecipient();
 
     params.tickSize = DEFAULT_TICK_SIZE;
@@ -160,6 +187,7 @@ contract DeployOnchainBook is Utils {
     params.maxMakers = DEFAULT_MAX_MAKERS;
     params.gasFloor = DEFAULT_GAS_FLOOR;
     params.priorityTaxRate = DEFAULT_PRIORITY_TAX_RATE;
+    params.selfPricedTtlCap = DEFAULT_SELF_PRICED_TTL_CAP;
   }
 
   function checkDeployer(Params memory params, address deployer, uint nonce, address usedDeployer) public pure {
@@ -187,8 +215,9 @@ contract DeployOnchainBook is Utils {
     FutureAsset future = FutureAsset(params.future);
     if (!future.whitelistedManager(params.engine)) revert("the future does not whitelist the engine");
     IFutureAsset.FutureContract memory c = future.futureContracts(params.subId);
-    if (!c.listed || c.settled) revert("the series is not listed, or settled");
-    if (c.lastTradeTime != params.lastTradeTime) revert("the series' last trade is not the artifact's");
+    if (!c.listed || c.settled) revert("the series is not listed, or settled: the vault lists EXPIRY first (setContract)");
+    if (c.expiry != params.expiry || future.getSubId(params.expiry) != params.subId) revert("the series is not EXPIRY");
+    if (c.lastTradeTime != params.lastTradeTime) revert("the series' last trade is not the future's");
     if (block.timestamp + MIN_LEAD >= c.lastTradeTime) revert("under 2 hours to the series' last trade");
     if (future.totalPositionCap(IManager(params.engine)) == 0) revert("the series is closed (cap 0)");
 
@@ -217,6 +246,10 @@ contract DeployOnchainBook is Utils {
     }
     if (params.gasFloor < MIN_GAS_FLOOR) revert("GAS_FLOOR under 600,000 skips honest makers (B5a, B10)");
     if (params.priorityTaxRate != 0) revert("PRIORITY_TAX_RATE must be 0 at rollout (B12: tax off)");
+    if (
+      params.selfPricedTtlCap == 0 || params.selfPricedTtlCap > MAX_SELF_PRICED_TTL_CAP
+        || params.selfPricedTtlCap > params.maxTtl
+    ) revert("SELF_PRICED_TTL_CAP: 1 to 60 s (C6), and no more than MAX_TTL");
 
     if (params.makerOwner == address(0)) revert("set MAKER_OWNER: the address owning the maker's account (B3)");
     if (params.makerOwner == params.vault) revert("MAKER_OWNER is the vault");
@@ -242,7 +275,13 @@ contract DeployOnchainBook is Utils {
     if (id != BOOK_MARKET_ID) revert("the book's first market is not 1");
     book.setMarketParams(id, params.takerFeeRate, params.takeMaxAge, params.maxTtl, params.maxMakers, false);
     book.setGasFloor(params.gasFloor);
+    book.setSelfPricedTtlCap(id, params.selfPricedTtlCap);
     book.transferOwnership(params.vault);
+  }
+
+  /// @dev Ownerless: it holds nothing and acts only for an account's owner (C4.3).
+  function deployRouter(OnchainBook book, Params memory params) public returns (OnchainBookRouter) {
+    return new OnchainBookRouter(book, IRouterCash(params.cash));
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -256,6 +295,7 @@ contract DeployOnchainBook is Utils {
     if (book.feeRecipient() != params.feeRecipient) revert("book fee recipient");
     if (book.gasFloor() != params.gasFloor) revert("book gas floor");
     if (book.priorityTaxRate() != 0) revert("book priority tax");
+    if (book.maxSelfPricedTtl(BOOK_MARKET_ID) != params.selfPricedTtlCap) revert("book self-priced ttl cap");
     if (book.nextMarketId() != BOOK_MARKET_ID + 1) revert("the book lists one market");
     _assertMarket(book, params);
     if (book.makerAllowed(params.makerOwner) || book.makerAllowed(deployer)) {
@@ -266,6 +306,12 @@ contract DeployOnchainBook is Utils {
     MarginEngine e = MarginEngine(params.engine);
     if (e.trustedRiskAssessor(address(book))) revert("the book is a trustedRiskAssessor");
     if (e.feeBypassedCaller(address(book))) revert("the book is a feeBypassedCaller");
+  }
+
+  function assertRouter(OnchainBookRouter router, OnchainBook book, Params memory params) public view {
+    if (address(router.book()) != address(book)) revert("router book");
+    if (address(router.cash()) != params.cash) revert("router cash");
+    if (address(router.subAccounts()) != params.subAccounts) revert("router subAccounts");
   }
 
   /// @dev The getter returns the struct's fields flattened, which is the encoding of the (all-static) struct itself:
@@ -295,11 +341,23 @@ contract DeployOnchainBook is Utils {
   // artifacts
   // ---------------------------------------------------------------------------------------------
 
-  function _writeArtifacts(OnchainBook book, Params memory params) internal {
+  function symbolOf(Params memory params) public pure returns (string memory) {
+    return string.concat("EURC-", _expiryCode(params.expiry));
+  }
+
+  function _deploymentPath(string memory name) internal view returns (string memory) {
+    return string.concat(vm.projectRoot(), "/deployments/", vm.toString(block.chainid), "/", name, ".json");
+  }
+
+  function _writeArtifacts(OnchainBook book, OnchainBookRouter router, Params memory params) internal {
     string memory obj = "onchain-book";
     vm.serializeAddress(obj, "book", address(book));
+    vm.serializeUint(obj, "version", BOOK_VERSION);
+    vm.serializeAddress(obj, "router", address(router));
+    vm.serializeUint(obj, "deployBlock", block.number);
     vm.serializeUint(obj, "bookMarketId", BOOK_MARKET_ID);
-    vm.serializeString(obj, "symbol", "EURC-30NOV26");
+    vm.serializeString(obj, "symbol", symbolOf(params));
+    vm.serializeUint(obj, "expiry", params.expiry);
     vm.serializeAddress(obj, "deployer", msg.sender);
     vm.serializeUint(obj, "deployerNonce", vm.getNonce(msg.sender));
     vm.serializeAddress(obj, "subAccounts", params.subAccounts);
@@ -320,6 +378,7 @@ contract DeployOnchainBook is Utils {
     vm.serializeUint(obj, "maxMakers", params.maxMakers);
     vm.serializeUint(obj, "gasFloor", params.gasFloor);
     vm.serializeUint(obj, "priorityTaxRate", params.priorityTaxRate);
+    vm.serializeUint(obj, "selfPricedTtlCap", params.selfPricedTtlCap);
     vm.serializeString(obj, "units", "tickSize in USDC per EURC (18 dp); lotSize in contracts (18 dp); fee of notional");
     string memory json = vm.serializeAddress(obj, "makerOwner", params.makerOwner);
     _writeToDeployments(ARTIFACT_NAME, json);
@@ -352,7 +411,7 @@ contract DeployOnchainBook is Utils {
     return string.concat(
       "[",
       _action(
-        "book.setMarketParams(1, ..., enabled = true) [opens EURC-30NOV26 on the OnchainBook]",
+        string.concat("book.setMarketParams(1, ..., enabled = true) [opens ", symbolOf(params), " on the OnchainBook]"),
         book,
         enableCalldata(params)
       ),
