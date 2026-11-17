@@ -77,7 +77,9 @@ variable "image_markets" {
   # 2026-11-16: main 96974ae (0d8fc68: the matcher indexes the OnchainBook's Fill and TakeExecuted onto the series tape;
   # migration 000024 run first, migrate td :55). Rollback is 2fd91925220b, in one apply (000024 only adds, so the old
   # image runs on the migrated schema).
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:96974ae8e208"
+  # 2026-11-17: main df70d1e (the settlement verifier: each matcher fill checked on chain, voided only on proof it did
+  # not settle; migration 000025 run first, migrate td :56). Rollback is 96974ae8e208, in one apply (000025 only adds).
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:df70d1e726e1"
 }
 
 variable "image_execution" {

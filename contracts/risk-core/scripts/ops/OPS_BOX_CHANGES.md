@@ -5,6 +5,18 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-17 01:36–01:43 UTC: markets df70d1e: the settlement verifier (ECS)
+
+- **What.** Each matcher fill recorded on the executor's broadcast is `settlement = 'pending'`; the matcher checks it
+  every 15 s and marks it `confirmed` on a successful receipt, or voids it only on proof (a revert, its nonce used by
+  another transaction, or no node, primary or fallback, aware of it 10 min after the broadcast). A void puts both orders
+  back (a completed order is cancelled, `settlement_voided`), moves a future's reduce-only ledger back, moves the row
+  to `trade_fills_voided` and posts `NUMO FILL VOIDED`. 9 DB-backed tests; 11 guards mutation-tested; 732 tests pass.
+- **Deploy.** Migration 000025 first (`numo-exchange-migrate:56`, task `068a7b6d…`, exit 0, applied 01:38:13); then the
+  markets and matcher task definitions with `markets:df70d1e726e1` through `with-matcher-mute.sh` (01:39:12–01:42:40;
+  the plan touched only those two). Old matcher STOPPED, fresh heartbeat after. `settlement_verifier_started
+  dropped_after=10m0s fallback=true` at 01:40:30. Rollback: `96974ae8e208`, in one apply.
+
 ## 2026-11-17 01:13–01:26 UTC: book-maker dead-man check (healthchecks.io, SSM, ECS)
 
 - **Check.** healthchecks.io "book-maker" (`be5e8a4d…`), created in the dashboard (the API key in SSM is read-only):
