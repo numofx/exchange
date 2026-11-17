@@ -17,7 +17,14 @@ the only place the box's real state is written down. Newest first.
   - sell 5, tx `0x5835bba9…b715`, block 58,747,112: at 1.102074, fee 0.002755185, 812,989 gas.
 - **Checked:** #57 and #58 flat; across the two blocks #58 +0.003000 (the spread), #57 −0.008512 (spread and fees),
   fee account 22 +0.005512 against 0.00551187 of fees; both `source: book` on `/trades?symbol=EURC-30NOV26` with their
-  hashes. Still to run: the composed case (the kit's vault flow or a router `route`).
+  hashes.
+- **Composed case: the router** (`0xd954…76aB`, a contract calling the book for #57's owner), no reports:
+  - `SubAccounts.setApprovalForAll(router, true)` from the taker, tx `0x18bf5189…dfa0` (left on: #57 is the canary);
+  - `route` buy 5, tx `0x09e12dc6…c108`, block 58,747,573: 1.102527 against #58, fee 0.0027563, 998,244 gas;
+  - `route` sell 9 with `reduceOnly`, cut to the position's 5, tx `0x8c548129…1819`, block 58,747,585: 1.101927, fee
+    0.0027548, 835,396 gas.
+  - Checked as above: both flat; #58 +0.003000, #57 −0.008511, fee account 22 +0.005511 (the fees); both on the tape
+    as `source: book`. The kit's `DeltaHedgedEurcVault` flow is not run on mainnet (fork-tested only).
 
 ## 2026-11-17 17:20–17:31 UTC: book-maker-v2 dead-man check proven; v2 enable proposed; MM wallet burn 0.0025 (ECS, box)
 
