@@ -120,6 +120,13 @@ locals {
     # the execution task cannot start.
     settlement_canary_heartbeat_url = "${local.ssm_arn_prefix}/numo/pager/heartbeats/settlement-canary-ecs"
   }
+
+  # The v2 book maker's own dead-man check (healthchecks.io "book-maker-v2"), so the two makers alert apart. Only once
+  # its image is set, so the execution role's policy does not change before then. Create the parameter first: a task
+  # referencing a missing one does not start.
+  secret_arns_book_v2 = var.image_market_maker_book_v2 == "" ? {} : {
+    book_maker_v2_heartbeat_url = "${local.ssm_arn_prefix}/numo/exchange/book_maker_v2_heartbeat_url"
+  }
 }
 
 # ----------------------------------------------------------- executor signing key

@@ -671,3 +671,19 @@ variable "onchain_book_start_block" {
   # The book's create transaction (0xa3bc740a…2baa).
   default = 58358413
 }
+
+# The v2 OnchainBook (risk-core ONCHAIN_BOOK_V2.json: quote, self-priced splines; spec C4) and its deployBlock, indexed
+# beside v1. Empty: not indexed, and the matcher's task definition does not change.
+variable "onchain_book_v2_address" {
+  type    = string
+  default = ""
+  validation {
+    condition     = var.onchain_book_v2_address == "" || can(regex("^0x[0-9a-fA-F]{40}$", var.onchain_book_v2_address))
+    error_message = "onchain_book_v2_address must be an address or empty."
+  }
+}
+
+variable "onchain_book_v2_start_block" {
+  type    = number
+  default = 0
+}

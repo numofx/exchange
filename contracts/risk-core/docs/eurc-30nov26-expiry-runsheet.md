@@ -16,7 +16,7 @@ Written 2026-11-17 from the contracts, the keeper and the deployment artifacts; 
 | Engine | MarginEngine v2 `0x0705…0950`, pool account #37 |
 | Index | `EurcIndexFeed` `0x5658…24D9`, reverts when its reports are over **60 s** old |
 | Keeper | ops box `numo-future-feeds-v3@eurc-30nov26`: posts reports every 20 s, forward marks, fixing samples, settlement, close-out. Pays gas from the v3 relayer `0x0AbA…12e5` |
-| Book | `OnchainBook` `0x8Fc6…d456`, market 1; maker ECS `market-maker-book` on #56 |
+| Book | `OnchainBook` `0x8Fc6…d456`, market 1; maker ECS `market-maker-book` on #56. **If v2 is live** (`onchain-book-v2-runsheet.md`): the v2 book (`ONCHAIN_BOOK_V2.json`), market 1, maker ECS `market-maker-book-v2`, self-priced, on its own account |
 | Matching maker | ECS `market-maker-future-v2-eurc` on #40 |
 | Open interest | 2 EURC on 2026-11-17 (`totalPosition(engine)` / 2) |
 
@@ -90,7 +90,7 @@ by the box): fund it, set `FORWARD_RELAYER_SSM_NAME=forward_relayer_key_v3_eurc_
 Close-out reads no feed, so it works with the index down. Check the pool account #37's cash afterwards (the keeper's
 deficit cover is shared with the cNGN series).
 
-**Book still quoting after 13:30.** Stop `market-maker-book` (above). The book itself refuses takes from 14:30 regardless.
+**Book still quoting after 13:30.** Stop `market-maker-book` (above), and `market-maker-book-v2` the same way if v2 is live. A self-priced quote lapses 30 s after its maker stops. The book itself refuses takes from 14:30 regardless.
 
 **A phantom fill on the last trades.** The settlement verifier voids it within ~10 min and posts `NUMO FILL VOIDED`.
 Before the 14:30 close, check `trade_fills_voided` stays empty.
@@ -101,6 +101,9 @@ Before the 14:30 close, check `trade_fills_voided` stays empty.
 - [ ] **Book:** set `desired_count_market_maker_book = 0` (counts.auto.tfvars) and apply; withdraw #56's USDC
       (`CashAsset.withdraw(56, …, 0x3448…)`, ~450) and the taker #57's 49.99; pause or delete the `book-maker`
       healthcheck. The market cannot trade again (past last trade); disabling it in the vault is optional.
+- [ ] **Book v2, if live:** the same for `desired_count_market_maker_book_v2` and its account, and the
+      `book-maker-v2` healthcheck; drop `onchain_book_v2_address` once its tape is final. Lower the MM wallet's floor back
+      in `check_signer_balance.py`.
 - [ ] **Matching:** `market-maker-future-v2-eurc` to 0 or onto the next series; `FUTURE_SERIES` drops EURC-30NOV26 when
       the app no longer needs to show it (a matcher redeploy: `with-matcher-mute.sh`).
 - [ ] **Keeper:** after close-out, `systemctl disable --now numo-future-feeds-v3@eurc-30nov26`; sweep the v3 relayer's

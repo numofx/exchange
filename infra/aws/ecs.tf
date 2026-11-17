@@ -37,6 +37,7 @@ resource "aws_cloudwatch_log_group" "tasks" {
     ["markets-service", "matcher", "execution-service", "migrate", "market-maker", "market-maker-perp", "market-maker-future"],
     var.image_market_maker_eurc == "" ? [] : ["market-maker-eurc"],
     var.image_market_maker_book == "" ? [] : ["market-maker-book"],
+    var.image_market_maker_book_v2 == "" ? [] : ["market-maker-book-v2"],
     [for k in keys(local.mm_future_v2_enabled) : "market-maker-future-v2-${k}"],
     [for k in keys(local.mm_options_enabled) : "market-maker-${k}"],
   ))
@@ -71,7 +72,7 @@ resource "aws_iam_role_policy_attachment" "execution_managed" {
 data "aws_iam_policy_document" "read_secrets" {
   statement {
     actions   = local.use_ssm ? ["ssm:GetParameters"] : ["secretsmanager:GetSecretValue"]
-    resources = values(local.secret_arns)
+    resources = concat(values(local.secret_arns), values(local.secret_arns_book_v2))
   }
   statement {
     actions   = ["kms:Decrypt"]
@@ -138,10 +139,17 @@ locals {
 
   # The OnchainBook whose fills the matcher indexes onto the series' tape (markets-service README, OnchainBook fills).
   # Matcher only. Absent while unset, so neither task definition changes until the book is deployed and both are set.
-  onchain_book_env = var.onchain_book_address == "" ? [] : [
-    { name = "ONCHAIN_BOOK_ADDRESS", value = var.onchain_book_address },
-    { name = "ONCHAIN_BOOK_START_BLOCK", value = tostring(var.onchain_book_start_block) },
-  ]
+  # v2 (spec C4, ONCHAIN_BOOK_V2.json) beside v1, each with its own indexer and cursor; needs markets 9780841 or later.
+  onchain_book_env = concat(
+    var.onchain_book_address == "" ? [] : [
+      { name = "ONCHAIN_BOOK_ADDRESS", value = var.onchain_book_address },
+      { name = "ONCHAIN_BOOK_START_BLOCK", value = tostring(var.onchain_book_start_block) },
+    ],
+    var.onchain_book_v2_address == "" ? [] : [
+      { name = "ONCHAIN_BOOK_V2_ADDRESS", value = var.onchain_book_v2_address },
+      { name = "ONCHAIN_BOOK_V2_START_BLOCK", value = tostring(var.onchain_book_v2_start_block) },
+    ],
+  )
 
   # EURC-USDC spot, for the api and the matcher alike, and only once the escrow exists. Absent rather than
   # empty when unset: an EURC_SPOT_ASSET_ADDRESS="" entry would read the same to markets-service (not listed)
@@ -309,6 +317,14 @@ resource "aws_ecs_task_definition" "matcher" {
     precondition {
       condition     = var.onchain_book_address == "" || var.onchain_book_start_block > 0
       error_message = "onchain_book_start_block (the book's deploy block) is required with onchain_book_address."
+    }
+    precondition {
+      condition     = var.onchain_book_v2_address == "" || var.onchain_book_v2_start_block > 0
+      error_message = "onchain_book_v2_start_block (ONCHAIN_BOOK_V2.json deployBlock) is required with onchain_book_v2_address."
+    }
+    precondition {
+      condition     = var.onchain_book_v2_address == "" || lower(var.onchain_book_v2_address) != lower(var.onchain_book_address)
+      error_message = "onchain_book_v2_address is the v1 book: one indexer per book."
     }
   }
 }
