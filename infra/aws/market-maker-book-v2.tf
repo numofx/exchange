@@ -33,7 +33,8 @@ variable "onchain_book_v2_maker_book" {
 variable "onchain_book_v2_maker_account_id" {
   description = "The v2 maker's account: held by mm_address (not Matching) under MarginEngine v2, with allowances to the v2 book."
   type        = string
-  default     = ""
+  # #58, created 2026-11-17 (OPS_BOX_CHANGES.md); margin not yet deposited.
+  default = "58"
 }
 
 # D4 (run-sheet): the size is to be named. Defaults are v1's canary curve.

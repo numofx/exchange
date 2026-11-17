@@ -5,6 +5,17 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-17: v2 maker account #58 created, allowances to the v2 book (laptop, `cast send`)
+
+- **What.** From the MM wallet (`0x3448…B47B`, key read from SSM `/numo/exchange/mm_private_key` into a subshell):
+  - `SubAccounts.createAccount(0x3448…, MarginEngine v2 0x0705…0950)` → **#58**, tx `0x4fdd17e4…`, block 58,690,327;
+  - `setAssetAllowances(58, book 0x83C5…89d5, [(future 0xC350…B227, max, max), (cash 0xA74E…4272, max, max)])`,
+    tx `0x27f01fbf…`, block 58,690,343.
+- **Read back:** owner the MM wallet, manager MarginEngine v2, both allowances max both ways. Gas ~0.0000012 ETH.
+- **Why.** Run-sheet step 4 (D5: a new account for v2, #56 stays on v1). Terraform `onchain_book_v2_maker_account_id`
+  defaults to 58; the service stays off until the image is set.
+- **Not done:** margin. The wallet holds 0.05 USDC; the deposit waits on the owner's choice of source.
+
 ## 2026-11-17 ~13:55 UTC: book-maker-v2 dead-man check (healthchecks.io, SSM); market-maker image 0d687040cfa5 pushed
 
 - **Check.** healthchecks.io "book-maker-v2" (`39ff502b…`), created in the dashboard (the API key in SSM is read-only):
