@@ -24,13 +24,14 @@ pass while the size stays on `Matching`.
 - **Self-priced ttl: 30 s**, refreshed once 22 s old (`refresh + poll + 3 ≤ ttl`). A reprice of
   `MM_BOOK_REPRICE_TICKS` sends at once. This replaces C6's ~10 s, for gas. The book's cap stays at 60 s.
 
-## Still open
+## Decided later (owner, 2026-11-17)
 
-| # | Decision | Recommendation |
-|---|---|---|
-| D4 | Book size: today 60 EURC a side (`20@0,40@50`, 300-tick half-spread). C0 test 3 means our `Matching` size moves here. | Name the curve and half-spread: they are the terraform variables `onchain_book_v2_maker_curve` and `onchain_book_v2_maker_half_spread_ticks`. The account's margin is sized from them (step 4). Until then, the canary curve. |
-| D5 | The maker's account | A new account for v2, owned by the MM wallet (`0x3448…B47B`), keeping #56 on v1. The terraform refuses #56 for v2. |
-| D6 | `Matching` quoting the series while the book carries our size | Quoting both doubles our exposure per price. Move the size to the book and shrink the Matching maker by the same amount. |
+- **D4: A, the whole size.** The Matching maker's ladder moved to the book (3,012 EURC a side, 8–35 bps), with the
+  bot's inventory cap (5,000 lots) and on-chain skew (1 tick a lot to 2,750). #58 holds 1,590 USDC (300 from #56,
+  1,290 from #40).
+- **D5:** #58, a new account; #56 stays on v1.
+- **D6:** the Matching maker for EURC-30NOV26 (#40) stopped 2026-11-17 19:01 UTC; #40 keeps 10 USDC behind a 2-EURC
+  short to expiry.
 
 ## Cost and funding (MM wallet `0x3448ac0A3283951A2AFD5B3A582329ECA43CB47B`)
 

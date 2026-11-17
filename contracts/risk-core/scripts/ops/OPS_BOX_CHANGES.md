@@ -5,6 +5,30 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-17 19:01–19:09 UTC: EURC-30NOV26's whole size moved from Matching to the v2 OnchainBook (D4 A, D6) (ECS, laptop)
+
+Owner's choice A and yes to the 1,290 USDC move.
+
+- **Bot.** market-maker `67de39e9`: the inventory cap (`MM_BOOK_MAX_POSITION_LOTS`): a side whose whole curve would take
+  the position past the cap quotes a park curve (one lot 500,000 ticks out, outside the ±2.79% index band, so it never
+  fills). Rehearsed on an anvil fork against #58: parked at −60 of a 100 cap, a further buy filled 0, unparked at −30.
+  Image `market-maker:67de39e99225` (refuses a cap under one side's curve).
+- **#40's Matching maker stopped:** `desired_count_market_maker_future_v2.eurc` 0 (counts.auto.tfvars), plan 1 change;
+  task `29483bf6…` STOPPED 19:01:47; its 10 orders expired by 19:03:38 (`move-usdc` refused while they rested). cNGN's
+  maker untouched.
+- **1,290 USDC #40 → #58:** `migrate-spot-mm.ts move-usdc 40 58 1290000000 --execute` (laptop, the MM key from SSM in a
+  subshell): withdrawal through `/withdrawals` `0xad3485f3…381b` (block 58,759,468), approve `0x55da99ba…ef7d`, deposit
+  `0xf9ab0037…77fc` (block 58,759,477). Read back: #58 1,590.01 cash, flat; #40 10.31 cash, short 2 EURC (to expiry).
+- **Book maker on the whole ladder** (`5365ddc`): curve
+  `116@0,139@330,167@660,200@990,241@1320,289@1650,346@1980,416@2310,499@2640,599@2970` (3,012 EURC a side), half-spread
+  880 (8 bps), skew 1 tick a lot to 2,750, cap 5,000 lots. Plan: only those env values and the image. Old task
+  `adcc2fc8…` STOPPED 19:07:42; the new one (`0056e48c…`) set curve 1 and the park curve 2 (`0x34e3b313…`), preflight ok,
+  quoting from its first cycle. Read back: spline half-spread 880, skew 1/2,750, curves as configured.
+- **Reachable in one take, `quote` with no account:** buy 3,012 EURC at avg 1.104510, sell 3,012 at 1.098808 (one
+  maker); a 4,000 order fills the same 3,012. EURC-30NOV26 had no quotes from us for ~5 minutes on Matching (19:03:38 to
+  the book's 19:08 update, the book's 60-EURC canary standing until the switch).
+- **Undo:** eurc back to 1 with `move-usdc 58 40` first (the book maker's curve back to the canary).
+
 ## 2026-11-17: the kit's DeltaHedgedEurcVault run on mainnet: spot, lending and the v2 book in one transaction (laptop, `cast`/`forge create`)
 
 Owner's yes for steps 1–5; code `a69afb6` (adds `close` and `withdrawMargin`), rehearsed at head by
