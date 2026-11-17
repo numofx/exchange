@@ -13,13 +13,17 @@
 variable "image_market_maker_book_v2" {
   description = "The market-maker image carrying /app/book-maker with self-priced support (0d687040+), by git SHA. Empty creates nothing."
   type        = string
-  default     = ""
+  # Built and pushed 2026-11-17: 957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:0d687040cfa5
+  # (book-maker 0d687040: self-priced, v1/v2 detection, 30 s / 22 s). Set it here once onchain_book_v2_maker_account_id
+  # exists (run-sheet step 4): before that the bot's preflight refuses to start and ECS would restart it in a loop.
+  default = ""
 }
 
 variable "onchain_book_v2_maker_book" {
   description = "The v2 book the maker quotes (ONCHAIN_BOOK_V2.json .book). Separate from onchain_book_v2_address, the matcher's indexer, so setting one does not redeploy the other."
   type        = string
-  default     = ""
+  # Deployed 2026-11-17 (ONCHAIN_BOOK_V2.json); setup batch landed, market disabled until the enable batch.
+  default = "0x83C5741a24d57189379E1215F7A22d9f048E89d5"
   validation {
     condition     = var.onchain_book_v2_maker_book == "" || can(regex("^0x[0-9a-fA-F]{40}$", var.onchain_book_v2_maker_book))
     error_message = "onchain_book_v2_maker_book must be an address or empty."

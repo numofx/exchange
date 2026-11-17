@@ -5,6 +5,17 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-17 ~13:55 UTC: book-maker-v2 dead-man check (healthchecks.io, SSM); market-maker image 0d687040cfa5 pushed
+
+- **Check.** healthchecks.io "book-maker-v2" (`39ff502b…`), created in the dashboard (the API key in SSM is read-only):
+  1 min period, 10 min grace, the project's email and Pushover integrations, never pinged so far (silent until the
+  first ping). Its ping URL is SSM `/numo/exchange/book_maker_v2_heartbeat_url` (SecureString), which the execution
+  role reads only once `image_market_maker_book_v2` is set (`secrets.tf`).
+- **Image.** `market-maker:0d687040cfa5` (book-maker `0d687040`). A smoke run refused a 23 s refresh at a 30 s ttl, so
+  the self-priced code is in it. Not deployed: the v2 service waits on the maker account (run-sheet step 4).
+- **Not yet proven:** the check going down. Break it once the bot runs: stop the v2 service for 11 minutes and read the
+  alert.
+
 ## 2026-11-17 13:49–13:52 UTC: markets 6bb45f2: the matcher indexes the v2 OnchainBook beside v1 (ECS)
 
 - **What.** `markets:6bb45f2f367d` (9780841: one book indexer per configured book). The matcher also got
