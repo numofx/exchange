@@ -5,6 +5,20 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-17 17:20–17:31 UTC: book-maker-v2 dead-man check proven; v2 enable proposed; MM wallet burn 0.0025 (ECS, box)
+
+- **Measured** over the first live task (15:32:14–17:20:15, one stream): 353 sends, 197 refreshes (~25 s), 155
+  reprices (20 ticks), 1 initial: ~4,700 a day, 0.0021 ETH/day. `check_signer_balance.py` burn raised to 0.0025
+  (`dde270b`, on the box, sha256 `4df1f7ec…a4d5`, SSM `49276177`).
+- **Dead-man test.** `aws ecs update-service --desired-count 0` at 17:20 (the task STOPPED by
+  `wait-for-rollout.sh`; its spline cancelled on SIGTERM, tx `0x383641f7…`). Last ping 17:20:28; the check went
+  `grace` then **`down` at 17:30:53**. Restored with `--desired-count 1` (terraform's count is 1, so no drift):
+  preflight ok 17:31:17, a spline at 17:31:17 (`0x14c13a62…`), the check `up` at 17:31:26. Delivery of the email and
+  Pushover alert is the owner's to confirm.
+- **Enable proposed** from the box (`exchange-ops` at `5d51b72`, the proposer and artifacts unchanged since): dry run
+  (SSM `a4bfdf44`) passed all six gates; `numo-onchain-book-v2-enable` (SSM `2237f5c1`) proposed MPCVault
+  `03129a0f-…`, digest `0xbbb4450d…ee42`, `setMarketParams(1, …, enabled = true)`. Awaiting approval.
+
 ## 2026-11-17 15:32 UTC: book-maker-v2 live on the v2 book; MM wallet funded 0.03 ETH; balance check updated (ECS, box)
 
 - **Funding.** The owner sent 0.03 ETH to the MM wallet (0.030387 read back).

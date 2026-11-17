@@ -70,7 +70,7 @@ pass while the size stays on `Matching`.
    - create the account under engine v2;
    - deposit cash for D4's margin;
    - set allowances to the **v2** book (allowances are per book).
-5. **Dead-man check** (**created 2026-11-17**, `39ff502b…`; firing not yet proven). A healthchecks.io check `book-maker-v2` (1 min period, 10 min grace), its ping URL at SSM
+5. **Dead-man check** (**created 2026-11-17**, `39ff502b…`; **went down 17:30:53** with the bot stopped, up again on restart). A healthchecks.io check `book-maker-v2` (1 min period, 10 min grace), its ping URL at SSM
    `/numo/exchange/book_maker_v2_heartbeat_url`. Create it before step 7: a task referencing a missing parameter
    does not start. Prove it fires (break it) once the bot runs.
 6. **Fund the wallet** and raise the floor (above). (**Done 2026-11-17:** 0.03 ETH; burn 0.002/day in the check.)
