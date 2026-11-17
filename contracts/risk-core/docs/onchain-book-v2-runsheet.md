@@ -11,9 +11,9 @@ pass while the size stays on `Matching`.
 
 | # | Decision | Options, with a recommendation |
 |---|---|---|
-| D1 | List a next EURC series? (open on the 30 Nov run-sheet) | Needed: v2 can only list a series the future has listed (the deploy refuses otherwise), and EURC-30NOV26's last trade is 14:30 UTC on 30 Nov. **Recommend yes.** |
+| D1 | List a next EURC series? (open on the 30 Nov run-sheet; owner said yes 2026-11-17, expiry being confirmed) | Needed: v2 can only list a series the future has listed (the deploy refuses otherwise), and EURC-30NOV26's last trade is 14:30 UTC on 30 Nov. **Recommend yes.** |
 | D2 | Its expiry | 2026-12-31 15:00 UTC (`1798729200`, rehearsed) or an earlier business day, e.g. 2026-12-30, to avoid a fixing window on 31 Dec. Last trade 30 min before, as now. |
-| D3 | Self-priced cadence, which sets the cost (below) | (a) As decided: ttl 10 s, every 5 s cycle sends. (b) ttl 30 s, refresh 22 s (`refresh + poll + 3 ≤ ttl`): about a fifth of the updates, with quotes up to ~30 s old when the forward moves less than `MM_BOOK_REPRICE_TICKS`. A reprice still sends at once in either case. (a) is the decision of record; (b) is offered because of the cost. |
+| D3 | **Decided 2026-11-17: (b), ttl 30 s** (bot defaults since market-maker `0d687040`). Self-priced cadence, which sets the cost (below) | (a) As decided: ttl 10 s, every 5 s cycle sends. (b) ttl 30 s, refresh 22 s (`refresh + poll + 3 ≤ ttl`): about a fifth of the updates, with quotes up to ~30 s old when the forward moves less than `MM_BOOK_REPRICE_TICKS`. A reprice still sends at once in either case. (a) is the decision of record; (b) is offered because of the cost. |
 | D4 | Book size | Today: 60 EURC a side (`20@0,40@50`, 300-tick half-spread). C0 test 3 means our `Matching` size moves here. Name the curve and half-spread; margin is sized from it (step 5). |
 | D5 | The maker's account | **Recommend** a new account for v2, owned by the MM wallet (`0x3448…B47B`), keeping #56 for v1 until 30 Nov. |
 | D6 | `Matching` quoting on the new series | C6 keeps the Matching path. Quoting both doubles our exposure per price. **Recommend** our size on the book only, with Matching quoting the series small or not at all until C4.6. |
@@ -27,10 +27,10 @@ pass while the size stays on `Matching`.
 | D3 (b), 30 s ttl | 73,061 | ~3,500 | ~0.0016 + L1, ≤ 0.003 |
 
 - **Balance:** 0.0004 ETH on 2026-11-17, under an hour at (a).
-- **Fund before step 6:** at least two weeks at the chosen cadence: about 0.2 ETH for (a), 0.05 ETH for (b). By hand
+- **Fund before step 6:** at least two weeks at the chosen cadence (b): **about 0.05 ETH**. By hand
   from the owner, not from another hot wallet. Write it back the same day.
-- **Raise its floor** in `check_signer_balance.py` in the same commit as the switch. The floor is a week's spend:
-  ~0.09 ETH (a), ~0.02 ETH (b). The floor of 0.00005 assumes pegged. Raised earlier, it pages until funded; left
+- **Raise its floor** in `check_signer_balance.py` in the same commit as the switch. The floor is a week's spend at
+  (b): **~0.02 ETH**. The floor of 0.00005 assumes pegged. Raised earlier, it pages until funded; left
   as is, it misses a drain.
 
 ## Steps
