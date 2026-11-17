@@ -66,6 +66,8 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -141,13 +143,26 @@ def load_env_file(path: Path) -> None:
     os.environ.setdefault(key.strip().removeprefix("export ").strip(), value.strip())
 
 
-def rpc(url: str, method: str, params: list):
+# A rate limit is not an answer: the public RPC refuses with HTTP 429 often enough (8 of 67 runs on 2026-11-16) that a
+# run failing on the first one made this check flap red and green and say nothing. Retried with backoff; anything else
+# (a revert, a 5xx, a timeout) fails the run at once, as before.
+RPC_429_RETRIES = 3
+
+
+def rpc(url: str, method: str, params: list, _open=urllib.request.urlopen, _sleep=time.sleep):
   body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
   req = urllib.request.Request(
     url, data=body, headers={"Content-Type": "application/json", "User-Agent": "numo-settlement-canary/1"}
   )
-  with urllib.request.urlopen(req, timeout=15) as resp:
-    out = json.loads(resp.read())
+  for attempt in range(RPC_429_RETRIES + 1):
+    try:
+      with _open(req, timeout=15) as resp:
+        out = json.loads(resp.read())
+      break
+    except urllib.error.HTTPError as exc:
+      if exc.code != 429 or attempt == RPC_429_RETRIES:
+        raise
+      _sleep(2 ** attempt)
   if "error" in out:
     raise RuntimeError(out["error"])
   return out["result"]
@@ -560,11 +575,38 @@ def alert(webhook: str | None, msg: str) -> None:
     print(f"webhook delivery failed: {exc}", file=sys.stderr)
 
 
+def self_test_rpc_retry() -> None:
+  """A 429 is retried with backoff and the answer returned; four in a row fail the run; nothing else is retried."""
+  import io
+  def opener(script):
+    def _open(req, timeout):
+      code = script.pop(0)
+      if code != 200:
+        raise urllib.error.HTTPError(req.full_url, code, "refused", {}, io.BytesIO(b""))
+      return io.BytesIO(b'{"jsonrpc":"2.0","id":1,"result":"0x2a"}')
+    return _open
+  slept = []
+  assert rpc("http://x", "eth_call", [], _open=opener([429, 429, 200]), _sleep=slept.append) == "0x2a"
+  assert slept == [1, 2], slept
+  try:
+    rpc("http://x", "eth_call", [], _open=opener([429] * 4), _sleep=lambda s: None)
+    raise AssertionError("four 429s in a row must fail the run")
+  except urllib.error.HTTPError as exc:
+    assert exc.code == 429
+  calls = [503, 200]
+  try:
+    rpc("http://x", "eth_call", [], _open=opener(calls), _sleep=lambda s: None)
+    raise AssertionError("a 503 is not retried")
+  except urllib.error.HTTPError as exc:
+    assert exc.code == 503 and calls == [200], "one attempt only"
+
+
 def self_test(compiled_abis: bool = True) -> None:
   """Every selector matches its signature, and the fake-chain cases hold. main() runs this before every
   check, with compiled_abis=False: the ops box has no forge build (no out/ and no abi_selectors.py), so
   the compiled-ABI check, which only says the file is right, runs under --self-test in CI instead. With
   it on every run, no version of this canary from 2026-10-12 on could run on the box."""
+  self_test_rpc_retry()
   # every selector and signature this script pins must name a compiled function, not just match `cast sig`
   if compiled_abis:
     from abi_selectors import assert_script
