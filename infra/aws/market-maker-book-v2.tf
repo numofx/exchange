@@ -13,8 +13,8 @@
 variable "image_market_maker_book_v2" {
   description = "The market-maker image carrying /app/book-maker with self-priced support (0d687040+), by git SHA. Empty creates nothing."
   type        = string
-  # book-maker 0d687040: self-priced, v1/v2 detection, 30 s / 22 s.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:0d687040cfa5"
+  # book-maker 67de39e9: self-priced, v1/v2 detection, 30 s / 22 s, the inventory cap (MM_BOOK_MAX_POSITION_LOTS).
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:67de39e99225"
 }
 
 variable "onchain_book_v2_maker_book" {
@@ -31,19 +31,30 @@ variable "onchain_book_v2_maker_book" {
 variable "onchain_book_v2_maker_account_id" {
   description = "The v2 maker's account: held by mm_address (not Matching) under MarginEngine v2, with allowances to the v2 book."
   type        = string
-  # #58, created 2026-11-17 with 300 USDC margin from #56 (OPS_BOX_CHANGES.md).
+  # #58, created 2026-11-17: 300 USDC margin from #56, then 1,290 from #40 (D4 A; OPS_BOX_CHANGES.md).
   default = "58"
 }
 
-# D4 (run-sheet): the size is to be named. Defaults are v1's canary curve.
+# D4 (owner, 2026-11-17: A, the whole size): the Matching maker's EURC-30NOV26 ladder, moved here (#40 stopped, D6).
+# Ten rungs, 116 to 599 EURC (1.2x), 3,012 a side; 8 bps out (880 ticks at 1 tick = 1e-6 USDC, ~1.10) and 3 bps
+# (330 ticks) further each, to 35 bps.
 variable "onchain_book_v2_maker_curve" {
   type    = string
-  default = "20@0,40@50"
+  default = "116@0,139@330,167@660,200@990,241@1320,289@1650,346@1980,416@2310,499@2640,599@2970"
 }
 
 variable "onchain_book_v2_maker_half_spread_ticks" {
   type    = string
-  default = "300"
+  default = "880"
+}
+
+# Inventory: the book refills every update, so the bot caps the position (a side that would pass it parks outside
+# the band) and skews against it on chain. 5,000 lots (5 contracts, #40 held 6) takes ~825 USDC of IM at 15%; one
+# curve landing past it before the bot sees it, 8,012, ~1,320 of #58's ~1,590. Skew: 1 tick a lot to 2,750 (#40's
+# 25 bps full at ~2.75 contracts).
+variable "onchain_book_v2_maker_max_position_lots" {
+  type    = string
+  default = "5000"
 }
 
 variable "market_maker_book_v2_dry_run" {
@@ -88,6 +99,9 @@ resource "aws_ecs_task_definition" "market_maker_book_v2" {
       { name = "MM_BOOK_SELF_PRICED", value = "true" },
       { name = "MM_BOOK_CURVE", value = var.onchain_book_v2_maker_curve },
       { name = "MM_BOOK_HALF_SPREAD_TICKS", value = var.onchain_book_v2_maker_half_spread_ticks },
+      { name = "MM_BOOK_MAX_POSITION_LOTS", value = var.onchain_book_v2_maker_max_position_lots },
+      { name = "MM_BOOK_SKEW_TICKS_PER_LOT", value = "1" },
+      { name = "MM_BOOK_MAX_SKEW_TICKS", value = "2750" },
       { name = "MM_BOOK_TTL_SECONDS", value = "30" },
       { name = "MM_BOOK_REFRESH_SECONDS", value = "22" },
       # 50 (owner, 2026-11-17): at 20, reprices were 155 of 353 sends in the first 108 min.
