@@ -47,7 +47,9 @@ pass while the size stays on `Matching`.
 
 ## Steps
 
-1. **Deploy** from a fresh, single-use deployer:
+1. **Deploy** from a fresh, single-use deployer. **Done 2026-11-17 ~13:15 UTC:** book `0x83C5741a24d57189379E1215F7A22d9f048E89d5`, router
+   `0xd9540220b514ab2E1a98Ff3C4c4F1F5FD5cf76aB`, block 58,656,411 (`OPS_BOX_CHANGES.md`). `maxMakers` is 10, not v1's 3:
+   pass `MAX_MAKERS` next time.
 
    ```
    EXPIRY=1796050800 TAKER_FEE_RATE=500000000000000 MAKER_OWNER=0x3448ac0A3283951A2AFD5B3A582329ECA43CB47B \

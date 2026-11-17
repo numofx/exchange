@@ -5,6 +5,26 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-17 ~13:15 UTC: OnchainBook v2 deployed closed on EURC-30NOV26 (laptop, `forge script`); its deployer key created in SSM
+
+Not a box change; recorded here with the other hand actions of the day. Owner's decisions: v2 on the existing series,
+self-priced ttl 30 s (`onchain-book-v2-runsheet.md`).
+
+- **Key.** `/numo/deploy/onchain_book_v2_deployer_key` (SecureString), created from `cast wallet new` and never
+  printed. It derives `0x4FECe4c226b5eF0C235aEA97216e61b69FE5263f`. Single use.
+- **Funded** 0.0002 ETH from the feed signer `0xC9F1…0FDc` (`/numo/feeds/relayer_key`, address checked before
+  sending), tx `0x66a1ed81…cb72`. The feed signer kept 0.00835, ~13 days at its measured burn.
+- **Deployed** `deploy-onchain-book.s.sol` at `f3747a0` with `EXPIRY=1796050800`, 5 bps, maker owner the MM wallet.
+  The mainnet simulation estimated 8.57M gas.
+  - Book `0x83C5741a24d57189379E1215F7A22d9f048E89d5`; router `0xd9540220b514ab2E1a98Ff3C4c4F1F5FD5cf76aB`.
+  - Seven transactions from block 58,656,411. The deployer keeps 0.000162 ETH.
+- **Read back.** Owner the deployer, pending owner the vault, `maxSelfPricedTtl` 60, tax 0, market 1 disabled, the
+  maker not allowed. The proposer's v2 setup dry run passes nominated, series and parity (26/26).
+- **Differs from v1:** `maxMakers` is 10 (the script's default), not v1's 3 (B14a); not passed as `MAX_MAKERS`. Makers
+  are allowlisted, so only the MM wallet can register.
+- **Next:** the setup batch (acceptOwnership, setMakerAllowed(0x3448…B47B)), proposed from the box. Digests
+  `0x6bf0febe…aed9` and `0x7c79dba5…db2`.
+
 ## 2026-11-17 ~03:40 UTC: the retired v2 EURC keeper stopped (owner's decision) (SSM, laptop)
 
 - **Checked first:** v2 EURC-30NOV26 `0x6Ff7…7744` (subId 1796054400) has `totalPosition(engine)` 0 and cap 0, the
