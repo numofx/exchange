@@ -43,7 +43,7 @@ from pathlib import Path
 WALLETS: list[tuple[str, str, float]] = [
   ("feed signer", "0xC9F1FfdEd29f7051538ad3a72729C3d07F920FDc", 0.0012),  # 0.00063/day measured; 2026-09-09's 0.0012 kept
   ("vol relayer (v1 forward's key)", "0xE5b8541dC2558f3db65aF88A2374e464AE4ae6de", 0.0002),  # 0.00014/day, 285 tx
-  ("forward relayer v2 EURC", "0xEEa45ea4f68cb62b5eDe84E1d9F82F6d253C5321", 0.00005),  # 0.000023/day, 46 tx
+  # forward relayer v2 EURC 0xEEa4…5321: off since 2026-11-17, its keeper stopped (the v2 series retired, OI 0).
   ("forward relayer v2 cNGN", "0x3ACeFDe146161D1b9ca2fdB8a3B38122818d763f", 0.00005),  # 0.000020/day, 46 tx
   ("EURC v3 keeper relayer", "0x0AbAac33E5ab7E62dED100Be465032A3636b12e5", 0.0035),  # 0.0029/day, ~2,700 tx
   # The MM wallet, as the OnchainBook maker's owner (ECS market-maker-book): it pays every updateSplines, ~0.00000042 ETH
