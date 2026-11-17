@@ -5,6 +5,20 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-17 17:40–18:24 UTC: v2 book enabled; canary takes with no reports filled against #58 (C0 test 3a)
+
+- **Enabled** by the vault (MPCVault `03129a0f-…` approved by the owner): tx `0xbf9bdaa8…87f7`, 17:40:55; the unit
+  `numo-onchain-book-v2-enable` exited 0. Read back: `markets(1).enabled = true`.
+- **Taker** #57 (`0x3Fdf…a914`, key SSM `/numo/deploy/onchain_book_taker_key`, 49.99 cash from 2026-11-16) reused:
+  - 0.0002 ETH from the MM wallet (owner's yes), tx `0x7786dc77…13ac`;
+  - `setAssetAllowances(57, v2 book, future and cash max both ways)`, tx `0xf73bceee…5b64`.
+- **Takes, `take(o, "")`: no reports attached,** each simulated and `quote`d first (index 1.101851):
+  - buy 5 EURC, tx `0xaae723ff…5c04`, block 58,747,098: filled at 1.102674 against #58, fee 0.002756685, 1,026,383 gas;
+  - sell 5, tx `0x5835bba9…b715`, block 58,747,112: at 1.102074, fee 0.002755185, 812,989 gas.
+- **Checked:** #57 and #58 flat; across the two blocks #58 +0.003000 (the spread), #57 −0.008512 (spread and fees),
+  fee account 22 +0.005512 against 0.00551187 of fees; both `source: book` on `/trades?symbol=EURC-30NOV26` with their
+  hashes. Still to run: the composed case (the kit's vault flow or a router `route`).
+
 ## 2026-11-17 17:20–17:31 UTC: book-maker-v2 dead-man check proven; v2 enable proposed; MM wallet burn 0.0025 (ECS, box)
 
 - **Measured** over the first live task (15:32:14–17:20:15, one stream): 353 sends, 197 refreshes (~25 s), 155

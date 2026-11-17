@@ -86,9 +86,9 @@ pass while the size stays on `Matching`.
      ARN).
    - Read the log: `book_v2=true`, `self_priced=true`, `ttl=30s`, then `preflight ok`.
    - Then set `market_maker_book_v2_dry_run = false`. Preflight sets the curve and registers.
-8. **Enable batch:** `book-enable`. Its gates require the vault owns the book, the maker is allowed, the series is
+8. **Enable batch** (**landed 2026-11-17 17:40:55**, tx `0xbf9bdaa8…`): `book-enable`. Its gates require the vault owns the book, the maker is allowed, the series is
    open, the index answers, and the book's fee equals the registry's.
-9. **Canary.**
+9. **Canary** (**3a passed 2026-11-17**: #57 bought and sold 5 EURC against #58 with no reports; the composed case still to run).
    - A throwaway account takes a few lots with no reports attached (`take(o, "")`). This is C0 3a.
    - Check the fill on the tape (`source = book`) and in `book_takes`.
    - Then run the kit's `DeltaHedgedEurcVault` flow, or a router `route`, as the composed case.
