@@ -15,6 +15,8 @@ the only place the box's real state is written down. Newest first.
   executor keeps 0.002583 (floor 0.002; a settlement costs ~0.000001). Its nonce tracker takes the chain's pending count
   when higher, so this send cannot collide with its next settlement.
 - v3 relayer now 0.032050 ETH, ~11 days at 0.0029/day (to ~11-28). **Still short ~0.011 ETH to expiry: outside ETH.**
+- 03:17 UTC: the owner sent 0.011 ETH from `0xeabc…fbfca` (tx `0x557b1667…`). v3 relayer **0.043032 ETH, ~15 days
+  (to ~12-02)**: past the expiry.
 
 ## 2026-11-17: feed signer topped up from three spare wallets (laptop, `cast send`)
 
