@@ -8,6 +8,8 @@ live contracts) and v2.x–v3.0 (reviewed in conversation, not committed).
   A6 and A7. Data Streams access is in place (A2.1).
 - **Step 2** (`OnchainBook`, oracle-pegged maker curves): gated on a concrete taker, **except for the EURC-30NOV26
   pilot (A1.2)**, for which the gate is lifted.
+- **Stage 3** (Part C, design direction 2026-11-17, not built): a composable venue. Self-priced maker quotes so takers
+  attach nothing, a quote view and a router, then resting orders, a maker vault and tokenized positions for lending.
 
 The pilot ships in two stages (A1.2): Stage 1 lists the new series on `Matching` as soon as its mainnet canary
 (A1.4) passes; Stage 2 adds `OnchainBook` to the same market behind its own gate. The market never waits for `OnchainBook`.
@@ -847,3 +849,118 @@ one run, against the live v3 stack:
   the cancelled spline alone.
 
 Not covered: Base Sepolia, and the book under a live keeper's report cadence, where `takeMaxAge` is 1 s.
+
+# Part C: Stage 3, a composable venue (design direction, 2026-11-17)
+
+Not built. Direction agreed with the owner on 2026-11-17; scope and the decisions in C6 come before any code.
+
+## C0. Goal and test
+
+The futures exchange should be **composable on chain with lending and spot markets**: another contract (a lending
+protocol, a vault, a DEX aggregator, a basis-trade product) can open, close and hedge futures positions in the same
+transaction as its own logic, using all of the venue's liquidity, with no off-chain party in the path.
+
+The test, for each item below: **a contract with no off-chain component can do it in one transaction.**
+
+1. Price a trade (a view: size → fill, average price, fee) and execute it, getting the result back.
+2. Open, increase, reduce and close a position, with collateral in and out.
+3. Reach all of the venue's liquidity, not a side venue's.
+4. Read the account's margin and mark, to decide or to liquidate.
+5. Hold the position (or a claim on it) as a transferable, priceable asset a lending market can accept.
+
+## C1. Benchmark: Phoenix (Solana)
+
+Phoenix (docs.phoenix.trade, read 2026-11-17) is composable because everything is one on-chain program:
+- **One engine, all liquidity.** A FIFO book and makers' splines are merged into one book at match time; at equal
+  prices splines fill first, but a worse spline price never skips a better resting order; splines never trade with
+  each other.
+- **Trading by cross-program call.** Their Rust SDK exposes CPI helpers for orders (market, limit, multi-limit,
+  delegated, cancels), deposits and withdrawals, conditional orders and trader registration. Order calls return
+  matching-engine data to the caller.
+- **Readable risk.** A margin view (`hawkeye::ViewMargin`) is callable by other programs.
+- **Self-priced splines.** A maker updates its own reference price ("spline oracle update", ~600 compute units),
+  with sequence numbers against stale updates and region lifespans in slots. **A taker attaches nothing:** staleness is
+  the maker's risk, managed by the maker's update rate and expiries.
+
+Not stated in their docs: which parts are permissioned (deposits take an optional `permission_account`, onboarding
+has invites) and how the external component of their mark price reaches the chain.
+
+## C2. Where Numo stands (2026-11-17)
+
+| C0 test | Today | Why |
+|---|---|---|
+| 1. Price and execute | Partly: `take` returns `(filled, avgPrice)` | No quote view; only a simulated `take` prices a trade |
+| 2. Positions and collateral | Yes, for an account the contract owns or operates | `CashAsset.deposit`/`withdraw`; `take` authorizes owner, operator or approved address |
+| 3. All liquidity | **No** | Nearly all liquidity is on `Matching`: paired off chain by the matcher, executed by an allowlisted executor, accounts held by `Matching`. The book has one allowlisted maker, 60 EURC a side |
+| 3a. With no off-chain party | **No**, even on the book | Splines quote only on reports at most `takeMaxAge` (1 s) old; the keeper posts every 20 s, so a taker must fetch and attach signed Data Streams reports (off-chain code and credentials) |
+| 4. Read margin and mark | Yes | `getMargin`, `getMarginAndMarkToMarket`, `futureContracts` are views. The index reverts when its reports are over 60 s old |
+| 5. Positions as collateral | **No** | Positions are SubAccounts balances, not tokens; an account is an ERC-721 no lender values |
+
+Already on chain: execution, margin, variation margin and settlement on both paths (verified on fill #548, tx
+`0x4ae42402…9385`).
+
+## C3. The core choice: who carries staleness
+
+Pegging quotes to the verified index (B6, B6a) protects makers from stale prices, but it moves the freshness
+requirement onto every taker, which is what blocks C0 item 3a. Phoenix puts staleness on the maker.
+
+**Direction: a maker chooses, per spline, between two modes.**
+- **Pegged** (today, B7): `mid = index + offset − skew`, quoting only within `takeMaxAge` of the stored reports.
+- **Self-priced** (new): `mid` is an absolute price the maker posts, quoting until `updatedAt + ttl`, with `seq`
+  strictly increasing (both exist today). A taker attaches nothing. Per-market cap on a self-priced `ttl` (proposed
+  60 s).
+
+What stays in both modes:
+- **Index band.** A fill outside `markIndexBand` is refused (A2.2). For self-priced takes the band reads the
+  *stored* index, valid while it is at most `indexMaxAge` (60 s) old, which the keeper's 20 s cadence keeps. A band
+  that cannot be read stops self-priced quoting, so the venue fails closed when the index is stale.
+- Maker allowlist (until C4.5), per-maker caps, skew, refill, the engine's margin checks.
+
+Costs and risks:
+- **Update cost.** About 70k gas a transaction on mainnet (16,789 for the warm write, B10, plus base cost), about
+  0.00000042 ETH with Base's L1 fee at 2026-11-16 prices: about 0.0073 ETH a day per maker updating every 5 s,
+  about 0.036 updating every second.
+- **Pick-off risk is the maker's,** as on any order book: a slow maker's quote can be taken at a stale price. The band
+  bounds the damage; the ttl cap bounds how stale.
+- **Off-market quotes.** A self-priced maker can post any mid inside the band. That is their loss, not the taker's or
+  the venue's.
+
+## C4. Work items
+
+1. **Quote view.** `quote(TakeOrder) view returns (filled, avgPrice, fee, levels)`, the same walk as `take` without
+   settling. Property test: for every reachable state, `quote` equals what `take` then does.
+2. **Self-priced splines** (C3). A new field or mode flag in the spline slot; the band from the stored index; tests
+   for both modes side by side, priority (price, then registration), the ttl cap and the band failing closed.
+3. **Router** (periphery). One call: deposit collateral, take, optionally reduce and withdraw. It acts on the
+   caller's own account as an operator (`setApprovalForAll`) and holds no funds between calls. Returns the take's
+   result.
+4. **Integration kit.** A Solidity interface, documented return data and events, an example integration (a
+   delta-hedge vault on Aerodrome EURC/USDC with a flash loan) and fork tests.
+5. **Open the maker set.** Raise the per-market cap with measured gas, or allow permissionless makers behind a bond.
+   Pre-req for C0 item 3 to mean anything.
+6. **Resting limit orders on the book** (B13: FIFO, O(1) post and cancel, merged with splines as Phoenix does).
+   Then the matcher becomes optional: a maker or router onto the book, not the exchange. Gas is the constraint on
+   Base, not compute: a take is already about 1M gas (B10); measure before choosing structures.
+7. **Maker vault** (ERC-4626). Pooled USDC running a self-priced spline. It deepens the book, and its share token is a
+   lendable yield asset: the first link to lending markets.
+8. **Tokenized positions** for lending (C0 item 5). A wrapper (ERC-20 for a long or short position, or a basis token:
+   long spot EURC, short the future), with a price from margin and mark. After C4.7, so there is a liquid venue to
+   price against.
+
+## C5. Contract versions
+
+`OnchainBook` is not upgradeable. C4.1–C4.2 are a new book version: deploy it closed, as Stage 2 was, list the next
+series on it, and keep v1 running to EURC-30NOV26's expiry. C4.3–C4.4 are periphery and can follow either version.
+Every contract change goes through the Stage 2 cycle: spec, tests with mutation checks, independent review, fork
+rehearsal, vault batches, mainnet canary.
+
+## C6. Decisions for the owner
+
+| Decision | Proposed |
+|---|---|
+| First scope | C4.1–C4.4 (quote view, self-priced splines, router, kit): the smallest set that makes the book composable |
+| Self-priced `ttl` cap | 60 s |
+| Pegged mode | Kept beside self-priced; a maker picks per spline |
+| Maker set (C4.5) | Raise the allowlist cap first; permissionless with a bond later |
+| Matching path | Kept for now; becomes a maker or router once C4.6 exists |
+| Lending (C4.7–C4.8) | After the venue is liquid |
