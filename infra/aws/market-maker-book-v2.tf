@@ -49,7 +49,8 @@ variable "onchain_book_v2_maker_half_spread_ticks" {
 variable "market_maker_book_v2_dry_run" {
   description = "true: reads, decides and logs, sends nothing. The first run is a dry run."
   type        = bool
-  default     = true
+  # Dry run 2026-11-17 15:25 UTC (preflight ok); live from the wallet's funding (0.03 ETH, 2026-11-17).
+  default = false
 }
 
 variable "desired_count_market_maker_book_v2" {
