@@ -957,8 +957,29 @@ Costs and risks:
      allowance re-plan with and without skew, a 256-run fuzz (equal results or the same revert), no-account quotes,
      stale reports, every revert, the tax at the caller's gas price. Seven guards mutation-tested; the existing 68
      book tests unchanged; 1,715 risk-core tests pass.
-2. **Self-priced splines** (C3). A new field or mode flag in the spline slot; the band from the stored index; tests
-   for both modes side by side, priority (price, then registration), the ttl cap and the band failing closed.
+2. **Self-priced splines** (C3). **Built 2026-11-17, in source for the next book version.**
+   - **Mode.** `SplineUpdate.selfPriced`: `offsetTicks` is then the mid itself (positive, `OB_InvalidMid`), not an
+     offset from the index. Stored as `Spline.selfPriced`, packed into the `owner` slot (no extra read per maker).
+   - **Freshness.** A self-priced spline quotes until the earlier of its ttl and the market's `maxSelfPricedTtl`
+     (`setSelfPricedTtlCap`, owner, at most `maxTtl`; default 0 = off; set it to 60 at listing, per C6). The cap is
+     read at take time, so lowering it, to 0 included, stops quotes already posted. Pegged splines keep `takeMaxAge`.
+   - **Fail closed.** Every fill stays inside the index band. If `getSpot()` reverts (reports over the index's 60 s)
+     the walk plans nothing and the take fills 0 rather than reverting (v1 reverted); a rotated index stops every
+     spline. A pegged spline is left out before its mid is computed on old reports (index + a negative offset would
+     otherwise underflow and revert the take).
+   - **ABI.** `markets(uint256)` and the `splines(uint256,uint256)` return bytes are v1's, so the indexer and the
+     vault proposer decode both books the same way (`splines` now returns a 12-field `SplineView`, the same 12 words;
+     `isSelfPriced` reads the mode; the 13-field auto getter was too deep for the legacy pipeline). `updateSplines`'
+     selector changes (`0xdf20ee06` → `0x5c06631f`): the book-maker needs the v2 ABI when it moves (item 5).
+   - **Cost.** take +~2,100 gas (1 maker 1,135,791 vs 1,133,667 after C4.1; 10 makers 6,625,717), mostly the `try`
+     around `getSpot`; `updateSplines` +~700. Size 23,165 bytes (1,411 under the limit).
+   - **Tests** (`test/periphery/OnchainBookSelfPriced.t.sol`, 15): its own mid; the index moving does not move it;
+     quoting on reports too old for pegged; a pegged negative offset beside it; the unreadable index (fills 0, no
+     revert); rotation; ttl expiry; lowering the cap and 0 = off; the band's far and near edges; registration order at
+     equal prices across modes; update validation; the cap's owner and bound; mode switches and v1's getter layout;
+     and a 256-run quote-equals-take fuzz over mid, report age (0–70 s) and modes. Twelve guards mutation-tested (one
+     equivalent mutant, the catch setting the index to 0, replaced by the meaningful one: no `try`, as v1). The 76
+     existing book tests unchanged; 1,729 risk-core tests pass.
 3. **Router** (periphery). One call: deposit collateral, take, optionally reduce and withdraw. It acts on the
    caller's own account as an operator (`setApprovalForAll`) and holds no funds between calls. Returns the take's
    result.

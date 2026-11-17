@@ -98,6 +98,26 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
     /// @dev the account's owner when the spline was written: a transfer of the account takes the spline down, so a
     ///      new owner (allowlisted or not) quotes only through its own update
     address owner;
+    /// @dev self-priced (spec C3): `offsetTicks` is the mid itself, quoting without fresh reports until the earlier of
+    ///      its ttl and the market's `maxSelfPricedTtl`; pegged: the mid is index + `offsetTicks`, quoting only on
+    ///      reports at most `takeMaxAge` old
+    bool selfPriced;
+  }
+
+  /// @dev `splines()`'s return: Spline without `selfPriced`, v1's getter layout
+  struct SplineView {
+    int32 offsetTicks;
+    uint32 halfSpreadTicks;
+    uint16 bidCurve;
+    uint16 askCurve;
+    uint32 skewTicksPerLot;
+    uint32 maxSkewTicks;
+    uint32 refillLotsPerSecond;
+    uint40 updatedAt;
+    uint32 ttl;
+    uint64 seq;
+    bool active;
+    address owner;
   }
 
   struct SplineUpdate {
@@ -112,6 +132,8 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
     uint32 refillLotsPerSecond;
     uint32 ttl;
     uint64 seq;
+    /// @dev see Spline.selfPriced; `offsetTicks` is then the mid, positive
+    bool selfPriced;
   }
 
   /// @dev Lots taken from the top of one side of a spline, refilling at `refillLotsPerSecond` (B7).
@@ -194,17 +216,24 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
   mapping(uint marketId => Market) public markets;
   mapping(uint marketId => uint[] accountIds) internal _makers;
   mapping(uint marketId => mapping(uint accountId => bool)) public isRegistered;
-  mapping(uint marketId => mapping(uint accountId => Spline)) public splines;
+  mapping(uint marketId => mapping(uint accountId => Spline)) internal _splines;
+  /// @notice The longest a self-priced spline quotes after its update (spec C3); 0, the default: self-priced quoting is
+  ///         off. Kept out of `Market` so the `markets` getter, which the indexer decodes, is the same as v1's.
+  mapping(uint marketId => uint32) public maxSelfPricedTtl;
   mapping(uint marketId => mapping(uint accountId => mapping(bool isBid => Cursor))) public cursors;
 
   mapping(address owner => mapping(uint16 curveId => Region[])) internal _curves;
   mapping(address owner => bool) public makerAllowed;
+
+  /// @dev `_peg`'s answer when the reports are too old for pegged splines: they do not quote, self-priced ones may
+  int internal constant NO_PEG = type(int).min;
 
   ////////////
   // Events //
   ////////////
 
   event MarketCreated(uint indexed marketId, address future, uint96 subId, address adapter);
+  event SelfPricedTtlCapSet(uint indexed marketId, uint32 cap);
   event MarketParamsSet(
     uint indexed marketId, uint takerFeeRate, uint32 takeMaxAge, uint32 maxTtl, uint16 maxMakers, bool enabled
   );
@@ -251,6 +280,7 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
   error OB_StaleSeq();
   error OB_CrossedSpline();
   error OB_InvalidTtl();
+  error OB_InvalidMid();
   error OB_TakerAllowanceTooLow();
   error OB_FeeTooHigh();
   error OB_BelowMinFill();
@@ -258,6 +288,28 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
   error OB_GasFloor();
   error OB_WrongManager();
   error OB_BatchOutOfGas();
+
+  /// @notice A spline as v1's public getter returned it: a static struct encodes as its 12 fields in order, so the
+  ///         book-maker and the vault proposer decode it unchanged. `isSelfPriced` reads the field v2 adds.
+  function splines(uint marketId, uint accountId) external view returns (SplineView memory v) {
+    Spline storage s = _splines[marketId][accountId];
+    v.offsetTicks = s.offsetTicks;
+    v.halfSpreadTicks = s.halfSpreadTicks;
+    v.bidCurve = s.bidCurve;
+    v.askCurve = s.askCurve;
+    v.skewTicksPerLot = s.skewTicksPerLot;
+    v.maxSkewTicks = s.maxSkewTicks;
+    v.refillLotsPerSecond = s.refillLotsPerSecond;
+    v.updatedAt = s.updatedAt;
+    v.ttl = s.ttl;
+    v.seq = s.seq;
+    v.active = s.active;
+    v.owner = s.owner;
+  }
+
+  function isSelfPriced(uint marketId, uint accountId) external view returns (bool) {
+    return _splines[marketId][accountId].selfPriced;
+  }
 
   constructor(ISubAccounts subAccounts_, IAsset cash_, uint feeRecipient_) Ownable(msg.sender) {
     subAccounts = subAccounts_;
@@ -315,6 +367,15 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
     emit MarketParamsSet(marketId, takerFeeRate, takeMaxAge, maxTtl, maxMakers, enabled);
   }
 
+  /// @notice The longest a self-priced spline quotes after its update (spec C3, decided 60 s). 0 turns self-priced
+  ///         quoting off, at once: splines already posted stop quoting too. At most the market's `maxTtl`.
+  function setSelfPricedTtlCap(uint marketId, uint32 cap) external onlyOwner {
+    Market storage m = _market(marketId);
+    if (cap > m.maxTtl) revert OB_InvalidParams();
+    maxSelfPricedTtl[marketId] = cap;
+    emit SelfPricedTtlCapSet(marketId, cap);
+  }
+
   function setFeeRecipient(uint feeRecipient_) external onlyOwner {
     feeRecipient = feeRecipient_;
     emit FeeRecipientSet(feeRecipient_);
@@ -348,7 +409,7 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
     }
     list.pop();
     isRegistered[marketId][accountId] = false;
-    splines[marketId][accountId].active = false;
+    _splines[marketId][accountId].active = false;
     emit MakerRemoved(marketId, accountId);
   }
 
@@ -394,7 +455,7 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
 
   function cancelSpline(uint marketId, uint accountId) external nonReentrant {
     _authorize(accountId);
-    splines[marketId][accountId].active = false;
+    _splines[marketId][accountId].active = false;
     emit SplineCancelled(marketId, accountId);
   }
 
@@ -402,7 +463,7 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
   ///         allowance. Position-reducing fills are held only to maintenance, but deactivating here is simpler (B5a).
   function poke(uint marketId, uint accountId) external nonReentrant {
     Market storage m = _market(marketId);
-    Spline storage s = splines[marketId][accountId];
+    Spline storage s = _splines[marketId][accountId];
     if (!s.active) return;
     IOnchainBookManager mgr = m.engine;
     if (mgr.liquidation().isAuctionLive(accountId)) {
@@ -594,9 +655,16 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
     uint[] storage list = _makers[o.marketId];
     makers = new MakerState[](list.length);
 
-    (bool fresh, int indexTicks) = _peg(m);
-    if (!fresh) return makers;
-    (uint index,) = m.future.indexFeed().getSpot();
+    // Pegged splines need fresh reports (takeMaxAge); self-priced ones do not, but every fill stays inside the index
+    // band, so an index that cannot be read (its reports over its own max age) stops all quoting: fail closed (C3).
+    (bool live, int indexTicks) = _peg(m);
+    if (!live) return makers;
+    uint index;
+    try m.future.indexFeed().getSpot() returns (uint spot, uint) {
+      index = spot;
+    } catch {
+      return makers;
+    }
     uint band = m.future.markIndexBand(m.expiry);
 
     for (uint i; i < list.length; ++i) {
@@ -642,6 +710,20 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
     }
   }
 
+  /// @dev Whether a spline quotes now: active, inside its ttl, and either self-priced (ttl capped by the market's
+  ///      `maxSelfPricedTtl`; lowering the cap, to 0: off, applies to quotes already posted) or pegged on fresh reports.
+  function _quoting(uint marketId, Spline memory s, int indexTicks) internal view returns (bool) {
+    if (!s.active) return false;
+    uint ttl = s.ttl;
+    if (s.selfPriced) {
+      uint cap = maxSelfPricedTtl[marketId];
+      if (cap < ttl) ttl = cap;
+    } else if (indexTicks == NO_PEG) {
+      return false;
+    }
+    return block.timestamp <= uint(s.updatedAt) + ttl;
+  }
+
   function _loadMaker(Market memory m, uint marketId, uint accountId, bool isBid, int indexTicks, uint pending)
     internal
     view
@@ -649,8 +731,8 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
   {
     mk.accountId = accountId;
     mk.done = true;
-    Spline memory s = splines[marketId][accountId];
-    if (!s.active || block.timestamp > uint(s.updatedAt) + s.ttl) return mk;
+    Spline memory s = _splines[marketId][accountId];
+    if (!_quoting(marketId, s, indexTicks)) return mk;
 
     mk.owner = subAccounts.ownerOf(accountId);
     if (mk.owner != s.owner) return mk;
@@ -664,7 +746,7 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
     int maxSkew = int(uint(s.maxSkewTicks));
     if (skew > maxSkew) skew = maxSkew;
     if (skew < -maxSkew) skew = -maxSkew;
-    mk.midTicks = indexTicks + s.offsetTicks - skew;
+    mk.midTicks = (s.selfPriced ? int(0) : indexTicks) + s.offsetTicks - skew;
     mk.halfSpreadTicks = s.halfSpreadTicks;
     mk.curveId = isBid ? s.bidCurve : s.askCurve;
 
@@ -751,7 +833,7 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
     uint gasBefore = gasleft();
     try subAccounts.submitTransfers(batch, o.managerData) {
       Cursor storage c = cursors[o.marketId][mk.accountId][!o.isBuy];
-      uint consumed = _consumedNow(c, splines[o.marketId][mk.accountId].refillLotsPerSecond);
+      uint consumed = _consumedNow(c, _splines[o.marketId][mk.accountId].refillLotsPerSecond);
       c.consumedLots = (consumed + mk.filledLots).toUint64();
       c.at = uint40(block.timestamp);
       emit Fill(o.marketId, o.takerAccountId, mk.accountId, o.isBuy, amount, price, fee);
@@ -791,13 +873,17 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
     if (!isRegistered[u.marketId][u.accountId]) revert OB_NotRegistered();
     if (!makerAllowed[owner_]) revert OB_MakerNotAllowed();
     if (u.ttl == 0 || u.ttl > m.maxTtl) revert OB_InvalidTtl();
+    if (u.selfPriced) {
+      if (u.ttl > maxSelfPricedTtl[u.marketId]) revert OB_InvalidTtl();
+      if (u.offsetTicks <= 0) revert OB_InvalidMid();
+    }
     Region[] storage bid = _curves[owner_][u.bidCurve];
     Region[] storage ask = _curves[owner_][u.askCurve];
     if (bid.length == 0 || ask.length == 0) revert OB_InvalidCurve();
     // Best bid below best ask: 2 x half spread plus both first offsets must be positive.
     if (2 * uint(u.halfSpreadTicks) + bid[0].offsetTicks + ask[0].offsetTicks == 0) revert OB_CrossedSpline();
 
-    Spline storage s = splines[u.marketId][u.accountId];
+    Spline storage s = _splines[u.marketId][u.accountId];
     if (u.seq <= s.seq) revert OB_StaleSeq();
     s.offsetTicks = u.offsetTicks;
     s.halfSpreadTicks = u.halfSpreadTicks;
@@ -811,27 +897,32 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
     s.seq = u.seq;
     s.active = true;
     s.owner = owner_;
+    s.selfPriced = u.selfPriced;
     delete cursors[u.marketId][u.accountId][true];
     delete cursors[u.marketId][u.accountId][false];
     emit SplineUpdated(u.marketId, u.accountId, u.seq);
   }
 
   function _deactivate(uint marketId, uint accountId, DeactivationReason reason) internal {
-    splines[marketId][accountId].active = false;
+    _splines[marketId][accountId].active = false;
     emit MakerDeactivated(marketId, accountId, reason);
   }
 
   /// @dev The index in ticks, and whether both streams' stored reports are within `takeMaxAge` (B6a).
-  function _peg(Market memory m) internal view returns (bool fresh, int indexTicks) {
+  /// @dev `indexTicks` is NO_PEG when the reports are too old for pegged splines; `live` is false once the future's
+  ///      index has been rotated away from this market's adapter, which stops every spline, self-priced included.
+  function _peg(Market memory m) internal view returns (bool live, int indexTicks) {
     // The future's index can be rotated (FutureAsset.proposeIndexFeed, timelocked). Once it reads another adapter,
-    // these reports are not what the band check prices against: quote nothing (a market on the new adapter replaces it).
+    // this market is not the one the band check prices: quote nothing (a market on the new adapter replaces it).
     if (IIndexFeedAdapter(address(m.future.indexFeed())).adapter() != address(m.adapter)) return (false, 0);
+    live = true;
+    indexTicks = NO_PEG;
     (uint base, uint64 baseAt) = m.adapter.latest(m.adapter.baseFeedId());
     (uint quote, uint64 quoteAt) = m.adapter.latest(m.adapter.quoteFeedId());
-    if (baseAt == 0 || quoteAt == 0 || quote == 0) return (false, 0);
+    if (baseAt == 0 || quoteAt == 0 || quote == 0) return (true, NO_PEG);
     uint oldest = baseAt < quoteAt ? baseAt : quoteAt;
-    if (block.timestamp > oldest && block.timestamp - oldest > m.takeMaxAge) return (false, 0);
-    return (true, int(base * 1e18 / quote / m.tickSize));
+    if (block.timestamp > oldest && block.timestamp - oldest > m.takeMaxAge) return (true, NO_PEG);
+    indexTicks = int(base * 1e18 / quote / m.tickSize);
   }
 
   /// @dev The future's own fill check (FutureAsset._checkInsideIndexBand), so the walk stops where the chain would

@@ -118,7 +118,7 @@ contract OnchainBookFork is Test {
       book.setCurve(1, r);
       book.registerMaker(mkt, acc);
       OnchainBook.SplineUpdate[] memory u = new OnchainBook.SplineUpdate[](1);
-      u[0] = OnchainBook.SplineUpdate(mkt, acc, int32(int(i)), 100, 1, 1, 0, 0, 0, 1 hours, 1);
+      u[0] = OnchainBook.SplineUpdate(mkt, acc, int32(int(i)), 100, 1, 1, 0, 0, 0, 1 hours, 1, false);
       book.updateSplines(u);
       vm.stopPrank();
     }
@@ -264,10 +264,10 @@ contract OnchainBookFork is Test {
       book.registerMaker(ids[i], makerAccs[0]);
     }
     OnchainBook.SplineUpdate[] memory one = new OnchainBook.SplineUpdate[](1);
-    one[0] = OnchainBook.SplineUpdate(mkt, makerAccs[0], 3, 100, 1, 1, 0, 0, 0, 1 hours, 2);
+    one[0] = OnchainBook.SplineUpdate(mkt, makerAccs[0], 3, 100, 1, 1, 0, 0, 0, 1 hours, 2, false);
     OnchainBook.SplineUpdate[] memory ten = new OnchainBook.SplineUpdate[](10);
     for (uint i; i < 10; ++i) {
-      ten[i] = OnchainBook.SplineUpdate(ids[i], makerAccs[0], 4, 100, 1, 1, 0, 0, 0, 1 hours, 3);
+      ten[i] = OnchainBook.SplineUpdate(ids[i], makerAccs[0], 4, 100, 1, 1, 0, 0, 0, 1 hours, 3, false);
     }
     vm.startPrank(owner);
     uint before = gasleft();

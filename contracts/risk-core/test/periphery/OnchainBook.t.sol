@@ -270,7 +270,8 @@ abstract contract OnchainBookBase is Test {
       maxSkewTicks: 0,
       refillLotsPerSecond: 0,
       ttl: 1 hours,
-      seq: seq
+      seq: seq,
+      selfPriced: false
     });
     vm.prank(owner);
     book.updateSplines(u);
@@ -616,7 +617,7 @@ contract OnchainBookTest is OnchainBookBase {
     vm.prank(alice);
     book.setCurve(2, r);
     OnchainBook.SplineUpdate[] memory u = new OnchainBook.SplineUpdate[](1);
-    u[0] = OnchainBook.SplineUpdate(mkt, aliceAcc, 0, 0, 2, 2, 0, 0, 0, 1 hours, 5);
+    u[0] = OnchainBook.SplineUpdate(mkt, aliceAcc, 0, 0, 2, 2, 0, 0, 0, 1 hours, 5, false);
     vm.prank(alice);
     vm.expectRevert(OnchainBook.OB_CrossedSpline.selector);
     book.updateSplines(u);
@@ -642,7 +643,7 @@ contract OnchainBookTest is OnchainBookBase {
 
   function testTtlAboveTheMarketMaxReverts() public {
     OnchainBook.SplineUpdate[] memory u = new OnchainBook.SplineUpdate[](1);
-    u[0] = OnchainBook.SplineUpdate(mkt, aliceAcc, 0, 100, 1, 1, 0, 0, 0, 1 hours + 1, 5);
+    u[0] = OnchainBook.SplineUpdate(mkt, aliceAcc, 0, 100, 1, 1, 0, 0, 0, 1 hours + 1, 5, false);
     vm.prank(alice);
     vm.expectRevert(OnchainBook.OB_InvalidTtl.selector);
     book.updateSplines(u);
@@ -673,7 +674,7 @@ contract OnchainBookTest is OnchainBookBase {
   function testCursorRefillsAtTheMakersRate() public {
     book.removeMaker(mkt, carolAcc);
     OnchainBook.SplineUpdate[] memory u = new OnchainBook.SplineUpdate[](1);
-    u[0] = OnchainBook.SplineUpdate(mkt, aliceAcc, 0, uint32(HALF_SPREAD), 1, 1, 0, 0, 100, 1 hours, 2);
+    u[0] = OnchainBook.SplineUpdate(mkt, aliceAcc, 0, uint32(HALF_SPREAD), 1, 1, 0, 0, 100, 1 hours, 2, false);
     vm.prank(alice);
     book.updateSplines(u);
 
@@ -710,7 +711,7 @@ contract OnchainBookTest is OnchainBookBase {
     book.removeMaker(mkt, carolAcc);
     _take(_order(true, 1000, 2e18)); // alice is short 1,000 lots
     OnchainBook.SplineUpdate[] memory u = new OnchainBook.SplineUpdate[](1);
-    u[0] = OnchainBook.SplineUpdate(mkt, aliceAcc, 0, uint32(HALF_SPREAD), 1, 1, 1, 30, 0, 1 hours, 2);
+    u[0] = OnchainBook.SplineUpdate(mkt, aliceAcc, 0, uint32(HALF_SPREAD), 1, 1, 1, 30, 0, 1 hours, 2, false);
     vm.prank(alice);
     book.updateSplines(u);
     (, uint avg) = _take(_order(false, 100, 0));
@@ -721,7 +722,7 @@ contract OnchainBookTest is OnchainBookBase {
     book.removeMaker(mkt, carolAcc);
     _take(_order(false, 1000, 0)); // alice is long 1,000 lots
     OnchainBook.SplineUpdate[] memory u = new OnchainBook.SplineUpdate[](1);
-    u[0] = OnchainBook.SplineUpdate(mkt, aliceAcc, 0, uint32(HALF_SPREAD), 1, 1, 1, 30, 0, 1 hours, 2);
+    u[0] = OnchainBook.SplineUpdate(mkt, aliceAcc, 0, uint32(HALF_SPREAD), 1, 1, 1, 30, 0, 1 hours, 2, false);
     vm.prank(alice);
     book.updateSplines(u);
     (, uint avg) = _take(_order(true, 100, 2e18));
@@ -741,7 +742,7 @@ contract OnchainBookTest is OnchainBookBase {
     (uint filled,) = _take(_order(true, 1000, 2e18));
     assertEq(filled, 1000 * LOT, "the others filled it");
     assertEq(_pos(poor), 0);
-    (,,,,,,,,,, bool active,) = book.splines(mkt, poor);
+    bool active = book.splines(mkt, poor).active;
     assertTrue(active, "a caught revert changes nothing stored");
   }
 
@@ -752,8 +753,8 @@ contract OnchainBookTest is OnchainBookBase {
     o.takerAccountId = broke;
     (uint filled,) = _take(o);
     assertEq(filled, 0);
-    (,,,,,,,,,, bool aliceActive,) = book.splines(mkt, aliceAcc);
-    (,,,,,,,,,, bool carolActive,) = book.splines(mkt, carolAcc);
+    bool aliceActive = book.splines(mkt, aliceAcc).active;
+    bool carolActive = book.splines(mkt, carolAcc).active;
     assertTrue(aliceActive && carolActive);
   }
 
@@ -766,7 +767,7 @@ contract OnchainBookTest is OnchainBookBase {
     assertEq(filled, 500 * LOT, "alice was planned, dropped, and carol filled it in the next round");
     assertEq(_pos(carolAcc), -int(500 * LOT));
     assertEq(_pos(aliceAcc), 0);
-    (,,,,,,,,,, bool active,) = book.splines(mkt, aliceAcc);
+    bool active = book.splines(mkt, aliceAcc).active;
     assertFalse(active, "an allowance failure is attributable: switched off");
   }
 
@@ -790,18 +791,18 @@ contract OnchainBookTest is OnchainBookBase {
     _take(_order(true, 1000, 2e18)); // poor is short one contract, IM 165 of its 300
     assertEq(_pos(poor), -1e18);
     book.poke(mkt, poor);
-    (,,,,,,,,,, bool active,) = book.splines(mkt, poor);
+    bool active = book.splines(mkt, poor).active;
     assertTrue(active, "above IM");
     engine.setFutureMarginRequirements(engineMarket, 0.2e18, 0.3e18); // IM 330 > 300
     book.poke(mkt, poor);
-    (,,,,,,,,,, active,) = book.splines(mkt, poor);
+    active = book.splines(mkt, poor).active;
     assertFalse(active);
   }
 
   function testPokeDeactivatesInAnAuction() public {
     auction.startAuction(aliceAcc, 0);
     book.poke(mkt, aliceAcc);
-    (,,,,,,,,,, bool active,) = book.splines(mkt, aliceAcc);
+    bool active = book.splines(mkt, aliceAcc).active;
     assertFalse(active);
   }
 
@@ -1027,7 +1028,7 @@ contract OnchainBookTest is OnchainBookBase {
     subAccounts.setSubIdAllowances(aliceAcc, address(book), a);
     (uint filled,) = _take(_order(true, 500, 2e18));
     assertEq(filled, 0);
-    (,,,,,,,,,, bool active,) = book.splines(mkt, aliceAcc);
+    bool active = book.splines(mkt, aliceAcc).active;
     assertFalse(active, "switched off as an allowance failure");
   }
 
@@ -1087,7 +1088,7 @@ contract OnchainBookTest is OnchainBookBase {
 
   function _splineUpdate(uint acc, uint64 seq) internal view returns (OnchainBook.SplineUpdate[] memory u) {
     u = new OnchainBook.SplineUpdate[](1);
-    u[0] = OnchainBook.SplineUpdate(mkt, acc, 0, uint32(HALF_SPREAD), 1, 1, 0, 0, 0, 1 hours, seq);
+    u[0] = OnchainBook.SplineUpdate(mkt, acc, 0, uint32(HALF_SPREAD), 1, 1, 0, 0, 0, 1 hours, seq, false);
   }
 
   ///////////////////////////////////////////////////////////
@@ -1120,7 +1121,7 @@ contract OnchainBookTest is OnchainBookBase {
     vm.startPrank(alice);
     book.setCurve(2, r);
     OnchainBook.SplineUpdate[] memory u = new OnchainBook.SplineUpdate[](1);
-    u[0] = OnchainBook.SplineUpdate(mkt, aliceAcc, -44_000, uint32(HALF_SPREAD), 2, 2, 0, 0, 0, 1 hours, 5);
+    u[0] = OnchainBook.SplineUpdate(mkt, aliceAcc, -44_000, uint32(HALF_SPREAD), 2, 2, 0, 0, 0, 1 hours, 5, false);
     book.updateSplines(u);
     vm.stopPrank();
     OnchainBook.TakeOrder memory o = _order(true, 500, 2e18);

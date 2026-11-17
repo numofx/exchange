@@ -57,7 +57,8 @@ contract OnchainBookHandler is Test {
     c.makers = book.makers(mkt);
     c.live = new bool[](c.makers.length);
     for (uint i; i < c.makers.length; ++i) {
-      (,,,,,,, uint40 updatedAt, uint32 ttl,, bool active,) = book.splines(mkt, c.makers[i]);
+      OnchainBook.SplineView memory sv = book.splines(mkt, c.makers[i]);
+      (uint40 updatedAt, uint32 ttl, bool active) = (sv.updatedAt, sv.ttl, sv.active);
       c.live[i] = active && block.timestamp <= uint(updatedAt) + ttl;
     }
 
@@ -113,7 +114,8 @@ contract OnchainBookHandler is Test {
       maxSkewTicks: 200,
       refillLotsPerSecond: uint32(bound(refill, 0, 500)),
       ttl: 1 hours,
-      seq: seq
+      seq: seq,
+      selfPriced: false
     });
     vm.prank(t.makerOwner(who));
     try book.updateSplines(u) {
@@ -125,7 +127,7 @@ contract OnchainBookHandler is Test {
   function staleUpdate(uint who) external {
     who = bound(who, 0, 1);
     OnchainBook.SplineUpdate[] memory u = new OnchainBook.SplineUpdate[](1);
-    u[0] = OnchainBook.SplineUpdate(mkt, t.makerAcc(who), 0, 100, 1, 1, 0, 0, 0, 1 hours, lastSeq[who]);
+    u[0] = OnchainBook.SplineUpdate(mkt, t.makerAcc(who), 0, 100, 1, 1, 0, 0, 0, 1 hours, lastSeq[who], false);
     vm.prank(t.makerOwner(who));
     try book.updateSplines(u) {
       _fail("an update with seq not above the stored one landed");
@@ -243,7 +245,8 @@ contract OnchainBookInvariant is OnchainBookBase {
   function invariant_seqNeverDecreasesAndNoSplineCrossed() public view {
     for (uint i; i < 2; ++i) {
       uint acc = i == 0 ? aliceAcc : carolAcc;
-      (, uint32 hs, uint16 bidCurve, uint16 askCurve,,,,,, uint64 seq,,) = book.splines(mkt, acc);
+      OnchainBook.SplineView memory sv = book.splines(mkt, acc);
+      (uint32 hs, uint16 bidCurve, uint16 askCurve, uint64 seq) = (sv.halfSpreadTicks, sv.bidCurve, sv.askCurve, sv.seq);
       assertEq(seq, handler.lastSeq(i), "stored seq is the last accepted one");
       address owner = i == 0 ? alice : carol;
       uint bid0 = book.curve(owner, bidCurve)[0].offsetTicks;

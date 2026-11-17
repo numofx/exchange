@@ -115,7 +115,7 @@ contract OnchainBookDeployFork is Test {
     OnchainBook.Region[] memory r = new OnchainBook.Region[](1);
     r[0] = OnchainBook.Region(1000, 0);
     OnchainBook.SplineUpdate[] memory u = new OnchainBook.SplineUpdate[](1);
-    u[0] = OnchainBook.SplineUpdate(1, acc, 0, 100, 1, 1, 0, 0, 0, 1 hours, 1);
+    u[0] = OnchainBook.SplineUpdate(1, acc, 0, 100, 1, 1, 0, 0, 0, 1 hours, 1, false);
     vm.startPrank(maker);
     book.setCurve(1, r);
     book.registerMaker(1, acc);

@@ -48,7 +48,8 @@ contract OnchainBookQuoteTest is OnchainBookBase {
       maxSkewTicks: 1_000_000,
       refillLotsPerSecond: 0,
       ttl: 1 hours,
-      seq: seq
+      seq: seq,
+      selfPriced: false
     });
     vm.prank(owner);
     book.updateSplines(u);
