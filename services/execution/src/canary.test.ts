@@ -12,6 +12,7 @@ const config: AppConfig = {
   port: 8081,
   host: '127.0.0.1',
   rpcUrl: 'http://127.0.0.1:0',
+  sendRpcUrl: 'http://127.0.0.1:0',
   privateKey: `0x${'11'.repeat(32)}`,
   chainId: 8453,
   executorAddress: '0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A',

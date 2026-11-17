@@ -28,6 +28,7 @@ const config: AppConfig = {
   port: 8081,
   host: '127.0.0.1',
   rpcUrl: 'http://127.0.0.1:1',
+  sendRpcUrl: 'http://127.0.0.1:1',
   privateKey: '0x1111111111111111111111111111111111111111111111111111111111111111',
   chainId: 8453,
   executorAddress: '0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A',
@@ -154,4 +155,15 @@ test('withdrawal: a non-owner signer is refused, by the pre-existing policy chec
   const error = await errorFrom(() => executor().then((e) => e.withdraw(withdrawRequest(OTHER))));
   assert.ok(error instanceof WithdrawalRejectedError, `expected WithdrawalRejectedError, got ${String(error)}`);
   assert.match(error.message, /signer must be action\.owner/);
+});
+
+// 2026-11-16: sends went through the rate-limited public RPC, which refused them with 429. Prepare and broadcast use the
+// send endpoint; reads (simulation, the nonce, receipts) stay on rpcUrl.
+test('transactions are prepared and sent through sendRpcUrl, reads through rpcUrl', async () => {
+  const e = (await MatchExecutor.create({ ...config, rpcUrl: 'http://127.0.0.1:1/reads', sendRpcUrl: 'http://127.0.0.1:1/sends' }, deps)) as unknown as {
+    walletClient: { transport: { url?: string } };
+    publicClient: { transport: { url?: string } };
+  };
+  assert.equal(e.walletClient.transport.url, 'http://127.0.0.1:1/sends');
+  assert.equal(e.publicClient.transport.url, 'http://127.0.0.1:1/reads');
 });

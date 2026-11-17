@@ -12,7 +12,8 @@ import type { NonceTracker } from './nonce-tracker.js';
  *   - the node answers "already known": the transaction is in the mempool. The nonce is used; the hash is returned.
  *   - "nonce too low" / "replacement transaction underpriced": something else holds this nonce. It is used; the
  *     tracker moves past it, and this send fails.
- *   - a timeout or a dropped connection: the transaction may be out. The same signed bytes are sent again (a duplicate
+ *   - an HTTP 4xx (rate limit, auth): the server refused the request, nothing was broadcast. The nonce is given back.
+ *   - a timeout, a dropped connection or an HTTP 5xx: the transaction may be out. The same signed bytes are sent again (a duplicate
  *     answers "already known"); either way the nonce stays used and the hash is returned for the receipt wait to
  *     settle. Giving it back instead could sign a second transaction with a nonce the first one already took.
  *   - any other rejection (underfunded, invalid): not accepted. The nonce is given back.
@@ -28,6 +29,12 @@ export function classifyBroadcastError(error: unknown): BroadcastOutcome {
   const walked = error instanceof BaseError ? error.walk((e) => e instanceof RpcRequestError || e instanceof TimeoutError || e instanceof HttpRequestError) : error;
   // A JSON-RPC error body is the node's answer: it saw the request and refused it.
   if (walked instanceof RpcRequestError) return 'rejected';
+  // An HTTP 4xx (a rate limit's 429, an auth 401/403) is the server refusing the request before any node took it: nothing
+  // was broadcast. Counting it as "may be out" returned a hash no node had and left the nonce ahead of the chain
+  // (2026-11-16 23:57, a phantom fill). A 5xx can come from a gateway after the node accepted it, so it stays unknown.
+  if (walked instanceof HttpRequestError && walked.status !== undefined && walked.status >= 400 && walked.status < 500) {
+    return 'rejected';
+  }
   if (walked instanceof TimeoutError || walked instanceof HttpRequestError) return 'transport';
   if (/timed out|timeout|fetch failed|ECONNRESET|ECONNREFUSED|socket hang up|network/i.test(text)) return 'transport';
   return 'rejected';

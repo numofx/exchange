@@ -99,7 +99,8 @@ locals {
     mm_rpc_url     = local.use_ssm ? "${local.ssm_arn_prefix}/numo/exchange/mm_rpc_url" : data.aws_secretsmanager_secret.mm_rpc_url[0].arn
     # A keyed endpoint retried when the free public RPC (rpc_url, mm_rpc_url) refuses a call with 429: every ECS
     # task shares one NAT IP and so one 25/s limit there. Billed per call, so only the bursty readers get it
-    # (markets-service, the matcher, the options maker), and the OnchainBook maker as its only RPC. SSM only.
+    # (markets-service, the matcher, the options maker), the OnchainBook maker as its only RPC, and execution-service's
+    # transaction sends (SEND_RPC_URL). SSM only.
     rpc_fallback_url = "${local.ssm_arn_prefix}/numo/exchange/rpc_fallback_url"
     # The index publisher's token for POST /v1/internal/index-status (the index-lag gate). The same
     # value sits at /numo/feeds/index_status_token for the publisher on the ops box. SSM only.

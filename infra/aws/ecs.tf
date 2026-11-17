@@ -459,6 +459,9 @@ resource "aws_ecs_task_definition" "execution" {
       # way this service signs, and executor_kms_signing must stay true.
       [
         { name = "RPC_URL", valueFrom = local.secret_arns.rpc_url },
+        # Transactions are prepared and broadcast through the keyed endpoint: on 2026-11-16 the public one refused the
+        # executor's sends with 429 and a broadcast nobody received was recorded as a fill. Reads stay on RPC_URL.
+        { name = "SEND_RPC_URL", valueFrom = local.secret_arns.rpc_fallback_url },
         # The canary's only route to a person. There is no CloudWatch alarm on this log group, so
         # without this a failing canary writes a line nobody reads.
         { name = "ALERT_WEBHOOK_URL", valueFrom = local.secret_arns.alert_webhook_url },

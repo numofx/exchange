@@ -11,7 +11,7 @@ import { NonceTracker } from './nonce-tracker.js';
 
 // A JSON-RPC node whose answers to eth_sendRawTransaction are scripted, so every error reaches broadcast.ts exactly as
 // viem raises it from a real HTTP transport -- wrapped, not hand-built.
-type Answer = 'ok' | 'hang' | 'drop' | { error: string; code?: number };
+type Answer = 'ok' | 'hang' | 'drop' | { error: string; code?: number } | { status: number };
 
 async function node(answers: Answer[]) {
   const sent: string[] = [];
@@ -24,6 +24,11 @@ async function node(answers: Answer[]) {
       const answer = answers.shift() ?? 'ok';
       if (answer === 'hang') return;
       if (answer === 'drop') return req.socket.destroy();
+      if (typeof answer === 'object' && 'status' in answer) {
+        // An HTTP-level refusal, as a rate limiter or gateway answers: no JSON-RPC body at all.
+        res.statusCode = answer.status;
+        return res.end(answer.status === 429 ? 'Too Many Requests' : 'refused');
+      }
       const payload = answer === 'ok'
         ? { jsonrpc: '2.0', id: call.id, result: keccak256(call.params[0]) }
         : { jsonrpc: '2.0', id: call.id, error: { code: answer.code ?? -32000, message: answer.error } };
@@ -126,4 +131,29 @@ test('Alchemy\'s "Missing or invalid parameters" is a refusal, not a transport f
   assert.ok(r.error);
   assert.equal(classifyBroadcastError(r.error), 'rejected');
   assert.deepEqual(r.sent, [55], 'refusals are not re-sent');
+});
+
+// 2026-11-16 23:57: mainnet.base.org answered the executor 429 (and 401) and the broadcast was counted as "may be out":
+// re-sent twice, then the nonce confirmed and the locally computed hash returned as accepted. The matcher recorded a
+// fill whose transaction no node ever saw, and the tracker held a nonce the chain never reached, so every later send
+// would have gone out behind the gap. An HTTP 4xx is the server refusing the request: nothing was broadcast.
+for (const status of [429, 401, 403]) {
+  test(`an HTTP ${status} is a refusal: the nonce is given back, nothing is returned as sent`, async () => {
+    const tracker = new NonceTracker(async () => 55);
+    const r = await run([{ status }], tracker);
+    assert.ok(r.error, 'the send fails, so the matcher records no fill');
+    assert.equal(r.hash, undefined);
+    assert.equal(classifyBroadcastError(r.error), 'rejected');
+    assert.deepEqual(r.sent, [55], 'a refusal is not re-sent');
+    assert.equal(await tracker.take(), 55, 'no gap: the next send takes the same nonce');
+  });
+}
+
+// A 5xx can come from a gateway after the node took the transaction: the outcome is unknown, as for a timeout.
+test('an HTTP 502 stays a transport failure: re-sent as the same bytes, the nonce kept', async () => {
+  const tracker = new NonceTracker(async () => 55);
+  const r = await run([{ status: 502 }, { error: 'already known' }], tracker);
+  assert.deepEqual(r.sent, [55, 55]);
+  assert.equal(r.hash, keccak256(await sign(55)));
+  assert.equal(await tracker.take(), 56);
 });

@@ -10,6 +10,9 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(8081),
   HOST: z.string().default('0.0.0.0'),
   RPC_URL: z.string().url(),
+  // The endpoint transactions are prepared and broadcast through; RPC_URL serves the reads. Unset: RPC_URL. A rate-limited
+  // public RPC refused the executor's sends with 429 on 2026-11-16 (a phantom fill): sends go to a keyed endpoint.
+  SEND_RPC_URL: z.string().url().optional().or(z.literal('')),
   // Exactly one of these. PRIVATE_KEY is the historical path and still works; EXECUTOR_KMS_KEY_ID
   // keeps the key inside KMS, where nothing that can read the task definition or this process's
   // memory can read the key itself. See @numo/kms-signer.
@@ -94,6 +97,8 @@ export type AppConfig = {
   port: number;
   host: string;
   rpcUrl: string;
+  /** Where transactions are prepared and sent: SEND_RPC_URL, or rpcUrl. */
+  sendRpcUrl: string;
   /** Set when signing with a local key. Exactly one of privateKey and kmsKeyId is present. */
   privateKey?: `0x${string}`;
   /** Set when signing through AWS KMS; the key never enters this process. */
@@ -169,6 +174,7 @@ export function loadConfig(): AppConfig {
     port: parsed.PORT,
     host: parsed.HOST,
     rpcUrl: parsed.RPC_URL,
+    sendRpcUrl: parsed.SEND_RPC_URL || parsed.RPC_URL,
     privateKey,
     kmsKeyId,
     chainId: parsed.CHAIN_ID,

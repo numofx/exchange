@@ -115,7 +115,8 @@ export class MatchExecutor {
       },
     });
     this.publicClient = createPublicClient({ chain: this.chain, transport: http(config.rpcUrl) });
-    this.walletClient = createWalletClient({ account: this.account, chain: this.chain, transport: http(config.rpcUrl) });
+    // Prepared and broadcast through the send endpoint (SEND_RPC_URL); reads, the nonce and receipts through rpcUrl.
+    this.walletClient = createWalletClient({ account: this.account, chain: this.chain, transport: http(config.sendRpcUrl) });
     this.nonces = new NonceTracker(() => this.publicClient.getTransactionCount({ address: this.account.address, blockTag: 'pending' }));
     const readBalance = () => this.publicClient.getBalance({ address: this.account.address });
     const log = (level: string, message: string, fields: Record<string, unknown>) =>
