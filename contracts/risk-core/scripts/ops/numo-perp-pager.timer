@@ -1,3 +1,4 @@
+# DISABLED on the ops box 2026-11-17 00:49 UTC by the owner's decision (OPS_BOX_CHANGES.md); kept for the record.
 # Every minute: the index heartbeat is 20 minutes and the page fires at 16, so a minute's lag leaves
 # the operator ~3 minutes before the market halts.
 [Unit]

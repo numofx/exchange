@@ -5,6 +5,21 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-17 00:49 UTC: the perp pager removed (owner's decision) (SSM)
+
+- **Done.** `systemctl disable --now numo-perp-pager.timer` (SSM `f91faae4-…`); the service is inactive, its last run
+  00:48:56. The unit files, `/etc/numo/perp-pager.env` and the checkout `/home/ec2-user/exchange-pager` are left in
+  place, inert. Undo: `systemctl enable --now numo-perp-pager.timer`.
+- **Decided by the owner** after being told what only the pager pages for: matcher dead, a halted index feed, an
+  unhealthy liquidation keeper (v1 and v2), insolvent accounts, SecurityModule payouts and coverage, the futures pools,
+  options vol, and low gas on every hot wallet. Since 00:49 nothing pages for any of these. Still running: the Slack
+  signer-balance alert (`numo-signer-balance-alert`, hot-wallet runway) and execution-service's settlement canary.
+- **Its dead-man's switch** (healthchecks.io check "perp pager", `9f0b72ba…`) could not be paused: the API key in SSM
+  (`/numo/pager/healthchecks_api_key`) is read-only (401 on pause). It went to grace at once and will alert until it
+  is paused or deleted in the dashboard.
+- Also off with it: `with-matcher-mute.sh`'s mute has nothing to mute, and the proposers whose gates read the pager's
+  state file (margin engine v1/v2, perp enable; all landed) would now fail those gates.
+
 ## 2026-11-17 00:28–00:34 UTC: execution-service 917da47: HTTP refusals are not sends; sends via the keyed RPC
 
 - **Fix** (`917da47`): `classifyBroadcastError` takes an HTTP 4xx (429, 401, 403) as a refusal: the nonce is given

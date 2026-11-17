@@ -1,3 +1,4 @@
+# DISABLED on the ops box 2026-11-17 00:49 UTC by the owner's decision (OPS_BOX_CHANGES.md); kept for the record.
 # Pages the operator's phone for USDCcNGN-PERP conditions that may need the guardian: a feed halt,
 # an unhealthy keeper, a SecurityModule payout, an insolvent account (check_perp_pager.py). Mirrors
 # every page to Slack. KEEPER_HEALTH_URL comes from /etc/numo/perp-pager.env. Paired with
