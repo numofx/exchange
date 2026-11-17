@@ -5,6 +5,17 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-17: expiry keeper enabled; EURC v3 relayer topped up from the executor (owner's decisions)
+
+- **`numo-future-feeds-v3@eurc-30nov26` enabled** (SSM `4dbc1cf7-…`): it was active but disabled, so a reboot before
+  11-30 would have left the fixing without its keeper. No restart (PID 4159626 before and after). Undo:
+  `systemctl disable` (not wanted before close-out).
+- **Executor → v3 relayer 0.009 ETH** (laptop, `cast send --aws` with the executor's KMS key
+  `…/2c640315-0897-4657-90fd-57946fcd40eb`, which derived `0xF68e…8703` before sending; tx `0x8ca87ce7…5044`). The
+  executor keeps 0.002583 (floor 0.002; a settlement costs ~0.000001). Its nonce tracker takes the chain's pending count
+  when higher, so this send cannot collide with its next settlement.
+- v3 relayer now 0.032050 ETH, ~11 days at 0.0029/day (to ~11-28). **Still short ~0.011 ETH to expiry: outside ETH.**
+
 ## 2026-11-17: feed signer topped up from three spare wallets (laptop, `cast send`)
 
 Owner's instruction: fund from existing market-maker or relayer wallets. Every key checked against its address first.
