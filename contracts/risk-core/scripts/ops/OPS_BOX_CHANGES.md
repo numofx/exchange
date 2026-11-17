@@ -14,7 +14,10 @@ the only place the box's real state is written down. Newest first.
 - **Read back:** owner the MM wallet, manager MarginEngine v2, both allowances max both ways. Gas ~0.0000012 ETH.
 - **Why.** Run-sheet step 4 (D5: a new account for v2, #56 stays on v1). Terraform `onchain_book_v2_maker_account_id`
   defaults to 58; the service stays off until the image is set.
-- **Not done:** margin. The wallet holds 0.05 USDC; the deposit waits on the owner's choice of source.
+- **Margin (owner's choice B):** 300 USDC moved from #56 (v1 maker, no position) to #58 through the wallet:
+  `CashAsset.withdraw(56, 300e6, wallet)` `0x06a8a5b5…` (58,693,297), USDC `approve(cash, 300e6)` `0x29eb0954…`,
+  `deposit(58, 300e6)` `0x3e6ac6ab…` (58,693,321). Read back: #56 150.0 cash, #58 300.0, the wallet's USDC unchanged
+  (0.047749). The v1 maker quotes 60 EURC a side on 150.
 
 ## 2026-11-17 ~13:55 UTC: book-maker-v2 dead-man check (healthchecks.io, SSM); market-maker image 0d687040cfa5 pushed
 

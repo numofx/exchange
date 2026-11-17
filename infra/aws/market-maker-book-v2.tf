@@ -33,7 +33,7 @@ variable "onchain_book_v2_maker_book" {
 variable "onchain_book_v2_maker_account_id" {
   description = "The v2 maker's account: held by mm_address (not Matching) under MarginEngine v2, with allowances to the v2 book."
   type        = string
-  # #58, created 2026-11-17 (OPS_BOX_CHANGES.md); margin not yet deposited.
+  # #58, created 2026-11-17 with 300 USDC margin from #56 (OPS_BOX_CHANGES.md).
   default = "58"
 }
 

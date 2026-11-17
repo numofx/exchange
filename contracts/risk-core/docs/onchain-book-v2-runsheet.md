@@ -66,7 +66,7 @@ pass while the size stays on `Matching`.
 3. **Indexer** (**done 2026-11-17 13:52 UTC**: markets `6bb45f2`, both books on `/health`). Deploy markets at `9780841` or later through `with-matcher-mute.sh`. Then set
    `onchain_book_v2_address` and `onchain_book_v2_start_block` (`deployBlock`); the matcher's preconditions refuse
    one without the other, and v1's address. Check that `/healthz` → `book_indexers` lists both books.
-4. **Maker account (D5)** (**#58 created, allowances set 2026-11-17**; margin not deposited). Same steps as `docs/book-maker.md`:
+4. **Maker account (D5)** (**done 2026-11-17: #58, 300 USDC moved from #56, allowances to the v2 book**). Same steps as `docs/book-maker.md`:
    - create the account under engine v2;
    - deposit cash for D4's margin;
    - set allowances to the **v2** book (allowances are per book).
