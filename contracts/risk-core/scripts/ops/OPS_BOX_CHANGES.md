@@ -5,6 +5,17 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-17 15:25 UTC: book-maker-v2 running in dry run (ECS, terraform from `main`)
+
+- **What.** `market-maker:0d687040cfa5` as service `market-maker-book-v2`, account #58 on the v2 book, curve
+  `20@0,40@50`, half-spread 300, ttl 30 s, refresh 22 s, `MM_BOOK_DRY_RUN=true`. `desired_count_market_maker_book_v2 = 1`
+  in the local `counts.auto.tfvars`.
+- **Plan:** 3 to add (log group, task definition, service), 1 to change (the execution role's policy gained only
+  `book_maker_v2_heartbeat_url`). No matcher change, so no mute.
+- **Log:** `book_v2=true self_priced=true ttl=30s`, would `setCurve` and `registerMaker`, `preflight ok`
+  (`market_enabled=false`), heartbeat configured, would send a spline at mid 1,100,142 ticks (1.100142). Nothing sent.
+- **Next:** fund the wallet (~0.05 ETH, owner), raise its floor, then `market_maker_book_v2_dry_run = false`.
+
 ## 2026-11-17: v2 maker account #58 created, allowances to the v2 book (laptop, `cast send`)
 
 - **What.** From the MM wallet (`0x3448…B47B`, key read from SSM `/numo/exchange/mm_private_key` into a subshell):

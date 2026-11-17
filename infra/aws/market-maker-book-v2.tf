@@ -13,10 +13,8 @@
 variable "image_market_maker_book_v2" {
   description = "The market-maker image carrying /app/book-maker with self-priced support (0d687040+), by git SHA. Empty creates nothing."
   type        = string
-  # Built and pushed 2026-11-17: 957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:0d687040cfa5
-  # (book-maker 0d687040: self-priced, v1/v2 detection, 30 s / 22 s). Set it here once onchain_book_v2_maker_account_id
-  # exists (run-sheet step 4): before that the bot's preflight refuses to start and ECS would restart it in a loop.
-  default = ""
+  # book-maker 0d687040: self-priced, v1/v2 detection, 30 s / 22 s.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/market-maker:0d687040cfa5"
 }
 
 variable "onchain_book_v2_maker_book" {

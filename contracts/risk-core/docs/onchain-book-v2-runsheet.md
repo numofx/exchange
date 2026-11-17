@@ -74,7 +74,7 @@ pass while the size stays on `Matching`.
    `/numo/exchange/book_maker_v2_heartbeat_url`. Create it before step 7: a task referencing a missing parameter
    does not start. Prove it fires (break it) once the bot runs.
 6. **Fund the wallet** and raise the floor (above).
-7. **Bot, dry run.**
+7. **Bot, dry run** (**running 2026-11-17 15:25 UTC**, `preflight ok`; live waits on step 6).
    - Build and push a market-maker image at `0d687040` or later. Set:
      - `image_market_maker_book_v2`;
      - `onchain_book_v2_maker_book`;
