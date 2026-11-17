@@ -1064,3 +1064,33 @@ venue's liveness): a keeper funding alert, a backup keeper key, and an alert on 
 falling back to per-maker settlement when the batch reverts, so B5a's isolation of a failing maker still holds.
 
 **Order of work:** hot-wallet top-ups (2026-11-17), then the EURC-30NOV26 expiry run-sheet, then C4.1 (quote view).
+
+**Our maker onto the book, self-priced: the bot built 2026-11-17** (market-maker `f7049c62`, `docs/book-maker.md`).
+
+- **What changed.**
+  - `MM_BOOK_SELF_PRICED=true` sends the forward as the mid, `round(forward / tick)`, with a 10 s ttl. A 5 s poll
+    and a 2 s refresh mean every cycle sends.
+  - Startup refuses a configuration where `refresh + poll + 3 s` exceeds the ttl. It also refuses a v1 book, a
+    `maxSelfPricedTtl` of 0, and a ttl over the cap.
+  - The bot detects the book version through `maxSelfPricedTtl` (only a plain revert counts as v1, not an RPC
+    error), so the same image keeps quoting the live v1 book pegged.
+  - The index guards are unchanged.
+- **Proof.**
+  - Tests pin the v2 selectors and `updateSplines` calldata to `cast`, and v1's layout to the v2 reads.
+  - Eleven guards were mutation-tested; one survivor was fixed by a stronger test.
+- **Fork rehearsal against a v2 book** (block 58,635,311):
+  - all five refusals fired;
+  - a 30-lot take filled at the curve as `quote` predicted;
+  - after `kill -9` the quote stopped filling at its 10 s ttl;
+  - SIGTERM cancelled the spline;
+  - a stale index cancelled it.
+- **Cost.** 73,061 gas per refresh, 17,280 a day: about 0.0076 ETH a day plus the L1 fee. That is roughly 250
+  times pegged mode's.
+- **Left for the deploy (a separate go-ahead):**
+  - `deploy-onchain-book.s.sol` targets EURC_FUTURE_V3 and its vault batch has no `setSelfPricedTtlCap(id, 60)`
+    yet;
+  - the MM wallet (`0x3448…B47B`) holds 0.0004 ETH, under an hour of self-priced quoting, and its
+    `check_signer_balance.py` floor (0.00005) assumes pegged;
+  - the ECS env needs `MM_BOOK_SELF_PRICED`, the v2 book's address, and a market on a series that trades past
+    30 Nov;
+  - the `report-age` check watches the EURC v3 adapter, so a next series on a new adapter needs it repointed.
