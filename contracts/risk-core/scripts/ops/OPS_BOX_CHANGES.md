@@ -19,7 +19,11 @@ the only place the box's real state is written down. Newest first.
   1 h → 1 h / 30 min. Its first hourly run (03:23) exited 2 on a 429 for the vault and paged; fixed by the retry and
   the keyed read, re-run 03:24 succeeded. Backups `.bak-202611170323`, `.bak-202611170324`.
 - **Backup relayer** for the v3 keeper: `0x0f79B47421fd21B1E4C39Ee717DF9A24d1A62F39`, key at SSM
-  `/numo/feeds/forward_relayer_key_v3_eurc_backup` (`cast wallet new`, never printed). **Unfunded.** Switch: run-sheet.
+  `/numo/feeds/forward_relayer_key_v3_eurc_backup` (`cast wallet new`, never printed). Switch: run-sheet.
+- **Backup funded 0.0013 ETH** (owner: from existing wallets; laptop, `cast send`, each key checked first): engine
+  keeper v2 0.0005 (tx `0xdc047642…9879`, keeps 0.00249), perp keeper 0.0003 (tx `0xbfd12669…8ace`, keeps 0.000205),
+  executor 0.0005 via KMS (tx `0xb56bbf09…d7c8`, keeps 0.00208, floor 0.002). About 11 h of the keeper's burn: time to
+  refund, not a full standby. No wallet had more to spare without shortening the expiry path.
 - Open: the v2 EURC relayer `0xEEa4…5321` warns (0.000229 ETH, ~4.6 days at its watched 0.00005/day) after this
   morning's transfer; its keeper `numo-future-feeds-v2@eurc-30nov26` serves the retired v2 series.
 
