@@ -7,7 +7,7 @@ How another contract prices, takes, and reads positions on Numo's futures, in th
 |---|---|
 | Interface | `src/interfaces/IOnchainBook.sol`: take, quote, market and spline reads, events, a take's errors. Asserted equal to the contract's ABI (`test/periphery/OnchainBookKit.t.sol`) |
 | Router | `src/periphery/OnchainBookRouter.sol`: deposit, take, reduce-only, withdraw in one call, for wallets and simple contracts |
-| Example | `examples/DeltaHedgedEurcVault.sol`: a Morpho flash loan, an Aerodrome swap, Morpho collateral and borrow, and a book short, in one transaction; `close` unwinds it in one more and `withdrawMargin` returns the cash. Fork-tested on a book built on the fork (`test/fork/OnchainBookKitFork.t.sol`) and on the deployed v2 book, the existing Morpho EURC/USDC market and the Aerodrome pool at head (`test/fork/DeltaHedgedEurcVaultLiveFork.t.sol`). Not audited |
+| Example | `examples/DeltaHedgedEurcVault.sol`: a Morpho flash loan, an Aerodrome swap, Morpho collateral and borrow, and a book short, in one transaction; `close` unwinds it in one more and `withdrawMargin` returns the cash. Fork-tested on a book built on the fork (`test/fork/OnchainBookKitFork.t.sol`) and on the deployed v2 book, the existing Morpho EURC/USDC market and the Aerodrome pool at head (`test/fork/DeltaHedgedEurcVaultLiveFork.t.sol`). Run once on mainnet, 2026-11-17: open `0xa634e40d…` (1.39M gas), close `0x74026401…` (1.14M). Not audited |
 
 **Which book.** EURC-30NOV26 has two books, market 1 on each. v2 (`0x83C5741a24d57189379E1215F7A22d9f048E89d5`, from
 2026-11-17, router `0xd9540220b514ab2E1a98Ff3C4c4F1F5FD5cf76aB`) has everything here: `quote`, self-priced quotes, the

@@ -5,6 +5,32 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-17: the kit's DeltaHedgedEurcVault run on mainnet: spot, lending and the v2 book in one transaction (laptop, `cast`/`forge create`)
+
+Owner's yes for steps 1–5; code `a69afb6` (adds `close` and `withdrawMargin`), rehearsed at head by
+`DeltaHedgedEurcVaultLiveFork`. All from the canary taker wallet `0x3Fdf…a914` (key SSM
+`/numo/deploy/onchain_book_taker_key`).
+
+- **Funded:** `CashAsset.withdraw(56, 25 USDC, taker)` from the MM wallet, tx `0x22ab3e30…6ec2`.
+- **Deployed** `DeltaHedgedEurcVault` at **`0xf2255C8606e887B0866681DED41e6a1c042B2abB`**, tx `0x81c4d5e2…9ff3`: owner the
+  taker, book v2 market 1, its own account **#59** (engine v2), Morpho market `0xa04698b2…a8b3` (EURC collateral, USDC
+  loan, Chainlink EURC/USD oracle `0x0e78…f7e0`, 86% LLTV; unlisted, ~$10 supplied by someone else), Aerodrome
+  Slipstream EURC/USDC `0xc5E5…48c1`. Not audited.
+- **Our own loan:** 10 USDC supplied to that market (`0xc6a449dd…0362`), so the borrow did not use a stranger's few
+  dollars. 10 USDC as margin on #59 (`0xd282ad8b…2007`).
+- **Open, one transaction, no reports:** tx **`0xa634e40d…55ed`**, block 58,754,433, 1,391,861 gas: Morpho flash loan
+  5 USDC; 10 USDC to 9.079632 EURC on Aerodrome; the EURC as Morpho collateral, 5 USDC borrowed (repaying the flash);
+  short 9 EURC on the v2 book against #58 at 1.101475 (fee 0.0049566). Delta after: +0.079632 EURC (under a lot).
+  The first send timed out at the RPC; nonce 18 read unused (latest and pending), so it was re-sent once with
+  `--nonce 18`.
+- **Close, one transaction:** tx `0x74026401…6374`, block 58,754,531, 1,144,253 gas: bought 9 back at 1.10205 (fee
+  0.0049592), flash-borrowed 6 USDC, repaid the debt, withdrew the collateral, sold it; 4.998598 USDC to the taker.
+  Read back: no debt, no collateral, delta 0.
+- **Back:** `withdrawMargin(9.984909)` (`0xca20871c…175a`; #59 keeps 0.0000001 dust), Morpho supply withdrawn by shares
+  (`0x9ceea2a4…0ba2`, 9.999999), 24.983506 USDC deposited back to #56 (`0x7d114573…e6f9`). #56 149.9866 (was 150.0031):
+  the run cost 0.0165 USDC (two book fees 0.0099, the spread, the swaps) and ~0.00004 ETH of the taker's gas. Taker
+  wallet: 0 USDC, 0.000157 ETH.
+
 ## 2026-11-17 18:26–18:29 UTC: book-maker-v2 reprices at 50 ticks (ECS, terraform from `main`)
 
 - **What** (`7009a45`, owner's call): `MM_BOOK_REPRICE_TICKS` 20 → 50 on the v2 bot only; the plan changed that value

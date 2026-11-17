@@ -7,8 +7,8 @@ import "openzeppelin/token/ERC20/utils/SafeERC20.sol";
 import {IOnchainBook} from "../src/interfaces/IOnchainBook.sol";
 
 /*
- * Example integration for the OnchainBook kit (spec C4.4, docs/onchain-book-integration.md). NOT AUDITED, NOT DEPLOYED:
- * it shows the calls, not a product.
+ * Example integration for the OnchainBook kit (spec C4.4, docs/onchain-book-integration.md). NOT AUDITED: it shows the
+ * calls, not a product. One canary instance ran open and close on mainnet on 2026-11-17 (scripts/ops/OPS_BOX_CHANGES.md).
  *
  * A leveraged EURC basis position opened in ONE transaction with no off-chain party, composing a lending market, a spot
  * DEX and the futures book (the C0 test):
