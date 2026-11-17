@@ -1,4 +1,4 @@
-# EURC-30NOV26 expiry run-sheet (Sunday 2026-11-30)
+# EURC-30NOV26 expiry run-sheet (Monday 2026-11-30)
 
 The first EURC series with outside users, an `OnchainBook` market and no pager (removed 2026-11-17). Times UTC.
 Written 2026-11-17 from the contracts, the keeper and the deployment artifacts; re-check the "Before" list on 11-28.

@@ -5,6 +5,21 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-17 22:44–22:50 UTC: MM wallet burn re-measured at the 50-tick reprice; balance check 0.0025 → 0.002 (box)
+
+- **Measured on chain** (nonce and balance at blocks 58,761,126 and 58,825,377, 19:10 to 22:44 UTC, the full-ladder
+  task `0056e48c…`): 551 sends in 3.57 h (~3,700 a day, nearly all ~25 s refreshes), 0.000243 ETH including the L1
+  fee: **0.00163 ETH/day**. That is below the 0.0021 estimated at the 20-tick reprice.
+- **`check_signer_balance.py`**: the MM wallet's burn is 0.002, rounded up. Installed over the `dde270b` file (sha
+  checked first); the new file is sha256 `fc10edb2…268b`, its self-test passed, and it ran from the unit (SSM
+  `35719fc9`), result success.
+- **The run's readings:**
+  - MM wallet 0.029644 ETH, ~14.8 days;
+  - feed signer 0.008089, ~6.7 days (**LOW**: top-up awaiting the owner);
+  - cNGN forward relayer ~7.3 days, vol relayer ~10.9.
+- **#58:** no outside fills yet; its six fills are our own canaries, the router and the vault. Flat, 1,590.01 cash,
+  all free margin, spline live.
+
 ## 2026-11-17 19:01–19:09 UTC: EURC-30NOV26's whole size moved from Matching to the v2 OnchainBook (D4 A, D6) (ECS, laptop)
 
 Owner's choice A and yes to the 1,290 USDC move.
