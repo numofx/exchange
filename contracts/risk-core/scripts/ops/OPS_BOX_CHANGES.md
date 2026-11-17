@@ -5,6 +5,18 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-17: feed signer topped up from three spare wallets (laptop, `cast send`)
+
+Owner's instruction: fund from existing market-maker or relayer wallets. Every key checked against its address first.
+- perp keeper `0xdE57…f18` (perp delisted) → feed signer 0.00049 (tx `0xc51404a7…80bc`); keeps 0.000505.
+- v2 EURC relayer `0xEEa4…5321` (series retired; `numo-future-feeds-v2@eurc-30nov26` still active) → 0.0004
+  (tx `0x1717f3c4…8121`); keeps 0.000229, ~10 days at its burn.
+- book taker `0x3Fdf…a914` → 0.00017 (tx `0x8db74704…3778`).
+- Feed signer now 0.008817 ETH, ~14 days at 0.00063/day (to ~12-01). The EURC v3 relayer (0.0231, ~8 days at
+  0.0029/day, to ~11-24) is still short ~0.019 to expiry: only the executor (0.0116, KMS) or outside ETH can cover it.
+- Found: `numo-future-feeds-v3@eurc-30nov26` (the series' expiry keeper) is active but **disabled**: it would not
+  restart after a reboot.
+
 ## 2026-11-17 01:36–01:43 UTC: markets df70d1e: the settlement verifier (ECS)
 
 - **What.** Each matcher fill recorded on the executor's broadcast is `settlement = 'pending'`; the matcher checks it
