@@ -885,6 +885,22 @@ Phoenix (docs.phoenix.trade, read 2026-11-17) is composable because everything i
 Not stated in their docs: which parts are permissioned (deposits take an optional `permission_account`, onboarding
 has invites) and how the external component of their mark price reaches the chain.
 
+## C1a. Benchmark: Perpl (an EVM on-chain order book)
+
+Perpl (docs.perpl.xyz/exchange/order-book, read 2026-11-17; the page does not name its chain) runs a limit-order book
+entirely on chain on an EVM chain, so its costs compare directly with ours:
+- **Structures.** A three-level bit-index tree of 256-bit words finds the next price up or down (more than 16M price
+  levels); a two-level tree indexes order ids (more than 65k orders per contract); orders at a price sit in lists that
+  share storage across nearby prices.
+- **Cost.** Post O(1), cancel O(1), match O(n). A post-and-cancel is "100k gas, including solvency checks", against
+  their figure of 200k for a Uniswap V2 swap. Tuned for makers, whose post-and-cancel cycle is the common operation.
+- **Order types.** Limit, market, an expiry block on any resting order, and a change operation replacing
+  cancel-and-post; changing only size or expiry does not move storage.
+- **Stale orders.** An order with an expiry pays a recycling fee, refunded on full fill or the issuer's cancel; a
+  taker who walks into an expired order keeps the fee for clearing it. Tunable at runtime.
+- **One permissioned element.** A backend can cancel far-from-market orders when the book fills, against spam.
+- Not stated: oracle use, a contract-callable interface, how margin and settlement work beyond "solvency checks".
+
 ## C2. Where Numo stands (2026-11-17)
 
 | C0 test | Today | Why |
@@ -940,7 +956,16 @@ Costs and risks:
    Pre-req for C0 item 3 to mean anything.
 6. **Resting limit orders on the book** (B13: FIFO, O(1) post and cancel, merged with splines as Phoenix does).
    Then the matcher becomes optional: a maker or router onto the book, not the exchange. Gas is the constraint on
-   Base, not compute: a take is already about 1M gas (B10); measure before choosing structures.
+   Base, not compute. From Perpl (C1a):
+   - **Settlement is the bottleneck, not the book.** Perpl posts and cancels for ~100k gas; our take is 1.13M, of
+     which ~610k is each maker's settlement through `SubAccounts` and the engine's margin hook (B10). Perpl most likely
+     keeps balances inside the book contract; ours stay in the shared margin accounts, which is what makes positions
+     usable by lenders (C0 items 4 and 5) and is kept. **Measure first:** how much of the ~610k batching a take's
+     fills into one margin check per account would save, before choosing book structures.
+   - **Copy:** expiring orders with a recycling fee (takers clear stale orders, no keeper), and a change operation
+     (no cancel-plus-post).
+   - **Avoid:** an off-chain hand on the book. Spam limits in the contract instead: a minimum order size, a per-account
+     order cap, the recycling fee itself.
 7. **Maker vault** (ERC-4626). Pooled USDC running a self-priced spline. It deepens the book, and its share token is a
    lendable yield asset: the first link to lending markets.
 8. **Tokenized positions** for lending (C0 item 5). A wrapper (ERC-20 for a long or short position, or a basis token:
