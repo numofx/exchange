@@ -1,0 +1,17 @@
+# Pages when the Data Streams reports held by the EURC StreamsIndexAdapter are over 120 s old for two runs in a row
+# (check_report_age.py): the index reverts past 60 s, and with it marks, fixing samples and self-priced quoting.
+# Reads through the keyed endpoint (RPC_SSM), never printed. Paired with numo-report-age.timer. Added 2026-11-17.
+#
+# After EURC-30NOV26 is settled and its keeper disabled, the reports stop by design: disable this timer then
+# (eurc-30nov26-expiry-runsheet.md, After).
+[Unit]
+Description=Numo index report age check
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/home/ec2-user/exchange/contracts/risk-core
+ExecStart=/home/ec2-user/exchange/contracts/risk-core/scripts/ops/run-with-heartbeat.sh report-age /usr/bin/python3 scripts/ops/check_report_age.py
+Environment=AWS_REGION=us-east-1
+Environment=RPC_SSM=/numo/keeper/rpc_url
+Environment=ADAPTER=0x9E9aB6ee5ccf0b050Eba0b64Ce9429334D49FfEB

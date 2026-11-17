@@ -53,6 +53,9 @@ WALLETS: list[tuple[str, str, float]] = [
 # A week, so an alert that lands on a Friday evening is still actionable on Monday.
 # At the measured burn this warns at ~0.0084 ETH.
 DEFAULT_WARN_DAYS = 7.0
+# Under this a wallet PAGES (exit 3): with the perp pager removed (2026-11-17) this is the only high-priority alert on a
+# keeper's gas, and under self-priced quoting (spec C3) a dry keeper stops the venue. Two days leaves a night and a day.
+DEFAULT_PAGE_DAYS = 2.0
 
 
 def load_env_file(path: Path) -> None:
@@ -118,8 +121,9 @@ def main() -> int:
   webhook = os.environ.get("ALERT_WEBHOOK_URL")
   wallets = parse_wallets(os.environ["WATCH_WALLETS"]) if os.environ.get("WATCH_WALLETS") else WALLETS
   warn_days = float(os.environ.get("WARN_RUNWAY_DAYS", DEFAULT_WARN_DAYS))
+  page_days = float(os.environ.get("PAGE_RUNWAY_DAYS", DEFAULT_PAGE_DAYS))
 
-  low, failed = [], []
+  low, critical, failed = [], [], []
   for name, address, burn in wallets:
     try:
       balance_eth = int(rpc(url, "eth_getBalance", [address, "latest"]), 16) / 1e18
@@ -127,6 +131,9 @@ def main() -> int:
       failed.append(f"{name} {address}: {exc}")
       continue
     line = verdict(name, address, balance_eth, burn, warn_days)
+    page = verdict(name, address, balance_eth, burn, page_days)
+    if page:
+      critical.append(page)
     if line:
       low.append(line)
     else:
@@ -135,9 +142,19 @@ def main() -> int:
   if low:
     alert(webhook, "NUMO HOT WALLET LOW GAS\n" + "\n".join(low)
           + f"\nBelow the {warn_days:.0f}-day threshold: top up, or the feed or keeper stops and its market freezes.")
+  if critical:
+    alert(webhook, "NUMO HOT WALLET OUT OF GAS SOON\n" + "\n".join(critical)
+          + f"\nUnder {page_days:g} days: paging. A dry keeper stops the index, the marks, the fixing and self-priced quoting.")
   if failed:
     alert(webhook, "NUMO HOT WALLET BALANCE CHECK FAILED\n" + "\n".join(failed))
     return 2
+  return exit_code(bool(low), bool(critical))
+
+
+def exit_code(low: bool, critical: bool) -> int:
+  """3 pages (the check goes down at HIGH priority), 1 is the LOW-priority finding, 0 healthy."""
+  if critical:
+    return 3
   return 1 if low else 0
 
 
@@ -149,6 +166,12 @@ def self_test() -> int:
   assert verdict("v3", "0x" + "0" * 40, 0.002, 0.0035, 7.0) is not None
   assert verdict("x", "0x" + "0" * 40, 0.0084, 0.0012, 7.0) is None, "exactly 7 days is not low"
   assert verdict("x", "0x" + "0" * 40, 0.0083, 0.0012, 7.0) is not None
+  # paging: under 2 days pages (3), under 7 is the low finding (1), a failed read is 2 regardless
+  assert exit_code(low=False, critical=False) == 0
+  assert exit_code(low=True, critical=False) == 1
+  assert exit_code(low=True, critical=True) == 3
+  assert verdict("v3", "0x" + "0" * 40, 0.0069, 0.0035, DEFAULT_PAGE_DAYS) is not None, "1.97 days pages"
+  assert verdict("v3", "0x" + "0" * 40, 0.0071, 0.0035, DEFAULT_PAGE_DAYS) is None, "2.03 days does not"
   assert parse_wallets("a=0x" + "1" * 40 + "@0.001, b=0x" + "2" * 40 + "@0.5") == [
     ("a", "0x" + "1" * 40, 0.001), ("b", "0x" + "2" * 40, 0.5)]
   for bad in ("a=0x12@0.1", "a=0x" + "1" * 40 + "@0", "a=0x" + "1" * 40, ",", "noequals"):
@@ -162,8 +185,9 @@ def self_test() -> int:
 
 
 # Exit codes, read by run-with-heartbeat.sh (HEARTBEAT_FINDING_EXIT=1): 0 healthy, 1 a finding
-# (posted to Slack; paged at LOW priority), 2 the check could not run (paged at HIGH priority, like
-# a missed run -- a monitor that cannot see is not a quiet one).
+# (posted to Slack; paged at LOW priority), 3 a wallet under PAGE_RUNWAY_DAYS (paged at HIGH priority),
+# 2 the check could not run (paged at HIGH priority, like a missed run -- a monitor that cannot see is
+# not a quiet one).
 if __name__ == "__main__":
   try:
     sys.exit(self_test() if "--self-test" in sys.argv[1:] else main())
