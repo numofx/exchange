@@ -8,6 +8,7 @@ import "openzeppelin/token/ERC20/utils/SafeERC20.sol";
 import {ISubAccounts} from "../interfaces/ISubAccounts.sol";
 import {IAsset} from "../interfaces/IAsset.sol";
 import {OnchainBook} from "./OnchainBook.sol";
+import {IOnchainBook} from "../interfaces/IOnchainBook.sol";
 
 /// @dev The three CashAsset calls the router makes.
 interface IRouterCash {
@@ -117,11 +118,8 @@ contract OnchainBookRouter is ReentrancyGuard {
     return o.amount < size ? o.amount : size;
   }
 
-  /// @dev `markets(id)`'s first and third words (future, subId): the getter returns 13 static words, and decoding all
-  ///      of them is too deep for the legacy pipeline.
   function _series(uint marketId) internal view returns (address future, uint96 subId) {
-    (bool ok, bytes memory ret) = address(book).staticcall(abi.encodeCall(book.markets, (marketId)));
-    require(ok);
-    (future,, subId) = abi.decode(ret, (address, address, uint96));
+    IOnchainBook.MarketView memory m = IOnchainBook(address(book)).markets(marketId);
+    return (m.future, m.subId);
   }
 }

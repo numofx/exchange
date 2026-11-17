@@ -998,8 +998,25 @@ Costs and risks:
      take alone (1,269,142).
    - **Tests.** 10 unit (`test/periphery/OnchainBookRouter.t.sol`) and 2 fork (the live cash refusing an operator;
      the full route against Chainlink's verifier). Nine guards mutation-tested.
-4. **Integration kit.** A Solidity interface, documented return data and events, an example integration (a
-   delta-hedge vault on Aerodrome EURC/USDC with a flash loan) and fork tests.
+4. **Integration kit. Built 2026-11-17.** Guide: `docs/onchain-book-integration.md`.
+   - **Interface** `src/interfaces/IOnchainBook.sol`: take, quote, the market and spline reads, Fill/TakeExecuted/
+     MakerSkipped, a take's errors. Selectors, event topics and error selectors asserted equal to the contract's, and a
+     caller holding only the interface quotes and takes (`test/periphery/OnchainBookKit.t.sol`, 3). `markets` is
+     declared as a 13-field `MarketView` struct return: the same bytes, but destructuring 13 values is too deep for the
+     legacy pipeline (the router hit it too, and now reads through the interface).
+   - **Example** `examples/DeltaHedgedEurcVault.sol`: one transaction flash-borrows USDC from Morpho Blue, buys EURC on
+     Aerodrome Slipstream (EURC/USDC tick spacing 1, `0xc5E5…48c1`, the deepest at the fork block: ~37.8k USDC, 99k
+     EURC), supplies it to Morpho as collateral, borrows the flash loan back, and shorts the same EURC on the book, all
+     or nothing; `rehedge` restores delta after the collateral or position moves. Uses only the interface and minimal
+     ABIs. The flash loan is useful only because the EURC becomes collateral to borrow against; a bare spot-plus-short
+     has nothing to repay it with. Not audited, not deployed.
+   - **Fork tests** (`test/fork/OnchainBookKitFork.t.sol`, 5) on the live stack: real Morpho Blue (a market created in
+     the test: EURC collateral, USDC loan, the enabled adaptive IRM and 86% LLTV, a fixed oracle at the index; no
+     existing market assumed), the real Aerodrome pool, the book on MarginEngine v2 and FutureAsset v3 with
+     Chainlink-verified reports. `open`: 1,995.23 EURC bought and posted, 1,995 EURC shorted, delta 0.23 EURC (under a
+     lot), no USDC or EURC idle, 3,276,751 gas. Rehedge after outside collateral; an unfillable hedge undoes the
+     swap, collateral and loan; callbacks only from Morpho mid-open and from the pool. Seven guards mutation-tested.
+   - `OnchainBookFork` was split into `OnchainBookForkBase` (the fixture) and the tests, so the kit reuses it.
 5. **Open the maker set.** Raise the per-market cap with measured gas, or allow permissionless makers behind a bond.
    Pre-req for C0 item 3 to mean anything.
 6. **Resting limit orders on the book** (B13: FIFO, O(1) post and cancel, merged with splines as Phoenix does).

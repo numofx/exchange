@@ -30,7 +30,7 @@ import {ICashAsset} from "../../src/interfaces/ICashAsset.sol";
  *
  * Requires BASE_RPC_URL.
  */
-contract OnchainBookFork is Test {
+abstract contract OnchainBookForkBase is Test {
   address constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
   IFutureAssetV3 constant FUTURE = IFutureAssetV3(0xC350243c1d07Ff598770ECe12323799D2EFbB227);
   uint96 constant SUB_ID = 1796050800;
@@ -59,7 +59,7 @@ contract OnchainBookFork is Test {
   uint bobAcc;
   uint[] makerAccs;
 
-  function setUp() public {
+  function setUp() public virtual {
     vm.createSelectFork(vm.envString("BASE_RPC_URL"), FORK_BLOCK);
     subAccounts = SubAccounts(address(ENGINE.subAccounts()));
     reports = vm.parseBytes(vm.readFile("test/fork/fixtures/eurc-streams-reports-57985893.hex"));
@@ -148,7 +148,10 @@ contract OnchainBookFork is Test {
     (filled,) = book.take(o, report);
     gas = before - gasleft();
   }
+}
 
+/// @dev The tests on the fixture above (the base is shared with the kit's example fork test).
+contract OnchainBookFork is OnchainBookForkBase {
   ///////////
   // Tests //
   ///////////
