@@ -5,6 +5,24 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-17 03:15–03:25 UTC: keeper-liveness alerts before Stage 3 (spec C6) (SSM, healthchecks.io)
+
+- **Report age** (new): `check_report_age.py` + `numo-report-age.{service,timer}` (every minute, through
+  `run-with-heartbeat.sh report-age`, reads via `RPC_SSM=/numo/keeper/rpc_url`). Pages (exit 3) when either stored
+  Data Streams report on the EURC adapter is over 120 s old for two runs in a row. healthchecks.io `report-age`
+  (`7101133c…`, 1 min / 3 min grace, created in the dashboard), ping URL at SSM `/numo/pager/heartbeats/report-age`.
+  First run: reports 7 s old, ok. Proven locally against mainnet with the limit forced to 1 s: run 1 waits, run 2
+  exits 3; a fresh read resets.
+- **Hot-wallet gas pages** (`76d0c5a`, `a63006c`): `check_signer_balance.py` exits 3 (HIGH page) for a wallet under
+  2 days, keeps the low-priority finding under 7, retries 429s and reads via `RPC_SSM`. Timer 6 h → 1 h (sed on the
+  box timer); the unit gained `Environment=RPC_SSM=/numo/keeper/rpc_url`. healthchecks.io `signer-balance-alert` 6 h /
+  1 h → 1 h / 30 min. Its first hourly run (03:23) exited 2 on a 429 for the vault and paged; fixed by the retry and
+  the keyed read, re-run 03:24 succeeded. Backups `.bak-202611170323`, `.bak-202611170324`.
+- **Backup relayer** for the v3 keeper: `0x0f79B47421fd21B1E4C39Ee717DF9A24d1A62F39`, key at SSM
+  `/numo/feeds/forward_relayer_key_v3_eurc_backup` (`cast wallet new`, never printed). **Unfunded.** Switch: run-sheet.
+- Open: the v2 EURC relayer `0xEEa4…5321` warns (0.000229 ETH, ~4.6 days at its watched 0.00005/day) after this
+  morning's transfer; its keeper `numo-future-feeds-v2@eurc-30nov26` serves the retired v2 series.
+
 ## 2026-11-17: expiry keeper enabled; EURC v3 relayer topped up from the executor (owner's decisions)
 
 - **`numo-future-feeds-v3@eurc-30nov26` enabled** (SSM `4dbc1cf7-…`): it was active but disabled, so a reboot before

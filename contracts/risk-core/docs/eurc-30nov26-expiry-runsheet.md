@@ -24,6 +24,9 @@ Written 2026-11-17 from the contracts, the keeper and the deployment artifacts; 
 
 Nothing phones anyone. During the day someone has to be watching **Slack** and **healthchecks.io**, from 13:00 until
 the series is settled and closed out.
+- **Pages (Pushover, through healthchecks.io), since 2026-11-17:** `report-age` (the adapter's reports over 120 s old
+  for two minutes running) and `signer-balance-alert` (any hot wallet under 2 days of gas; under 7 days is a
+  low-priority push).
 - **Slack:** the keeper's alerts (`fixing-failed`, a recovery opened, `close-out-failed-<id>`), the settlement
   canary, `NUMO HOT WALLET LOW GAS`, `NUMO FILL VOIDED`, settlement-verifier posts.
 - **healthchecks.io:** `settlement-canary`, `settlement-canary-ecs`, `book-maker`, `signer-balance-alert`,
@@ -72,6 +75,13 @@ On the box: `journalctl -u numo-future-feeds-v3@eurc-30nov26 -f`.
    if the first window broke at expiry), and repeats until one completes. Margin keeps following the index meanwhile
    (A8.3); holders cannot exit after 14:30 (they carry the price until settlement).
 
+**Keeper's relayer empty or its key lost: switch to the backup relayer.** Posting reports and the fixing calls accept
+any sender, and forward marks are signed by the KMS forward signer, so the keeper runs from any funded key. The
+standby is `0x0f79B47421fd21B1E4C39Ee717DF9A24d1A62F39` (SSM `/numo/feeds/forward_relayer_key_v3_eurc_backup`, readable
+by the box): fund it, set `FORWARD_RELAYER_SSM_NAME=forward_relayer_key_v3_eurc_backup` in
+`/etc/numo/future-feeds-v3-eurc-30nov26.env`, `systemctl restart numo-future-feeds-v3@eurc-30nov26`, and add it to
+`check_signer_balance.py`'s WALLETS. Record it the same day.
+
 **Keeper down but the index fine.** Every fixing step is permissionless: from any funded key,
 `cast send $F 'recordFixingSample(uint96)' $S` (every ≤ 120 s in the window), then after expiry
 `cast send $F 'fixSettlementFromIndex(uint96)' $S`, or `'openRecoveryWindow(uint96)' $S` if it broke.
@@ -95,5 +105,7 @@ Before the 14:30 close, check `trade_fills_voided` stays empty.
       the app no longer needs to show it (a matcher redeploy: `with-matcher-mute.sh`).
 - [ ] **Keeper:** after close-out, `systemctl disable --now numo-future-feeds-v3@eurc-30nov26`; sweep the v3 relayer's
       ETH to the next series' keeper or the feed signer.
+- [ ] **Report age:** once the keeper is disabled the reports stop by design: `systemctl disable --now
+      numo-report-age.timer` and pause the `report-age` healthcheck, unless a next series uses the same adapter.
 - [ ] **Indexer:** keep `onchain_book_address` until the v2 book (spec Part C) replaces it.
 - [ ] Record every hand step in `OPS_BOX_CHANGES.md` the same day.
