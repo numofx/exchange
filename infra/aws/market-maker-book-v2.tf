@@ -90,7 +90,8 @@ resource "aws_ecs_task_definition" "market_maker_book_v2" {
       { name = "MM_BOOK_HALF_SPREAD_TICKS", value = var.onchain_book_v2_maker_half_spread_ticks },
       { name = "MM_BOOK_TTL_SECONDS", value = "30" },
       { name = "MM_BOOK_REFRESH_SECONDS", value = "22" },
-      { name = "MM_BOOK_REPRICE_TICKS", value = "20" },
+      # 50 (owner, 2026-11-17): at 20, reprices were 155 of 353 sends in the first 108 min.
+      { name = "MM_BOOK_REPRICE_TICKS", value = "50" },
       { name = "MM_BOOK_CUTOFF_SECONDS", value = "3600" },
       { name = "MM_BOOK_MAX_DIVERGENCE_BPS", value = "50" },
       { name = "MM_BOOK_POLL_SECONDS", value = "5" },
