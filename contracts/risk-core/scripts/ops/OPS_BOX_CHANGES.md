@@ -5,6 +5,25 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-17 00:05–00:10 UTC: execution-service restarted after a phantom fill (ECS, laptop)
+
+- **What happened.** 2026-11-16 23:57:58 the matcher crossed taker order `future-0f8e737c-…` (2 EURC buy, EURC-30NOV26)
+  with `mm:EURC-30NOV26:sell:3589746651976157`. execution-service answered `accepted: true` with tx
+  `0xfb8ba3f26fd79dd82144bb2cda70c63f0bf5a7ca0627604e938cc214662f8e2e` in 395 ms (`WAIT_FOR_RECEIPT=false`), and the
+  matcher recorded the fill. That transaction exists on no node (mined or pending, mainnet.base.org and Alchemy); the
+  executor's nonce stayed 253 and Matching logged nothing. `totalPosition` is 0: the app's open interest of $0 is right
+  and the trade on `/trades` and the chart never settled.
+- **Why (from the code and the minute's rpc_calls).** `broadcast.ts` treats an `HttpRequestError` as "the transaction may
+  be out": it resends twice, then confirms the nonce and returns the locally computed hash. viem raises that error for an
+  HTTP 429 or 401, and in that minute `mainnet.base.org` answered the executor 429 x12 and 401 x2 around its three
+  `eth_sendRawTransaction`s. The tracker then held 254 against the chain's 253, so every later settlement on every market
+  would have gone out behind the gap and been recorded as filled.
+- **Done.** `aws ecs update-service --force-new-deployment` on execution-service (td :42 unchanged), 00:05:57; old task
+  `bfd006f2…` STOPPED by 00:09:35 (`wait-for-rollout.sh`). The new process reads its nonce from the chain (253). No other
+  phantom fill on any market in between (checked `/trades` from 23:50).
+- **Open.** The phantom fill's rows (both orders filled 2, one `trade_fills` row); the broadcast classification; the
+  executor's send RPC.
+
 ## 2026-11-16 23:38 UTC: gas watch covers the MM wallet (OnchainBook maker) (SSM)
 
 - `/etc/numo/perp-pager.env`: `GAS_WATCH` gains `book-maker=0x3448…B47B:0.0001` (backup `.bak-202611162338`).
