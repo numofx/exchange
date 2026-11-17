@@ -5,6 +5,23 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-17 13:27–13:44 UTC: OnchainBook v2 setup batch landed (box, `exchange-ops` → `5d51b72`)
+
+- **`/home/ec2-user/exchange-ops`** fetched and detached at `5d51b72` (was `4eec6f7`), clean before and after (SSM
+  `8699876c-…`). The proposer and the three `ONCHAIN_BOOK_V2*.json` matched the laptop's sha256. Only the disabled
+  `numo-book-maker.service` runs from this checkout.
+- **Dry run** on the box (SSM `c047c494-…`): nominated, series and parity (26/26) passed.
+- **`numo-onchain-book-v2-setup`**, a transient unit (`systemd-run --uid=ec2-user`, `PYTHONUNBUFFERED=1`), ran
+  `run-with-ssm-mark.sh propose_onchain_book_batch.py book-setup --propose` (SSM `9e092ebe-…`). The first start (SSM
+  `15a4b2a7-…`) failed on a relative path and sent nothing. Both actions were approved by hand in MPCVault:
+  - `acceptOwnership()` (MPCVault `487303fc-…`), tx `0x9dc361fa…1279`, owner the vault by 13:43:38;
+  - `setMakerAllowed(0x3448…B47B, true)` (MPCVault `354ca1f2-…`), tx `0xf7528746…dece`, by 13:44:40, after the
+    gates re-ran.
+
+  The unit exited 0 and is gone.
+- **Read back:** owner the vault, no pending owner, the maker allowed, market 1 still disabled.
+- **Undo** the checkout: `git -C /home/ec2-user/exchange-ops checkout --detach 4eec6f7`.
+
 ## 2026-11-17 ~13:15 UTC: OnchainBook v2 deployed closed on EURC-30NOV26 (laptop, `forge script`); its deployer key created in SSM
 
 Not a box change; recorded here with the other hand actions of the day. Owner's decisions: v2 on the existing series,

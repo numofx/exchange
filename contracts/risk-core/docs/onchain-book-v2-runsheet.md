@@ -61,7 +61,7 @@ pass while the size stays on `Matching`.
    - It writes `ONCHAIN_BOOK_V2{,_VAULT_ACTIONS,_ENABLE_VAULT_ACTIONS}.json`, recording `router` and `deployBlock`,
      and refuses if they already exist. v1's files are untouched.
    - The fee (5 bps) is the registry's, and the enable gate checks it again.
-2. **Setup batch:** `propose_onchain_book_batch.py book-setup` (`--version 2` is the default) accepts ownership and
+2. **Setup batch** (**landed 2026-11-17 13:44 UTC**, `OPS_BOX_CHANGES.md`): `propose_onchain_book_batch.py book-setup` (`--version 2` is the default) accepts ownership and
    allows the maker. The gates re-read 26 settings, including the cap and the router's book, cash and SubAccounts.
 3. **Indexer.** Deploy markets at `9780841` or later through `with-matcher-mute.sh`. Then set
    `onchain_book_v2_address` and `onchain_book_v2_start_block` (`deployBlock`); the matcher's preconditions refuse
