@@ -268,6 +268,13 @@ export type CanarySnapshot = {
 
 export type CanaryOptions = {
   rpcUrl: string;
+  /**
+   * Where the whitelist scan (eth_getLogs from block 0) goes: a keyed endpoint, since the public one refuses a full-range
+   * scan ("request limit reached") and every invariant check starts with it. Unset: rpcUrl.
+   */
+  logsRpcUrl?: string;
+  /** Tests: the scan's client, as `client` is for the reads. */
+  logsClient?: Pick<PublicClient, 'getLogs'>;
   chainId: number;
   manager: `0x${string}`;
   /**
@@ -352,6 +359,8 @@ export type CanaryOptions = {
 
 export class SettlementCanary {
   private readonly client: Pick<PublicClient, 'readContract' | 'getLogs' | 'getBlockNumber'>;
+  /** The whitelist scan's client: options.logsRpcUrl, else the read client. */
+  private readonly logsClient: Pick<PublicClient, 'getLogs'>;
   /** Discovered once: the whitelist does not change between checks, and a log scan every 60s would. */
   private wrappers: `0x${string}`[] | undefined;
   private perps: `0x${string}`[] | undefined;
@@ -375,6 +384,19 @@ export class SettlementCanary {
         }),
         transport: http(options.rpcUrl),
       });
+    this.logsClient =
+      options.logsClient ??
+      (options.logsRpcUrl && options.logsRpcUrl !== options.rpcUrl
+        ? createPublicClient({
+            chain: defineChain({
+              id: options.chainId,
+              name: `chain-${options.chainId}`,
+              nativeCurrency: { name: 'Native', symbol: 'ETH', decimals: 18 },
+              rpcUrls: { default: { http: [options.logsRpcUrl] } },
+            }),
+            transport: http(options.logsRpcUrl),
+          })
+        : this.client);
     this.log = options.log ?? (() => {});
     this.postAlert = options.postAlert ?? defaultPostAlert;
     this.ping = options.ping ?? defaultPing;
@@ -560,7 +582,7 @@ export class SettlementCanary {
   /** Wrappers and perps under the manager, from its AssetWhitelisted logs. Once: the whitelist does not churn. */
   private async discoverWhitelist(): Promise<void> {
     if (this.wrappers && this.perps) return;
-    const logs = await this.client.getLogs({
+    const logs = await this.logsClient.getLogs({
       address: this.options.manager,
       event: ASSET_WHITELISTED_EVENT,
       fromBlock: 0n,
@@ -858,6 +880,7 @@ export function settlementCanaryOptions(config: AppConfig, log?: CanaryOptions['
   if (!canary) return undefined;
   return {
     rpcUrl: config.rpcUrl,
+    logsRpcUrl: config.sendRpcUrl,
     chainId: config.chainId,
     manager: canary.manager,
     otherManagers: canary.otherManagers,

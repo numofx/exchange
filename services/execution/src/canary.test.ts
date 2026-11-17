@@ -867,3 +867,24 @@ test('an account under a manager outside the configured set is still a configura
   const unlisted = await managedAccountCanary({ 32: ENGINE }, []).canary.check();
   assert.match(unlisted.config_failures.join(' '), /subaccount 32 is under manager/);
 });
+
+// 2026-11-17: every invariant check reported "failed to run" on every pass. The whitelist scan is eth_getLogs from
+// block 0 to latest, which mainnet.base.org refuses ("request limit reached") while a keyed endpoint answers it; and
+// cash backing, wrapper backing and issuer controls all start with that scan. It goes through the logs client.
+test('the whitelist scan uses the logs client: a refused full-range getLogs on the read RPC no longer blinds the invariants', async () => {
+  const canary = new SettlementCanary({
+    rpcUrl: config.rpcUrl,
+    chainId: config.chainId,
+    manager: MANAGER,
+    accountIds: [15],
+    intervalMs: 60_000,
+    client: {
+      getLogs: async () => { throw new Error('request limit reached'); },
+      readContract: async (a: { address: string; functionName: string }) =>
+        a.functionName === 'getMargin' ? 0n : healthyInvariantRead(a),
+    } as never,
+    logsClient: { getLogs: async () => [{ args: { asset: '0x9D806fD040a719D27a8E5E77dc5aE0ED1e089493' } }] } as never,
+  });
+  const snapshot = await canary.check();
+  assert.deepEqual(snapshot.invariant_failures, [], snapshot.invariant_failures.join('; '));
+});

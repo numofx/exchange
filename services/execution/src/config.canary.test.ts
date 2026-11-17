@@ -24,6 +24,7 @@ function withEnv<T>(extra: Record<string, string | undefined>, fn: () => T): T {
     'SETTLEMENT_CANARY_FEE_OWNER',
     'SETTLEMENT_CANARY_FEE_MODULE',
     'SETTLEMENT_CANARY_FEE_QUOTE_ASSET',
+    'SEND_RPC_URL',
   ];
   const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
   Object.assign(process.env, BASE_ENV);
@@ -137,4 +138,14 @@ test('the other managers reach the canary the service builds', () => {
   assert.deepEqual(options?.otherManagers, ['0xA19E296021c9DF25b90D96C2A0793CC3D0800758']);
   assert.deepEqual(options?.accountIds, [32, 34]);
   assert.equal(settlementCanaryOptions(withEnv({ SETTLEMENT_CANARY_MANAGER: undefined }, loadConfig)), undefined);
+});
+
+// The whitelist scan is a full-range eth_getLogs that the public RPC refuses: it goes to the keyed endpoint the service
+// already sends through (SEND_RPC_URL), and to RPC_URL when that is unset.
+test('the canary scans logs through SEND_RPC_URL', () => {
+  const keyed = settlementCanaryOptions(withEnv({ SETTLEMENT_CANARY_MANAGER: MANAGER, SETTLEMENT_CANARY_ACCOUNTS: '32', SEND_RPC_URL: 'https://keyed.invalid/k' }, loadConfig));
+  assert.equal(keyed?.logsRpcUrl, 'https://keyed.invalid/k');
+  assert.equal(keyed?.rpcUrl, 'https://example.invalid/rpc', 'the reads stay on RPC_URL');
+  const plain = settlementCanaryOptions(withEnv({ SETTLEMENT_CANARY_MANAGER: MANAGER, SETTLEMENT_CANARY_ACCOUNTS: '32', SEND_RPC_URL: undefined }, loadConfig));
+  assert.equal(plain?.logsRpcUrl, 'https://example.invalid/rpc');
 });
