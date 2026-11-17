@@ -87,7 +87,9 @@ variable "image_execution" {
   # probes each account through its own manager, and watches 34 and 32), on top of 45144dff (#231).
   # 2026-11-17: main 917da47 (an HTTP 4xx on broadcast is a refusal, not a send: the 2026-11-16 phantom fill; sends via
   # SEND_RPC_URL, the keyed endpoint). Rollback is 3fe2553fb2d2, in one apply.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/execution:917da470fdd4"
+  # 2026-11-17: main d2c409c (the settlement canary's whitelist scan through SEND_RPC_URL: the public RPC refuses a
+  # full-range getLogs, so every invariant check had failed to run). Rollback is 917da470fdd4, in one apply.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/execution:d2c409c4ef25"
 }
 
 variable "secret_backend" {

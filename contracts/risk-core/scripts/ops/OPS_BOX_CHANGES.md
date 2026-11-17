@@ -5,6 +5,24 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-17 00:58–01:10 UTC: both settlement canaries green again (ECS deploy; box script and unit, SSM)
+
+- **ECS canary (`settlement-canary-ecs`).** Every invariant check had "failed to run" on every pass since at least
+  2026-11-16 23:57: each starts with the whitelist scan, `eth_getLogs` from block 0, which mainnet.base.org refuses
+  ("request limit reached"); the keyed endpoint answers it. `d2c409c` sends that scan through `SEND_RPC_URL`.
+  Proved locally against mainnet with production's canary env: ok, no failures. Deployed as `execution:d2c409c4ef25`
+  (td :45 via one apply touching only execution-service, 00:58:39; old task stopped 01:02:48). First pass 01:02:26
+  `ok: true`.
+- **Box canary (`settlement-canary`).** Failed 8 of 67 runs in 6 h on 429s. `a549281` retries a 429 three times with
+  backoff (installed 01:04; it had been `8c55551`'s copy, whose only difference from the repo's was a docstring line).
+  That did not clear the wrapper check: its full-range scan is refused as such, and `8ec06ac` sends the two scans to
+  `LOGS_RPC_SSM=/numo/keeper/rpc_url` (read with the box's role, never printed). With the scan working, the wrapper check
+  read a 411,131.97 cNGN mismatch on the escrow `0x37c9…`: the unit's `OTHER_MANAGERS` lacked MarginEngine v2, which
+  holds exactly that credit (SRM 5,000 + v1 0.000001 + v2 411,131.965849 = 416,131.965850 held). Added. Unit and
+  script replaced from `8ec06ac` (sha-checked before; backups `.bak-202611170109`), daemon-reload, one run: ok.
+- healthchecks.io at 01:10: both canaries `up`; `rebalance-check` `down` for a real reason (HyperFX has no USDC -> cNGN
+  depth since 2026-11-16 21:15, as on 2026-11-11 for ~4 h).
+
 ## 2026-11-17 00:49 UTC: the perp pager removed (owner's decision) (SSM)
 
 - **Done.** `systemctl disable --now numo-perp-pager.timer` (SSM `f91faae4-…`); the service is inactive, its last run
