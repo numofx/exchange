@@ -21,7 +21,12 @@ Environment=AWS_REGION=us-east-1
 # backing sums the SRM's and the engine's credit. Mirrors SETTLEMENT_CANARY_MANAGER/
 # OTHER_MANAGERS/ACCOUNTS in infra/aws/ecs.tf.
 Environment=SRM_ADDRESS=0xDE0423D0a1E15536265C9513d2e0c10DAb5835D4
-Environment=OTHER_MANAGERS=0xA19E296021c9DF25b90D96C2A0793CC3D0800758
+# MarginEngine v1 and v2: wrapper backing is the sum of every manager's credit, and v2 holds the makers' cNGN
+# (411,131.97 of the escrow's 416,131.97 on 2026-11-17). Without v2 the check reads a mismatch that is not there.
+Environment=OTHER_MANAGERS=0xA19E296021c9DF25b90D96C2A0793CC3D0800758,0x0705219a1594d5Fc5dC2573da4082cAf3e1B0950
+# The two full-range eth_getLogs scans (whitelist, settled cash) through the keyed endpoint: mainnet.base.org
+# rate-limits a scan from block 0, and the wrapper and settled-cash checks failed to run on most passes.
+Environment=LOGS_RPC_SSM=/numo/keeper/rpc_url
 Environment=CANARY_ACCOUNTS=32,34
 
 # Pinned values, mirroring infra/aws/ecs.tf. Both are recorded here rather than only on the box:

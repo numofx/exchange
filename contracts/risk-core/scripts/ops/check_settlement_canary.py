@@ -65,6 +65,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.error
@@ -168,6 +169,31 @@ def rpc(url: str, method: str, params: list, _open=urllib.request.urlopen, _slee
   return out["result"]
 
 
+_logs_url: str | None = None
+
+
+def logs_url(url: str) -> str:
+  """Where the full-range eth_getLogs scans go. mainnet.base.org rate-limits a scan from block 0 (HTTP 429, or "request
+  limit reached"), and both the wrapper and the settled-cash checks start with one, so they failed to run on most passes
+  (2026-11-17). LOGS_RPC_URL, else the keyed endpoint named by LOGS_RPC_SSM (an SSM parameter, read once with the box's
+  role, never printed), else `url` as before."""
+  global _logs_url
+  if _logs_url is None:
+    _logs_url = os.environ.get("LOGS_RPC_URL", "").strip()
+    name = os.environ.get("LOGS_RPC_SSM", "").strip()
+    if not _logs_url and name:
+      try:
+        _logs_url = subprocess.run(
+          ["aws", "ssm", "get-parameter", "--name", name, "--with-decryption", "--query", "Parameter.Value",
+           "--output", "text", "--region", os.environ.get("AWS_REGION", "us-east-1")],
+          capture_output=True, text=True, timeout=20, check=True,
+        ).stdout.strip()
+      except Exception as exc:  # noqa: BLE001
+        print(f"LOGS_RPC_SSM {name} unreadable ({type(exc).__name__}); log scans use RPC_URL")
+        _logs_url = ""
+  return _logs_url or url
+
+
 def call(url: str, to: str, data: str, block: str = "latest") -> str:
   return rpc(url, "eth_call", [{"to": to, "data": data}, block])
 
@@ -260,7 +286,7 @@ def uint_arg(value: int) -> str:
 
 def perps_under(url: str, srm: str) -> list:
   """Every perp whitelisted under the manager, from its AssetWhitelisted logs (data: asset, marketId, assetType)."""
-  logs = rpc(url, "eth_getLogs", [{"fromBlock": "0x0", "toBlock": "latest", "address": srm, "topics": [TOPIC_ASSET_WHITELISTED]}])
+  logs = rpc(logs_url(url), "eth_getLogs", [{"fromBlock": "0x0", "toBlock": "latest", "address": srm, "topics": [TOPIC_ASSET_WHITELISTED]}])
   perps = []
   for entry in logs:
     data = entry["data"][2:]
@@ -406,7 +432,7 @@ def check_wrapper_backing(url: str, srm: str, failures: list, checked: list, oth
   """
   managers = [srm, *(others or [])]
   exceptions = wrapper_exceptions()
-  logs = rpc(url, "eth_getLogs", [{
+  logs = rpc(logs_url(url), "eth_getLogs", [{
     "fromBlock": "0x0", "toBlock": "latest", "address": srm, "topics": [TOPIC_ASSET_WHITELISTED],
   }])
   seen = set()
@@ -575,6 +601,31 @@ def alert(webhook: str | None, msg: str) -> None:
     print(f"webhook delivery failed: {exc}", file=sys.stderr)
 
 
+def self_test_logs_url() -> None:
+  """Both whitelist scans go to logs_url; LOGS_RPC_URL wins, and unset everything stays on RPC_URL."""
+  global _logs_url, rpc
+  saved_env = {k: os.environ.get(k) for k in ("LOGS_RPC_URL", "LOGS_RPC_SSM")}
+  real_rpc, seen = rpc, []
+  try:
+    for k in saved_env:
+      os.environ.pop(k, None)
+    _logs_url = None
+    assert logs_url("http://reads") == "http://reads", "unset: the read RPC"
+    os.environ["LOGS_RPC_URL"] = "http://keyed"
+    _logs_url = None
+    rpc = lambda url, method, params: (seen.append((url, method)), [])[1]  # noqa: E731
+    perps_under("http://reads", "0x" + "11" * 20)
+    check_wrapper_backing("http://reads", "0x" + "11" * 20, [], [])
+    assert seen == [("http://keyed", "eth_getLogs")] * 2, seen
+  finally:
+    rpc, _logs_url = real_rpc, None
+    for k, v in saved_env.items():
+      if v is None:
+        os.environ.pop(k, None)
+      else:
+        os.environ[k] = v
+
+
 def self_test_rpc_retry() -> None:
   """A 429 is retried with backoff and the answer returned; four in a row fail the run; nothing else is retried."""
   import io
@@ -607,6 +658,7 @@ def self_test(compiled_abis: bool = True) -> None:
   the compiled-ABI check, which only says the file is right, runs under --self-test in CI instead. With
   it on every run, no version of this canary from 2026-10-12 on could run on the box."""
   self_test_rpc_retry()
+  self_test_logs_url()
   # every selector and signature this script pins must name a compiled function, not just match `cast sig`
   if compiled_abis:
     from abi_selectors import assert_script
