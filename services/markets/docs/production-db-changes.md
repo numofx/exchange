@@ -11,6 +11,36 @@ naming the `pgload` container). It connects as `numo` through `TARGET_URL` (SSM 
 to `/ecs/numo-exchange/migrate`, stream prefix `pgload`. Mask connection strings in anything it prints, as `pgload`'s
 own script does.
 
+## 2026-11-17 ~00:45 UTC: a phantom fill on EURC-30NOV26 voided (owner's approval)
+
+- **Why.** Trade 547 (2026-11-16 23:57:59, 2 EURC buy at 1.101122082009609926, taker order
+  `future-0f8e737c-291f-4c41-aeef-cb66e7286eb4` of `0xeabca823…fbfca` / #41, maker
+  `mm:EURC-30NOV26:sell:3589746651976157` / #40) was recorded on execution-service's `accepted: true`, but its
+  transaction `0xfb8ba3f26fd79dd82144bb2cda70c63f0bf5a7ca0627604e938cc214662f8e2e` was never broadcast: the public RPC
+  refused it with HTTP 429/401 and the executor counted that as sent (fixed in `917da47`; ops log 2026-11-17). Nothing
+  moved on chain (`totalPosition` 0), so the venue's records were the only thing wrong.
+- **Read first** (task `b973fa99…`, started by `phantom-fill-read`, exit 0): the one `trade_fills` row, the taker order
+  filled 2 of 2, the maker order filled 2 of 116 and already cancelled (`bot.market-maker.size_mismatch`), no
+  `perp_positions` rows for either account on the series, and no other fill on either order.
+- **What** (task `5fd9244c…`, started by `phantom-fill-void`, exit 0), one transaction, each statement required to touch
+  exactly one row or the whole of it rolls back:
+
+  ```sql
+  update active_orders set filled_amount = '0', status = 'cancelled', cancelled_at = now(),
+         cancel_reason = 'phantom_fill_voided', cancelled_by = 'operator'
+   where order_id = 'future-0f8e737c-291f-4c41-aeef-cb66e7286eb4' and filled_amount = '2' and status = 'filled';
+  update active_orders set filled_amount = '0'
+   where order_id = 'mm:EURC-30NOV26:sell:3589746651976157' and filled_amount = '2' and status = 'cancelled';
+  delete from trade_fills where trade_id = 547 and lower(tx_hash) = '0xfb8b…8e2e';
+  delete from market_events where channel = 'trades' and payload->>'trade_id' = '547';  -- 1 row
+  ```
+
+  The taker order is cancelled rather than reopened: placed an hour earlier, it must not trade now.
+- **State now.** Both orders filled 0, cancelled; no row or stream event for trade 547; `/trades?symbol=EURC-30NOV26`
+  lists only the OnchainBook canary's 545 and 546. Candles and 24h stats read `trade_fills`, so they follow.
+- **Undo.** Re-insert trade 547 and set both `filled_amount` back to '2' (the taker's status to 'filled'); the values
+  are above. Not expected: the fill never happened.
+
 ## 2026-10-19 15:57–16:01 UTC: deposit error-leak audit (#229, before #231's migration 000023)
 
 - **Why.** Before #231, a failed deposit submission stored the raw error on a public deposit record
