@@ -139,7 +139,7 @@ contract OnchainBookKitFork is OnchainBookForkBase {
     assertEq(IERC20Metadata(USDC).balanceOf(owner), 2_000e6);
   }
 
-  /// Mid-open (the flag set, as during a re-entry), only Morpho itself gets past the check. Slot 5 is `opening`: the
+  /// Mid-open (the flag set, as during a re-entry), only Morpho itself gets past the check. Slot 5 is `flashMode`: the
   /// Morpho-pranked call below gets past it (and fails decoding), which proves the slot.
   function testDuringOpenOnlyMorphoCanCallBack() public {
     vm.store(address(vault), bytes32(uint(5)), bytes32(uint(1)));

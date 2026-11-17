@@ -17,7 +17,9 @@ import {IOnchainBook} from "../src/interfaces/IOnchainBook.sol";
  *   3. supply the EURC to a Morpho market as collateral and borrow USDC against it, repaying the flash loan;
  *   4. short EURC-USDC futures on the OnchainBook for the same EURC, so the vault is delta-neutral: long spot (as
  *      collateral), short the future; it earns the basis less the borrow rate.
- * `rehedge` later brings the future back to the collateral after the position or the collateral moved.
+ * `rehedge` later brings the future back to the collateral after the position or the collateral moved. `close` undoes
+ * it in one transaction (buy the short back; flash-borrow the debt, repay, withdraw the collateral, sell it), and
+ * `withdrawMargin` returns the futures account's cash: nothing the owner puts in stays locked in the contract.
  *
  * Only the external ABIs are used: IOnchainBook and the minimal interfaces below. Nothing imports the book's source.
  */
@@ -31,6 +33,8 @@ interface ISubAccountsLite {
 
 interface ICashLite {
   function deposit(uint recipientAccount, uint stableAmount) external;
+  /// @dev only the account's owner (this contract) may call it; pays `recipient`
+  function withdraw(uint accountId, uint stableAmount, address recipient) external;
 }
 
 interface IFutureLite {
@@ -52,6 +56,10 @@ interface IMorphoLite {
   function borrow(MorphoMarketParams memory p, uint assets, uint shares, address onBehalf, address receiver)
     external
     returns (uint, uint);
+  function repay(MorphoMarketParams memory p, uint assets, uint shares, address onBehalf, bytes memory data)
+    external
+    returns (uint, uint);
+  function withdrawCollateral(MorphoMarketParams memory p, uint assets, address onBehalf, address receiver) external;
   function position(bytes32 id, address user)
     external
     view
@@ -89,8 +97,8 @@ contract DeltaHedgedEurcVault {
 
   MorphoMarketParams public lending;
   bytes32 public immutable lendingId;
-  /// @dev the flash loan's callback is accepted only inside `open`
-  bool internal opening;
+  /// @dev the flash loan's callback is accepted only inside `open` (1) or `close` (2); 0 otherwise
+  uint8 internal flashMode;
 
   struct Hedge {
     /// @dev worst futures price, 18 dp: the lowest when shorting, the highest when buying back
@@ -99,6 +107,15 @@ contract DeltaHedgedEurcVault {
     uint maxFee;
     /// @dev Data Streams reports to attach, abi.encode(bytes[]); empty to use the stored ones
     bytes reports;
+  }
+
+  struct Close {
+    /// @dev buys the short back; its `limitPrice` is the highest acceptable
+    Hedge hedge;
+    /// @dev USDC flash-borrowed to repay the debt: at least the debt with interest to this block (the rest is returned)
+    uint flash;
+    /// @dev the least USDC the owner accepts back from the whole unwind
+    uint minUsdcOut;
   }
 
   struct Open {
@@ -113,10 +130,12 @@ contract DeltaHedgedEurcVault {
 
   event Opened(uint usdcIn, uint eurcBought, uint borrowed, uint shortFilled, uint avgPrice);
   event Rehedged(bool isBuy, uint filled, uint avgPrice);
+  event Closed(uint boughtBack, uint eurcSold, uint usdcOut);
 
   error NotOwner();
   error NotCallback();
   error SwapTooSmall();
+  error NotShort();
 
   modifier onlyOwner() {
     if (msg.sender != owner) revert NotOwner();
@@ -162,9 +181,9 @@ contract DeltaHedgedEurcVault {
   /// @notice Open (or add to) the hedged position in one transaction; see the file header.
   function open(Open calldata p) external onlyOwner returns (uint eurcBought, uint shortFilled) {
     usdc.safeTransferFrom(msg.sender, address(this), p.equity);
-    opening = true;
+    flashMode = 1;
     morpho.flashLoan(address(usdc), p.borrow, abi.encode(p));
-    opening = false;
+    flashMode = 0;
     (eurcBought, shortFilled) = (_lastBought, _lastShort);
   }
 
@@ -174,11 +193,12 @@ contract DeltaHedgedEurcVault {
 
   /// @dev Morpho's flash-loan callback: Morpho pulls `assets` back from this contract when it returns.
   function onMorphoFlashLoan(uint assets, bytes calldata data) external {
-    if (msg.sender != address(morpho) || !opening) revert NotCallback();
+    if (msg.sender != address(morpho) || flashMode == 0) revert NotCallback();
+    if (flashMode == 2) return _closeLending(assets);
     Open memory p = abi.decode(data, (Open));
 
     // 2. Spot: all the USDC into EURC.
-    uint bought = _buyEurc(p.equity + assets);
+    uint bought = _swap(true, p.equity + assets);
     if (bought < p.minEurc) revert SwapTooSmall();
 
     // 3. Lending: the EURC as collateral, the flash loan's USDC borrowed against it.
@@ -214,6 +234,45 @@ contract DeltaHedgedEurcVault {
     emit Rehedged(isBuy, filled, avg);
   }
 
+  /// @notice Unwind in one transaction: buy the whole short back (all or nothing), then repay the loan with a flash loan,
+  ///         withdraw all the collateral and sell it, and send the owner every USDC left. The futures account's cash
+  ///         stays: `withdrawMargin` returns it.
+  function close(Close calldata c) external onlyOwner returns (uint usdcOut) {
+    int pos = subAccounts.getBalance(accountId, future, subId);
+    if (pos > 0) revert NotShort();
+    uint boughtBack;
+    if (pos < 0) (boughtBack,) = _take(true, uint(-pos), c.hedge);
+
+    flashMode = 2;
+    morpho.flashLoan(address(usdc), c.flash, "");
+    flashMode = 0;
+
+    usdcOut = usdc.balanceOf(address(this));
+    if (usdcOut < c.minUsdcOut) revert SwapTooSmall();
+    usdc.safeTransfer(owner, usdcOut);
+    emit Closed(boughtBack, _lastSold, usdcOut);
+  }
+
+  /// @notice The futures account's cash back to the owner, in USDC units (6 dp). Fails while a position needs it.
+  function withdrawMargin(uint amount) external onlyOwner {
+    cash.withdraw(accountId, amount, owner);
+  }
+
+  uint internal _lastSold;
+
+  /// @dev `close`'s flash-loan step: Morpho pulls `assets` back when this returns.
+  function _closeLending(uint assets) internal {
+    (, uint128 borrowShares, uint128 collateral) = morpho.position(lendingId, address(this));
+    if (borrowShares > 0) {
+      usdc.forceApprove(address(morpho), assets);
+      morpho.repay(lending, 0, borrowShares, address(this), "");
+    }
+    if (collateral > 0) morpho.withdrawCollateral(lending, collateral, address(this), address(this));
+    _lastSold = collateral;
+    if (collateral > 0) _swap(false, collateral);
+    usdc.forceApprove(address(morpho), assets);
+  }
+
   /// @dev Pegged and self-priced quotes alike; `minFill = amount`, so a partial fill reverts the whole transaction.
   function _take(bool isBuy, uint amount, Hedge memory h) internal returns (uint filled, uint avg) {
     IOnchainBook.TakeOrder memory o = IOnchainBook.TakeOrder({
@@ -238,18 +297,21 @@ contract DeltaHedgedEurcVault {
     return units / lotSize * lotSize;
   }
 
-  function _buyEurc(uint usdcIn) internal returns (uint eurcOut) {
-    bool zeroForOne = pool.token0() == address(usdc);
+  /// @dev Exact-in swap on the pool: USDC for EURC (`usdcIn`), or EURC for USDC. Returns what came out.
+  function _swap(bool usdcIn, uint amountIn) internal returns (uint out) {
+    bool zeroForOne = (pool.token0() == address(usdc)) == usdcIn;
     (int a0, int a1) =
-      pool.swap(address(this), zeroForOne, int(usdcIn), zeroForOne ? MIN_SQRT_RATIO + 1 : MAX_SQRT_RATIO - 1, "");
-    eurcOut = uint(-(zeroForOne ? a1 : a0));
+      pool.swap(address(this), zeroForOne, int(amountIn), zeroForOne ? MIN_SQRT_RATIO + 1 : MAX_SQRT_RATIO - 1, "");
+    out = uint(-(zeroForOne ? a1 : a0));
   }
 
-  /// @dev The pool's swap callback: pay what it is owed.
+  /// @dev The pool's swap callback: pay what it is owed, in whichever token that is.
   function uniswapV3SwapCallback(int amount0Delta, int amount1Delta, bytes calldata) external {
     if (msg.sender != address(pool)) revert NotCallback();
-    bool usdcIsToken0 = pool.token0() == address(usdc);
-    uint owed = uint(usdcIsToken0 ? amount0Delta : amount1Delta);
-    usdc.safeTransfer(msg.sender, owed);
+    address t0 = pool.token0();
+    if (amount0Delta > 0) IERC20(t0).safeTransfer(msg.sender, uint(amount0Delta));
+    if (amount1Delta > 0) {
+      IERC20(t0 == address(usdc) ? address(eurc) : address(usdc)).safeTransfer(msg.sender, uint(amount1Delta));
+    }
   }
 }
