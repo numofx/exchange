@@ -10,6 +10,13 @@
                (MAKER_OWNER, the owner of its account outside Matching). Opens nothing: the market stays disabled.
   book-enable  <NAME>_ENABLE_VAULT_ACTIONS.json: setMarketParams with the deployed parameters and enabled.
 
+  --market N --expiry E (v2, N > 1): a further series on the same book, with no deploy. Its actions are built here
+  from <NAME>.json's parameters (tick, lot, fee, ages, makers cap, self-priced cap) and E, not read from a file:
+  book-add-market  createMarket(future, E, engine, adapter, tick, lot), setMarketParams(N, ..., disabled),
+                   setSelfPricedTtlCap(N, cap). Opens nothing.
+  book-enable      setMarketParams(N, ..., enabled), under the enable gates on market N.
+  The maker needs no new allowance (allowances are per book) and registers itself (registerMaker(N, account)).
+
 Every action is rebuilt here from <NAME>.json and must match the file exactly (to, calldata, value), digest
 recomputed (keccak(to || keccak(data))). Every action is on the book: the engine and the future are not touched. An
 action whose postcondition already holds is skipped. Gates are re-read before every action.
@@ -21,6 +28,16 @@ Setup gates (all read live, all required):
              TradeModule's), gas floor, tax 0, one market on the artifact's series, adapter, tick, lot, fee, ages and
              cap, disabled; the engine neither trusts nor fee-bypasses the book (B4); the deployer has sent nothing
              unaudited since
+
+Add-market gates (all read live, all required):
+  custody    the vault owns the book
+  next       createMarket will number the market N: nextMarketId is N (or market N is already on E: resuming)
+  series     E is listed on the artifact's future, unsettled, over 2 h to last trade, the engine's cap above 0
+  unique     no other market on the book trades E
+  index      as at enable
+  fee        the instruments registry lists E with the artifact's taker fee
+  parity     the book-wide settings as deployed (no market's): SubAccounts, cash, fee account, gas floor, tax 0, the
+             router, B4, the deployer silent
 
 Enable gates (all read live, all required unless marked):
   custody    the vault owns the book; the maker is allowed; the market is still disabled
@@ -39,6 +56,8 @@ Env (or ~/.numo-mark-keeper.env): MPCVAULT_TOKEN, MPCVAULT_VAULT, VAULT_ADDRESS,
   python3 scripts/ops/propose_onchain_book_batch.py book-setup             # check + sheet, proposes nothing
   python3 scripts/ops/propose_onchain_book_batch.py book-setup --propose
   python3 scripts/ops/propose_onchain_book_batch.py book-enable
+  python3 scripts/ops/propose_onchain_book_batch.py book-add-market --market 2 --expiry 1798729200
+  python3 scripts/ops/propose_onchain_book_batch.py book-enable --market 2 --expiry 1798729200
   python3 scripts/ops/propose_onchain_book_batch.py --self-test
 """
 
@@ -64,8 +83,8 @@ word_address, word_uint, digest = v1p.word_address, v1p.word_uint, v1p.digest
 ROOT = v1p.ROOT
 NAMES = {1: "ONCHAIN_BOOK", 2: "ONCHAIN_BOOK_V2"}
 NAME = NAMES[1]
-SETUP, ENABLE = "book-setup", "book-enable"
-BATCHES = (SETUP, ENABLE)
+SETUP, ENABLE, ADD_MARKET = "book-setup", "book-enable", "book-add-market"
+BATCHES = (SETUP, ENABLE, ADD_MARKET)
 MAX_SELF_PRICED_TTL_CAP = 60  # C6
 
 
@@ -76,7 +95,8 @@ def files(name: str) -> dict[str, str]:
 FILES = files(NAME)
 EUR_MARKET = 2
 FUTURE = 4  # IMarginEngine.AssetType.Future
-BOOK_MARKET = 1
+DEPLOYED_MARKET = 1  # the market deploy-onchain-book.s.sol creates, and the artifact records
+BOOK_MARKET = DEPLOYED_MARKET  # the market these batches act on: the deployed one, unless --market says otherwise
 MIN_LEAD_SEC = 2 * 3600
 
 SIGNATURES = {
@@ -103,6 +123,8 @@ SIGNATURES = {
   "splines": "splines(uint256,uint256)",
   "maxSelfPricedTtl": "maxSelfPricedTtl(uint256)",
   "book": "book()",
+  "createMarket": "createMarket(address,uint96,address,address,uint256,uint256)",
+  "setSelfPricedTtlCap": "setSelfPricedTtlCap(uint256,uint32)",
 }
 PINNED = {
   "acceptOwnership": "0x79ba5097", "setMakerAllowed": "0x4db8b77b", "setMarketParams": "0x9910da7d",
@@ -112,6 +134,7 @@ PINNED = {
   "trustedRiskAssessor": "0x5b75ad78", "feeBypassedCaller": "0x3f210eea", "getSpot": "0x2b37269c",
   "totalPositionCap": "0x745ab570", "assetMap": "0xed75d3f3", "futureContracts": "0xc3c74b34",
   "makers": "0x33f02fa2", "splines": "0xe5dd8989", "maxSelfPricedTtl": "0x3a1359b6", "book": "0x05a8da72",
+  "createMarket": "0x021d75bd", "setSelfPricedTtlCap": "0xd4449950",
 }
 # OnchainBook.Market, as markets(uint256) returns it: field -> word index
 MARKET_WORDS = {"future": 0, "engine": 1, "subId": 2, "expiry": 3, "lastTradeTime": 4, "adapter": 5, "tickSize": 6,
@@ -131,9 +154,22 @@ def enable_calldata(d: dict) -> str:
           + word_uint(int(d["takeMaxAge"])) + word_uint(int(d["maxTtl"])) + word_uint(int(d["maxMakers"])) + word_uint(1))
 
 
-def expected_actions(batch: str, d: dict) -> list[tuple[str, str]]:
-  """(to, calldata) for each action, in order, as deploy-onchain-book.s.sol writes them."""
+def add_market_actions(d: dict) -> list[tuple[str, str]]:
+  """Market BOOK_MARKET on the series d["subId"], with the deployed market's parameters, disabled, and its cap."""
   book = d["book"]
+  return [(book, selector("createMarket") + word_address(d["future"]) + word_uint(int(d["subId"]))
+           + word_address(d["manager"]) + word_address(d["adapter"]) + word_uint(int(d["tickSize"]))
+           + word_uint(int(d["lotSize"]))),
+          (book, enable_calldata(d)[:-64] + word_uint(0)),
+          (book, selector("setSelfPricedTtlCap") + word_uint(BOOK_MARKET) + word_uint(int(d["selfPricedTtlCap"])))]
+
+
+def expected_actions(batch: str, d: dict) -> list[tuple[str, str]]:
+  """(to, calldata) for each action, in order, as deploy-onchain-book.s.sol writes them (book-add-market: as built
+  here, with no file)."""
+  book = d["book"]
+  if batch == ADD_MARKET:
+    return add_market_actions(d)
   if batch == SETUP:
     return [(book, selector("acceptOwnership")),
             (book, selector("setMakerAllowed") + word_address(d["makerOwner"]) + word_uint(1))]
@@ -146,6 +182,10 @@ def market_word(chain: Chain, d: dict, field: str) -> int:
 
 def postconditions(chain: Chain, batch: str, d: dict, vault: str) -> list:
   book = d["book"]
+  if batch == ADD_MARKET:
+    return [lambda: chain.word(book, selector("nextMarketId")) > BOOK_MARKET and market_word(chain, d, "subId") == int(d["subId"]),
+            lambda: market_word(chain, d, "takeMaxAge") == int(d["takeMaxAge"]) and market_word(chain, d, "maxTtl") == int(d["maxTtl"]),
+            lambda: chain.word(book, selector("maxSelfPricedTtl") + word_uint(BOOK_MARKET)) == int(d["selfPricedTtlCap"])]
   if batch == SETUP:
     return [lambda: chain.address(book, "owner").lower() == vault.lower(),
             lambda: chain.word(book, selector("makerAllowed") + word_address(d["makerOwner"])) == 1]
@@ -189,8 +229,8 @@ def check_artifact(d: dict, series: dict) -> None:
       raise SystemExit(f"{NAMES[2]}.json: self-priced ttl cap {d['selfPricedTtlCap']} outside 1..60 s (C6)")
     if int(d["router"], 16) == 0:
       raise SystemExit(f"{NAMES[2]}.json records no router")
-  if int(d["bookMarketId"]) != BOOK_MARKET:
-    raise SystemExit(f"{NAME}.json: the book's market is {d['bookMarketId']}, not {BOOK_MARKET}")
+  if int(d["bookMarketId"]) != DEPLOYED_MARKET:
+    raise SystemExit(f"{NAME}.json: the book's market is {d['bookMarketId']}, not {DEPLOYED_MARKET}")
   if int(d["priorityTaxRate"]) != 0:
     raise SystemExit(f"{NAME}.json: the priority tax is on (B12: off at rollout)")
   if int(d["takerFeeRate"]) > 10**16:
@@ -205,7 +245,8 @@ def series_verdict(listed_future: str, future: str, listed: int, settled: int, l
                    cap: int | None) -> Gate:
   problems = ([f"EUR's future is {listed_future}, not {future}"] if listed_future.lower() != future.lower() else []) + \
              (["the series is not listed"] if not listed else []) + (["the series has settled"] if settled else []) + \
-             ([f"{(last_trade - now) / 3600:.1f} h to last trade (under 2 h)"] if last_trade - now < MIN_LEAD_SEC else []) + \
+             ([f"{(last_trade - now) / 3600:.1f} h to last trade (under 2 h)"]
+              if listed and last_trade - now < MIN_LEAD_SEC else []) + \
              (["the series is closed on the engine (cap 0)"] if cap == 0 else [])
   return Gate("series", not problems, "; ".join(problems) or
               f"EUR's future, listed, {(last_trade - now) / 3600:.1f} h to last trade" + ("" if cap is None else ", open"))
@@ -223,7 +264,8 @@ def gate_series(chain: Chain, d: dict, need_open: bool) -> Gate:
     return Gate("series", False, f"the series unreadable: {str(exc)[:120]}")
 
 
-def gate_parity(chain: Chain, d: dict, vault: str, attached: bool) -> Gate:
+def gate_parity(chain: Chain, d: dict, vault: str, attached: bool, market: bool = True) -> Gate:
+  """Every setting the deploy made. market=False (book-add-market, before market N exists): the book-wide ones only."""
   book = d["book"]
   w = lambda to, name, *args: chain.word(to, selector(name) + "".join(args))  # noqa: E731
   a = lambda to, name, *args: "0x" + chain.call(to, selector(name) + "".join(args))[24:64]  # noqa: E731
@@ -236,6 +278,31 @@ def gate_parity(chain: Chain, d: dict, vault: str, attached: bool) -> Gate:
     ("the TradeModule's fee account", w(d["tradeModule"], "feeRecipient"), int(d["feeRecipient"])),
     ("book gas floor", w(book, "gasFloor"), int(d["gasFloor"])),
     ("book priority tax", w(book, "priorityTaxRate"), 0),
+    # B4: the engine grants the book nothing
+    ("engine trusts the book", w(d["manager"], "trustedRiskAssessor", word_address(book)), 0),
+    ("engine fee-bypasses the book", w(d["manager"], "feeBypassedCaller", word_address(book)), 0),
+    *([("router's book", a(d["router"], "book"), book),
+       ("router's cash", a(d["router"], "cash"), d["cash"]),
+       ("router's SubAccounts", a(d["router"], "subAccounts"), d["subAccounts"])] if version_of(d) == 2 else []),
+    ("deployer transactions since the deploy, unaudited",
+     v2p.unaudited_deployer_txs(chain.url, d["deployer"], int(d["deployerNonce"])), 0),
+  ]
+  if market:
+    pairs += market_pairs(chain, d, w, mk, addr)
+  holder = a(book, "owner").lower() if attached else (a(book, "owner").lower(), a(book, "pendingOwner").lower())
+  pairs.append(("the book is the vault's" if attached else "the book is nominated to the vault",
+                holder == vault.lower() if attached else vault.lower() in holder, True))
+  bad = v1p.parity_mismatches(pairs)
+  if bad:
+    return Gate("parity", False, f"{len(bad)} setting(s) differ from the deploy: " + "; ".join(bad[:4]))
+  return Gate("parity", True, f"all {len(pairs)} settings as deployed; deployer {d['deployer']} has sent nothing unaudited since")
+
+
+def market_pairs(chain: Chain, d: dict, w, mk, addr) -> list[tuple[str, object, object]]:
+  """Market BOOK_MARKET's settings. The book has exactly the markets up to it: one after the deploy, N after
+  book-add-market N."""
+  book = d["book"]
+  return [
     ("book markets", w(book, "nextMarketId"), BOOK_MARKET + 1),
     ("market future", addr("future"), d["future"]),
     ("market engine", addr("engine"), d["manager"]),
@@ -248,23 +315,9 @@ def gate_parity(chain: Chain, d: dict, vault: str, attached: bool) -> Gate:
     ("market take max age", mk("takeMaxAge"), int(d["takeMaxAge"])),
     ("market ttl cap", mk("maxTtl"), int(d["maxTtl"])),
     ("market makers cap", mk("maxMakers"), int(d["maxMakers"])),
-    # B4: the engine grants the book nothing
-    ("engine trusts the book", w(d["manager"], "trustedRiskAssessor", word_address(book)), 0),
-    ("engine fee-bypasses the book", w(d["manager"], "feeBypassedCaller", word_address(book)), 0),
-    *([("book self-priced ttl cap", w(book, "maxSelfPricedTtl", word_uint(BOOK_MARKET)), int(d["selfPricedTtlCap"])),
-       ("router's book", a(d["router"], "book"), book),
-       ("router's cash", a(d["router"], "cash"), d["cash"]),
-       ("router's SubAccounts", a(d["router"], "subAccounts"), d["subAccounts"])] if version_of(d) == 2 else []),
-    ("deployer transactions since the deploy, unaudited",
-     v2p.unaudited_deployer_txs(chain.url, d["deployer"], int(d["deployerNonce"])), 0),
+    *([("book self-priced ttl cap", w(book, "maxSelfPricedTtl", word_uint(BOOK_MARKET)), int(d["selfPricedTtlCap"]))]
+      if version_of(d) == 2 else []),
   ]
-  holder = a(book, "owner").lower() if attached else (a(book, "owner").lower(), a(book, "pendingOwner").lower())
-  pairs.append(("the book is the vault's" if attached else "the book is nominated to the vault",
-                holder == vault.lower() if attached else vault.lower() in holder, True))
-  bad = v1p.parity_mismatches(pairs)
-  if bad:
-    return Gate("parity", False, f"{len(bad)} setting(s) differ from the deploy: " + "; ".join(bad[:4]))
-  return Gate("parity", True, f"all {len(pairs)} settings as deployed; deployer {d['deployer']} has sent nothing unaudited since")
 
 
 def gate_setup(chain: Chain, d: dict, vault: str) -> list[Gate]:
@@ -286,13 +339,15 @@ def fee_verdict(listing: dict | None, book_rate: int) -> Gate:
   return Gate("fee", True, f"{listing['taker_fee_bps']} bps, as the instruments registry")
 
 
-def gate_fee(chain: Chain, d: dict, markets_url: str) -> Gate:
+def gate_fee(chain: Chain, d: dict, markets_url: str, book_rate: int | None = None) -> Gate:
+  """The registry's fee for the series against the book's: the market's own, or (book-add-market, before the market
+  exists) the rate the market will be given."""
   try:
     listing = v2p.find_listing(v2p.markets(markets_url), d["future"], d["subId"])
   except Exception as exc:  # noqa: BLE001
     return Gate("fee", False, f"markets-service /markets unreadable: {str(exc)[:80]}")
   try:
-    return fee_verdict(listing, market_word(chain, d, "takerFeeRate"))
+    return fee_verdict(listing, market_word(chain, d, "takerFeeRate") if book_rate is None else book_rate)
   except Exception as exc:  # noqa: BLE001
     return Gate("fee", False, f"the book's fee unreadable: {str(exc)[:80]}")
 
@@ -335,6 +390,67 @@ def gate_enable(chain: Chain, d: dict, vault: str, markets_url: str) -> list[Gat
   return [Gate("custody", not problems, "; ".join(problems) or "the vault owns the book; the maker allowed; disabled"),
           gate_series(chain, d, need_open=True), gate_index(chain, d), gate_fee(chain, d, markets_url),
           gate_makers(chain, d), gate_parity(chain, d, vault, attached=True)]
+
+
+def next_verdict(next_id: int, market: int, market_sub_id: int, sub_id: int) -> Gate:
+  """createMarket numbers markets from nextMarketId: the batch's market N must be the next one, or already on the series
+  (a resumed batch). Anything else would open a market under another number than the one every later action names."""
+  if next_id == market:
+    return Gate("next", True, f"createMarket will number it {market}")
+  if next_id > market and market_sub_id == sub_id:
+    return Gate("next", True, f"market {market} is already on {sub_id}: resuming")
+  return Gate("next", False, f"nextMarketId is {next_id}: createMarket would not number it {market}"
+                             + (f" (market {market} trades {market_sub_id})" if next_id > market else ""))
+
+
+def unique_verdict(sub_ids: dict[int, int], market: int, sub_id: int) -> Gate:
+  """No other market on the book trades the series: two would split its makers and its tape."""
+  others = [m for m, s in sub_ids.items() if s == sub_id and m != market]
+  return Gate("unique", not others, f"market(s) {others} already trade {sub_id}" if others
+              else f"no other market on the book trades {sub_id}")
+
+
+def gate_add_market(chain: Chain, d: dict, vault: str, markets_url: str) -> list[Gate]:
+  book = d["book"]
+  owned = chain.address(book, "owner").lower() == vault.lower()
+  gates = [Gate("custody", owned, "the vault owns the book" if owned else "the vault does not own the book")]
+  try:
+    next_id = chain.word(book, selector("nextMarketId"))
+    sub_ids = {m: chain.word(book, selector("markets") + word_uint(m), MARKET_WORDS["subId"]) for m in range(1, next_id)}
+    gates += [next_verdict(next_id, BOOK_MARKET, sub_ids.get(BOOK_MARKET, 0), int(d["subId"])),
+              unique_verdict(sub_ids, BOOK_MARKET, int(d["subId"]))]
+  except Exception as exc:  # noqa: BLE001
+    gates.append(Gate("next", False, f"the book's markets unreadable: {str(exc)[:80]}"))
+  return gates + [gate_series(chain, d, need_open=True), gate_index(chain, d),
+                  gate_fee(chain, d, markets_url, book_rate=int(d["takerFeeRate"])),
+                  gate_parity(chain, d, vault, attached=True, market=False)]
+
+
+def series_symbol(base: str, expiry: int) -> str:
+  import time
+  return f"{base}-" + time.strftime("%d%b%y", time.gmtime(expiry)).upper()
+
+
+def market_view(d: dict, market: int, expiry: int, last_trade: int) -> dict:
+  """The artifact as market N on the series `expiry` would record it: the deployed market's parameters, its own series.
+  The last trade is the future's, read live."""
+  return {**d, "bookMarketId": market, "subId": expiry, "expiry": expiry, "lastTradeTime": last_trade,
+          "symbol": series_symbol("EURC", expiry)}
+
+
+def from_file(batch: str) -> bool:
+  """Market 1's batches are the deploy's files; book-add-market and any batch on a further market are built here."""
+  return BOOK_MARKET == 1 and batch != ADD_MARKET
+
+
+def built_actions(batch: str, d: dict) -> list[dict]:
+  """A batch on market N > 1 has no deploy file: its actions, built here, in the files' shape."""
+  names = {ADD_MARKET: [f"book.createMarket(future, {d['subId']}, engine, adapter, tick, lot) [market {BOOK_MARKET}]",
+                        f"book.setMarketParams({BOOK_MARKET}, ..., enabled = false)",
+                        f"book.setSelfPricedTtlCap({BOOK_MARKET}, {d['selfPricedTtlCap']})"],
+           ENABLE: [f"book.setMarketParams({BOOK_MARKET}, ..., enabled = true) [opens {d['symbol']}]"]}[batch]
+  return [{"description": n, "to": to, "value": "0", "data": data, "digest": digest(to, data)}
+          for n, (to, data) in zip(names, expected_actions(batch, d))]
 
 
 # ---------------------------------------------------------------------------------------------
@@ -443,12 +559,87 @@ def self_test() -> int:
   m = makers_verdict([(1, now - 10, 3600), (1, now - 7200, 3600), (0, now, 3600)], now)
   assert m.ok and "3 maker(s) registered, 1 spline(s) live" in m.detail, m.detail
 
+  # a further market (book-add-market, book-enable --market N): the calldata as `cast calldata` encodes it (2026-11-17)
+  global BOOK_MARKET
+  BOOK_MARKET = 2
+  try:
+    m2 = {**d, "future": a(1), "manager": a(2), "adapter": a(3), "subId": 1798729200, "tickSize": 10**12,
+          "lotSize": 10**15, "selfPricedTtlCap": 60, "symbol": "EURC-31DEC26"}
+    assert expected_actions(ADD_MARKET, m2) == [
+      (a(5), "0x021d75bd" + word_address(a(1)) + word_uint(1798729200)
+       + word_address(a(2)) + word_address(a(3)) + "000000000000000000000000000000000000000000000000000000e8d4a51000"
+       + "00000000000000000000000000000000000000000000000000038d7ea4c68000"),
+      (a(5), "0x9910da7d" + word_uint(2) + "0000000000000000000000000000000000000000000000000001c6bf52634000"
+       + word_uint(1) + word_uint(3600) + word_uint(10) + word_uint(0)),
+      (a(5), "0xd4449950" + word_uint(2) + word_uint(60))]
+    assert expected_actions(ENABLE, m2)[0][1].endswith(word_uint(10) + word_uint(1))
+    assert expected_actions(ENABLE, m2)[0][1][10:74] == word_uint(2), "enable names market 2"
+    built = built_actions(ADD_MARKET, m2)
+    verify_actions(ADD_MARKET, m2, built)
+    for what, mutate in {"target": lambda acts: acts[0].update(to=a(99)),
+                         "calldata": lambda acts: acts[1].update(data=acts[1]["data"][:-1] + "1"),
+                         "dropped": lambda acts: acts.pop(), "reordered": lambda acts: acts.reverse()}.items():
+      acts = json.loads(json.dumps(built))
+      mutate(acts)
+      try:
+        verify_actions(ADD_MARKET, m2, acts)
+      except SystemExit:
+        continue
+      raise AssertionError(f"add-market: a wrong {what} was accepted")
+    assert "opens EURC-31DEC26" in built_actions(ENABLE, m2)[0]["description"]
+    assert not from_file(ENABLE) and not from_file(ADD_MARKET), "market 2 has no deploy file"
+    check_artifact(v2, series)  # the artifact still records the deployed market while a batch acts on market 2
+
+    # each add-market postcondition reads what its own action writes
+    mk2 = selector("markets")
+    steps = [{(a(5), selector("nextMarketId")): 3, (a(5), mk2, MARKET_WORDS["subId"]): 1798729200},
+             {(a(5), mk2, MARKET_WORDS["takeMaxAge"]): 1, (a(5), mk2, MARKET_WORDS["maxTtl"]): 3600},
+             {(a(5), selector("maxSelfPricedTtl")): 60}]
+    for landed in range(4):
+      state = {k: v for st in steps[:landed] for k, v in st.items()}
+      if landed == 0:
+        state[(a(5), selector("nextMarketId"))] = 2
+      got = [h() for h in postconditions(Reads(state), ADD_MARKET, m2, vault)]
+      assert got == [i < landed for i in range(3)], (landed, got)
+    # another series already on market 2 is not "created"
+    assert not postconditions(Reads({(a(5), selector("nextMarketId")): 3, (a(5), mk2, MARKET_WORDS["subId"]): 1}),
+                              ADD_MARKET, m2, vault)[0]()
+  finally:
+    BOOK_MARKET = 1
+  assert from_file(SETUP) and from_file(ENABLE) and not from_file(ADD_MARKET)
+
+  # next: market N must be the next number, or already on the series (resuming)
+  assert next_verdict(2, 2, 0, 1798729200).ok
+  assert next_verdict(3, 2, 1798729200, 1798729200).ok and "resuming" in next_verdict(3, 2, 1798729200, 1798729200).detail
+  assert not next_verdict(3, 2, 1796050800, 1798729200).ok, "market 2 is another series"
+  assert not next_verdict(4, 3, 1, 1798729200).ok and not next_verdict(2, 3, 0, 1798729200).ok
+  # unique: no other market on the series; the batch's own (resumed) market is not another
+  assert unique_verdict({1: 1796050800}, 2, 1798729200).ok
+  assert unique_verdict({1: 1796050800, 2: 1798729200}, 2, 1798729200).ok
+  assert not unique_verdict({1: 1798729200}, 2, 1798729200).ok
+  # the arguments
+  for bad in ((ADD_MARKET, 2, 1, None), (ENABLE, 2, 1, 1798729200), (ENABLE, 2, 2, None), (SETUP, 2, 2, 1798729200),
+              (ENABLE, 1, 2, 1798729200), (ENABLE, 2, 0, None)):
+    try:
+      check_market_args(*bad)
+    except SystemExit:
+      continue
+    raise AssertionError(f"arguments {bad} accepted")
+  check_market_args(ENABLE, 2, 1, None)
+  check_market_args(ADD_MARKET, 2, 2, 1798729200)
+  check_market_args(ENABLE, 2, 2, 1798729200)
+  v = market_view({**full, "symbol": "EURC-30NOV26"}, 2, 1798729200, 1798727400)
+  assert (v["bookMarketId"], v["subId"], v["expiry"], v["lastTradeTime"], v["symbol"]) == \
+    (2, 1798729200, 1798729200, 1798727400, "EURC-31DEC26"), v
+  assert full["subId"] == 1796050800, "the view leaves the artifact as recorded"
+
   import inspect
   for fn in (main, run_batch):
     assert "propose(token" not in inspect.getsource(fn), f"{fn.__name__} calls propose() directly"
   print("self-test ok: selectors compiled and pinned; a wrong target, calldata, value, digest, count or order is refused; "
         "the artifact must be on the recorded series with the tax off (v2: any series, cap 1-60 s, a router); the series must be the engine's, listed, open "
-        "and over 2 h from last trade; the book's fee must equal the registry's")
+        "and over 2 h from last trade; the book's fee must equal the registry's; a further market is created as `cast calldata` encodes it, under its "
+        "own number, on a series no other market trades")
   return 0
 
 
@@ -457,11 +648,18 @@ def self_test() -> int:
 # ---------------------------------------------------------------------------------------------
 
 def run_batch(args, d: dict, chain: Chain, rpc_url: str, vault: str, markets_url: str) -> int:
-  actions = json.loads((args.dir / FILES[args.batch]).read_text())
+  if from_file(args.batch):
+    actions = json.loads((args.dir / FILES[args.batch]).read_text())
+  else:
+    actions = built_actions(args.batch, d)
   verify_actions(args.batch, d, actions)
 
   def gates() -> list[Gate]:
-    return gate_setup(chain, d, vault) if args.batch == SETUP else gate_enable(chain, d, vault, markets_url)
+    if args.batch == SETUP:
+      return gate_setup(chain, d, vault)
+    if args.batch == ADD_MARKET:
+      return gate_add_market(chain, d, vault, markets_url)
+    return gate_enable(chain, d, vault, markets_url)
 
   current = gates()
   passed = report(current)
@@ -505,14 +703,18 @@ def main() -> int:
   ap.add_argument("--self-test", action="store_true")
   ap.add_argument("--dir", type=Path, default=ROOT / "deployments" / "8453", help="where the deploys wrote their artifacts")
   ap.add_argument("--json", action="store_true", help="print the gates as JSON on the last line")
+  ap.add_argument("--market", type=int, default=1, help="the book's market (default 1, the deployed one)")
+  ap.add_argument("--expiry", type=int, help="with --market N > 1: the series (unix expiry, its subId)")
   args = ap.parse_args()
 
   if args.self_test:
     return self_test()
   if not args.batch:
     ap.error("name a batch: " + ", ".join(BATCHES))
-  global NAME, FILES
+  global NAME, FILES, BOOK_MARKET
   NAME, FILES = NAMES[args.version], files(NAMES[args.version])
+  check_market_args(args.batch, args.version, args.market, args.expiry)
+  BOOK_MARKET = args.market
 
   load_env_file(Path.home() / ".numo-mark-keeper.env")
   rpc_url = os.environ.get("RPC_URL") or os.environ.get("BASE_RPC_URL", "")
@@ -532,7 +734,30 @@ def main() -> int:
   if version_of(d) != args.version:
     raise SystemExit(f"{artifact} records version {version_of(d)}, not {args.version}")
   check_artifact(d, json.loads((args.dir / "EURC_FUTURE_V3.json").read_text()))
-  return run_batch(args, d, Chain(rpc_url), rpc_url, vault, os.environ.get("MARKETS_URL", "https://api.numofx.com"))
+  chain = Chain(rpc_url)
+  if BOOK_MARKET > 1:
+    last_trade = chain.word(d["future"], selector("futureContracts") + word_uint(args.expiry), 3)
+    d = market_view(d, BOOK_MARKET, args.expiry, last_trade)
+  return run_batch(args, d, chain, rpc_url, vault, os.environ.get("MARKETS_URL", "https://api.numofx.com"))
+
+
+def check_market_args(batch: str, version: int, market: int, expiry: int | None) -> None:
+  """Market 1 is the deployed one, from the deploy's files; a further market is v2 only, named with its series, and
+  has no setup of its own (setup is the book's, once)."""
+  if market < 1:
+    raise SystemExit("--market starts at 1")
+  if market == 1:
+    if batch == ADD_MARKET:
+      raise SystemExit("market 1 is the deployed one: book-add-market adds market 2 and later")
+    if expiry is not None:
+      raise SystemExit("--expiry is for --market N > 1: market 1's series is the deploy's")
+    return
+  if version != 2:
+    raise SystemExit("a further market is for the v2 book (--version 2)")
+  if batch == SETUP:
+    raise SystemExit("book-setup is the book's, once: a further market starts with book-add-market")
+  if expiry is None:
+    raise SystemExit(f"--market {market} needs --expiry: the series it trades")
 
 
 if __name__ == "__main__":

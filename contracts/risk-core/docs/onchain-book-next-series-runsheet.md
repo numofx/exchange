@@ -40,7 +40,7 @@ The book's `createMarket` refuses an unlisted series. **Listing EURC-31DEC26 has
 | # | Step | Sends | Done when |
 |---|---|---|---|
 | 0 | Series listed (separate run-sheet) | vault | `futureContracts(subId)` listed, unsettled; `/markets` lists it with 5 bps |
-| 1 | **Tooling.** `propose_onchain_book_batch.py` takes `--market N` (today `BOOK_MARKET = 1` is a constant), with a `book-add-market` batch: `createMarket(future, subId, engine v2, adapter, 1e12, 1e15)`, `setMarketParams(N, 5 bps, takeMaxAge, maxTtl, 10, false)`, `setSelfPricedTtlCap(N, 60)`. Gates as for setup, on market N. Self-tested, plus an anvil rehearsal against the live book | nothing | Committed; the rehearsal opens market 2 and a fork take fills against it |
+| 1 | **Tooling** (**done 2026-11-17**, rehearsed below). `propose_onchain_book_batch.py` takes `--market N --expiry E`, with a `book-add-market` batch: `createMarket(future, subId, engine v2, adapter, 1e12, 1e15)`, `setMarketParams(N, 5 bps, takeMaxAge, maxTtl, 10, false)`, `setSelfPricedTtlCap(N, 60)`. Gates as for setup, on market N. Self-tested, plus an anvil rehearsal against the live book | nothing | Committed; the rehearsal opens market 2 and a fork take fills against it |
 | 2 | **Add the market** (`book-add-market --market 2 --propose`) | vault | `nextMarketId` = 3; market 2 on subId `1798729200`, disabled; ttl cap 60 |
 | 3 | **Register #58 on market 2** (`registerMaker(2, 58)` from the MM wallet). Allowances are per book, not per market, so #58's existing ones cover it | MM wallet | `makers(2) = [58]` |
 | 4 | **Enable** (`book-enable --market 2 --propose`) | vault | `markets(2).enabled`; the index and fee gates pass |
@@ -64,3 +64,26 @@ come first:
 - a market-maker release that encodes v3's `SplineUpdate`.
 
 Realistically that is 4–6 working days before step 2, so on this timeline it would likely miss 30 Nov.
+
+## Rehearsed on an anvil fork, 2026-11-17 (Base at head)
+
+Listing is fork-only here: the vault, impersonated, called `setContract(1798729200, 1798727400, 1.102)`.
+
+- **`book-add-market --market 2 --expiry 1798729200`, before the actions:** custody, next, unique, series (1,047 h to
+  last trade), index and parity (13 book-wide settings) passed. **Fee failed:** the series isn't in the registry,
+  which is listing step L6, so this ordering is right.
+- **The three actions from the vault:**
+  - `createMarket` 188,660 gas;
+  - `setMarketParams(2, …, false)` 74,086;
+  - `setSelfPricedTtlCap(2, 60)` 52,024.
+
+  The proposer then read all three as landed.
+- **`book-enable --market 2`:** its gates passed except fee, with parity at 26 settings on market 2. Enabled by hand
+  on the fork: 37,098 gas.
+- **`registerMaker(2, 58)` and a self-priced spline on market 2** (mid 1.102, the live curve, cap and skew):
+  - `quote` with no account filled 3,012 EURC a side, buy average 1.104836 and sell 1.099164;
+  - market 1 kept quoting 3,012 from the same account.
+- **The proposer afterwards:** every action landed; custody reads "already enabled".
+- **Self-test:** the calldata matches `cast calldata`. Eight mutants of the new guards were all caught. One survivor
+  (the batch's action source) was fixed by extracting `from_file`. The dry run also caught a bug the self-test
+  missed: `check_artifact` compared the artifact's market with the batch's. That's fixed and tested.
