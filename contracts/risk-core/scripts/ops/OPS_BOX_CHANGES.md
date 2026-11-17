@@ -5,6 +5,16 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-17 ~03:40 UTC: the retired v2 EURC keeper stopped (owner's decision) (SSM, laptop)
+
+- **Checked first:** v2 EURC-30NOV26 `0x6Ff7…7744` (subId 1796054400) has `totalPosition(engine)` 0 and cap 0, the
+  engine's market-2 future slot is v3 `0xC350…B227`, and `/markets` lists only v3. The unit's env named the v2 asset.
+- `systemctl disable --now numo-future-feeds-v2@eurc-30nov26` (SSM `a1a6c95d-…`): inactive, disabled. The v3 keeper
+  `numo-future-feeds-v3@eurc-30nov26` untouched (active, enabled). Undo: `systemctl enable --now` (nothing needs it).
+- Its relayer `0xEEa4…5321` swept to the backup relayer (tx `0x6e258e63…bd7d`; dust 0.0000013 left). Backup now
+  0.001528 ETH. Dropped from `check_signer_balance.py` (`2d3622d`, installed on the box, hash-checked; one run: six
+  wallets ok, no finding). `perp-pager.env` still lists it in `GAS_WATCH`, inert with the pager off.
+
 ## 2026-11-17 03:15–03:25 UTC: keeper-liveness alerts before Stage 3 (spec C6) (SSM, healthchecks.io)
 
 - **Report age** (new): `check_report_age.py` + `numo-report-age.{service,timer}` (every minute, through
