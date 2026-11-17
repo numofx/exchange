@@ -85,7 +85,9 @@ variable "image_execution" {
   type        = string
   # 2026-10-19: main a74cec2c (#237: the settlement canary sums wrapper backing across the SRM and the MarginEngine,
   # probes each account through its own manager, and watches 34 and 32), on top of 45144dff (#231).
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/execution:3fe2553fb2d2"
+  # 2026-11-17: main 917da47 (an HTTP 4xx on broadcast is a refusal, not a send: the 2026-11-16 phantom fill; sends via
+  # SEND_RPC_URL, the keyed endpoint). Rollback is 3fe2553fb2d2, in one apply.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/execution:917da470fdd4"
 }
 
 variable "secret_backend" {

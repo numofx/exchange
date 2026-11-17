@@ -5,6 +5,18 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-17 00:28–00:34 UTC: execution-service 917da47: HTTP refusals are not sends; sends via the keyed RPC
+
+- **Fix** (`917da47`): `classifyBroadcastError` takes an HTTP 4xx (429, 401, 403) as a refusal: the nonce is given
+  back, the send fails, the matcher records no fill. A 5xx stays "may be out", as a timeout. Three tests reproduce
+  the incident (red on the old code); 186/186 pass. Transactions are prepared and broadcast through `SEND_RPC_URL`
+  (`/numo/exchange/rpc_fallback_url`, keyed); reads stay on `RPC_URL`. Both wirings mutation-tested.
+- **Deploy** (laptop, terraform 1.13.3 from main; the plan touched only execution-service's task definition and
+  service): image `execution:917da470fdd4`, td :43, applied 00:28:35; the old task STOPPED by 00:33:52. No match was
+  in flight (none on any market since 00:10). Rollback: `3fe2553fb2d2`, in one apply.
+- **Not yet seen:** its first send through the keyed endpoint (`rpc_calls` host `base-mainnet.g.alchemy.com`,
+  `eth_sendRawTransaction`), at the next match.
+
 ## 2026-11-17 00:05–00:10 UTC: execution-service restarted after a phantom fill (ECS, laptop)
 
 - **What happened.** 2026-11-16 23:57:58 the matcher crossed taker order `future-0f8e737c-…` (2 EURC buy, EURC-30NOV26)
