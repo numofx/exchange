@@ -47,10 +47,10 @@ WALLETS: list[tuple[str, str, float]] = [
   ("forward relayer v2 cNGN", "0x3ACeFDe146161D1b9ca2fdB8a3B38122818d763f", 0.00005),  # 0.000020/day, 46 tx
   ("EURC v3 keeper relayer", "0x0AbAac33E5ab7E62dED100Be465032A3636b12e5", 0.0035),  # 0.0029/day, ~2,700 tx
   # The MM wallet, as owner of both OnchainBook makers. v1 (#56, pegged): up to ~100 updateSplines a day, 0.000042.
-  # v2 (#58, self-priced, from 2026-11-17): a refresh every 22 s plus reprices, ~4,000 a day at 73,061 gas, 0.006 gwei
-  # (the L1 fee under 0.00000001 a tx, measured 2026-11-17): 0.0018/day. Rounded up to 0.002: warns under 0.014 ETH,
-  # pages under 0.004. mm-bot signs off chain.
-  ("OnchainBook makers (MM wallet)", "0x3448ac0A3283951A2AFD5B3A582329ECA43CB47B", 0.002),
+  # v2 (#58, self-priced, from 2026-11-17): measured 353 sends in 108 min (197 refreshes at ~25 s, 155 reprices at 20
+  # ticks), ~4,700 a day at 73,061 gas, 0.006 gwei (the L1 fee under 0.00000001 a tx): 0.0021/day. Rounded up to
+  # 0.0025: warns under 0.0175 ETH, pages under 0.005. mm-bot signs off chain.
+  ("OnchainBook makers (MM wallet)", "0x3448ac0A3283951A2AFD5B3A582329ECA43CB47B", 0.0025),
   # The vault no longer marks (6 tx/day, 0.0000014 ETH/day), but a dry vault cannot approve a batch at all.
   ("vault", "0x1dcA42ab54Bd3862853A821F84B29BF65245F435", 0.00001),
 ]
