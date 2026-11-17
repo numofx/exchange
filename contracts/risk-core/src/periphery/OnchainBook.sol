@@ -157,6 +157,9 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
     uint filledLots;
     uint notionalTicks;
     uint fee;
+    /// @dev Per maker, lots settled earlier in this call that storage does not show: always 0 in `take` (its settlements
+    ///      write the cursor and the position), the simulated settlements in `quote`. Read by `_loadMaker`.
+    uint[] pendingLots;
   }
 
   /// @dev In-memory state of one maker during a take.
@@ -451,7 +454,8 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
       excluded: new bool[](_makers[o.marketId].length),
       filledLots: 0,
       notionalTicks: 0,
-      fee: 0
+      fee: 0,
+      pendingLots: new uint[](_makers[o.marketId].length)
     });
     for (uint round; round <= p.excluded.length && p.remainingLots > 0 && p.levelsLeft > 0; ++round) {
       if (!_settleAll(o, m, _walk(m, o, takerOwner, p), p)) break;
@@ -467,6 +471,83 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
     if (filled < o.minFill) revert OB_BelowMinFill();
     if (p.filledLots > 0) avgPrice = p.notionalTicks * m.tickSize / p.filledLots;
     emit TakeExecuted(o.marketId, o.takerAccountId, o.isBuy, filled, avgPrice, p.fee);
+  }
+
+  /**
+   * @notice What `take(o, "")` would do now if every maker's settlement succeeds: the same walk, the same rounds (a maker
+   *         whose allowance no longer covers its fill is left out and the take re-planned without it), the same fee
+   *         and tax, and the same reverts (disabled, closed, expired, taker allowance, `maxFee`, `minFill`). It cannot
+   *         see a settlement that reverts on margin: that maker's lots would go to the others in `take`'s next round.
+   *         `takerAccountId` 0 is a price quote with no account: no self-trade or allowance check. The priority tax
+   *         reads the call's gas price, so quote with the priority fee you will send. Reports are not posted: a quote
+   *         reads the stored index, as a take without reports does.
+   * @return filled position units, as `take` returns them
+   * @return avgPrice quote per base, 18 dp; 0 when nothing fills
+   * @return fee taker fee and priority tax, in cash
+   * @return makers how many makers would be settled: each costs ~610k gas (spec B10)
+   */
+  function quote(TakeOrder calldata o) external view returns (uint filled, uint avgPrice, uint fee, uint makers) {
+    Market memory m = _market(o.marketId);
+    if (!m.enabled) revert OB_MarketDisabled();
+    if (block.timestamp > o.deadline) revert OB_Expired();
+    if (block.timestamp >= m.lastTradeTime) revert OB_TradingClosed();
+    address takerOwner;
+    if (o.takerAccountId != 0) {
+      takerOwner = subAccounts.ownerOf(o.takerAccountId);
+      if (!_allowanceCovers(o.takerAccountId, m.future, m.subId, o.isBuy, o.amount)) revert OB_TakerAllowanceTooLow();
+      if (o.maxFee > 0 && !_allowanceCovers(o.takerAccountId, cash, 0, false, o.maxFee)) {
+        revert OB_TakerAllowanceTooLow();
+      }
+    }
+    Pass memory p = Pass({
+      remainingLots: o.amount / m.lotSize,
+      levelsLeft: o.maxLevels,
+      excluded: new bool[](_makers[o.marketId].length),
+      filledLots: 0,
+      notionalTicks: 0,
+      fee: 0,
+      pendingLots: new uint[](_makers[o.marketId].length)
+    });
+    bool[] memory settled = new bool[](p.excluded.length);
+    for (uint round; round <= p.excluded.length && p.remainingLots > 0 && p.levelsLeft > 0; ++round) {
+      if (!_simulateSettleAll(o, m, _walk(m, o, takerOwner, p), p, settled)) break;
+    }
+    uint tax = _priorityTax();
+    if (tax > 0 && p.filledLots > 0) p.fee += tax;
+    if (p.fee > o.maxFee) revert OB_FeeTooHigh();
+    filled = p.filledLots * m.lotSize;
+    if (filled < o.minFill) revert OB_BelowMinFill();
+    if (p.filledLots > 0) avgPrice = p.notionalTicks * m.tickSize / p.filledLots;
+    fee = p.fee;
+    for (uint i; i < settled.length; ++i) {
+      if (settled[i]) ++makers;
+    }
+  }
+
+  /// @dev `_settleAll` without settling, for `quote`: the allowance check and its exclusion as there; every other
+  ///      maker succeeds. Keep the two in step (test: quote equals take).
+  function _simulateSettleAll(
+    TakeOrder calldata o,
+    Market memory m,
+    MakerState[] memory makers,
+    Pass memory p,
+    bool[] memory settled
+  ) internal view returns (bool anyFailed) {
+    for (uint i; i < makers.length; ++i) {
+      MakerState memory mk = makers[i];
+      if (mk.filledLots == 0) continue;
+      if (!_allowanceCovers(mk.accountId, m.future, m.subId, !o.isBuy, mk.filledLots * m.lotSize)) {
+        p.remainingLots += mk.filledLots;
+        p.excluded[i] = true;
+        anyFailed = true;
+        continue;
+      }
+      p.filledLots += mk.filledLots;
+      p.notionalTicks += mk.notionalTicks;
+      p.fee += _fee(m, mk.filledLots * m.lotSize, mk.notionalTicks * m.tickSize / mk.filledLots);
+      p.pendingLots[i] += mk.filledLots;
+      settled[i] = true;
+    }
   }
 
   /// @dev Settle each planned maker in turn. A maker whose allowance no longer covers its fill is switched off (an
@@ -523,7 +604,7 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
         makers[i].done = true;
         continue;
       }
-      makers[i] = _loadMaker(m, o.marketId, list[i], !o.isBuy, indexTicks);
+      makers[i] = _loadMaker(m, o.marketId, list[i], !o.isBuy, indexTicks, p.pendingLots[i]);
     }
 
     // A level counts against maxLevels when it fills or is cancelled by DecrementTake. A level dropped for being short
@@ -561,7 +642,7 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
     }
   }
 
-  function _loadMaker(Market memory m, uint marketId, uint accountId, bool isBid, int indexTicks)
+  function _loadMaker(Market memory m, uint marketId, uint accountId, bool isBid, int indexTicks, uint pending)
     internal
     view
     returns (MakerState memory mk)
@@ -577,6 +658,8 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
 
     // Skew from the position at the start of the take, clamped, not recomputed between levels (B7).
     int posLots = subAccounts.getBalance(accountId, m.future, m.subId) / int(m.lotSize);
+    // Lots this call has already settled but storage does not show (quote's re-plan): a bid buys, an ask sells.
+    posLots += isBid ? int(pending) : -int(pending);
     int skew = posLots * int(uint(s.skewTicksPerLot));
     int maxSkew = int(uint(s.maxSkewTicks));
     if (skew > maxSkew) skew = maxSkew;
@@ -586,7 +669,7 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
     mk.curveId = isBid ? s.bidCurve : s.askCurve;
 
     Region[] storage curve = _curves[mk.owner][mk.curveId];
-    uint consumed = _consumedNow(cursors[marketId][accountId][isBid], s.refillLotsPerSecond);
+    uint consumed = _consumedNow(cursors[marketId][accountId][isBid], s.refillLotsPerSecond) + pending;
     for (uint r; r < curve.length; ++r) {
       uint lots = curve[r].lots;
       if (consumed >= lots) {

@@ -943,8 +943,20 @@ Costs and risks:
 
 ## C4. Work items
 
-1. **Quote view.** `quote(TakeOrder) view returns (filled, avgPrice, fee, levels)`, the same walk as `take` without
-   settling. Property test: for every reachable state, `quote` equals what `take` then does.
+1. **Quote view. Built 2026-11-17, in source for the next book version (v1 at `0x8Fc6…d456` is not upgradeable).**
+   `quote(TakeOrder) view returns (filled, avgPrice, fee, makers)`: what `take(o, "")` does if every settlement
+   succeeds. The same walk (`_walk`), the same rounds (a maker whose allowance no longer covers its fill is left out
+   and the take re-planned), the same fee and priority tax (at the call's gas price), the same reverts. It cannot see a
+   settlement reverting on margin. `takerAccountId` 0 is a price quote with no account. `makers` sizes gas (~610k
+   each, B10).
+   - **Re-plan fidelity.** `take`'s second round reads the first round's settlements from storage (cursors,
+     positions, so skew). A view cannot write them, so `Pass.pendingLots` carries them and `_loadMaker` adds them to
+     consumption and position; in `take` it is always 0. Cost to `take`: ~4,060 gas (1 maker 1,133,667 vs 1,129,609;
+     10 makers 6,623,580 vs 6,619,506; fork, block 57,985,892). Size 22,146 bytes.
+   - **Tests** (`test/periphery/OnchainBookQuote.t.sol`, 8): quote equals take across makers and regions, through an
+     allowance re-plan with and without skew, a 256-run fuzz (equal results or the same revert), no-account quotes,
+     stale reports, every revert, the tax at the caller's gas price. Seven guards mutation-tested; the existing 68
+     book tests unchanged; 1,715 risk-core tests pass.
 2. **Self-priced splines** (C3). A new field or mode flag in the spline slot; the band from the stored index; tests
    for both modes side by side, priority (price, then registration), the ttl cap and the band failing closed.
 3. **Router** (periphery). One call: deposit collateral, take, optionally reduce and withdraw. It acts on the
