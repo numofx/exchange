@@ -5,6 +5,22 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-17 13:49–13:52 UTC: markets 6bb45f2: the matcher indexes the v2 OnchainBook beside v1 (ECS)
+
+- **What.** `markets:6bb45f2f367d` (9780841: one book indexer per configured book). The matcher also got
+  `ONCHAIN_BOOK_V2_ADDRESS=0x83C5…89d5` and `ONCHAIN_BOOK_V2_START_BLOCK=58656423`, the create transaction's block. No
+  migration.
+- **How.** Terraform 1.13.3 (the state's writer) in Docker (`hashicorp/terraform:1.13.3`), because the laptop has no
+  binary. The `numo` profile's credentials were exported for the run only, and the container's `.terraform` lives in a
+  Docker volume. Applied from `main` at `6bb45f2`.
+  - The plan touched only the markets, matcher and migrate task definitions (the image) and the two services; the
+    matcher alone gained the two variables.
+  - Applied through `with-matcher-mute.sh`: the old matcher STOPPED (`2e7e8474…`), with a fresh heartbeat after.
+  - Migrate is td :57.
+- **Read back.** `/health` → `book_indexers` lists v1 and v2, each at the 20-block confirmation lag with no
+  `last_error`; v2 read from its create block to head.
+- **Rollback:** `df70d1e726e1` with `onchain_book_v2_address = ""`, in one apply.
+
 ## 2026-11-17 13:27–13:44 UTC: OnchainBook v2 setup batch landed (box, `exchange-ops` → `5d51b72`)
 
 - **`/home/ec2-user/exchange-ops`** fetched and detached at `5d51b72` (was `4eec6f7`), clean before and after (SSM
@@ -34,7 +50,8 @@ self-priced ttl 30 s (`onchain-book-v2-runsheet.md`).
 - **Deployed** `deploy-onchain-book.s.sol` at `f3747a0` with `EXPIRY=1796050800`, 5 bps, maker owner the MM wallet.
   The mainnet simulation estimated 8.57M gas.
   - Book `0x83C5741a24d57189379E1215F7A22d9f048E89d5`; router `0xd9540220b514ab2E1a98Ff3C4c4F1F5FD5cf76aB`.
-  - Seven transactions from block 58,656,411. The deployer keeps 0.000162 ETH.
+  - Seven transactions in blocks 58,656,423–58,656,479; the create is `0x769e0c25…`. The artifact's `deployBlock`
+    (58,656,411) is the block the script ran at, a lower bound. The deployer keeps 0.000162 ETH.
 - **Read back.** Owner the deployer, pending owner the vault, `maxSelfPricedTtl` 60, tax 0, market 1 disabled, the
   maker not allowed. The proposer's v2 setup dry run passes nominated, series and parity (26/26).
 - **Differs from v1:** `maxMakers` is 10 (the script's default), not v1's 3 (B14a); not passed as `MAX_MAKERS`. Makers

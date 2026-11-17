@@ -79,7 +79,9 @@ variable "image_markets" {
   # image runs on the migrated schema).
   # 2026-11-17: main df70d1e (the settlement verifier: each matcher fill checked on chain, voided only on proof it did
   # not settle; migration 000025 run first, migrate td :56). Rollback is 96974ae8e208, in one apply (000025 only adds).
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:df70d1e726e1"
+  # 2026-11-17: main 6bb45f2 (9780841: the matcher indexes more than one OnchainBook, v2 beside v1; no migration).
+  # Rollback is df70d1e726e1 with onchain_book_v2_address = "", in one apply.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:6bb45f2f367d"
 }
 
 variable "image_execution" {
@@ -675,8 +677,9 @@ variable "onchain_book_start_block" {
 # The v2 OnchainBook (risk-core ONCHAIN_BOOK_V2.json: quote, self-priced splines; spec C4) and its deployBlock, indexed
 # beside v1. Empty: not indexed, and the matcher's task definition does not change.
 variable "onchain_book_v2_address" {
-  type    = string
-  default = ""
+  type = string
+  # Deployed 2026-11-17 closed on EURC-30NOV26 (risk-core deployments/8453/ONCHAIN_BOOK_V2.json); setup batch landed 13:44 UTC.
+  default = "0x83C5741a24d57189379E1215F7A22d9f048E89d5"
   validation {
     condition     = var.onchain_book_v2_address == "" || can(regex("^0x[0-9a-fA-F]{40}$", var.onchain_book_v2_address))
     error_message = "onchain_book_v2_address must be an address or empty."
@@ -684,6 +687,8 @@ variable "onchain_book_v2_address" {
 }
 
 variable "onchain_book_v2_start_block" {
-  type    = number
-  default = 0
+  type = number
+  # The book's create transaction (0x769e0c25…, block 58,656,423). ONCHAIN_BOOK_V2.json's deployBlock (58,656,411) is
+  # the block the script ran at, a lower bound.
+  default = 58656423
 }

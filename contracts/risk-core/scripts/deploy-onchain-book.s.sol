@@ -354,6 +354,7 @@ contract DeployOnchainBook is Utils {
     vm.serializeAddress(obj, "book", address(book));
     vm.serializeUint(obj, "version", BOOK_VERSION);
     vm.serializeAddress(obj, "router", address(router));
+    // The block the script ran at: a lower bound on the create, safe as an indexer start block.
     vm.serializeUint(obj, "deployBlock", block.number);
     vm.serializeUint(obj, "bookMarketId", BOOK_MARKET_ID);
     vm.serializeString(obj, "symbol", symbolOf(params));

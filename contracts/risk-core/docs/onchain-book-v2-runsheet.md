@@ -48,7 +48,7 @@ pass while the size stays on `Matching`.
 ## Steps
 
 1. **Deploy** from a fresh, single-use deployer. **Done 2026-11-17 ~13:15 UTC:** book `0x83C5741a24d57189379E1215F7A22d9f048E89d5`, router
-   `0xd9540220b514ab2E1a98Ff3C4c4F1F5FD5cf76aB`, block 58,656,411 (`OPS_BOX_CHANGES.md`). `maxMakers` is 10, not v1's 3:
+   `0xd9540220b514ab2E1a98Ff3C4c4F1F5FD5cf76aB`, created in block 58,656,423 (`OPS_BOX_CHANGES.md`). `maxMakers` is 10, not v1's 3:
    pass `MAX_MAKERS` next time.
 
    ```
@@ -63,7 +63,7 @@ pass while the size stays on `Matching`.
    - The fee (5 bps) is the registry's, and the enable gate checks it again.
 2. **Setup batch** (**landed 2026-11-17 13:44 UTC**, `OPS_BOX_CHANGES.md`): `propose_onchain_book_batch.py book-setup` (`--version 2` is the default) accepts ownership and
    allows the maker. The gates re-read 26 settings, including the cap and the router's book, cash and SubAccounts.
-3. **Indexer.** Deploy markets at `9780841` or later through `with-matcher-mute.sh`. Then set
+3. **Indexer** (**done 2026-11-17 13:52 UTC**: markets `6bb45f2`, both books on `/health`). Deploy markets at `9780841` or later through `with-matcher-mute.sh`. Then set
    `onchain_book_v2_address` and `onchain_book_v2_start_block` (`deployBlock`); the matcher's preconditions refuse
    one without the other, and v1's address. Check that `/healthz` → `book_indexers` lists both books.
 4. **Maker account (D5).** Same steps as `docs/book-maker.md`:
