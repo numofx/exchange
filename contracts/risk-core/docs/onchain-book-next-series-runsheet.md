@@ -1,16 +1,15 @@
 # OnchainBook run-sheet: the next EURC series keeps C0 test 3 passing (draft)
 
-Drafted 2026-11-17. **Nothing here has been sent; three decisions are open (below).** Each sending step is its own
-go-ahead.
+Drafted 2026-11-17. **Nothing here has been sent.** Each sending step is its own go-ahead.
 
 EURC-30NOV26 stops trading on Mon 2026-11-30 at 14:30 UTC, and both makers' cutoff takes their quotes down at 13:30.
 From then on, C0 test 3 (an outside contract reaches all the venue's liquidity in one transaction, with no off-chain
 party) passes only if a listed series has our maker's size on a book. That takes a listed next series, a book market
 on it, and the maker moved across, all before 30 Nov 13:30.
 
-## Decisions open (owner)
+## Decided (owner, 2026-11-17: all three as recommended)
 
-| | Recommended | Why |
+| | Decision | Why |
 |---|---|---|
 | **N1. Next series** | **EURC-31DEC26**: expiry Thu 2026-12-31 15:00 UTC (`1798729200`), last trade 14:30 (`1798727400`) | The same month-end pattern as 30NOV26. New Year's Eve is thin, but the fixing is the index's TWAP, not a traded price |
 | **N2. Book code** | **The current v2 book, as market 2.** v3 (`onchain-book-v3-spec.md`) from the series after | Market 2 needs no deploy, no new indexer entry (the matcher maps any market on a book to its series through `markets(id)`) and no bot release. v3 changes the code that holds the maker's account: listing a series and changing the book in the same week puts two changes on the path that keeps test 3 passing |
@@ -22,8 +21,8 @@ January series costs nothing.
 
 ## Critical path: the series must be listed first
 
-The book's `createMarket` refuses an unlisted series. **Listing EURC-31DEC26 is a separate run-sheet, not written
-yet.** Known pieces:
+The book's `createMarket` refuses an unlisted series. **Listing EURC-31DEC26 has its own run-sheet,
+`eurc-31dec26-listing-runsheet.md` (L1–L8).** In short:
 
 - **Vault:** `FutureAsset` v3 `setContract(1798729200, 1798727400, <initial mark>)`. It takes the fixing parameters
   in force now, permanently: re-read `seriesFixing` for 30NOV26 and confirm they are wanted before listing. The
