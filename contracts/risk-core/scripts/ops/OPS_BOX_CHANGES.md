@@ -5,6 +5,21 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-17 15:32 UTC: book-maker-v2 live on the v2 book; MM wallet funded 0.03 ETH; balance check updated (ECS, box)
+
+- **Funding.** The owner sent 0.03 ETH to the MM wallet (0.030387 read back).
+- **Live** (`c263816`, terraform from `main`: only `MM_BOOK_DRY_RUN` true → false). The dry-run task (`80310155…`)
+  STOPPED 15:31:51 before the new one (`d91e16d8…`) started 15:32:12. It sent `setCurve` `0xaf0bec01…`,
+  `registerMaker` `0x32ea6dbd…`, then a spline `0xe8ec8a0f…`. Read back: `makers(1) = [58]`, `isSelfPriced(1, 58)`,
+  mid 1,100,215 ticks, half-spread 300, ttl 30, active. The market is still disabled (step 8).
+- **Cadence, first 2 minutes:** refreshes every ~25 s (22 s age on a 5 s poll), and 4 reprices (`MM_BOOK_REPRICE_TICKS`
+  20) between them: 7 sends in 110 s, ~5,500 a day, above the 4,000 estimated. Re-measure over an hour before
+  trusting the 0.002 burn.
+- **Box.** `check_signer_balance.py` replaced by `c263816`'s (sha256 `e4746f85…87a0`, `--self-test` on the box first;
+  backup `.bak-202611171533`). SSM `157376ce`. A run by hand read the MM wallet at ~15.2 days, and warned for the feed
+  signer (0.008288 ETH, ~6.9 days, under the 7-day line: not this change).
+- **Not yet proven:** the `book-maker-v2` dead-man check going down.
+
 ## 2026-11-17 15:25 UTC: book-maker-v2 running in dry run (ECS, terraform from `main`)
 
 - **What.** `market-maker:0d687040cfa5` as service `market-maker-book-v2`, account #58 on the v2 book, curve

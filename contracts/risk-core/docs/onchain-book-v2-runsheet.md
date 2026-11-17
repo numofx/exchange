@@ -73,8 +73,8 @@ pass while the size stays on `Matching`.
 5. **Dead-man check** (**created 2026-11-17**, `39ff502b…`; firing not yet proven). A healthchecks.io check `book-maker-v2` (1 min period, 10 min grace), its ping URL at SSM
    `/numo/exchange/book_maker_v2_heartbeat_url`. Create it before step 7: a task referencing a missing parameter
    does not start. Prove it fires (break it) once the bot runs.
-6. **Fund the wallet** and raise the floor (above).
-7. **Bot, dry run** (**running 2026-11-17 15:25 UTC**, `preflight ok`; live waits on step 6).
+6. **Fund the wallet** and raise the floor (above). (**Done 2026-11-17:** 0.03 ETH; burn 0.002/day in the check.)
+7. **Bot, dry run** (**live 2026-11-17 15:32 UTC** after a dry run from 15:25; registered, quoting self-priced).
    - Build and push a market-maker image at `0d687040` or later. Set:
      - `image_market_maker_book_v2`;
      - `onchain_book_v2_maker_book`;
