@@ -1084,8 +1084,8 @@ falling back to per-maker settlement when the batch reverts, so B5a's isolation 
   - after `kill -9` the quote stopped filling at its 10 s ttl;
   - SIGTERM cancelled the spline;
   - a stale index cancelled it.
-- **Cost.** 73,061 gas per refresh, 17,280 a day: about 0.0076 ETH a day plus the L1 fee. That is roughly 250
-  times pegged mode's.
+- **Cost.** 73,061 gas per refresh, 17,280 a day: about 0.0076 ETH a day plus the L1 fee. That is roughly 300
+  times pegged mode's (at most ~100 updates a day at ~40k gas).
 - **Left for the deploy (a separate go-ahead):**
   - `deploy-onchain-book.s.sol` targets EURC_FUTURE_V3 and its vault batch has no `setSelfPricedTtlCap(id, 60)`
     yet;
