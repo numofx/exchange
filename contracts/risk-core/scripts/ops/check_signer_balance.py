@@ -28,7 +28,10 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -69,16 +72,42 @@ def load_env_file(path: Path) -> None:
     os.environ.setdefault(key.strip().removeprefix("export ").strip(), value.strip())
 
 
-def rpc(url: str, method: str, params: list) -> str:
+RPC_429_RETRIES = 3
+
+
+def rpc(url: str, method: str, params: list, _open=urllib.request.urlopen, _sleep=time.sleep) -> str:
+  """One JSON-RPC call. A 429 is retried with backoff: hourly runs on the public RPC were refused often enough to page
+  (2026-11-17 03:23, the vault's read). Anything else raises at once."""
   body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
   req = urllib.request.Request(
     url, data=body, headers={"Content-Type": "application/json", "User-Agent": "numo-balance-monitor/1"}
   )
-  with urllib.request.urlopen(req, timeout=15) as resp:
-    out = json.loads(resp.read())
+  for attempt in range(RPC_429_RETRIES + 1):
+    try:
+      with _open(req, timeout=15) as resp:
+        out = json.loads(resp.read())
+      break
+    except urllib.error.HTTPError as exc:
+      if exc.code != 429 or attempt == RPC_429_RETRIES:
+        raise
+      _sleep(2 ** attempt)
   if "error" in out:
     raise RuntimeError(out["error"])
   return out["result"]
+
+
+def resolve_rpc() -> str:
+  """RPC_SSM names a keyed endpoint in SSM (read with the box's role, never printed); else RPC_URL."""
+  name = os.environ.get("RPC_SSM", "").strip()
+  if name:
+    try:
+      return subprocess.run(
+        ["aws", "ssm", "get-parameter", "--name", name, "--with-decryption", "--query", "Parameter.Value", "--output",
+         "text", "--region", os.environ.get("AWS_REGION", "us-east-1")],
+        capture_output=True, text=True, timeout=20, check=True).stdout.strip()
+    except Exception as exc:  # noqa: BLE001
+      print(f"RPC_SSM {name} unreadable ({type(exc).__name__}); using RPC_URL")
+  return os.environ.get("RPC_URL", "https://mainnet.base.org")
 
 
 def alert(webhook: str | None, msg: str) -> None:
@@ -117,7 +146,7 @@ def verdict(name: str, address: str, balance_eth: float, burn: float, warn_days:
 
 def main() -> int:
   load_env_file(Path.home() / ".numo-feeds.env")
-  url = os.environ.get("RPC_URL", "https://mainnet.base.org")
+  url = resolve_rpc()
   webhook = os.environ.get("ALERT_WEBHOOK_URL")
   wallets = parse_wallets(os.environ["WATCH_WALLETS"]) if os.environ.get("WATCH_WALLETS") else WALLETS
   warn_days = float(os.environ.get("WARN_RUNWAY_DAYS", DEFAULT_WARN_DAYS))
@@ -167,6 +196,20 @@ def self_test() -> int:
   assert verdict("x", "0x" + "0" * 40, 0.0084, 0.0012, 7.0) is None, "exactly 7 days is not low"
   assert verdict("x", "0x" + "0" * 40, 0.0083, 0.0012, 7.0) is not None
   # paging: under 2 days pages (3), under 7 is the low finding (1), a failed read is 2 regardless
+  import io
+  def opener(script):
+    def _open(req, timeout):
+      code = script.pop(0)
+      if code != 200:
+        raise urllib.error.HTTPError(req.full_url, code, "x", {}, io.BytesIO(b""))
+      return io.BytesIO(b'{"jsonrpc":"2.0","id":1,"result":"0x2a"}')
+    return _open
+  assert rpc("http://x", "m", [], _open=opener([429, 429, 200]), _sleep=lambda s: None) == "0x2a", "429s are retried"
+  try:
+    rpc("http://x", "m", [], _open=opener([503, 200]), _sleep=lambda s: None)
+    raise AssertionError("a 503 is not retried")
+  except urllib.error.HTTPError:
+    pass
   assert exit_code(low=False, critical=False) == 0
   assert exit_code(low=True, critical=False) == 1
   assert exit_code(low=True, critical=True) == 3
