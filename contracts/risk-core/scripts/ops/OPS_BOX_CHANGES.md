@@ -5,6 +5,15 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-17 18:26–18:29 UTC: book-maker-v2 reprices at 50 ticks (ECS, terraform from `main`)
+
+- **What** (`7009a45`, owner's call): `MM_BOOK_REPRICE_TICKS` 20 → 50 on the v2 bot only; the plan changed that value
+  alone. At 20, reprices were 155 of 353 sends.
+- **Rollout:** the old task (`41df820b…`) cancelled its spline at 18:26:10 (`0xf3b70b44…`) and sent nothing after; the
+  new one (`adcc2fc8…`) started 18:27:05, `preflight ok` with the market enabled, re-quoted at 18:27:06; the old
+  STOPPED by 18:28:47 (`wait-for-rollout.sh`). ~1 min unquoted; no warnings or errors in either stream.
+- **Next:** re-measure sends an hour on, and set the burn in `check_signer_balance.py` from it.
+
 ## 2026-11-17 17:40–18:24 UTC: v2 book enabled; canary takes with no reports filled against #58 (C0 test 3a)
 
 - **Enabled** by the vault (MPCVault `03129a0f-…` approved by the owner): tx `0xbf9bdaa8…87f7`, 17:40:55; the unit
