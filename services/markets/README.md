@@ -63,6 +63,14 @@ migrations/   database schema (incl. market_events table + triggers)
 - **Each fill records how it settled.** `trade_fills.taker_fee` is the fee the matcher submitted, as a
   quote-asset decimal (makers pay none), and `tx_hash` the settling transaction. NULL means unknown;
   migration 000014 backfilled the fee wherever it was exactly known.
+- **Every fill is checked on chain afterwards.** execution-service answers on the broadcast (`WAIT_FOR_RECEIPT=false`),
+  so a fill is recorded before it is mined and marked `trade_fills.settlement = 'pending'`. The matcher's settlement
+  verifier (`internal/matching/settlement_verifier.go`, every 15 s) marks it `confirmed` on a successful receipt, and
+  voids it only on proof it did not settle: a reverted receipt, its nonce used by another transaction, or no node
+  (primary or fallback RPC) aware of it 10 minutes after the broadcast. A void puts both orders' filled amounts back (an
+  order the fill had completed is cancelled, `settlement_voided`, not reopened), moves a future's reduce-only ledger
+  back, moves the row to `trade_fills_voided` and posts `NUMO FILL VOIDED`. Anything unproven waits and is posted once
+  at 10 minutes; a perp fill or one on an unlisted series is posted for a person and never voided automatically.
 - **Pruning keeps orders that traded.** The API prunes `cancelled` and `expired` orders older than
   `ORDERS_PRUNE_HORIZON` (default 30 days) unless they have fills: the order row is the only link from
   a fill to its owner, which `GET /fills` and `filled_quote` depend on. `filled` orders are never

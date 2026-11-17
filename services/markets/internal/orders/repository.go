@@ -1036,8 +1036,9 @@ insert into trade_fills (
   maker_order_id,
   taker_fee,
   tx_hash,
-  mark_price
-) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+  mark_price,
+  settlement
+) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 `
 
 	_, err := tx.Exec(
@@ -1053,8 +1054,18 @@ insert into trade_fills (
 		unknownIfEmpty(settlement.TakerFee),
 		unknownIfEmpty(settlement.TxHash),
 		unknownIfEmpty(settlement.MarkPrice),
+		// A fill with its transaction is checked on chain afterwards (matching/settlement_verifier.go).
+		pendingIfSent(settlement.TxHash),
 	)
 	return mapPGError(err)
+}
+
+// pendingIfSent is 'pending' for a fill recorded with its transaction, NULL without one.
+func pendingIfSent(txHash string) any {
+	if strings.TrimSpace(txHash) == "" {
+		return nil
+	}
+	return "pending"
 }
 
 // unknownIfEmpty stores an empty settlement field as NULL, which a fill row reads as unknown.

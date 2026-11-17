@@ -19,8 +19,11 @@ type Config struct {
 	MatcherPollInterval time.Duration
 	// MatcherHealthAddr is where the matcher serves its own /healthz (MATCHER_HEALTH_ADDR, default
 	// ":8082"); empty disables it.
-	MatcherHealthAddr      string
-	ChainRPCURL            string
+	MatcherHealthAddr string
+	ChainRPCURL       string
+	// ChainRPCFallbackURL (CHAIN_RPC_FALLBACK_URL) is the keyed endpoint rpcfallback retries 429s on; the settlement
+	// verifier also asks it directly before taking a transaction as never seen.
+	ChainRPCFallbackURL    string
 	ChainID                string
 	MatchingAddress        string
 	EnforceMatchingCustody bool
@@ -211,6 +214,7 @@ func Load() (Config, error) {
 		APIAddr:                 getenvDefault("API_ADDR", ":8080"),
 		DatabaseURL:             os.Getenv("DATABASE_URL"),
 		ChainRPCURL:             getenvDefault("CHAIN_RPC_URL", os.Getenv("RPC_URL")),
+		ChainRPCFallbackURL:     strings.TrimSpace(os.Getenv("CHAIN_RPC_FALLBACK_URL")),
 		MatcherHealthAddr:       getenvDefault("MATCHER_HEALTH_ADDR", ":8082"),
 		ChainID:                 os.Getenv("CHAIN_ID"),
 		MatchingAddress:         os.Getenv("MATCHING_ADDRESS"),

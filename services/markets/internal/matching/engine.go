@@ -93,6 +93,10 @@ func (e *Engine) Run(ctx context.Context) error {
 	if book != nil {
 		go book.run(ctx)
 	}
+	// A fill is recorded on the executor's broadcast; this proves each one mined, and takes back any that did not.
+	if verifier := newSettlementVerifier(e.cfg, e.orders, e.registry, e.alerts); verifier != nil {
+		go verifier.run(ctx)
+	}
 	health := newMatcherHealth(indexer, book)
 	if e.cfg.MatcherHealthAddr != "" {
 		go health.serve(ctx, e.cfg.MatcherHealthAddr)

@@ -92,6 +92,14 @@ func (a *settlementAlerter) NeedsResolution(what, market, takerOrderID, makerOrd
 	a.send(fmt.Sprintf("NUMO SETTLEMENT NEEDS RESOLUTION\n%s\n%s taker %s, maker %s: %s", what, market, takerOrderID, makerOrderID, short(cause)))
 }
 
+// Voided posts a fill the verifier took back, every time.
+func (a *settlementAlerter) Voided(text string) {
+	if a == nil {
+		return
+	}
+	a.send("NUMO FILL VOIDED\n" + text)
+}
+
 func (a *settlementAlerter) send(text string) {
 	if text == "" || a.url == "" {
 		return
