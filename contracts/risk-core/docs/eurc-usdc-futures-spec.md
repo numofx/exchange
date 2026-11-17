@@ -979,13 +979,23 @@ series on it, and keep v1 running to EURC-30NOV26's expiry. C4.3–C4.4 are peri
 Every contract change goes through the Stage 2 cycle: spec, tests with mutation checks, independent review, fork
 rehearsal, vault batches, mainnet canary.
 
-## C6. Decisions for the owner
+## C6. Decisions (approved by the owner 2026-11-17)
 
-| Decision | Proposed |
+| Decision | Decided |
 |---|---|
-| First scope | C4.1–C4.4 (quote view, self-priced splines, router, kit): the smallest set that makes the book composable |
-| Self-priced `ttl` cap | 60 s |
+| First scope | C4.1–C4.4 (quote view, self-priced splines, router, kit), **plus our own maker's quoting moved from `Matching` onto the book in self-priced mode**: the fastest route to C0 test 3 |
+| Self-priced `ttl` cap | 60 s per market. Our maker targets a ~10 s ttl at a 5 s update cadence |
 | Pegged mode | Kept beside self-priced; a maker picks per spline |
+| Priority-fee tax (B12) | Ships ready in the new version; **off while only our maker quotes, on when outside takers arrive** |
+| Maker caps | **Two separate parameters:** the per-take cap on makers settled (gas, B10) and the per-market maker set (who may quote, C4.5) |
 | Maker set (C4.5) | Raise the allowlist cap first; permissionless with a bond later |
 | Matching path | Kept for now; becomes a maker or router once C4.6 exists |
 | Lending (C4.7–C4.8) | After the venue is liquid |
+
+**Before any C4 item ships** (self-priced quoting stops when the stored index is stale, C3, so the keeper becomes the
+venue's liveness): a keeper funding alert, a backup keeper key, and an alert on the stored reports' age.
+
+**C4.6 measurement, extended:** besides one margin check per account per take, measure a **hybrid**: one batch per take,
+falling back to per-maker settlement when the batch reverts, so B5a's isolation of a failing maker still holds.
+
+**Order of work:** hot-wallet top-ups (2026-11-17), then the EURC-30NOV26 expiry run-sheet, then C4.1 (quote view).
