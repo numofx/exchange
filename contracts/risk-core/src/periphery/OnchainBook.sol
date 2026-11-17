@@ -545,9 +545,9 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
    * @return filled position units, as `take` returns them
    * @return avgPrice quote per base, 18 dp; 0 when nothing fills
    * @return fee taker fee and priority tax, in cash
-   * @return makers how many makers would be settled: each costs ~610k gas (spec B10)
+   * @return makerCount how many makers would be settled: each costs ~610k gas (spec B10)
    */
-  function quote(TakeOrder calldata o) external view returns (uint filled, uint avgPrice, uint fee, uint makers) {
+  function quote(TakeOrder calldata o) external view returns (uint filled, uint avgPrice, uint fee, uint makerCount) {
     Market memory m = _market(o.marketId);
     if (!m.enabled) revert OB_MarketDisabled();
     if (block.timestamp > o.deadline) revert OB_Expired();
@@ -581,7 +581,7 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
     if (p.filledLots > 0) avgPrice = p.notionalTicks * m.tickSize / p.filledLots;
     fee = p.fee;
     for (uint i; i < settled.length; ++i) {
-      if (settled[i]) ++makers;
+      if (settled[i]) ++makerCount;
     }
   }
 

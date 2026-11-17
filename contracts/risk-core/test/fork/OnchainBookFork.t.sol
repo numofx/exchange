@@ -14,6 +14,8 @@ import {IAsset} from "../../src/interfaces/IAsset.sol";
 import {IManager} from "../../src/interfaces/IManager.sol";
 import {IFutureAssetV3} from "../../src/interfaces/IFutureAssetV3.sol";
 import {OnchainBook, IOnchainBookManager} from "../../src/periphery/OnchainBook.sol";
+import {OnchainBookRouter, IRouterCash} from "../../src/periphery/OnchainBookRouter.sol";
+import {ICashAsset} from "../../src/interfaces/ICashAsset.sol";
 
 /**
  * OnchainBook against the live EURC-30NOV26 v3 stack on Base (docs/eurc-usdc-futures-spec.md, B10, B11): the
@@ -286,5 +288,53 @@ contract OnchainBookFork is Test {
       address(FUTURE).staticcall(abi.encodeWithSignature("totalPosition(address)", address(ENGINE)));
     require(ok, "totalPosition");
     return abi.decode(ret, (uint));
+  }
+
+  /////////////////////////
+  // Router (spec C4.3) //
+  /////////////////////////
+
+  /// The live CashAsset pays out only to the account's owner: an operator is refused. This is why the router holds the
+  /// account for its withdrawal step.
+  function testTheRealCashRefusesAnOperatorsWithdrawal() public {
+    address operator = address(0x0e7);
+    vm.prank(bob);
+    subAccounts.setApprovalForAll(operator, true);
+    vm.prank(operator);
+    vm.expectRevert(ICashAsset.CA_OnlyAccountOwner.selector);
+    CASH.withdraw(bobAcc, 1e6, operator);
+  }
+
+  /// Deposit, a take priced from the real reports through Chainlink's verifier, and a withdrawal, in one router call
+  /// on the live stack.
+  function testRouterDepositTakeWithdrawOnTheLiveStack() public {
+    _makers(1, 1);
+    OnchainBookRouter router = new OnchainBookRouter(book, IRouterCash(address(CASH)));
+    deal(USDC, bob, 100e6);
+    vm.startPrank(bob);
+    subAccounts.setApprovalForAll(address(router), true);
+    IERC20Metadata(USDC).approve(address(router), 100e6);
+
+    OnchainBookRouter.Route memory r;
+    r.accountId = bobAcc;
+    r.deposit = 100e6;
+    r.take = _order(true, 100);
+    r.reports = reports;
+    r.withdraw = 60e6;
+    int cashBefore = subAccounts.getBalance(bobAcc, IAsset(address(CASH)), 0);
+    uint g = gasleft();
+    (uint filled,) = router.route(r);
+    g -= gasleft();
+    vm.stopPrank();
+    console.log("router: deposit + take (1 maker, reports attached) + withdraw:", g);
+
+    assertEq(filled, 100 * LOT);
+    assertEq(IERC20Metadata(USDC).balanceOf(bob), 60e6, "the withdrawal reached bob");
+    assertEq(IERC20Metadata(USDC).balanceOf(address(router)), 0, "the router holds nothing");
+    assertEq(subAccounts.ownerOf(bobAcc), bob, "the account is bob's again");
+    assertEq(subAccounts.balanceOf(address(router)), 0);
+    int cashAfter = subAccounts.getBalance(bobAcc, IAsset(address(CASH)), 0);
+    assertGt(cashAfter, cashBefore + 40e18 - 1e18, "net +40 USDC, less the fee and the mark");
+    assertLt(cashAfter, cashBefore + 40e18);
   }
 }

@@ -980,9 +980,24 @@ Costs and risks:
      and a 256-run quote-equals-take fuzz over mid, report age (0–70 s) and modes. Twelve guards mutation-tested (one
      equivalent mutant, the catch setting the index to 0, replaced by the meaningful one: no `try`, as v1). The 76
      existing book tests unchanged; 1,729 risk-core tests pass.
-3. **Router** (periphery). One call: deposit collateral, take, optionally reduce and withdraw. It acts on the
-   caller's own account as an operator (`setApprovalForAll`) and holds no funds between calls. Returns the take's
-   result.
+3. **Router** (periphery). **Built 2026-11-17: `src/periphery/OnchainBookRouter.sol`, 4,035 bytes, ownerless and not
+   upgradeable; deployed with the next book (it takes the book's address).** `route(Route)` → `(filled, avgPrice)`:
+   deposit stable from the caller, take (reports attached), optionally reduce-only, withdraw to a recipient (default
+   the caller). Each step is optional; any failure reverts the whole call.
+   - **Who.** Only the account's owner calls it (`R_NotOwner`, an operator of the owner included); the take must be on
+     the routed account (`R_WrongAccount`). The router is the owner's operator (`setApprovalForAll`). The book still
+     needs its own permission on the account, as for any take (operator, or allowances on the future and cash).
+   - **Withdrawal.** CashAsset pays out only to the owner (`CA_OnlyAccountOwner`, proven on the live cash), so the
+     router holds the account for that step: owner → router → owner inside the call. Allowances are keyed by
+     (account, owner) and survive; ERC721 clears a per-account `approve`, so withdrawals need `setApprovalForAll`
+     (tested). A maker account's splines are inert only within the call.
+   - **Reduce-only.** The take must oppose the position (`R_NotReducing`, flat included) and is cut to its size.
+   - **Holds nothing.** Exactly the deposit is pulled and deposited; afterwards the router holds no tokens and no
+     account (asserted on the fork).
+   - **Gas.** Deposit + take (1 maker, reports attached) + withdraw: 1,364,329 on the live-stack fork, ~95k over the
+     take alone (1,269,142).
+   - **Tests.** 10 unit (`test/periphery/OnchainBookRouter.t.sol`) and 2 fork (the live cash refusing an operator;
+     the full route against Chainlink's verifier). Nine guards mutation-tested.
 4. **Integration kit.** A Solidity interface, documented return data and events, an example integration (a
    delta-hedge vault on Aerodrome EURC/USDC with a flash loan) and fork tests.
 5. **Open the maker set.** Raise the per-market cap with measured gas, or allow permissionless makers behind a bond.
