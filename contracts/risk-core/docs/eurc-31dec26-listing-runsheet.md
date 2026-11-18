@@ -32,8 +32,8 @@ markets-service.
 
 | # | Step | Sends | Done when |
 |---|---|---|---|
-| L1 | **Tooling.** Add an `eurc-v3-list` batch to `propose_eurc_future_v3_batch.py` with `--expiry`. It runs one action, `setContract(expiry, expiry − 1800, initialMark)`; the initial mark is index × (1 + 0.015 × time to expiry / 365 d), the keeper's carry. **Gates:** the vault owns the future; the expiry is unlisted, and no other future on the engine has it; fixing parameters are 1800/120/3600; last trade is more than 7 days away; the initial mark is inside `markIndexBand(expiry)` and within 1% of the carry forward; the index answers. Self-tested, plus a fork rehearsal: prank the vault, list, then `pullMark` from a stand-in-signed forward, take on a market 2 of the v2 book | nothing | Committed; the fork lists, marks and fills |
-| L2 | **Keeper config.** `future-feeds-v3-eurc-31dec26.env`, a copy of 30NOV26's with `FUTURE_SUB_ID=1798729200`, and `FORWARD_RELAYER_SSM_NAME=forward_relayer_key_v3_eurc_canary`. That relayer, `0x35ee…bDD5`, is idle since the canary settled and holds 0.00002 ETH. Two relayers, because two instances on one key collide on nonces | nothing | Committed |
+| L1 | **Tooling** (**done 2026-11-17**, rehearsed below). An `eurc-v3-list` batch in `propose_eurc_future_v3_batch.py` with `--expiry` (and `--initial-mark` to pin the dry run's). It runs one action, `setContract(expiry, expiry − 1800, initialMark)`; the initial mark is index × (1 + 0.015 × time to expiry / 365 d), the keeper's carry. **Gates:** the vault owns the future; the expiry is unlisted, and no other future on the engine has it; fixing parameters are 1800/120/3600; last trade is more than 7 days away; the initial mark is inside `markIndexBand(expiry)` and within 1% of the carry forward; the index answers. Self-tested, plus a fork rehearsal: prank the vault, list, then `pullMark` from a stand-in-signed forward, take on a market 2 of the v2 book | nothing | Committed; the fork lists, marks and fills |
+| L2 | **Keeper config** (**done 2026-11-17**, `DRY_RUN=true` in the file). `future-feeds-v3-eurc-31dec26.env`, a copy of 30NOV26's with `FUTURE_SUB_ID=1798729200`, and `FORWARD_RELAYER_SSM_NAME=forward_relayer_key_v3_eurc_canary`. That relayer, `0x35ee…bDD5`, is idle since the canary settled and holds 0.00002 ETH. Two relayers, because two instances on one key collide on nonces | nothing | Committed |
 | L3 | **Fund the relayer:** ~0.02 ETH to `0x35eeBd8E94F9c4a6b13EBa9fD676f7d0fDa8bDD5` (owner). Add it to `check_signer_balance.py` at 0.0035, the v3 relayer's measured rate | owner | Read back; balance check `ok` |
 | L4 | **List** (`eurc-v3-list --expiry 1798729200 --propose`, from the box) | vault | `futureContracts(1798729200)`: listed, unsettled, last trade `1798727400` |
 | L5 | **Keeper:** install the env with `DRY_RUN=true`, then `systemctl enable --now numo-future-feeds-v3@eurc-31dec26`. Read its first forward mark in the log (`basis carry`, since Matching is empty), then set `DRY_RUN=false` and restart | box | `futureContracts(…).markPrice` updated by `pullMark`; `lastMarkTime` within `maxMarkDelay` |
@@ -61,3 +61,29 @@ the canary ran. After 30NOV26's close-out:
 - **After L4:** a listed series can't be unlisted. With no trades it costs nothing; settlement runs on 31 Dec with no
   positions to close out.
 - **After L6:** remove the `future_series` entry and redeploy, which delists it on Matching and in the app.
+
+## Rehearsed, 2026-11-17
+
+- **Mainnet dry run** (`eurc-v3-list --expiry 1798729200`): every gate passed.
+  - custody;
+  - schedule: 43.4 days to last trade, fixing (1800, 120, 3600);
+  - series;
+  - forward: expiries taken to `1826509675`;
+  - index 1.099112;
+  - mark 1.101078, the carry forward, inside 3% of the index;
+  - parity: 43 settings.
+
+  Digest `0x157c5459…71af`. The mark moves with the index, so **propose with the `--initial-mark` that the same day's
+  dry run printed.**
+- **anvil fork at head:**
+  - The vault, impersonated, sent the proposer's exact calldata: `setContract` 132,549 gas.
+  - Read back: listed, expiry and last trade as intended, mark 1.101078, and `seriesFixing` (1800, 120, 3600). The
+    proposer then read it as landed.
+  - Then market 2 on the v2 book as in `onchain-book-next-series-runsheet.md`. #57 **bought 5 EURC of EURC-31DEC26
+    from #58 with no reports** (1,031,582 gas): +5 / −5 on the new subId, 30NOV26 untouched, and both accounts' margin
+    positive. Sold back (770,753 gas): flat.
+- **The keeper itself isn't rehearsed:** it needs the Data Streams credentials and the KMS forward signer. The canary
+  ran a second instance on this future from 15 Nov, which is the precedent. L5's dry run is the check.
+- **Self-test:** the carry forward matches perp-feeds' `discountForward` to the unit (vectors from node BigInt).
+  Python's `//` floors where JavaScript truncates, which is caught by a test. The calldata matches `cast calldata`.
+  Nine mutants of the new guards were all caught; the band check needed a second case.

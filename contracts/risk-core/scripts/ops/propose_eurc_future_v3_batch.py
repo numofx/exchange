@@ -6,6 +6,11 @@
                   v2 EURC-30NOV26 in the market's one future slot, and set market 2's futures margin. Opens nothing.
   eurc-v3-enable  EURC_FUTURE_V3_ENABLE_VAULT_ACTIONS.json: the future's cap under v2, then the future on the
                   TradeModule.
+  eurc-v3-list    --expiry E: a further series on the same future (eurc-31dec26-listing-runsheet.md, L4), built here
+                  with no file: setContract(E, E - fixingWindow, initial mark). The cap and the TradeModule are the
+                  asset's, already open; the series takes the future's fixing parameters in force now, for good. The
+                  initial mark is the keeper's carry forward, index / (1 + CARRY x tau) (perp-feeds discountForward),
+                  unless --initial-mark gives one.
 
 Every action is rebuilt here from EURC_FUTURE_V3.json and must match the file exactly (to, calldata, value), digest
 recomputed (keccak(to || keccak(data))). An action whose postcondition already holds is skipped. Gates are re-read
@@ -22,6 +27,16 @@ Setup gates (all read live, all required):
   parity     the adapter, index feed, future and forward feed as deployed; the deployer has sent nothing unaudited;
              the canary series (spec A1.4), if deployed, listed on its own short fixing params and settling before
              the production series' window opens
+
+List gates (all read live, all required):
+  custody    the vault owns the future; EUR's future on v2 is this one
+  schedule   E unlisted on the future; last trade E - fixingWindow is over 7 days away; the future's fixing parameters
+             are the production series' (window, sample gap, recovery delay), the values E keeps
+  series     no other market lists a series at E
+  forward    the forward feed takes data for E (E within its maxExpiry)
+  index      EurcIndexFeed answers
+  mark       the initial mark sits inside markIndexBand(E) of the index and within 1% of the carry forward
+  parity     as at enable, owned by the vault
 
 Enable gates (all read live, all required unless marked):
   custody    the vault owns both; setup has landed; the future is closed (cap 0, not on the TradeModule)
@@ -48,6 +63,7 @@ Env (or ~/.numo-mark-keeper.env): MPCVAULT_TOKEN, MPCVAULT_VAULT, VAULT_ADDRESS,
   python3 scripts/ops/propose_eurc_future_v3_batch.py eurc-v3-setup             # check + sheet, proposes nothing
   python3 scripts/ops/propose_eurc_future_v3_batch.py eurc-v3-setup --propose
   python3 scripts/ops/propose_eurc_future_v3_batch.py eurc-v3-enable
+  python3 scripts/ops/propose_eurc_future_v3_batch.py eurc-v3-list --expiry 1798729200
   python3 scripts/ops/propose_eurc_future_v3_batch.py --self-test
 """
 
@@ -77,7 +93,7 @@ ROOT = v1p.ROOT
 NAME = "EURC_FUTURE_V3"
 RETIRED_NAME = "EURC_FUTURE_V2"
 ENGINE_NAME = v2p.NAME
-SETUP, ENABLE = "eurc-v3-setup", "eurc-v3-enable"
+SETUP, ENABLE, LIST = "eurc-v3-setup", "eurc-v3-enable", "eurc-v3-list"
 FILES = {SETUP: f"{NAME}_VAULT_ACTIONS.json", ENABLE: f"{NAME}_ENABLE_VAULT_ACTIONS.json"}
 MARKET_ID = e2.MARKET_ID
 FUTURE, PERP = v2p.FUTURE, v2p.PERP
@@ -97,10 +113,18 @@ USDC_USD_FEED = 0x00038f83323b6b08116d1614cf33a9bd71ab5e0abf0c9f1b783a74a43e7bd9
 
 SIGNATURES = {**e2.SIGNATURES, "adapter": "adapter()", "verifierProxy": "verifierProxy()", "baseFeedId": "baseFeedId()",
               "quoteFeedId": "quoteFeedId()", "indexMaxAge": "indexMaxAge()", "feedTimelock": "feedTimelock()",
-              "recoveryDelay": "recoveryDelay()", "seriesFixing": "seriesFixing(uint256)"}
+              "recoveryDelay": "recoveryDelay()", "seriesFixing": "seriesFixing(uint256)",
+              "setContract": "setContract(uint64,uint64,uint256)", "maxExpiry": "maxExpiry()"}
 PINNED = {**e2.PINNED, "adapter": "0x03eadcfc", "verifierProxy": "0x47f77bc0", "baseFeedId": "0x99b447af",
           "quoteFeedId": "0x05cdccbf", "indexMaxAge": "0xf1edb35b", "feedTimelock": "0x5258a69d",
-          "recoveryDelay": "0x3758ca7a", "seriesFixing": "0x066f2a37"}
+          "recoveryDelay": "0x3758ca7a", "seriesFixing": "0x066f2a37", "setContract": "0x5e3dba2b",
+          "maxExpiry": "0x94be834d"}
+# A further series (eurc-v3-list): listed at least this long before its last trade, so the keeper, markets-service and
+# the book have a week to follow; its initial mark within this of the keeper's carry forward (18 dp).
+LIST_MIN_LEAD_SEC = 7 * 86400
+LIST_MARK_TOLERANCE = 10**16
+YEAR_SEC = 365 * 86400
+ONE = 10**18
 
 
 def selector(name: str) -> str:
@@ -126,6 +150,88 @@ def expected_actions(batch: str, d: dict) -> list[tuple[str, str]]:
   # TradeModule first: until it is registered a fill carries no price and skips the band check, and the cap is still 0
   return [(d["tradeModule"], selector("setDatedFutureAsset") + word_address(d["future"]) + word_uint(1)),
           (d["future"], selector("setTotalPositionCap") + m + word_uint(int(d["futureOICap"])))]
+
+
+def discount_forward(index: int, carry: int, seconds_to_expiry: int) -> int:
+  """index / (1 + carry x tau), 18 dp: perp-feeds forward-targets.ts discountForward, the v3 keeper's mark without a book
+  (a negative carry, EURC's, is a premium). Same integer arithmetic, so the keeper's first mark starts where this one does."""
+  if seconds_to_expiry <= 0:
+    return index
+  return tdiv(index * ONE, ONE + tdiv(carry * seconds_to_expiry, YEAR_SEC))
+
+
+def tdiv(a: int, b: int) -> int:
+  """Integer division toward zero, as JavaScript's BigInt: Python's // floors, which differs for a negative carry."""
+  q = abs(a) // abs(b)
+  return q if (a >= 0) == (b > 0) else -q
+
+
+def list_action(d: dict, expiry: int, initial_mark: int) -> tuple[str, str]:
+  return (d["future"], selector("setContract") + word_uint(expiry) + word_uint(expiry - int(d["fixingWindow"]))
+          + word_uint(initial_mark))
+
+
+def list_postcondition(chain: Chain, d: dict, expiry: int):
+  s = word_uint(expiry)
+  return lambda: (chain.word(d["future"], selector("futureContracts") + s, 0) == 1
+                  and chain.word(d["future"], selector("futureContracts") + s, 2) == expiry
+                  and chain.word(d["future"], selector("futureContracts") + s, 3) == expiry - int(d["fixingWindow"]))
+
+
+def schedule_verdict(listed: int, expiry: int, now: int, window: int, fixing: tuple[int, int, int],
+                     production: tuple[int, int, int]) -> Gate:
+  problems = (["already listed"] if listed else []) + \
+             ([f"{(expiry - window - now) / 86400:.1f} days to last trade (under {LIST_MIN_LEAD_SEC // 86400})"]
+              if expiry - window - now < LIST_MIN_LEAD_SEC else []) + \
+             ([f"the future's fixing parameters {fixing} are not the production series' {production}: the series would "
+               "keep them for good"] if fixing != production else [])
+  return Gate("schedule", not problems, "; ".join(problems) or
+              f"unlisted; last trade in {(expiry - window - now) / 86400:.1f} days; fixing {fixing}, the production series'")
+
+
+def mark_verdict(initial: int, index: int, band: int, fair: int) -> Gate:
+  problems = ([f"outside the index band ({band / 1e16:g}% around {index / 1e18:.6f})"]
+              if abs(initial - index) * ONE > index * band else []) + \
+             ([f"over 1% from the carry forward {fair / 1e18:.6f}"] if abs(initial - fair) * ONE > fair * LIST_MARK_TOLERANCE else [])
+  return Gate("mark", not problems, f"initial mark {initial / 1e18:.6f}: " + ("; ".join(problems) if problems else
+              f"inside {band / 1e16:g}% of the index {index / 1e18:.6f}, carry forward {fair / 1e18:.6f}"))
+
+
+def forward_verdict(expiry: int, now: int, max_expiry: int) -> Gate:
+  ok = expiry <= now + max_expiry
+  return Gate("forward", ok, f"the forward feed takes expiries to {(now + max_expiry)} " +
+              ("(covers it)" if ok else f"and refuses {expiry}: setMaxExpiry first"))
+
+
+def gate_list(chain: Chain, d: dict, vault: str, expiry: int, initial_mark: int) -> list[Gate]:
+  s = word_uint(expiry)
+  now = chain.head()
+  future, w = d["future"], lambda name, *args, index=0: chain.word(d["future"], selector(name) + "".join(args), index)  # noqa: E731
+  owned_ = chain.address(future, "owner").lower() == vault.lower()
+  on_engine = e2.future_on_market(chain, d).lower() == future.lower()
+  custody = Gate("custody", owned_ and on_engine, "the vault owns the future; EUR's future is this one" if owned_ and on_engine
+                 else ("the vault does not own the future; " if not owned_ else "") + ("" if on_engine else "EUR's future is not this one"))
+  gates = [custody,
+           schedule_verdict(w("futureContracts", s), expiry, now, w("fixingWindow"),
+                            (w("fixingWindow"), w("maxSampleGap"), w("recoveryDelay")),
+                            (int(d["fixingWindow"]), int(d["maxSampleGap"]), int(d["recoveryDelay"]))),
+           e2.series_gate(chain, {**d, "subId": expiry}),
+           forward_verdict(expiry, now, chain.word(d["forwardFeed"], selector("maxExpiry")))]
+  try:
+    index = chain.word(d["indexFeed"], selector("getSpot"))
+    gates += [index_gate(True, f"EURC/USDC index {index / 1e18:.6f}"),
+              mark_verdict(initial_mark, index, w("markIndexBand", s),
+                           discount_forward(index, int(d["carry"]), expiry - now))]
+  except Exception as exc:  # noqa: BLE001
+    gates.append(index_gate(False, str(exc)[:80]))
+  return gates + [gate_parity(chain, d, vault, attached=True)]
+
+
+def check_list_args(batch: str, expiry: int | None, initial_mark: int | None) -> None:
+  if batch == LIST and expiry is None:
+    raise SystemExit("eurc-v3-list needs --expiry: the series to list")
+  if batch != LIST and (expiry is not None or initial_mark is not None):
+    raise SystemExit("--expiry and --initial-mark are for eurc-v3-list: setup and enable are the deployed series'")
 
 
 # The action whose landing replaces market 2's future: the slot gate is re-read right before it.
@@ -539,13 +645,46 @@ def self_test() -> int:
   assert sm.ok and "covers 48.2 EURC contracts" in sm.detail, sm.detail
   assert keeper.ok and "over 40.8 EURC contracts" in keeper.detail, keeper.detail
 
+  # eurc-v3-list: the keeper's carry forward, to the unit (node BigInt, forward-targets.ts discountForward, 2026-11-17)
+  assert discount_forward(1100055000000000000, -15 * 10**15, 3741000) == 1102015921595647505
+  assert discount_forward(1100055000000000000, -15 * 10**15, 0) == 1100055000000000000
+  assert discount_forward(1234567890123456789, -15 * 10**15, 31536000) == 1253368416368991663
+  assert tdiv(-7, 2) == -3 and tdiv(7, 2) == 3 and tdiv(-7, -2) == 3
+  ld = {"future": a(3), "fixingWindow": 1800}
+  to, data = list_action(ld, 1798729200, 1102015000000000000)
+  # cast calldata "setContract(uint64,uint64,uint256)" 1798729200 1798727400 1102015000000000000
+  assert (to, data) == (a(3), "0x5e3dba2b" + word_uint(1798729200) + word_uint(1798727400) + word_uint(1102015000000000000))
+  now, prod = 1795_000_000, (1800, 120, 3600)
+  assert schedule_verdict(0, 1798729200, now, 1800, prod, prod).ok
+  assert not schedule_verdict(1, 1798729200, now, 1800, prod, prod).ok, "already listed"
+  assert not schedule_verdict(0, now + LIST_MIN_LEAD_SEC + 1799, now, 1800, prod, prod).ok, "under a week to last trade"
+  assert schedule_verdict(0, now + LIST_MIN_LEAD_SEC + 1800, now, 1800, prod, prod).ok, "exactly a week"
+  assert not schedule_verdict(0, 1798729200, now, 1800, (900, 120, 300), prod).ok, "the canary's fixing params"
+  idx, band, fair = 1100 * 10**15, 3 * 10**16, 1102 * 10**15
+  assert mark_verdict(fair, idx, band, fair).ok
+  assert not mark_verdict(idx * 104 // 100, idx, band, fair).ok, "outside the band"
+  assert not mark_verdict(fair, idx, 10**15, fair).ok, "at the carry forward but outside a 0.1% band"
+  assert not mark_verdict(fair * 1011 // 1000, idx, 10**17, fair).ok, "over 1% from the carry forward"
+  assert mark_verdict(fair * 1009 // 1000, idx, 10**17, fair).ok
+  assert forward_verdict(1798729200, now, 365 * 86400).ok and not forward_verdict(1798729200, now, 86400).ok
+  for bad in (("eurc-v3-list", None, None), (SETUP, 1798729200, None), (ENABLE, None, 1)):
+    try:
+      check_list_args(*bad)
+    except SystemExit:
+      continue
+    raise AssertionError(f"arguments {bad} accepted")
+  check_list_args(LIST, 1798729200, None)
+  check_list_args(ENABLE, None, None)
+  assert series_label(1798729200) == "EURC-31DEC26"
+
   import inspect
   for fn in (main, run_batch):
     assert "propose(token" not in inspect.getsource(fn), f"{fn.__name__} calls propose() directly"
   print("self-test ok: selectors compiled and pinned; a wrong target, calldata, value, digest, count or order is refused; "
         "the artifact must replace the recorded retired series; the slot refuses open interest, a cap, a TradeModule "
         "registration, pending VM or a stranger; a stale or out-of-band mark, a silent index and a cap over the "
-        "measurement are refused")
+        "measurement are refused; a further series lists at the keeper's carry forward (to the unit), on the production "
+        "fixing parameters, a week or more before its last trade")
   return 0
 
 
@@ -553,16 +692,34 @@ def self_test() -> int:
 # main
 # ---------------------------------------------------------------------------------------------
 
+def list_initial_mark(chain: Chain, d: dict, expiry: int, given: int | None) -> int:
+  """--initial-mark, or the keeper's carry forward now, to 6 dp (a mark MPCVault shows readably)."""
+  if given is not None:
+    return given
+  fair = discount_forward(chain.word(d["indexFeed"], selector("getSpot")), int(d["carry"]), expiry - chain.head())
+  return fair // 10**12 * 10**12
+
+
 def run_batch(args, d: dict, retired: dict, cngn: dict, stack: dict, chain: Chain, rpc_url: str, vault: str) -> int:
-  actions = json.loads((args.dir / FILES[args.batch]).read_text())
-  verify_actions(args.batch, d, actions)
+  if args.batch == LIST:
+    mark = list_initial_mark(chain, d, args.expiry, args.initial_mark)
+    to, data = list_action(d, args.expiry, mark)
+    actions = [{"description": f"eurcFutureV3.setContract({args.expiry}, {args.expiry - int(d['fixingWindow'])}, "
+                               f"{mark / 1e18:.6f}) [lists {series_label(args.expiry)}]",
+                "to": to, "value": "0", "data": data, "digest": digest(to, data)}]
+    print(f"initial mark {mark} ({mark / 1e18:.6f}): pass --initial-mark {mark} to propose exactly this one later")
+  else:
+    actions = json.loads((args.dir / FILES[args.batch]).read_text())
+    verify_actions(args.batch, d, actions)
 
   def gates() -> list[Gate]:
+    if args.batch == LIST:
+      return gate_list(chain, d, vault, args.expiry, mark)
     return gate_setup(chain, d, retired, vault) if args.batch == SETUP else gate_enable(chain, d, cngn, stack, vault)
 
   current = gates()
   passed = report(current)
-  holds = postconditions(chain, args.batch, d, vault)
+  holds = [list_postcondition(chain, d, args.expiry)] if args.batch == LIST else postconditions(chain, args.batch, d, vault)
   done = [h() for h in holds]
   print()
   for i, a in enumerate(actions):
@@ -591,24 +748,33 @@ def run_batch(args, d: dict, retired: dict, cngn: dict, stack: dict, chain: Chai
       if not report(again):
         raise SystemExit(f"a gate failed before action {i}: stop and investigate")
     v2p.await_approval(token, vault_uuid, vault, a, rpc_url, holds[i])
-  print(f"\n{args.batch}: done." + (f" {d['symbol']} v3 is open." if args.batch == ENABLE else ""))
+  print(f"\n{args.batch}: done." + (f" {d['symbol']} v3 is open." if args.batch == ENABLE else "")
+        + (f" {series_label(args.expiry)} is listed." if args.batch == LIST else ""))
   return 0
+
+
+def series_label(expiry: int) -> str:
+  import time
+  return "EURC-" + time.strftime("%d%b%y", time.gmtime(expiry)).upper()
 
 
 def main() -> int:
   ap = argparse.ArgumentParser(description="Propose the EURC v3 series' vault batches on MarginEngine v2")
-  ap.add_argument("batch", nargs="?", choices=tuple(FILES))
+  ap.add_argument("batch", nargs="?", choices=(*FILES, LIST))
   ap.add_argument("--propose", action="store_true", help="create MPCVault signing requests, one at a time")
   ap.add_argument("--self-test", action="store_true")
   ap.add_argument("--dir", type=Path, default=ROOT / "deployments" / "8453", help="where the deploys wrote their artifacts")
   ap.add_argument("--stack", type=Path, default=ROOT / "deployments" / "8453" / "CNGN_PERP_STACK.json")
   ap.add_argument("--json", action="store_true", help="print the gates as JSON on the last line")
+  ap.add_argument("--expiry", type=int, help="eurc-v3-list: the series to list (unix expiry, its subId)")
+  ap.add_argument("--initial-mark", type=int, help="eurc-v3-list: the initial mark, 18 dp (default: the carry forward)")
   args = ap.parse_args()
 
   if args.self_test:
     return self_test()
   if not args.batch:
-    ap.error("name a batch: " + ", ".join(FILES))
+    ap.error("name a batch: " + ", ".join((*FILES, LIST)))
+  check_list_args(args.batch, args.expiry, args.initial_mark)
 
   load_env_file(Path.home() / ".numo-mark-keeper.env")
   load_env_file(Path("/etc/numo/perp-pager.env"))
