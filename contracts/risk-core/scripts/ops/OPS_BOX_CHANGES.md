@@ -5,6 +5,21 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-18 ~23:20 UTC: cNGN book maker wallet and account created (SSM, chain)
+
+Owner approved, 2026-11-18: a wallet for the cNGN OnchainBook maker; its account; 2,700 USDC from #39 at cutover.
+
+- **Wallet `0x7b96cFc1C909318Ed55F50ABD7D2EFC52f1eBE4d`.** Generated with `cast wallet new` into a mode-600
+  scratch file, written to SSM **`/numo/exchange/mm_book_cngn_private_key`** (SecureString, version 1), then the file
+  was deleted. The key was never printed. The SSM value derives back to the address. It holds no ETH: the owner
+  funds about 0.03.
+- **Account #60** under MarginEngine v2, owned by that wallet: `createAccount(0x7b96…, 0x0705…)` from the MM wallet,
+  tx `0xdff5f63e…4638`, block 59,256,942. `cast send` errored after sending, on publicnode refusing a receipt call
+  as "archive"; `lastAccountId` 60, `ownerOf(60)` and `manager(60)` were read back on `mainnet.base.org`.
+- **`migrate-spot-mm.ts move-usdc`** may now deposit into an account held by a wallet in `BOOK_MAKER_WALLETS`
+  (just 0x7b96…). Dry run `move-usdc 39 60 2700000000`: both accounts pass. It is refused because 20 of the MM's
+  orders rest on #39. That is right until cutover, when #39's maker stops and its quotes expire.
+
 ## 2026-11-18 21:46–21:55 UTC: fallback RPC off the capped Alchemy key; book maker and executor redeployed (SSM, ECS)
 
 - **SSM `/numo/exchange/rpc_fallback_url`** (version 2): Alchemy → `https://base-rpc.publicnode.com`. Owner approved.

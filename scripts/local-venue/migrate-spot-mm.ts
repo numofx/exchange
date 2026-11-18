@@ -508,6 +508,13 @@ async function atBlock<T>(read: () => Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * Our OnchainBook makers' own wallets, besides the MM wallet: a destination move-usdc may deposit into. Each book maker
+ * sends transactions, so each has its own wallet (two on one key collide on nonces).
+ *   0x7b96…bE4d  the cNGN book maker (2026-11-18), account #60; key in SSM /numo/exchange/mm_book_cngn_private_key
+ */
+const BOOK_MAKER_WALLETS: readonly Address[] = ['0x7b96cFc1C909318Ed55F50ABD7D2EFC52f1eBE4d'];
+
 async function moveUsdc() {
   const [from, to, units] = flags.filter((f) => /^[0-9]+$/.test(f)).map(BigInt);
   if (!from || !to || !units) throw new Error('move-usdc needs <from id> <to id> <usdc units (6dp)>');
@@ -523,8 +530,10 @@ async function moveUsdc() {
     if (!engines.has(mgr.toLowerCase())) throw new Error(`#${id} is under ${mgr}, not a MarginEngine the venue lists`);
     const custodian = await client.readContract({ address: MATCHING, abi, functionName: 'subAccountToOwner', args: [id] });
     const held = custodian.toLowerCase() === owner.address.toLowerCase();
-    // The destination may also be an account the MM wallet holds itself, outside Matching: the OnchainBook maker's.
-    const direct = id === to && (await client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'ownerOf', args: [id] })).toLowerCase() === owner.address.toLowerCase();
+    // The destination may also be an account the MM wallet holds itself, outside Matching (the EURC OnchainBook
+    // maker's, #58), or one held by another of our book makers' wallets (BOOK_MAKER_WALLETS).
+    const direct = id === to && [owner.address, ...BOOK_MAKER_WALLETS].map((a) => a.toLowerCase()).includes(
+      (await client.readContract({ address: SUB_ACCOUNTS, abi, functionName: 'ownerOf', args: [id] })).toLowerCase());
     if (!held && !direct) throw new Error(`#${id} is neither the MM's in Matching (owner ${custodian}) nor ${id === to ? "held by the MM wallet" : "a destination"}`);
     console.log(`#${id}: under ${mgr}, cash ${await ledger(id, cash)} (18dp)`);
   }
