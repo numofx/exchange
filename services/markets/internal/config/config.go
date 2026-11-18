@@ -764,7 +764,8 @@ type OnchainBookSource struct {
 }
 
 // onchainBookEnvNames are the env prefixes of the books, in order: <NAME>_ADDRESS and <NAME>_START_BLOCK.
-var onchainBookEnvNames = []string{"ONCHAIN_BOOK", "ONCHAIN_BOOK_V2"}
+// ONCHAIN_BOOK_CNGN (2026-11-18) is the adapter-less cNGN book (risk-core ONCHAIN_BOOK_CNGN.json): the same events.
+var onchainBookEnvNames = []string{"ONCHAIN_BOOK", "ONCHAIN_BOOK_V2", "ONCHAIN_BOOK_CNGN"}
 
 func (c *Config) loadOnchainBooks(getenv func(string) string) error {
 	c.OnchainBooks = nil

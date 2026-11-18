@@ -150,6 +150,10 @@ locals {
       { name = "ONCHAIN_BOOK_V2_ADDRESS", value = var.onchain_book_v2_address },
       { name = "ONCHAIN_BOOK_V2_START_BLOCK", value = tostring(var.onchain_book_v2_start_block) },
     ],
+    var.onchain_book_cngn_address == "" ? [] : [
+      { name = "ONCHAIN_BOOK_CNGN_ADDRESS", value = var.onchain_book_cngn_address },
+      { name = "ONCHAIN_BOOK_CNGN_START_BLOCK", value = tostring(var.onchain_book_cngn_start_block) },
+    ],
   )
 
   # EURC-USDC spot, for the api and the matcher alike, and only once the escrow exists. Absent rather than
@@ -326,6 +330,16 @@ resource "aws_ecs_task_definition" "matcher" {
     precondition {
       condition     = var.onchain_book_v2_address == "" || lower(var.onchain_book_v2_address) != lower(var.onchain_book_address)
       error_message = "onchain_book_v2_address is the v1 book: one indexer per book."
+    }
+    precondition {
+      condition     = var.onchain_book_cngn_address == "" || var.onchain_book_cngn_start_block > 0
+      error_message = "onchain_book_cngn_start_block (the cNGN book's create block) is required with onchain_book_cngn_address."
+    }
+    precondition {
+      condition = var.onchain_book_cngn_address == "" || !contains(
+        [lower(var.onchain_book_address), lower(var.onchain_book_v2_address)], lower(var.onchain_book_cngn_address)
+      )
+      error_message = "onchain_book_cngn_address is an EURC book: one indexer per book."
     }
   }
 }

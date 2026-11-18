@@ -692,3 +692,20 @@ variable "onchain_book_v2_start_block" {
   # the block the script ran at, a lower bound.
   default = 58656423
 }
+
+variable "onchain_book_cngn_address" {
+  type = string
+  # The adapter-less cNGN book, deployed 2026-11-18 22:48 UTC on cNGN-30NOV26 (risk-core ONCHAIN_BOOK_CNGN.json); setup
+  # landed 22:53, market disabled until the enable batch. Needs markets with ONCHAIN_BOOK_CNGN (2026-11-18).
+  default = "0x5a35f149005Ce74b874F7Cf07CC2618BFA4F8Bd4"
+  validation {
+    condition     = var.onchain_book_cngn_address == "" || can(regex("^0x[0-9a-fA-F]{40}$", var.onchain_book_cngn_address))
+    error_message = "onchain_book_cngn_address must be an address or empty."
+  }
+}
+
+variable "onchain_book_cngn_start_block" {
+  type = number
+  # The book's create transaction (0x061036ba58…, block 59,258,624).
+  default = 59258624
+}

@@ -61,3 +61,27 @@ func TestBothBooksAreIndexedAndNeverTwice(t *testing.T) {
 		t.Fatalf("v2 alone: %v %+v", err, cfg.OnchainBooks)
 	}
 }
+
+// The cNGN book is a third, independent book: indexed beside the two EURC books, and never the same address as one.
+func TestTheCngnBookIsIndexedBesideTheEurcBooks(t *testing.T) {
+	const v1, v2, cngn = "0x1111111111111111111111111111111111111111", "0x2222222222222222222222222222222222222222",
+		"0x5a35f149005ce74b874f7cf07cc2618bfa4f8bd4"
+	env := map[string]string{"ONCHAIN_BOOK_ADDRESS": v1, "ONCHAIN_BOOK_START_BLOCK": "58358413",
+		"ONCHAIN_BOOK_V2_ADDRESS": v2, "ONCHAIN_BOOK_V2_START_BLOCK": "58656411",
+		"ONCHAIN_BOOK_CNGN_ADDRESS": "0x5a35f149005Ce74b874F7Cf07CC2618BFA4F8Bd4", "ONCHAIN_BOOK_CNGN_START_BLOCK": "59258602"}
+	var cfg Config
+	if err := cfg.loadOnchainBooks(func(k string) string { return env[k] }); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.OnchainBooks) != 3 || cfg.OnchainBooks[2] != (OnchainBookSource{cngn, 59258602}) {
+		t.Fatalf("%+v", cfg.OnchainBooks)
+	}
+	env["ONCHAIN_BOOK_CNGN_START_BLOCK"] = ""
+	if err := cfg.loadOnchainBooks(func(k string) string { return env[k] }); err == nil {
+		t.Fatal("the cNGN book without a start block was accepted")
+	}
+	env["ONCHAIN_BOOK_CNGN_ADDRESS"], env["ONCHAIN_BOOK_CNGN_START_BLOCK"] = v2, "59258602"
+	if err := cfg.loadOnchainBooks(func(k string) string { return env[k] }); err == nil {
+		t.Fatal("the cNGN book at the EURC v2 book's address was accepted")
+	}
+}
