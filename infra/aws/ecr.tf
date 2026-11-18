@@ -2,7 +2,8 @@ locals {
   # market-maker is built from the separate numofx/market-maker repo, so
   # build-and-push.sh in THIS repo cannot produce its image — but the repository
   # is created here so the registry is one object with one lifecycle policy.
-  repos = ["markets", "execution", "market-maker"]
+  # cngn-rate (2026-11-18): the cNGN book maker's reference-price sidecar, built here (services/cngn-rate).
+  repos = ["markets", "execution", "market-maker", "cngn-rate"]
 }
 
 resource "aws_ecr_repository" "app" {

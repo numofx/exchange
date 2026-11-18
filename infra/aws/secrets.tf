@@ -127,6 +127,12 @@ locals {
   secret_arns_book_v2 = var.image_market_maker_book_v2 == "" ? {} : {
     book_maker_v2_heartbeat_url = "${local.ssm_arn_prefix}/numo/exchange/book_maker_v2_heartbeat_url"
   }
+
+  # The cNGN book maker's own key (its own wallet 0x7b96…bE4d: two book makers on one key collide on nonces). Created
+  # 2026-11-18, never printed. Only once the service exists, so the execution role's policy does not change before.
+  secret_arns_book_cngn = local.book_cngn_enabled ? {
+    mm_book_cngn_private_key = "${local.ssm_arn_prefix}/numo/exchange/mm_book_cngn_private_key"
+  } : {}
 }
 
 # ----------------------------------------------------------- executor signing key

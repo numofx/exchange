@@ -38,6 +38,7 @@ resource "aws_cloudwatch_log_group" "tasks" {
     var.image_market_maker_eurc == "" ? [] : ["market-maker-eurc"],
     var.image_market_maker_book == "" ? [] : ["market-maker-book"],
     var.image_market_maker_book_v2 == "" ? [] : ["market-maker-book-v2"],
+    local.book_cngn_enabled ? ["market-maker-book-cngn", "cngn-rate"] : [],
     [for k in keys(local.mm_future_v2_enabled) : "market-maker-future-v2-${k}"],
     [for k in keys(local.mm_options_enabled) : "market-maker-${k}"],
   ))
@@ -72,7 +73,7 @@ resource "aws_iam_role_policy_attachment" "execution_managed" {
 data "aws_iam_policy_document" "read_secrets" {
   statement {
     actions   = local.use_ssm ? ["ssm:GetParameters"] : ["secretsmanager:GetSecretValue"]
-    resources = concat(values(local.secret_arns), values(local.secret_arns_book_v2))
+    resources = concat(values(local.secret_arns), values(local.secret_arns_book_v2), values(local.secret_arns_book_cngn))
   }
   statement {
     actions   = ["kms:Decrypt"]

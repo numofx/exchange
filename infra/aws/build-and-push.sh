@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build both service images and push them to ECR, tagged by git SHA.
+# Build the service images (markets, execution, cngn-rate) and push them to ECR, tagged by git SHA.
 #
 # The tag is the commit and nothing else — no :latest, and the ECR repositories are
 # IMMUTABLE — so a running task definition always names an image that can be traced
@@ -46,16 +46,27 @@ docker build \
   -t "${REGISTRY}/${STACK}/execution:${GIT_SHA}" \
   "${ROOT}"
 
+# The cNGN book maker's reference-price sidecar (services/cngn-rate), also from the root: the workspace lockfile.
+docker build \
+  --platform linux/amd64 \
+  --build-arg "GIT_SHA=${GIT_SHA}" \
+  -f "${ROOT}/services/cngn-rate/Dockerfile" \
+  -t "${REGISTRY}/${STACK}/cngn-rate:${GIT_SHA}" \
+  "${ROOT}"
+
 docker push "${REGISTRY}/${STACK}/markets:${GIT_SHA}"
 docker push "${REGISTRY}/${STACK}/execution:${GIT_SHA}"
+docker push "${REGISTRY}/${STACK}/cngn-rate:${GIT_SHA}"
 
 cat <<EOF
 
 pushed ${GIT_SHA}
 
-Set the image_markets / image_execution defaults in variables.tf to
+Set the image_markets / image_execution / image_cngn_rate defaults (variables.tf,
+market-maker-book-cngn.tf) to whichever changed:
   ${REGISTRY}/${STACK}/markets:${GIT_SHA}
   ${REGISTRY}/${STACK}/execution:${GIT_SHA}
+  ${REGISTRY}/${STACK}/cngn-rate:${GIT_SHA}
 then terraform plan (expect only the task definitions and services for the images that
 changed), apply, and commit variables.tf: the defaults ARE the deployed values, so a
 flag-less apply stays a no-op.
