@@ -51,6 +51,10 @@ WALLETS: list[tuple[str, str, float]] = [
   # 58,761,126 and 58,825,377 (19:10 to 22:44 UTC), 551 sends (~3,700 a day, nearly all ~25 s refreshes), 0.000243 ETH,
   # L1 fee included: 0.00163/day. Rounded up to 0.002: warns under 0.014 ETH, pages under 0.004. mm-bot signs off chain.
   ("OnchainBook makers (MM wallet)", "0x3448ac0A3283951A2AFD5B3A582329ECA43CB47B", 0.002),
+  # The cNGN book maker's own wallet (2026-11-18), at 60 s / 50 s: ~1,700 sends a day at the MM wallet's measured
+  # 0.00000044 ETH a send is ~0.00075/day. ESTIMATED, not yet measured: rounded up to 0.001. Re-measure a day after it
+  # goes live. Funded 0.01 ETH, so it warns within a few days, before the 30 Nov cutoff: top it up then.
+  ("cNGN OnchainBook maker", "0x7b96cFc1C909318Ed55F50ABD7D2EFC52f1eBE4d", 0.001),
   # The vault no longer marks (6 tx/day, 0.0000014 ETH/day), but a dry vault cannot approve a batch at all.
   ("vault", "0x1dcA42ab54Bd3862853A821F84B29BF65245F435", 0.00001),
 ]
