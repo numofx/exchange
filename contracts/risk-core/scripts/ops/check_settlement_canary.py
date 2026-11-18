@@ -67,6 +67,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -194,6 +195,57 @@ def logs_url(url: str) -> str:
   return _logs_url or url
 
 
+# The keyed endpoint was Alchemy until its monthly cap ran out on 2026-11-18 04:16 UTC; it is now publicnode, which
+# refuses eth_getLogs over 50,000 blocks and is not an archive node, while mainnet.base.org rate-limits a scan from
+# block 0. So the whitelist scans start at the SRM's deploy block, walk it in chunks, and cache what they have scanned:
+# the first run reads ~145 chunks, later runs only the blocks since. The last LOGS_REORG_MARGIN blocks are re-read
+# every run and never cached.
+LOGS_CHUNK = 49_999
+LOGS_REORG_MARGIN = 64
+DEFAULT_LOGS_FROM_BLOCK = 51_998_433  # the live SRM 0xDE04…35D4's deploy block (eth_getCode bisection, 2026-11-18)
+
+
+def scan_logs(url: str, address: str, topics: list, from_block: int | None = None,
+              cache_dir: Path | None = None) -> list:
+  if from_block is None:
+    from_block = int(os.environ.get("LOGS_FROM_BLOCK", DEFAULT_LOGS_FROM_BLOCK))
+  if cache_dir is None:
+    cache_dir = Path(os.environ.get("LOGS_CACHE_DIR", str(Path.home() / ".cache" / "numo-canary")))
+  path = cache_dir / f"{address.lower()}-{'-'.join(t[2:10] for t in topics)}-{from_block}.json"
+  where = logs_url(url)
+  try:
+    cached = json.loads(path.read_text())
+    scanned_to, logs = int(cached["to"]), list(cached["logs"])
+  except (OSError, ValueError, KeyError, TypeError):
+    scanned_to, logs = from_block - 1, []
+
+  def get(start: int, end: int) -> list:
+    return rpc(where, "eth_getLogs", [{"fromBlock": hex(start), "toBlock": hex(end), "address": address, "topics": topics}])
+
+  def save(to: int) -> None:
+    try:
+      cache_dir.mkdir(parents=True, exist_ok=True)
+      tmp = path.with_suffix(".tmp")
+      tmp.write_text(json.dumps({"to": to, "logs": logs}))
+      tmp.replace(path)
+    except OSError as exc:
+      print(f"log cache {path} not written ({type(exc).__name__}); the next run rescans")
+
+  head = int(rpc(where, "eth_blockNumber", []), 16)
+  safe = head - LOGS_REORG_MARGIN
+  start, before = scanned_to + 1, scanned_to
+  try:
+    while start <= safe:
+      end = min(start + LOGS_CHUNK - 1, safe)
+      logs += get(start, end)
+      scanned_to, start = end, end + 1
+  finally:
+    if scanned_to > before:
+      save(scanned_to)  # progress survives a failed chunk, so a first run cut short resumes where it stopped
+  tail_from = max(scanned_to + 1, from_block)
+  return logs + (get(tail_from, head) if tail_from <= head else [])
+
+
 def call(url: str, to: str, data: str, block: str = "latest") -> str:
   return rpc(url, "eth_call", [{"to": to, "data": data}, block])
 
@@ -286,7 +338,7 @@ def uint_arg(value: int) -> str:
 
 def perps_under(url: str, srm: str) -> list:
   """Every perp whitelisted under the manager, from its AssetWhitelisted logs (data: asset, marketId, assetType)."""
-  logs = rpc(logs_url(url), "eth_getLogs", [{"fromBlock": "0x0", "toBlock": "latest", "address": srm, "topics": [TOPIC_ASSET_WHITELISTED]}])
+  logs = scan_logs(url, srm, [TOPIC_ASSET_WHITELISTED])
   perps = []
   for entry in logs:
     data = entry["data"][2:]
@@ -432,9 +484,7 @@ def check_wrapper_backing(url: str, srm: str, failures: list, checked: list, oth
   """
   managers = [srm, *(others or [])]
   exceptions = wrapper_exceptions()
-  logs = rpc(logs_url(url), "eth_getLogs", [{
-    "fromBlock": "0x0", "toBlock": "latest", "address": srm, "topics": [TOPIC_ASSET_WHITELISTED],
-  }])
+  logs = scan_logs(url, srm, [TOPIC_ASSET_WHITELISTED])
   seen = set()
   for entry in logs:
     asset = "0x" + entry["data"][2:][24:64]
@@ -604,7 +654,7 @@ def alert(webhook: str | None, msg: str) -> None:
 def self_test_logs_url() -> None:
   """Both whitelist scans go to logs_url; LOGS_RPC_URL wins, and unset everything stays on RPC_URL."""
   global _logs_url, rpc
-  saved_env = {k: os.environ.get(k) for k in ("LOGS_RPC_URL", "LOGS_RPC_SSM")}
+  saved_env = {k: os.environ.get(k) for k in ("LOGS_RPC_URL", "LOGS_RPC_SSM", "LOGS_CACHE_DIR")}
   real_rpc, seen = rpc, []
   try:
     for k in saved_env:
@@ -613,11 +663,17 @@ def self_test_logs_url() -> None:
     assert logs_url("http://reads") == "http://reads", "unset: the read RPC"
     os.environ["LOGS_RPC_URL"] = "http://keyed"
     _logs_url = None
-    rpc = lambda url, method, params: (seen.append((url, method)), [])[1]  # noqa: E731
-    perps_under("http://reads", "0x" + "11" * 20)
-    check_wrapper_backing("http://reads", "0x" + "11" * 20, [], [])
-    assert seen == [("http://keyed", "eth_getLogs")] * 2, seen
+    rpc = lambda url, method, params: (seen.append((url, method)),  # noqa: E731
+                                       hex(DEFAULT_LOGS_FROM_BLOCK) if method == "eth_blockNumber" else [])[1]
+    with tempfile.TemporaryDirectory() as tmp:
+      os.environ["LOGS_CACHE_DIR"] = tmp
+      perps_under("http://reads", "0x" + "11" * 20)
+      check_wrapper_backing("http://reads", "0x" + "11" * 20, [], [])
+    scans = [u for u, m in seen if m in ("eth_getLogs", "eth_blockNumber")]
+    assert scans and set(scans) == {"http://keyed"}, seen
+    assert sum(m == "eth_getLogs" for _, m in seen) == 2, seen
   finally:
+    os.environ.pop("LOGS_CACHE_DIR", None)
     rpc, _logs_url = real_rpc, None
     for k, v in saved_env.items():
       if v is None:
@@ -625,6 +681,62 @@ def self_test_logs_url() -> None:
       else:
         os.environ[k] = v
 
+
+def self_test_scan_logs() -> None:
+  """Against a fake publicnode (no range over 50,000 blocks, nothing before the deploy block asked for): every log is
+  found once, a second run reads only new blocks, the reorg margin is never cached, and a chunk that fails keeps the
+  progress before it."""
+  global rpc
+  real_rpc = rpc
+  deploy, chain = 1_000_000, {"head": 1_200_000}
+  events = [deploy + 5, deploy + 49_999, deploy + 50_000, deploy + 150_123, 1_199_990]  # the last is in the margin
+  calls: list = []
+  fail_at: list = []
+
+  def fake(url, method, params):
+    calls.append(method)
+    if method == "eth_blockNumber":
+      return hex(chain["head"])
+    q = params[0]
+    lo, hi = int(q["fromBlock"], 16), int(q["toBlock"], 16)
+    assert lo >= deploy and hi <= chain["head"] and hi - lo + 1 <= 50_000, ("refused range", lo, hi)
+    if fail_at and lo >= fail_at[0]:
+      raise RuntimeError("HTTP Error 429")
+    return [{"blockNumber": hex(b), "data": "0x"} for b in events if lo <= b <= hi]
+
+  saved = os.environ.get("LOGS_RPC_URL")
+  global _logs_url
+  try:
+    rpc, _logs_url = fake, "http://keyed"
+    with tempfile.TemporaryDirectory() as tmp:
+      d = Path(tmp)
+      found = lambda: sorted(int(e["blockNumber"], 16) for e in scan_logs("u", "0xAB", ["0x65e6c2e0ff"], deploy, d))  # noqa: E731
+      assert found() == events, "first run finds each once"
+      first = len(calls)
+      calls.clear()
+      assert found() == events, "cached run finds the same"
+      assert calls == ["eth_blockNumber", "eth_getLogs"], calls  # head moved 0: only the margin tail
+      chain["head"] += 120_000
+      events.append(1_250_000)
+      calls.clear()
+      assert found() == events and calls.count("eth_getLogs") == 4, calls  # ~120k new blocks: 3 chunks plus the tail
+      assert first > 4
+      # a failing chunk keeps what came before it, and the next run resumes from there
+      chain["head"] += 200_000
+      events.append(1_400_000)
+      fail_at.append(1_380_000)
+      try:
+        found()
+        raise AssertionError("a failed chunk must fail the run")
+      except RuntimeError:
+        pass
+      fail_at.clear()
+      calls.clear()
+      assert found() == events and calls.count("eth_getLogs") == 4, calls  # resumed: from scratch would be 6
+  finally:
+    rpc, _logs_url = real_rpc, None
+    if saved is not None:
+      os.environ["LOGS_RPC_URL"] = saved
 
 def self_test_rpc_retry() -> None:
   """A 429 is retried with backoff and the answer returned; four in a row fail the run; nothing else is retried."""
@@ -657,8 +769,22 @@ def self_test(compiled_abis: bool = True) -> None:
   check, with compiled_abis=False: the ops box has no forge build (no out/ and no abi_selectors.py), so
   the compiled-ABI check, which only says the file is right, runs under --self-test in CI instead. With
   it on every run, no version of this canary from 2026-10-12 on could run on the box."""
+  saved = os.environ.get("LOGS_CACHE_DIR")
+  with tempfile.TemporaryDirectory() as tmp:
+    os.environ["LOGS_CACHE_DIR"] = tmp  # fake chains' scans must never land in the real run's cache
+    try:
+      _self_test(compiled_abis)
+    finally:
+      if saved is None:
+        os.environ.pop("LOGS_CACHE_DIR", None)
+      else:
+        os.environ["LOGS_CACHE_DIR"] = saved
+
+
+def _self_test(compiled_abis: bool) -> None:
   self_test_rpc_retry()
   self_test_logs_url()
+  self_test_scan_logs()
   # every selector and signature this script pins must name a compiled function, not just match `cast sig`
   if compiled_abis:
     from abi_selectors import assert_script
@@ -751,7 +877,8 @@ def self_test_managers() -> None:
 
   credits = {srm: 5_000 * e, engine: 396_131_965_850 * 10**12}
   try:
-    rpc = lambda url, method, params: [{"data": "0x" + "0" * 24 + wrapper[2:] + "0" * 64}]  # noqa: E731
+    rpc = lambda url, method, params: (hex(DEFAULT_LOGS_FROM_BLOCK) if method == "eth_blockNumber"  # noqa: E731
+                                       else [{"data": "0x" + "0" * 24 + wrapper[2:] + "0" * 64}])
     reads: list = []
     call = fake_chain(credits, {}, reads)
     failures, checked = [], []
@@ -835,7 +962,7 @@ def self_test_borrowers() -> None:
 def self_test_settled_cash() -> None:
   """check_settled_cash against a fake chain: perp PnL zero-sum, each rule broken once."""
   global call, rpc
-  real_call, real_rpc = call, rpc
+  real_call, real_rpc, real_cache = call, rpc, os.environ.get("LOGS_CACHE_DIR")
   srm, cash, sub = "0x" + "a" * 40, "0x" + "c" * 40, "0x" + "5" * 40
   perp1, perp2, wrapper = "0x" + "1" * 40, "0x" + "2" * 40, "0x" + "3" * 40
   e = 10**18
@@ -847,12 +974,17 @@ def self_test_settled_cash() -> None:
     return {"data": "0x" + "0" * 24 + asset[2:] + format(1, "064x") + format(asset_type, "064x")}
 
   def fake(settled: int, unsettled: dict, perps=(perp1,)):
+    # a new chain behind the same SRM address: its own log cache, or it would read the previous case's history
+    os.environ["LOGS_CACHE_DIR"] = tempfile.mkdtemp(dir=os.environ.get("LOGS_CACHE_DIR"))
     blocks = set()
 
     def fake_rpc(url: str, method: str, params: list):
       if method == "eth_blockNumber":
         return "0x31f8f3a"
-      if method == "eth_getLogs":
+      if method == "eth_getLogs":  # the whitelisting sits in one block, so a chunked scan sees it once
+        q = params[0]
+        if not int(q["fromBlock"], 16) <= DEFAULT_LOGS_FROM_BLOCK <= int(q["toBlock"], 16):
+          return []
         return [whitelisted(p_, ASSET_TYPE_PERPETUAL) for p_ in perps] + [whitelisted(wrapper, 3)]
       raise AssertionError(method)
 
@@ -890,6 +1022,10 @@ def self_test_settled_cash() -> None:
       assert blocks == {"0x31f8f3a"}, f"{name}: reads not pinned to one block: {blocks}"
   finally:
     call, rpc = real_call, real_rpc
+    if real_cache is None:
+      os.environ.pop("LOGS_CACHE_DIR", None)
+    else:
+      os.environ["LOGS_CACHE_DIR"] = real_cache
 
 
 def main() -> int:

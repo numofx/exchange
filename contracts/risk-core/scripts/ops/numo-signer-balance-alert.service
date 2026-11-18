@@ -13,5 +13,6 @@ Environment=AWS_REGION=us-east-1
 # LOW priority: a finding (exit 1, under 7 days) notifies Pushover without sound. A wallet under 2 days (exit 3, since
 # 2026-11-17) and a run that cannot happen or cannot see (exit 2) page at high priority. See run-with-heartbeat.sh.
 Environment=HEARTBEAT_FINDING_EXIT=1
-# Reads through the keyed endpoint (the box may read /numo/keeper/*); the public one refused the hourly run's reads with 429.
+# Reads through /numo/keeper/rpc_url, not mainnet.base.org, which refused the hourly run's reads with 429. Publicnode since
+# 2026-11-18, when the Alchemy key behind it ran out of its monthly cap.
 Environment=RPC_SSM=/numo/keeper/rpc_url
