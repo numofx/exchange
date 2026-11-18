@@ -220,6 +220,10 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
   /// @notice The longest a self-priced spline quotes after its update (spec C3); 0, the default: self-priced quoting is
   ///         off. Kept out of `Market` so the `markets` getter, which the indexer decodes, is the same as v1's.
   mapping(uint marketId => uint32) public maxSelfPricedTtl;
+  /// @dev A market listed with no adapter (an index that is not a Data Streams pair, cNGN's signed spot feed): the index
+  ///      feed the future read at listing. Such a market quotes only self-priced splines, and only while the future
+  ///      still reads this feed. Zero for a market with an adapter. Kept outside Market so `markets()` keeps its layout.
+  mapping(uint marketId => address) public indexFeedOf;
   mapping(uint marketId => mapping(uint accountId => mapping(bool isBid => Cursor))) public cursors;
 
   mapping(address owner => mapping(uint16 curveId => Region[])) internal _curves;
@@ -281,6 +285,8 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
   error OB_CrossedSpline();
   error OB_InvalidTtl();
   error OB_InvalidMid();
+  /// @dev a pegged spline, or a report, on a market listed with no adapter
+  error OB_NoAdapter();
   error OB_TakerAllowanceTooLow();
   error OB_FeeTooHigh();
   error OB_BelowMinFill();
@@ -330,12 +336,14 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
     uint lotSize
   ) external onlyOwner returns (uint marketId) {
     IFutureAsset.FutureContract memory c = future.futureContracts(subId);
+    address feed = address(future.indexFeed());
     if (
-      !c.listed || c.settled || address(adapter) == address(0) || tickSize == 0 || lotSize == 0
+      !c.listed || c.settled || feed == address(0) || tickSize == 0 || lotSize == 0
         || !IOnchainBookManagerWhitelist(address(future)).whitelistedManager(address(engine))
-        || IIndexFeedAdapter(address(future.indexFeed())).adapter() != address(adapter)
+        || (address(adapter) != address(0) && IIndexFeedAdapter(feed).adapter() != address(adapter))
     ) revert OB_InvalidParams();
     marketId = nextMarketId++;
+    if (address(adapter) == address(0)) indexFeedOf[marketId] = feed;
     Market storage m = markets[marketId];
     m.future = future;
     m.engine = engine;
@@ -499,7 +507,10 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
     address takerOwner = _authorize(o.takerAccountId);
 
     // Post before transferring: the future checks each fill against the index in its asset hook (B6).
-    if (optionalReport.length > 0) m.adapter.acceptData(optionalReport);
+    if (optionalReport.length > 0) {
+      if (address(m.adapter) == address(0)) revert OB_NoAdapter();
+      m.adapter.acceptData(optionalReport);
+    }
 
     uint tax = _priorityTax();
     if (!_allowanceCovers(o.takerAccountId, m.future, m.subId, o.isBuy, o.amount)) revert OB_TakerAllowanceTooLow();
@@ -657,7 +668,7 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
 
     // Pegged splines need fresh reports (takeMaxAge); self-priced ones do not, but every fill stays inside the index
     // band, so an index that cannot be read (its reports over its own max age) stops all quoting: fail closed (C3).
-    (bool live, int indexTicks) = _peg(m);
+    (bool live, int indexTicks) = _peg(m, o.marketId);
     if (!live) return makers;
     uint index;
     try m.future.indexFeed().getSpot() returns (uint spot, uint) {
@@ -876,6 +887,8 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
     if (u.selfPriced) {
       if (u.ttl > maxSelfPricedTtl[u.marketId]) revert OB_InvalidTtl();
       if (u.offsetTicks <= 0) revert OB_InvalidMid();
+    } else if (address(m.adapter) == address(0)) {
+      revert OB_NoAdapter();
     }
     Region[] storage bid = _curves[owner_][u.bidCurve];
     Region[] storage ask = _curves[owner_][u.askCurve];
@@ -911,7 +924,10 @@ contract OnchainBook is Ownable2Step, ReentrancyGuard {
   /// @dev The index in ticks, and whether both streams' stored reports are within `takeMaxAge` (B6a).
   /// @dev `indexTicks` is NO_PEG when the reports are too old for pegged splines; `live` is false once the future's
   ///      index has been rotated away from this market's adapter, which stops every spline, self-priced included.
-  function _peg(Market memory m) internal view returns (bool live, int indexTicks) {
+  function _peg(Market memory m, uint marketId) internal view returns (bool live, int indexTicks) {
+    // No adapter: no reports to peg to, so pegged splines never quote. The market is live while the future reads the
+    // index feed it read at listing; once that is rotated, the band check prices another index: quote nothing.
+    if (address(m.adapter) == address(0)) return (address(m.future.indexFeed()) == indexFeedOf[marketId], NO_PEG);
     // The future's index can be rotated (FutureAsset.proposeIndexFeed, timelocked). Once it reads another adapter,
     // this market is not the one the band check prices: quote nothing (a market on the new adapter replaces it).
     if (IIndexFeedAdapter(address(m.future.indexFeed())).adapter() != address(m.adapter)) return (false, 0);
