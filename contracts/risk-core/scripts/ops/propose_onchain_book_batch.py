@@ -94,6 +94,14 @@ def files(name: str) -> dict[str, str]:
 
 FILES = files(NAME)
 EUR_MARKET = 2
+# --book: which book's artifacts. eurc: the EURC books (--version picks v1 or v2). cngn: the adapter-less cNGN book
+# (deploy-onchain-book-cngn.s.sol, 2026-11-18), on the cNGN future, which is the engine's market 1.
+BOOKS = {
+  "eurc": {"series": "EURC_FUTURE_V3.json", "engine_market": EUR_MARKET, "label": "EUR", "index": "EURC/USDC"},
+  "cngn": {"series": "MARGIN_ENGINE_V2.json", "engine_market": 1, "label": "cNGN", "index": "cNGN spot"},
+}
+CNGN_NAME = "ONCHAIN_BOOK_CNGN"
+BOOK = BOOKS["eurc"]
 FUTURE = 4  # IMarginEngine.AssetType.Future
 DEPLOYED_MARKET = 1  # the market deploy-onchain-book.s.sol creates, and the artifact records
 BOOK_MARKET = DEPLOYED_MARKET  # the market these batches act on: the deployed one, unless --market says otherwise
@@ -125,6 +133,8 @@ SIGNATURES = {
   "book": "book()",
   "createMarket": "createMarket(address,uint96,address,address,uint256,uint256)",
   "setSelfPricedTtlCap": "setSelfPricedTtlCap(uint256,uint32)",
+  "indexFeedOf": "indexFeedOf(uint256)",
+  "indexFeed": "indexFeed()",
 }
 PINNED = {
   "acceptOwnership": "0x79ba5097", "setMakerAllowed": "0x4db8b77b", "setMarketParams": "0x9910da7d",
@@ -134,7 +144,8 @@ PINNED = {
   "trustedRiskAssessor": "0x5b75ad78", "feeBypassedCaller": "0x3f210eea", "getSpot": "0x2b37269c",
   "totalPositionCap": "0x745ab570", "assetMap": "0xed75d3f3", "futureContracts": "0xc3c74b34",
   "makers": "0x33f02fa2", "splines": "0xe5dd8989", "maxSelfPricedTtl": "0x3a1359b6", "book": "0x05a8da72",
-  "createMarket": "0x021d75bd", "setSelfPricedTtlCap": "0xd4449950",
+  "createMarket": "0x021d75bd", "setSelfPricedTtlCap": "0xd4449950", "indexFeedOf": "0x4572d043",
+  "indexFeed": "0x198cae76",
 }
 # OnchainBook.Market, as markets(uint256) returns it: field -> word index
 MARKET_WORDS = {"future": 0, "engine": 1, "subId": 2, "expiry": 3, "lastTradeTime": 4, "adapter": 5, "tickSize": 6,
@@ -212,10 +223,13 @@ def version_of(d: dict) -> int:
 def check_artifact(d: dict, series: dict) -> None:
   """The book's market is on the recorded EURC v3 future, engine and adapter. v1: the recorded series itself. v2: the
   series EXPIRY chose (the series gate reads it on the future); the self-priced cap within C6's 60 s, and a router."""
-  for key, other in (("future", "future"), ("manager", "manager"), ("adapter", "adapter"), ("indexFeed", "indexFeed"),
-                     ("cash", "cash"), ("tradeModule", "tradeModule")):
+  keys = (("future", "future"), ("manager", "manager"), ("indexFeed", "indexFeed"), ("cash", "cash"),
+          ("tradeModule", "tradeModule")) + ((("adapter", "adapter"),) if BOOK is BOOKS["eurc"] else ())
+  if BOOK is BOOKS["cngn"] and int(d["adapter"], 16) != 0:
+    raise SystemExit(f"{NAME}.json records adapter {d['adapter']}: the cNGN book's market has none")
+  for key, other in keys:
     if d[key].lower() != series[other].lower():
-      raise SystemExit(f"{NAME}.json {key} {d[key]} is not EURC_FUTURE_V3.json's {series[other]}")
+      raise SystemExit(f"{NAME}.json {key} {d[key]} is not {BOOK['series']}'s {series[other]}")
   version = version_of(d)
   if version not in NAMES:
     raise SystemExit(f"{NAME}.json: version {version} is unknown")
@@ -243,19 +257,19 @@ def check_artifact(d: dict, series: dict) -> None:
 
 def series_verdict(listed_future: str, future: str, listed: int, settled: int, last_trade: int, now: int,
                    cap: int | None) -> Gate:
-  problems = ([f"EUR's future is {listed_future}, not {future}"] if listed_future.lower() != future.lower() else []) + \
+  problems = ([f"{BOOK['label']}'s future is {listed_future}, not {future}"] if listed_future.lower() != future.lower() else []) + \
              (["the series is not listed"] if not listed else []) + (["the series has settled"] if settled else []) + \
              ([f"{(last_trade - now) / 3600:.1f} h to last trade (under 2 h)"]
               if listed and last_trade - now < MIN_LEAD_SEC else []) + \
              (["the series is closed on the engine (cap 0)"] if cap == 0 else [])
   return Gate("series", not problems, "; ".join(problems) or
-              f"EUR's future, listed, {(last_trade - now) / 3600:.1f} h to last trade" + ("" if cap is None else ", open"))
+              f"{BOOK['label']}'s future, listed, {(last_trade - now) / 3600:.1f} h to last trade" + ("" if cap is None else ", open"))
 
 
 def gate_series(chain: Chain, d: dict, need_open: bool) -> Gate:
   try:
     s = word_uint(int(d["subId"]))
-    listed_future = "0x" + chain.call(d["manager"], selector("assetMap") + word_uint(EUR_MARKET) + word_uint(FUTURE))[24:64]
+    listed_future = "0x" + chain.call(d["manager"], selector("assetMap") + word_uint(BOOK["engine_market"]) + word_uint(FUTURE))[24:64]
     cap = chain.word(d["future"], selector("totalPositionCap") + word_address(d["manager"])) if need_open else None
     return series_verdict(listed_future, d["future"], chain.word(d["future"], selector("futureContracts") + s, 0),
                           chain.word(d["future"], selector("futureContracts") + s, 1),
@@ -302,6 +316,7 @@ def market_pairs(chain: Chain, d: dict, w, mk, addr) -> list[tuple[str, object, 
   """Market BOOK_MARKET's settings. The book has exactly the markets up to it: one after the deploy, N after
   book-add-market N."""
   book = d["book"]
+  a = lambda to, name, *args: "0x" + chain.call(to, selector(name) + "".join(args))[24:64]  # noqa: E731
   return [
     ("book markets", w(book, "nextMarketId"), BOOK_MARKET + 1),
     ("market future", addr("future"), d["future"]),
@@ -317,6 +332,9 @@ def market_pairs(chain: Chain, d: dict, w, mk, addr) -> list[tuple[str, object, 
     ("market makers cap", mk("maxMakers"), int(d["maxMakers"])),
     *([("book self-priced ttl cap", w(book, "maxSelfPricedTtl", word_uint(BOOK_MARKET)), int(d["selfPricedTtlCap"]))]
       if version_of(d) == 2 else []),
+    # adapter-less: the index the market is tied to (OnchainBook.indexFeedOf), the future's
+    *([("market index feed", a(book, "indexFeedOf", word_uint(BOOK_MARKET)), d["indexFeed"]),
+       ("the future's index", a(d["future"], "indexFeed"), d["indexFeed"])] if BOOK is BOOKS["cngn"] else []),
   ]
 
 
@@ -374,7 +392,7 @@ def gate_makers(chain: Chain, d: dict) -> Gate:
 
 def gate_index(chain: Chain, d: dict) -> Gate:
   try:
-    return Gate("index", True, f"EURC/USDC index {chain.word(d['indexFeed'], selector('getSpot')) / 1e18:.6f}")
+    return Gate("index", True, f"{BOOK['index']} index {chain.word(d['indexFeed'], selector('getSpot')) / 1e18:.6f}")
   except Exception as exc:  # noqa: BLE001
     return Gate("index", False, f"EurcIndexFeed reverts ({str(exc)[:80]}): is the v3 keeper posting reports?")
 
@@ -458,6 +476,25 @@ def built_actions(batch: str, d: dict) -> list[dict]:
 # ---------------------------------------------------------------------------------------------
 
 def self_test() -> int:
+  # --book cngn: the artifact is checked against MARGIN_ENGINE_V2.json and must record no adapter
+  global BOOK, NAME
+  saved_book, saved_name = BOOK, NAME
+  try:
+    BOOK, NAME = BOOKS["cngn"], CNGN_NAME
+    eng = {"future": "0x" + "c1" * 20, "manager": "0x" + "e1" * 20, "indexFeed": "0x" + "f1" * 20,
+           "cash": "0x" + "ca" * 20, "tradeModule": "0x" + "7d" * 20}
+    art = {**eng, "adapter": "0x" + "00" * 20, "version": 2, "subId": 1796047200, "expiry": 1796047200,
+           "selfPricedTtlCap": 60, "maxTtl": 3600, "router": "0x" + "40" * 20, "bookMarketId": 1,
+           "priorityTaxRate": 0, "takerFeeRate": 15 * 10**14}
+    check_artifact(art, eng)
+    for bad, why in (({"adapter": "0x" + "9e" * 20}, "records adapter"), ({"future": "0x" + "c2" * 20}, "MARGIN_ENGINE_V2")):
+      try:
+        check_artifact({**art, **bad}, eng)
+        raise AssertionError(f"cngn artifact {bad} accepted")
+      except SystemExit as exc:
+        assert why in str(exc), exc
+  finally:
+    BOOK, NAME = saved_book, saved_name
   from abi_selectors import assert_script
   assert_script(__file__)
   for name, want in PINNED.items():
@@ -699,6 +736,7 @@ def main() -> int:
   ap = argparse.ArgumentParser(description="Propose the OnchainBook's vault batches")
   ap.add_argument("batch", nargs="?", choices=BATCHES)
   ap.add_argument("--version", type=int, choices=tuple(NAMES), default=2, help="the book version's artifacts (default 2)")
+  ap.add_argument("--book", choices=tuple(BOOKS), default="eurc", help="eurc (default) or cngn, the adapter-less cNGN book")
   ap.add_argument("--propose", action="store_true", help="create MPCVault signing requests, one at a time")
   ap.add_argument("--self-test", action="store_true")
   ap.add_argument("--dir", type=Path, default=ROOT / "deployments" / "8453", help="where the deploys wrote their artifacts")
@@ -711,8 +749,12 @@ def main() -> int:
     return self_test()
   if not args.batch:
     ap.error("name a batch: " + ", ".join(BATCHES))
-  global NAME, FILES, BOOK_MARKET
-  NAME, FILES = NAMES[args.version], files(NAMES[args.version])
+  global NAME, FILES, BOOK_MARKET, BOOK
+  BOOK = BOOKS[args.book]
+  if args.book == "cngn" and args.version != 2:
+    raise SystemExit("the cNGN book is v2 code: --version 2")
+  NAME = CNGN_NAME if args.book == "cngn" else NAMES[args.version]
+  FILES = files(NAME)
   check_market_args(args.batch, args.version, args.market, args.expiry)
   BOOK_MARKET = args.market
 
@@ -733,7 +775,7 @@ def main() -> int:
   d = json.loads(artifact.read_text())
   if version_of(d) != args.version:
     raise SystemExit(f"{artifact} records version {version_of(d)}, not {args.version}")
-  check_artifact(d, json.loads((args.dir / "EURC_FUTURE_V3.json").read_text()))
+  check_artifact(d, json.loads((args.dir / BOOK["series"]).read_text()))
   chain = Chain(rpc_url)
   if BOOK_MARKET > 1:
     last_trade = chain.word(d["future"], selector("futureContracts") + word_uint(args.expiry), 3)

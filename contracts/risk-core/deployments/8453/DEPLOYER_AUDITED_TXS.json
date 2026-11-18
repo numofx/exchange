@@ -149,6 +149,46 @@
           "note": "EURC v3 deployer (single-use, 2026-11-15): 0.0012 ETH gas top-up to the canary keeper relayer 0x35ee\u2026bDD5, after the deploy. Reviewed: a plain transfer, no contract call."
         }
       ]
+    },
+    {
+      "deployer": "0x4FECe4c226b5eF0C235aEA97216e61b69FE5263f",
+      "transactions": [
+        {
+          "nonce": 7,
+          "hash": "0x061036ba58a56d8a07da7c95ea5eeab50bc3878cf1695fe92cf70b9b37236f42",
+          "note": "cNGN OnchainBook deploy (deploy-onchain-book-cngn.s.sol at 1cc624c, 2026-11-18): create OnchainBook. Reviewed: ONCHAIN_BOOK_CNGN.json; the key reused by name (USED_DEPLOYER)."
+        },
+        {
+          "nonce": 8,
+          "hash": "0x69b32d90574e4ae2d40d9ae94b8e8f82fc29b7e120fed81826715ed5eab298d2",
+          "note": "cNGN OnchainBook deploy (deploy-onchain-book-cngn.s.sol at 1cc624c, 2026-11-18): createMarket(address,uint96,address,address,uint256,uint256). Reviewed: ONCHAIN_BOOK_CNGN.json; the key reused by name (USED_DEPLOYER)."
+        },
+        {
+          "nonce": 9,
+          "hash": "0x4c8c181e33791919723cac9fc0de4e3b3b5f89e63e4066a8bd79a6deb8d5a9b2",
+          "note": "cNGN OnchainBook deploy (deploy-onchain-book-cngn.s.sol at 1cc624c, 2026-11-18): setMarketParams(uint256,uint256,uint32,uint32,uint16,bool). Reviewed: ONCHAIN_BOOK_CNGN.json; the key reused by name (USED_DEPLOYER)."
+        },
+        {
+          "nonce": 10,
+          "hash": "0xfff59b7e1a5ede1084bb90a1e609f27220b705b11ceac50ede0c74ef335e89e9",
+          "note": "cNGN OnchainBook deploy (deploy-onchain-book-cngn.s.sol at 1cc624c, 2026-11-18): setGasFloor(uint256). Reviewed: ONCHAIN_BOOK_CNGN.json; the key reused by name (USED_DEPLOYER)."
+        },
+        {
+          "nonce": 11,
+          "hash": "0x6c4b2cfa67b077a52f8161e2550edde23ca2ec8565d325f202a297ca04a256fb",
+          "note": "cNGN OnchainBook deploy (deploy-onchain-book-cngn.s.sol at 1cc624c, 2026-11-18): setSelfPricedTtlCap(uint256,uint32). Reviewed: ONCHAIN_BOOK_CNGN.json; the key reused by name (USED_DEPLOYER)."
+        },
+        {
+          "nonce": 12,
+          "hash": "0xaef8feed69f81f1f1580e6fddee645ff934c7e0324bbc433c2852331f80a7ea0",
+          "note": "cNGN OnchainBook deploy (deploy-onchain-book-cngn.s.sol at 1cc624c, 2026-11-18): transferOwnership(address). Reviewed: ONCHAIN_BOOK_CNGN.json; the key reused by name (USED_DEPLOYER)."
+        },
+        {
+          "nonce": 13,
+          "hash": "0xa1cd18278050f69fdd8722c1cbaada9e61744f6f54de61014ad4fe30ecfcb1a0",
+          "note": "cNGN OnchainBook deploy (deploy-onchain-book-cngn.s.sol at 1cc624c, 2026-11-18): create OnchainBookRouter. Reviewed: ONCHAIN_BOOK_CNGN.json; the key reused by name (USED_DEPLOYER)."
+        }
+      ]
     }
   ]
 }
