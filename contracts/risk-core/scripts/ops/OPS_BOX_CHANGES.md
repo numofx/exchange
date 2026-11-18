@@ -5,6 +5,21 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-19 ~00:30 UTC: cNGN OnchainBook setup batch landed (box, vault)
+
+- **Ops checkout** `/home/ec2-user/exchange-ops` fast-forwarded `6965d10` → `c646011`, a clean tree. That commit carries
+  the proposer's `--book cngn` and the audited deployer transactions.
+- **Dry run on the box**, `book-setup --book cngn`: nominated, series (278 h to last trade) and parity (28 settings)
+  passed.
+- **Proposed** as `numo-onchain-book-cngn-setup`. Owner approved both in MPCVault:
+  - `acceptOwnership()`: uuid `fdd3fcfa…`, digest `0xa5831c1c…0877`, tx `0xe0ef9866…b3a1`, block 59,260,095;
+  - `setMakerAllowed(0x7b96…bE4d, true)`: uuid `ac75f461…`, digest `0x96865271…6812`, tx `0x63ee649a…20cb`, block
+    59,260,200.
+  Both have status 1 and come from the vault.
+- **Read back:** owner the vault, no pending owner, `makerAllowed(0x7b96…)` true. The proposer reports every action
+  landed. The market stays **disabled** until the enable batch.
+- **The maker wallet still holds 0 ETH**, waiting on the owner.
+
 ## 2026-11-18 ~23:50 UTC: cNGN OnchainBook deployed (chain)
 
 Owner approved the deploy, 2026-11-18.
