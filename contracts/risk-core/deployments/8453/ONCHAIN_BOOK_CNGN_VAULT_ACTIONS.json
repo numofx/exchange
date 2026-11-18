@@ -1,0 +1,16 @@
+[
+  {
+    "description": "acceptOwnership() [OnchainBook cNGN]",
+    "to": "0x5a35f149005Ce74b874F7Cf07CC2618BFA4F8Bd4",
+    "value": "0",
+    "data": "0x79ba5097",
+    "digest": "0xa5831c1cfa6bdf98254bc5959d373e3507898a3e7efdec80253e04c55caf0877"
+  },
+  {
+    "description": "book.setMakerAllowed(0x7b96cFc1C909318Ed55F50ABD7D2EFC52f1eBE4d, true) [the cNGN book maker]",
+    "to": "0x5a35f149005Ce74b874F7Cf07CC2618BFA4F8Bd4",
+    "value": "0",
+    "data": "0x4db8b77b0000000000000000000000007b96cfc1c909318ed55f50abd7d2efc52f1ebe4d0000000000000000000000000000000000000000000000000000000000000001",
+    "digest": "0x968652711bd1b0ec4757288b35b4d2b0dde02b66c19e0cf120db978466e46812"
+  }
+]

@@ -5,6 +5,26 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-18 ~23:50 UTC: cNGN OnchainBook deployed (chain)
+
+Owner approved the deploy, 2026-11-18.
+
+- **`deploy-onchain-book-cngn.s.sol` at `1cc624c`**, `TAKER_FEE_RATE` 1.5e15 (the registry's 15 bps), `MAKER_OWNER`
+  0x7b96…bE4d. Deployer: the v2 book's single-use key `/numo/deploy/onchain_book_v2_deployer_key` (0x4FECe4c2…263f),
+  reused by name (`USED_DEPLOYER`) rather than funding a new key: no ETH to spare. The mainnet simulation estimated
+  8.67M gas; it cost 0.0000386 ETH, and the deployer keeps 0.000124.
+  - Book **`0x5a35f149005Ce74b874F7Cf07CC2618BFA4F8Bd4`**; router **`0x09431Cf4a3693452DD46886b51453eDC8995B067`**.
+  - Seven transactions in blocks 59,258,624–59,258,682, all status 1; the create is `0x061036ba58…`. The artifact's
+    `deployBlock` 59,258,602 is a lower bound.
+- **Read back on chain:**
+  - owner the deployer, pending owner the vault;
+  - `nextMarketId` 2, `indexFeedOf(1)` the cNGN spot feed `0xFaC4…20a5`, `maxSelfPricedTtl(1)` 60;
+  - market 1: the cNGN future, engine v2, subId 1796047200, last trade 1796043600, **adapter 0**, tick 1e10, lot 1e15,
+    fee 1.5e15, takeMaxAge 1, maxTtl 3600, maxMakers 10, **disabled**;
+  - `makerAllowed(0x7b96…)` false.
+- **Next:** the setup batch (acceptOwnership, setMakerAllowed(0x7b96…)), then enable, from
+  `ONCHAIN_BOOK_CNGN_*VAULT_ACTIONS.json`, proposed from the box once the proposer reads the cNGN artifact.
+
 ## 2026-11-18 ~23:20 UTC: cNGN book maker wallet and account created (SSM, chain)
 
 Owner approved, 2026-11-18: a wallet for the cNGN OnchainBook maker; its account; 2,700 USDC from #39 at cutover.
