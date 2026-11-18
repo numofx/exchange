@@ -19,7 +19,7 @@
 variable "image_cngn_rate" {
   description = "The cngn-rate sidecar image (services/cngn-rate), by git SHA. Empty creates nothing here."
   type        = string
-  # services/cngn-rate at c39ec112 (2026-11-19)
+  # services/cngn-rate at c39ec112 (2026-11-18)
   default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/cngn-rate:c39ec1128990"
 }
 
@@ -97,8 +97,10 @@ resource "aws_ecs_task_definition" "market_maker_book_cngn" {
         # 1 tick a lot to 25 bps (172 ticks): the tick is coarse against the lot, so full skew comes at ~0.17 contract
         { name = "MM_BOOK_SKEW_TICKS_PER_LOT", value = "1" },
         { name = "MM_BOOK_MAX_SKEW_TICKS", value = "172" },
-        { name = "MM_BOOK_TTL_SECONDS", value = "30" },
-        { name = "MM_BOOK_REFRESH_SECONDS", value = "22" },
+        # 60 s / 50 s (owner, 2026-11-18: 0.01 ETH to expiry): ~1,700 sends a day, ~0.0008 ETH, half EURC's 30/22.
+        # The book caps a self-priced ttl at 60; 50 + 5 poll + 3 inside it (CheckCadence).
+        { name = "MM_BOOK_TTL_SECONDS", value = "60" },
+        { name = "MM_BOOK_REFRESH_SECONDS", value = "50" },
         { name = "MM_BOOK_REPRICE_TICKS", value = "7" }, # ~1 bp
         { name = "MM_BOOK_CUTOFF_SECONDS", value = "3600" },
         { name = "MM_BOOK_MAX_DIVERGENCE_BPS", value = "200" },

@@ -5,7 +5,28 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
-## 2026-11-19 ~01:00 UTC: cNGN book maker images and service (ECR, ECS; terraform from `main`)
+## 2026-11-18 23:05–23:08 UTC: cNGN maker funded, allowances granted, bot started in dry run (chain, ECS)
+
+The times in the four cNGN entries below were first written as estimates (two dated the 19th). They are corrected to
+the block timestamps: Base blocks are 0.2 s apart.
+
+- **Funded by the owner: 0.01 ETH** to 0x7b96…bE4d (owner's choice over 0.03). That covers about 11.5 days at the
+  60 s / 50 s cadence below, to the 30 Nov cutoff.
+- **`setAssetAllowances(60, cNGN book 0x5a35…8Bd4, [(future 0xcACE…AA75, max, max), (cash 0xA74E…4272, max, max)])`**
+  from the maker's own wallet: tx `0x22ecf623…89ee`, block 59,263,718 (23:05:19), status 1, 119,771 gas.
+- **Cadence 60 s ttl / 50 s refresh** (the book's self-priced cap is 60; 50 + 5 + 3 fits inside it): about 1,700
+  sends a day, half the EURC maker's. Task definition revision 2.
+- **`desired_count_market_maker_book_cngn` 1**, dry run. The plan was 1 add, 1 change, 1 destroy (the revision), and
+  touched only this service.
+- **Read back from the logs** (task `4cac246a…`):
+  - preflight ok: book v2, self-priced, market disabled, tick 1e10, lot 1e15;
+  - the cngn-rate sidecar serving;
+  - "spline (dry run: nothing sent)" every 5 s: mid **68,707 ticks (0.00068707)**, half spread 103, position 0. No
+    divergence or reference errors.
+- **Heartbeat** not configured (`configured=false`): the pager is removed, so there is no dead-man check for this
+  maker yet.
+
+## 2026-11-18 ~22:55–23:00 UTC: cNGN book maker images and service (ECR, ECS; terraform from `main`)
 
 Owner approved steps 1 and 2, 2026-11-18. Terraform 1.13.3, the version that wrote the state (serial 215), in
 `hashicorp/terraform:1.13.3`, with credentials exported from the SSO session into a mode-600 env file, deleted after.
@@ -26,7 +47,7 @@ Owner approved steps 1 and 2, 2026-11-18. Terraform 1.13.3, the version that wro
 - **Smoke test** of the cngn-rate image locally: `/usd-per-cngn` 200, 0.000691 USD per cNGN (Textile 1447.05; Bybit
   1469).
 
-## 2026-11-19 ~00:30 UTC: cNGN OnchainBook setup batch landed (box, vault)
+## 2026-11-18 22:53 UTC: cNGN OnchainBook setup batch landed (box, vault)
 
 - **Ops checkout** `/home/ec2-user/exchange-ops` fast-forwarded `6965d10` → `c646011`, a clean tree. That commit carries
   the proposer's `--book cngn` and the audited deployer transactions.
@@ -41,7 +62,7 @@ Owner approved steps 1 and 2, 2026-11-18. Terraform 1.13.3, the version that wro
   landed. The market stays **disabled** until the enable batch.
 - **The maker wallet still holds 0 ETH**, waiting on the owner.
 
-## 2026-11-18 ~23:50 UTC: cNGN OnchainBook deployed (chain)
+## 2026-11-18 22:48 UTC: cNGN OnchainBook deployed (chain)
 
 Owner approved the deploy, 2026-11-18.
 
@@ -61,7 +82,7 @@ Owner approved the deploy, 2026-11-18.
 - **Next:** the setup batch (acceptOwnership, setMakerAllowed(0x7b96…)), then enable, from
   `ONCHAIN_BOOK_CNGN_*VAULT_ACTIONS.json`, proposed from the box once the proposer reads the cNGN artifact.
 
-## 2026-11-18 ~23:20 UTC: cNGN book maker wallet and account created (SSM, chain)
+## 2026-11-18 22:42 UTC: cNGN book maker wallet and account created (SSM, chain)
 
 Owner approved, 2026-11-18: a wallet for the cNGN OnchainBook maker; its account; 2,700 USDC from #39 at cutover.
 
