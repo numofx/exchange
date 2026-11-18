@@ -2,9 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { buildApp } from './app.js';
-import { SettlementCanary, to18 } from './canary.js';
+import { DEFAULT_LOGS_FROM_BLOCK, LOGS_CHUNK, SettlementCanary, to18 } from './canary.js';
 import type { AppConfig } from './config.js';
 import type { ExecuteMatchResponse } from './types.js';
+
+/** The scan's head in the fakes: the deploy block, so a whitelist scan is one getLogs call. */
+const SCAN_HEAD = DEFAULT_LOGS_FROM_BLOCK;
 
 const MANAGER = '0x3195Bd7e02d93982bCF8b34DF5B941fFCaE1E49b' as const;
 
@@ -62,6 +65,7 @@ function canaryWith(readContract: () => Promise<unknown>, accountIds = [15]) {
     accountIds,
     intervalMs: 60_000,
     client: {
+      getBlockNumber: async () => SCAN_HEAD,
       getLogs: async () => [{ args: { asset: '0x9D806fD040a719D27a8E5E77dc5aE0ED1e089493' } }],
       readContract: async (a: { address: string; functionName: string }) =>
         a.functionName === 'getMargin' ? readContract() : healthyInvariantRead(a),
@@ -94,6 +98,7 @@ function feeCanary(o: { owner?: string; allowance?: bigint; accrued?: bigint; qu
       quoteAsset: (o.quoteAsset ?? WRAPPER) as `0x\${string}`,
     },
     client: {
+      getBlockNumber: async () => SCAN_HEAD,
       getLogs: async () => [],
       readContract: async (a: { address: string; functionName: string }) => {
         switch (a.functionName) {
@@ -202,6 +207,7 @@ function alertingCanary(
     alertRepeatAfterChecks: opts.repeatAfter ?? 30,
     announceOnStart: opts.announceOnStart ?? false,
     client: {
+      getBlockNumber: async () => SCAN_HEAD,
       getLogs: async () => [{ args: { asset: '0x9D806fD040a719D27a8E5E77dc5aE0ED1e089493' } }],
       readContract: async (a: { address: string; functionName: string }) => {
         if (a.functionName !== 'getMargin') return healthyInvariantRead(a);
@@ -267,6 +273,7 @@ test('every configured account is checked, not just the first', async () => {
     accountIds: [15, 16],
     intervalMs: 60_000,
     client: {
+      getBlockNumber: async () => SCAN_HEAD,
       getLogs: async () => [],
       readContract: async (a: { address: string; functionName: string; args?: unknown[] }) => {
         if (a.functionName !== 'getMargin') return healthyInvariantRead(a);
@@ -689,6 +696,7 @@ function accountCanary(
     heartbeatUrl: opts.heartbeatUrl,
     ping: opts.ping,
     client: {
+      getBlockNumber: async () => SCAN_HEAD,
       getLogs: async () => [],
       readContract: async (a: { address: string; functionName: string }) => {
         if (a.functionName === 'getMargin') return 0n;
@@ -835,6 +843,7 @@ function managedAccountCanary(managerOf: Record<number, string>, other: `0x${str
     intervalMs: 60_000,
     announceOnStart: false,
     client: {
+      getBlockNumber: async () => SCAN_HEAD,
       getLogs: async () => [],
       readContract: async (a: { address: string; functionName: string; args?: readonly unknown[] }) => {
         if (a.functionName === 'manager') return managerOf[Number(a.args?.[0])];
@@ -879,12 +888,57 @@ test('the whitelist scan uses the logs client: a refused full-range getLogs on t
     accountIds: [15],
     intervalMs: 60_000,
     client: {
+      getBlockNumber: async () => SCAN_HEAD,
       getLogs: async () => { throw new Error('request limit reached'); },
       readContract: async (a: { address: string; functionName: string }) =>
         a.functionName === 'getMargin' ? 0n : healthyInvariantRead(a),
     } as never,
-    logsClient: { getLogs: async () => [{ args: { asset: '0x9D806fD040a719D27a8E5E77dc5aE0ED1e089493' } }] } as never,
+    logsClient: { getBlockNumber: async () => SCAN_HEAD, getLogs: async () => [{ args: { asset: '0x9D806fD040a719D27a8E5E77dc5aE0ED1e089493' } }] } as never,
   });
   const snapshot = await canary.check();
   assert.deepEqual(snapshot.invariant_failures, [], snapshot.invariant_failures.join('; '));
+});
+
+// 2026-11-18: the keyed endpoint is publicnode now, which refuses eth_getLogs over 50,000 blocks. The whitelist scan
+// walks chunks from the SRM's deploy block, never asks for more than that, finds every entry once, and a pass that
+// fails mid-scan resumes where it stopped.
+test('the whitelist scan walks 50k-block chunks from the deploy block and resumes after a failure', async () => {
+  const from = DEFAULT_LOGS_FROM_BLOCK;
+  const head = from + 4n * LOGS_CHUNK + 123n;
+  const wrapper = '0x9D806fD040a719D27a8E5E77dc5aE0ED1e089493';
+  const at = [from, from + LOGS_CHUNK, head]; // one entry at each end and on a chunk boundary
+  const asked: [bigint, bigint][] = [];
+  let failAt: bigint | undefined = from + 2n * LOGS_CHUNK;
+  const logsClient = {
+    getBlockNumber: async () => head,
+    getLogs: async (q: { fromBlock: bigint; toBlock: bigint }) => {
+      assert.ok(q.fromBlock >= from && q.toBlock <= head && q.toBlock - q.fromBlock + 1n <= 50_000n, `refused ${q.fromBlock}..${q.toBlock}`);
+      if (failAt !== undefined && q.fromBlock >= failAt) throw new Error('timeout');
+      asked.push([q.fromBlock, q.toBlock]);
+      return at.filter((b) => b >= q.fromBlock && b <= q.toBlock).map(() => ({ args: { asset: wrapper, assetType: 3 } }));
+    },
+  };
+  const canary = new SettlementCanary({
+    rpcUrl: config.rpcUrl,
+    chainId: config.chainId,
+    manager: MANAGER,
+    accountIds: [15],
+    intervalMs: 60_000,
+    client: {
+      getBlockNumber: async () => head,
+      getLogs: async () => { throw new Error('the read client is not the scan client'); },
+      readContract: async (a: { address: string; functionName: string }) =>
+        a.functionName === 'getMargin' ? 0n : healthyInvariantRead(a),
+    } as never,
+    logsClient: logsClient as never,
+  });
+  const first = await canary.check();
+  assert.ok(first.invariant_failures.some((f) => f.includes('timeout')), first.invariant_failures.join('; '));
+  assert.equal(asked.length, 2, 'two chunks before the failure');
+  failAt = undefined;
+  const second = await canary.check();
+  assert.deepEqual(second.invariant_failures, [], second.invariant_failures.join('; '));
+  assert.equal(asked.length, 5, 'resumed: three more chunks, not five from the start');
+  assert.equal(asked[2][0], from + 2n * LOGS_CHUNK);
+  assert.equal(asked.at(-1)?.[1], head);
 });

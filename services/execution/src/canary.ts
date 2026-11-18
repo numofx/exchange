@@ -193,6 +193,11 @@ export async function checkBorrowers(read: InvariantRead, manager: `0x${string}`
   return out;
 }
 
+/** publicnode refuses eth_getLogs over 50,000 blocks. */
+export const LOGS_CHUNK = 49_999n;
+/** The live SRM 0xDE04…35D4's deploy block (eth_getCode bisection, 2026-11-18). */
+export const DEFAULT_LOGS_FROM_BLOCK = 51_998_433n;
+
 const ASSET_WHITELISTED_EVENT = {
   type: 'event',
   name: 'AssetWhitelisted',
@@ -269,12 +274,15 @@ export type CanarySnapshot = {
 export type CanaryOptions = {
   rpcUrl: string;
   /**
-   * Where the whitelist scan (eth_getLogs from block 0) goes: a keyed endpoint, since the public one refuses a full-range
-   * scan ("request limit reached") and every invariant check starts with it. Unset: rpcUrl.
+   * Where the whitelist scan goes: not the public read RPC, which refuses a long scan ("request limit reached"), and
+   * every invariant check starts with it. Unset: rpcUrl. Since 2026-11-18 this is publicnode (the Alchemy key ran out
+   * of its monthly cap), which refuses eth_getLogs over 50,000 blocks: the scan walks chunks from `logsFromBlock`.
    */
   logsRpcUrl?: string;
+  /** The first block the whitelist scan reads: the manager's deploy block. Default: the live SRM's, 51,998,433. */
+  logsFromBlock?: bigint;
   /** Tests: the scan's client, as `client` is for the reads. */
-  logsClient?: Pick<PublicClient, 'getLogs'>;
+  logsClient?: Pick<PublicClient, 'getLogs' | 'getBlockNumber'>;
   chainId: number;
   manager: `0x${string}`;
   /**
@@ -360,7 +368,10 @@ export type CanaryOptions = {
 export class SettlementCanary {
   private readonly client: Pick<PublicClient, 'readContract' | 'getLogs' | 'getBlockNumber'>;
   /** The whitelist scan's client: options.logsRpcUrl, else the read client. */
-  private readonly logsClient: Pick<PublicClient, 'getLogs'>;
+  private readonly logsClient: Pick<PublicClient, 'getLogs' | 'getBlockNumber'>;
+  /** The scan's progress: a pass that fails mid-scan resumes here on the next, rather than from the deploy block. */
+  private scannedTo: bigint | undefined;
+  private scanned: { asset: `0x${string}`; assetType?: number }[] = [];
   /** Discovered once: the whitelist does not change between checks, and a log scan every 60s would. */
   private wrappers: `0x${string}`[] | undefined;
   private perps: `0x${string}`[] | undefined;
@@ -582,13 +593,21 @@ export class SettlementCanary {
   /** Wrappers and perps under the manager, from its AssetWhitelisted logs. Once: the whitelist does not churn. */
   private async discoverWhitelist(): Promise<void> {
     if (this.wrappers && this.perps) return;
-    const logs = await this.logsClient.getLogs({
-      address: this.options.manager,
-      event: ASSET_WHITELISTED_EVENT,
-      fromBlock: 0n,
-      toBlock: 'latest',
-    });
-    const entries = logs.map((l) => (l as { args: { asset: `0x${string}`; assetType?: number } }).args);
+    const head = await this.logsClient.getBlockNumber();
+    let start = this.scannedTo === undefined ? (this.options.logsFromBlock ?? DEFAULT_LOGS_FROM_BLOCK) : this.scannedTo + 1n;
+    while (start <= head) {
+      const end = start + LOGS_CHUNK - 1n < head ? start + LOGS_CHUNK - 1n : head;
+      const logs = await this.logsClient.getLogs({
+        address: this.options.manager,
+        event: ASSET_WHITELISTED_EVENT,
+        fromBlock: start,
+        toBlock: end,
+      });
+      this.scanned.push(...logs.map((l) => (l as { args: { asset: `0x${string}`; assetType?: number } }).args));
+      this.scannedTo = end;
+      start = end + 1n;
+    }
+    const entries = this.scanned;
     this.wrappers = [...new Set(entries.map((a) => a.asset))];
     this.perps = [...new Set(entries.filter((a) => Number(a.assetType) === ASSET_TYPE_PERPETUAL).map((a) => a.asset))];
   }
