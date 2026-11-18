@@ -5,6 +5,23 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-18 21:46–21:55 UTC: fallback RPC off the capped Alchemy key; book maker and executor redeployed (SSM, ECS)
+
+- **SSM `/numo/exchange/rpc_fallback_url`** (version 2): Alchemy → `https://base-rpc.publicnode.com`. Owner approved.
+- **`--force-new-deployment`** of `market-maker-book-v2` and `execution-service`, the two services that use it as their
+  primary RPC (`MM_RPC_URL`; `SEND_RPC_URL`). Both deploy with min 0% and max 100%, so each was down from about
+  21:47 until its new task was healthy. Both reached a steady state by ~21:55.
+- **Read back:** #58's `splines(1,58)` updated 4 s before the check, so our EURC size is back on the book after about
+  17.5 h without it. The executor logs no capacity errors.
+- **Found:**
+  - The executor's own settlement canary (`canary.ts`) failed on publicnode: "Invalid parameters", the block-0 log scan
+    again. Fixed in `15fc964` with chunks from the SRM's deploy block. **Not yet deployed.**
+  - The executor's **deposits have been paused since at least 2026-11-16**: 0.00208 ETH, under the 0.006 ETH deposit
+    floor. It needs ETH.
+- **Not restarted:** the matcher, markets-service and the cNGN future and options makers. They use the parameter as a
+  fallback and read it at start, so they still hold the Alchemy URL until their next deploy. The matcher's book indexer
+  logs a 429 on every fallback `getLogs`, and `future_gate_unreadable` for EURC-30NOV26.
+
 ## 2026-11-18 17:00–17:30 UTC: keeper RPC off the capped Alchemy key onto publicnode; settlement canary scans in chunks (box, SSM)
 
 **Correction to the entry below:** the 2,188 "429" lines were mostly `mainnet.base.org` throttling its own traffic (the
