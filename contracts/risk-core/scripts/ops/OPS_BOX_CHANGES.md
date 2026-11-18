@@ -5,6 +5,23 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-18 13:50–15:50 UTC: EURC-31DEC26 listed (L4); ops checkout to `6965d10`; Alchemy key over its monthly cap (box)
+
+- **`/home/ec2-user/exchange-ops` fast-forwarded** `5d51b72` → `6965d10` (clean tree, `--ff-only`). The proposers'
+  `--self-test` can't run there: it needs `out/` from `forge build`, which the box doesn't have. It passed locally.
+- **Dry run** `eurc-v3-list --expiry 1798729200`: every gate passed; index 1.097296, initial mark 1.099240 (carry).
+- **Proposed** as `numo-eurc-v3-list` with `--initial-mark 1099240000000000000 --propose`: MPCVault uuid
+  `4655caed-cd8f-4cff-92d4-af304dbb7e4e`, digest `0x79c2e2c4…68ed`, the dry run's. The proposer's 30 min wait timed
+  out at 14:23 (the unit shows `failed`, exit 1); the owner approved afterwards, at about 15:46.
+- **Read back** (`futureContracts(1798729200)`, block ~59,132,549): listed 1, settled 0, expiry `1798729200`, last
+  trade `1798727400`, mark 1.099240, `lastMarkTime` 15:46:20. No keeper marks it yet (L5).
+- **Found while reading back:** the box's Alchemy key returns HTTP 429 "Monthly capacity limit exceeded" since
+  **04:16:33 UTC**: 2,188 such lines in two hours. Units that read through it:
+  - `numo-report-age`, `numo-settlement-canary` and `numo-signer-balance-alert` are `failed`;
+  - the perp keeper, engine keeper v2, perp feeds, vol feeds and both 30NOV26 feeds log 429s.
+  The EURC-30NOV26 v3 feed reads through `mainnet.base.org` and kept marking hourly and posting reports. Not fixed
+  here; see the session notes.
+
 ## 2026-11-17 22:44–22:50 UTC: MM wallet burn re-measured at the 50-tick reprice; balance check 0.0025 → 0.002 (box)
 
 - **Measured on chain** (nonce and balance at blocks 58,761,126 and 58,825,377, 19:10 to 22:44 UTC, the full-ladder
