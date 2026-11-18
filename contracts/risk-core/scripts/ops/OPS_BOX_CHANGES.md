@@ -5,6 +5,27 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-19 ~01:00 UTC: cNGN book maker images and service (ECR, ECS; terraform from `main`)
+
+Owner approved steps 1 and 2, 2026-11-18. Terraform 1.13.3, the version that wrote the state (serial 215), in
+`hashicorp/terraform:1.13.3`, with credentials exported from the SSO session into a mode-600 env file, deleted after.
+
+- **Images:**
+  - market-maker `0f8c5b262781` (book-maker `MM_BOOK_REFERENCE_URL`), digest `sha256:6381edfe…c261`;
+  - markets, execution and **cngn-rate** at `c39ec1128990` (`infra/aws/build-and-push.sh` builds all three now).
+    Only cngn-rate is pinned. markets and execution are pushed but **not deployed**; execution carries `15fc964`.
+- **Apply 1** (`c39ec112`): the `numo-exchange/cngn-rate` ECR repository (IMMUTABLE) and its lifecycle policy. The plan
+  was 2 to add and nothing else, so there was no drift from `main`.
+- **Apply 2** (`037f72c5`): log groups `market-maker-book-cngn` and `cngn-rate`, task definition
+  `market-maker-book-cngn:1` (book-maker plus the cngn-rate sidecar), and service `market-maker-book-cngn` at **0
+  replicas, dry run**. The execution role's secrets policy gains only
+  `/numo/exchange/mm_book_cngn_private_key`. The plan was 4 to add and 1 to change, all of it this service's.
+- **Read back:** the service exists with desired 0 and running 0, on task definition revision 1.
+- **Why 0 replicas:** the bot's preflight refuses to start until #60 grants the cNGN book its allowances, a
+  transaction from 0x7b96…bE4d, which holds no ETH.
+- **Smoke test** of the cngn-rate image locally: `/usd-per-cngn` 200, 0.000691 USD per cNGN (Textile 1447.05; Bybit
+  1469).
+
 ## 2026-11-19 ~00:30 UTC: cNGN OnchainBook setup batch landed (box, vault)
 
 - **Ops checkout** `/home/ec2-user/exchange-ops` fast-forwarded `6965d10` → `c646011`, a clean tree. That commit carries
