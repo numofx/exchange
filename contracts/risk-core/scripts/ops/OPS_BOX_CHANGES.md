@@ -5,6 +5,26 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-18 23:12–23:16 UTC: matcher and markets-service on markets 0f52e76a, indexing the cNGN book (ECS)
+
+Owner approved the matcher deploy, 2026-11-18.
+
+- **markets `0f52e76a3390`** (`ONCHAIN_BOOK_CNGN`: the matcher indexes the cNGN book). The running image was
+  `6bb45f2f367d`, with no `services/markets` changes since, so this ships only the new env name. Rollback is
+  `6bb45f2f367d` in one apply.
+- **Plan** (from `main`, terraform 1.13.3): markets, matcher and migrate task definitions on the new image; the
+  markets and matcher services; the matcher gains `ONCHAIN_BOOK_CNGN_ADDRESS` 0x5a35…8Bd4 and `_START_BLOCK`
+  59,258,624. 3 add, 2 change, 3 destroy, nothing else. Applied through `with-matcher-mute.sh`, which waited for the
+  old task to stop and for a fresh heartbeat (4.7 s).
+- **Matching gap ~55 s:** the old matcher `ff139c48…` started stopping at 23:12:54 and logged its last line at
+  23:12:56; the new one `b9f579f4…` logged "matcher started" at 23:13:49.
+- **Read back on the new task's stream:**
+  - three `book_indexer_started` lines, the cNGN book's from 59,258,624 with its own cursor;
+  - the fallback RPC is now `base-rpc.publicnode.com`, which picked up the 21:46 SSM change; there are no Alchemy
+    lines;
+  - the two EURC indexers, stuck for days on Alchemy 429s, caught up within about 2 minutes. No tick failures after
+    that.
+
 ## 2026-11-18 23:05–23:08 UTC: cNGN maker funded, allowances granted, bot started in dry run (chain, ECS)
 
 The times in the four cNGN entries below were first written as estimates (two dated the 19th). They are corrected to
