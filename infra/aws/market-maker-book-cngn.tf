@@ -19,7 +19,8 @@
 variable "image_cngn_rate" {
   description = "The cngn-rate sidecar image (services/cngn-rate), by git SHA. Empty creates nothing here."
   type        = string
-  default     = ""
+  # services/cngn-rate at c39ec112 (2026-11-19)
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/cngn-rate:c39ec1128990"
 }
 
 variable "image_market_maker_book_cngn" {
