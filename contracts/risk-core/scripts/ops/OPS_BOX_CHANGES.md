@@ -25,6 +25,10 @@ the block timestamps: Base blocks are 0.2 s apart.
     divergence or reference errors.
 - **Heartbeat** not configured (`configured=false`): the pager is removed, so there is no dead-man check for this
   maker yet.
+- **Balance check** (`09d00af3`): `check_signer_balance.py` watches 0x7b96…bE4d at 0.001 ETH/day, an estimate to
+  re-measure once live. Installed on the box over `fc10edb2…`, which is kept as `.bak-20261118b`; the new file is
+  `63d05c91…`. The box self-test passed, and the unit ran `success`: "cNGN OnchainBook maker 0.009999 ETH (~10.0
+  days)".
 
 ## 2026-11-18 ~22:55–23:00 UTC: cNGN book maker images and service (ECR, ECS; terraform from `main`)
 
