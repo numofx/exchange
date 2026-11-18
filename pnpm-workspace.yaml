@@ -3,5 +3,6 @@ packages:
   - 'services/execution'
   - 'services/rebalance'
   - 'services/perp-feeds'
+  - 'services/cngn-rate'
   - 'services/perp-keeper'
   - 'scripts/local-venue'
