@@ -5,6 +5,42 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-18 17:00–17:30 UTC: keeper RPC off the capped Alchemy key onto publicnode; settlement canary scans in chunks (box, SSM)
+
+**Correction to the entry below:** the 2,188 "429" lines were mostly `mainnet.base.org` throttling its own traffic (the
+`rpc_calls` lines' `429:n` counts; engine keeper v2 gets 7–15 a minute of ~200 calls). Only the readers of
+`/numo/keeper/rpc_url` were on Alchemy: `numo-perp-keeper`, `numo-report-age`, `numo-signer-balance-alert` and the
+canary's log scans. The cNGN, EURC, perp and vol feeds and engine keeper v2 read `/numo/feeds/rpc_url`
+(`mainnet.base.org`) and were not affected.
+
+- **Endpoints tested from the box:**
+  - `base-rpc.publicnode.com`: 30/30 in a burst, 148 ms. It caps `eth_getLogs` at 50,000 blocks and isn't an archive
+    node: historical `eth_getCode` gives 403.
+  - drpc and 1rpc cap `getLogs` at 100 and 50 blocks;
+  - llamarpc and meowrpc failed the burst.
+- **SSM `/numo/keeper/rpc_url`** (version 2): Alchemy → `https://base-rpc.publicnode.com`. The market makers use
+  publicnode from ECS, which has a different egress IP.
+- **`numo-perp-keeper` restarted:** no capacity-limit errors since. report-age (`ok`, 24 s) and the signer balance
+  check ran green by hand.
+- **The settlement canary still failed**, now with 403, because its two whitelist scans read `eth_getLogs` from block 0.
+  `check_settlement_canary.py` (`3d1cafc`): `scan_logs` starts at the SRM's deploy block 51,998,433, walks
+  49,999-block chunks, caches progress in `~/.cache/numo-canary` and re-reads the last 64 blocks each run. A chunk that
+  fails keeps the progress before it.
+  - Installed over `3dbc384a…`, which is kept as `.bak-20261118`. The new file is `26eede6f…`. The box self-test passed.
+  - Priming the cache: the first pass timed out on one chunk (15 s read), and the second resumed and finished, with 2
+    logs. Then `numo-settlement-canary` ran: `success`, all checks `ok`.
+  - The unit files' comments changed in the repo only. Their settings are the same, so nothing was reinstalled.
+- **Not done: blocked by the session's permission check, pending the owner.** `/numo/exchange/rpc_fallback_url` is
+  still Alchemy. Two ECS services use it as their **primary** RPC:
+  - `market-maker-book-v2`'s `MM_RPC_URL`: #58's spline on market 1 was last updated at 04:16 UTC, so the book has had
+    no size from us since then;
+  - `execution-service`'s `SEND_RPC_URL`: its next settlement broadcast would fail.
+
+  The matcher, markets-service and the cNGN future and options makers use it only as a fallback.
+- **Separately, seen but not caused by this:**
+  - `numo-rebalance-check` has failed since 16:53 with "the orderbook cannot fill 1000000 USDC units (max 0)".
+  - The matcher's book indexer has been stuck on `0x8fc6…d519d456` at blocks 58,925,529..58,927,528 with "rpc status 429".
+
 ## 2026-11-18 13:50–15:50 UTC: EURC-31DEC26 listed (L4); ops checkout to `6965d10`; Alchemy key over its monthly cap (box)
 
 - **`/home/ec2-user/exchange-ops` fast-forwarded** `5d51b72` → `6965d10` (clean tree, `--ff-only`). The proposers'
