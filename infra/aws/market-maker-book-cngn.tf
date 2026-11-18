@@ -46,7 +46,8 @@ variable "onchain_book_cngn_maker_account_id" {
 variable "market_maker_book_cngn_dry_run" {
   description = "true: reads, decides and logs, sends nothing. The first run is a dry run."
   type        = bool
-  default     = true
+  # Dry run 2026-11-18 23:06 UTC (preflight ok, mid 68,707); live 23:2x after #39 stopped and 2,700 USDC moved to #60.
+  default = false
 }
 
 variable "desired_count_market_maker_book_cngn" {

@@ -5,6 +5,37 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-18 23:17–23:30 UTC: cNGN-30NOV26 cutover: #39 stopped, 2,700 USDC to #60, book enabled, maker live, canary (vault, chain, ECS)
+
+Owner approved the cutover, with enable proposed first, 2026-11-18.
+
+- **Enable**, proposed from the box (checkout `59cf37c5`, a clean tree) as `numo-onchain-book-cngn-enable`. All gates
+  passed: custody, series 277.7 h, index 0.000689, fee 15 bps as the registry, makers 0, parity 28. MPCVault uuid
+  `194fee69…`, digest `0x8f00a139…79ac`. The owner approved; `markets(1).enabled` read 1 by 23:20.
+- **#39's Matching maker stopped:**
+  - `desired_count_market_maker_future_v2` cngn 1 → 0 in `counts.auto.tfvars`, which is untracked (`*.tfvars` is
+    ignored), so the count is recorded here;
+  - plan 1 change (the service's desired count);
+  - task `214938db…` STOPPED at 23:19:25. Its orders were cancelled on stop: `move-usdc` found none resting at
+    23:19:51.
+- **2,700 USDC #39 → #60** (`move-usdc 39 60 2700000000 --execute`, the MM key from SSM in a subshell):
+  - withdrawal `0xa4587d71…f438` (block 59,268,266), approve `0xb947a739…a362`, deposit `0x22522637…1303`
+    (59,268,274);
+  - #60 2,700.000000 cash;
+  - #39 keeps 101.02 cash and a −0.35 contract short (about 48.5 USDC of IM) to expiry.
+- **Maker live:** `market_maker_book_cngn_dry_run` false (task definition revision 3). The plan was 1 add, 1 change,
+  1 destroy, the value true → false only. The dry-run task `4cac246a…` was STOPPED at 23:25:26.
+  - **Read back by 23:28:** `makers(1)` [60]; `splines(1,60)` active, mid 68,632 ticks (0.00068632), half spread 103,
+    skew 1 to 172, ttl 60. The wallet had sent 5 transactions and holds 0.009996 ETH.
+  - **`quote` with no account:** 3.012 contracts a side; buy average 0.00068935, sell 0.00068321.
+- **Canary** from #57 (taker key `/numo/deploy/onchain_book_taker_key`, no reports):
+  - `setAssetAllowances(57, cNGN book, future and cash max)` `0xfa6c5b3c…7b59`;
+  - buy 5 lots `0x5b0e1f42…c6cc` (1,029,588 gas); sell 5 `0x38427d16…48fc` (807,946);
+  - #57 flat, 49.954031 cash (−0.0204, spread and fees); #60 flat, 2,700.010050;
+  - **on the tape:** trades 555 and 556, `source: book`, cNGN-30NOV26, 5 at 0.00068731 and 5 at 0.0006853.
+- **The cNGN-30NOV26 Matching book has no maker from 23:19.** The whole size is on the OnchainBook, as for EURC
+  (D4 A).
+
 ## 2026-11-18 23:12–23:16 UTC: matcher and markets-service on markets 0f52e76a, indexing the cNGN book (ECS)
 
 Owner approved the matcher deploy, 2026-11-18.
