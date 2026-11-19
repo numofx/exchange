@@ -20,8 +20,9 @@ const (
 	// from `cast sig`; book_depth_test.go pins the encoding against `cast calldata`.
 	selectorBookQuote   = "24bea503"
 	selectorBookMarkets = "b1283e77"
-	bookDepthCacheTTL   = 5 * time.Second
-	bookDepthMarketID   = 1
+	// nextMarketId(), from `cast sig`: a book's markets are 1 .. nextMarketId-1, one series each.
+	selectorBookNextMarketID = "406ef2ef"
+	bookDepthCacheTTL        = 5 * time.Second
 	// One lot (0.001 contract): the best price each side.
 	bookDepthLot = 1_000_000_000_000_000
 )
@@ -57,7 +58,7 @@ type bookDepthService struct {
 	now   func() time.Time
 
 	mu      sync.Mutex
-	series  map[string]string // book -> "future:subId", read once: a book's market never changes series
+	series  map[bookMarket]string // (book, market) -> "future:subId", read once: a market never changes series
 	cache   map[string]bookDepthResponse
 	cacheAt map[string]time.Time
 }
@@ -66,7 +67,7 @@ func newBookDepthService(chain bookChain, books []string) *bookDepthService {
 	if chain == nil || len(books) == 0 {
 		return nil
 	}
-	return &bookDepthService{chain: chain, books: books, now: time.Now, series: map[string]string{}, cache: map[string]bookDepthResponse{},
+	return &bookDepthService{chain: chain, books: books, now: time.Now, series: map[bookMarket]string{}, cache: map[string]bookDepthResponse{},
 		cacheAt: map[string]time.Time{}}
 }
 
@@ -107,19 +108,20 @@ func (svc *bookDepthService) depth(ctx context.Context, market instruments.Metad
 	}
 	svc.mu.Unlock()
 
-	book, err := svc.bookFor(ctx, market)
+	found, err := svc.bookFor(ctx, market)
 	if err != nil {
 		return bookDepthResponse{}, err
 	}
+	book := found.book
 	deadline := svc.now().Unix() + 60
-	out := bookDepthResponse{Market: market.Symbol, Book: book, MarketID: bookDepthMarketID, ReadAt: svc.now().Unix()}
+	out := bookDepthResponse{Market: market.Symbol, Book: book, MarketID: int(found.market), ReadAt: svc.now().Unix()}
 	for _, size := range bookDepthLadder {
 		amount, ok := contractsToUnits(size)
 		if !ok {
 			return bookDepthResponse{}, fmt.Errorf("bad ladder size %s", size)
 		}
 		for _, isBuy := range []bool{true, false} {
-			level, err := svc.quote(ctx, book, isBuy, amount, deadline)
+			level, err := svc.quote(ctx, found, isBuy, amount, deadline)
 			if err != nil {
 				return bookDepthResponse{}, err
 			}
@@ -138,44 +140,77 @@ func (svc *bookDepthService) depth(ctx context.Context, market instruments.Metad
 	return out, nil
 }
 
-// bookFor finds the book whose market 1 trades the series, reading each configured book's markets(1) once.
-func (svc *bookDepthService) bookFor(ctx context.Context, market instruments.Metadata) (string, error) {
-	want := strings.ToLower(market.AssetAddress) + ":" + market.SubID
-	for _, book := range svc.books {
-		svc.mu.Lock()
-		series, known := svc.series[book]
-		svc.mu.Unlock()
-		if !known {
-			result, err := svc.chain.ethCall(ctx, book, "0x"+selectorBookMarkets+fmt.Sprintf("%064x", bookDepthMarketID))
-			if err != nil {
-				return "", fmt.Errorf("read %s markets(1): %w", book, err)
-			}
-			raw := strings.TrimPrefix(result, "0x")
-			if len(raw) < 3*64 {
-				return "", fmt.Errorf("read %s markets(1): short result", book)
-			}
-			future := "0x" + raw[24:64]
-			subID, _ := new(big.Int).SetString(raw[2*64:3*64], 16)
-			series = strings.ToLower(future) + ":" + subID.String()
-			svc.mu.Lock()
-			svc.series[book] = series
-			svc.mu.Unlock()
-		}
-		if series == want {
-			return book, nil
-		}
-	}
-	return "", errNoBookForSeries
+// bookMarket is one market on one book.
+type bookMarket struct {
+	book   string
+	market uint64
 }
 
-func (svc *bookDepthService) quote(ctx context.Context, book string, isBuy bool, amount *big.Int, deadline int64) (bookDepthLevel, error) {
-	result, err := svc.chain.ethCall(ctx, book, encodeBookQuote(isBuy, amount, deadline))
+// bookFor finds the (book, market) that trades the series. Every market on every configured book is read once and
+// kept (a market never changes series); a series not yet seen re-reads each book's nextMarketId, so a market added
+// after start (the next series as market 2) is found without a restart.
+func (svc *bookDepthService) bookFor(ctx context.Context, market instruments.Metadata) (bookMarket, error) {
+	want := strings.ToLower(market.AssetAddress) + ":" + market.SubID
+	svc.mu.Lock()
+	for at, series := range svc.series {
+		if series == want {
+			svc.mu.Unlock()
+			return at, nil
+		}
+	}
+	svc.mu.Unlock()
+	for _, book := range svc.books {
+		result, err := svc.chain.ethCall(ctx, book, "0x"+selectorBookNextMarketID)
+		if err != nil {
+			return bookMarket{}, fmt.Errorf("read %s nextMarketId: %w", book, err)
+		}
+		next, ok := new(big.Int).SetString(strings.TrimPrefix(result, "0x"), 16)
+		if !ok || !next.IsUint64() {
+			return bookMarket{}, fmt.Errorf("read %s nextMarketId: bad result", book)
+		}
+		for id := uint64(1); id < next.Uint64(); id++ {
+			at := bookMarket{book: book, market: id}
+			svc.mu.Lock()
+			series, known := svc.series[at]
+			svc.mu.Unlock()
+			if !known {
+				if series, err = svc.readSeries(ctx, at); err != nil {
+					return bookMarket{}, err
+				}
+				svc.mu.Lock()
+				svc.series[at] = series
+				svc.mu.Unlock()
+			}
+			if series == want {
+				return at, nil
+			}
+		}
+	}
+	return bookMarket{}, errNoBookForSeries
+}
+
+// readSeries is markets(id)'s future and sub id, as "future:subId".
+func (svc *bookDepthService) readSeries(ctx context.Context, at bookMarket) (string, error) {
+	result, err := svc.chain.ethCall(ctx, at.book, "0x"+selectorBookMarkets+fmt.Sprintf("%064x", at.market))
 	if err != nil {
-		return bookDepthLevel{}, fmt.Errorf("quote %s: %w", book, err)
+		return "", fmt.Errorf("read %s markets(%d): %w", at.book, at.market, err)
+	}
+	raw := strings.TrimPrefix(result, "0x")
+	if len(raw) < 3*64 {
+		return "", fmt.Errorf("read %s markets(%d): short result", at.book, at.market)
+	}
+	subID, _ := new(big.Int).SetString(raw[2*64:3*64], 16)
+	return strings.ToLower("0x"+raw[24:64]) + ":" + subID.String(), nil
+}
+
+func (svc *bookDepthService) quote(ctx context.Context, at bookMarket, isBuy bool, amount *big.Int, deadline int64) (bookDepthLevel, error) {
+	result, err := svc.chain.ethCall(ctx, at.book, encodeBookQuote(at.market, isBuy, amount, deadline))
+	if err != nil {
+		return bookDepthLevel{}, fmt.Errorf("quote %s market %d: %w", at.book, at.market, err)
 	}
 	raw := strings.TrimPrefix(result, "0x")
 	if len(raw) < 4*64 {
-		return bookDepthLevel{}, fmt.Errorf("quote %s: short result", book)
+		return bookDepthLevel{}, fmt.Errorf("quote %s market %d: short result", at.book, at.market)
 	}
 	num := func(i int) *big.Int { n, _ := new(big.Int).SetString(raw[i*64:(i+1)*64], 16); return n }
 	filled, avg, fee := num(0), num(1), num(2)
@@ -186,10 +221,10 @@ func (svc *bookDepthService) quote(ctx context.Context, book string, isBuy bool,
 	return level, nil
 }
 
-// encodeBookQuote is quote(TakeOrder) for a price quote with no account (takerAccountId 0): market 1, the amount,
+// encodeBookQuote is quote(TakeOrder) for a price quote with no account (takerAccountId 0): the market, the amount,
 // no price limit (a buy accepts any price, a sell any above zero), no minimum fill, a fee bound that never binds,
 // 255 levels, Abort, no managerData. The TakeOrder holds `bytes`, so it is encoded behind an offset.
-func encodeBookQuote(isBuy bool, amount *big.Int, deadline int64) string {
+func encodeBookQuote(marketID uint64, isBuy bool, amount *big.Int, deadline int64) string {
 	w := func(v *big.Int) string { return fmt.Sprintf("%064x", v) }
 	maxUint := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 255), big.NewInt(1)) // high enough, and positive as int256
 	limit, buy := big.NewInt(0), big.NewInt(0)
@@ -197,19 +232,19 @@ func encodeBookQuote(isBuy bool, amount *big.Int, deadline int64) string {
 		limit, buy = maxUint, big.NewInt(1)
 	}
 	words := []string{
-		w(big.NewInt(0x20)),              // offset of the tuple
-		w(big.NewInt(bookDepthMarketID)), // marketId
-		w(big.NewInt(0)),                 // takerAccountId: a quote with no account
-		w(buy),                           // isBuy
-		w(amount),                        // amount
-		w(limit),                         // limitPrice
-		w(big.NewInt(0)),                 // minFill
-		w(maxUint),                       // maxFee
-		w(big.NewInt(deadline)),          // deadline
-		w(big.NewInt(255)),               // maxLevels
-		w(big.NewInt(0)),                 // selfTradeMode: Abort
-		w(big.NewInt(11 * 32)),           // managerData's offset within the tuple
-		w(big.NewInt(0)),                 // managerData's length
+		w(big.NewInt(0x20)),                 // offset of the tuple
+		w(new(big.Int).SetUint64(marketID)), // marketId
+		w(big.NewInt(0)),                    // takerAccountId: a quote with no account
+		w(buy),                              // isBuy
+		w(amount),                           // amount
+		w(limit),                            // limitPrice
+		w(big.NewInt(0)),                    // minFill
+		w(maxUint),                          // maxFee
+		w(big.NewInt(deadline)),             // deadline
+		w(big.NewInt(255)),                  // maxLevels
+		w(big.NewInt(0)),                    // selfTradeMode: Abort
+		w(big.NewInt(11 * 32)),              // managerData's offset within the tuple
+		w(big.NewInt(0)),                    // managerData's length
 	}
 	return "0x" + selectorBookQuote + strings.Join(words, "")
 }
