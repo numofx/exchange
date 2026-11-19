@@ -30,6 +30,22 @@ trading-app `eaed4a4`). Option total position under v2 was 0 beforehand: no trad
     heartbeat 3 s. `/markets` lists no options.
   - **Rollback:** revert `7d18810d`'s two infra defaults and apply, then fund #44 again and set its count back.
 
+## 2026-11-19 02:03–02:10 UTC: vol feed stopped, its relayer's ETH to the executor (SSM, chain)
+
+- **Owner's decision** ("stop the vol feed and send 0.0019 ETH from 0xE5b8 to the executor"), after options were
+  retired (01:25–01:38 above): nothing read the surface any more.
+- **`numo-vol-feeds` disabled and stopped** (SSM `f56680cc-…`, 02:03): `disabled inactive`. Unit and
+  `/etc/numo/vol-feeds.env` left in place, inert. Only it sent from `forward_relayer_key` (every forward feed has its
+  own relayer key). Nothing running watches the vol feed (staleness check reads spot feeds; the pager is off).
+  Undo: `systemctl enable --now numo-vol-feeds`, after funding the relayer.
+- **0.0019 ETH `0xE5b8…ae6de` → executor `0xF68e…8703`**, tx
+  `0x9dc2333a513f7db3068a1c9f2a0eb72157d1ab7e3f90c50b0bd9bfdfa4b4dcee` (block 59,292,645, status 1), key from SSM in a
+  subshell, nonce 5017 with nothing pending. After: executor 0.008975 ETH (deposit floor 0.006), relayer 0.000125.
+- **Balance check:** the relayer dropped from `check_signer_balance.py`'s WALLETS (self-test ok, 6 wallets). Installed
+  in `/home/ec2-user/exchange` (the unit's) and `exchange-ops`, both sha-checked at `63d05c91…` before, now
+  `78ccd9e5…`; backups `.bak-20261119c`. One run (SSM `ebdf4b4a-…`): exit 0, the relayer not listed; it warned for the
+  feed signer (~6.1 days) and forward relayer v2 cNGN (~6.7 days), both real.
+
 ## 2026-11-19 ~02:10 UTC: v1's keeper and forward-feed units removed from the box (SSM `5b64692f-…`)
 
 - **Owner's decision:** v1 fully gone, after the delisting above. Both units were disabled and inactive (since

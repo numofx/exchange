@@ -42,7 +42,8 @@ from pathlib import Path
 # cadence changes. The v3 canary relayer (0x35ee...bDD5) is left out: its keeper is disabled.
 WALLETS: list[tuple[str, str, float]] = [
   ("feed signer", "0xC9F1FfdEd29f7051538ad3a72729C3d07F920FDc", 0.0012),  # 0.00063/day measured; 2026-09-09's 0.0012 kept
-  ("vol relayer (v1 forward's key)", "0xE5b8541dC2558f3db65aF88A2374e464AE4ae6de", 0.0002),  # 0.00014/day, 285 tx
+  # vol relayer 0xE5b8…ae6de (v1 forward's key): off since 2026-11-19, numo-vol-feeds disabled with options retired;
+  # 0.0019 ETH swept to the executor.
   # forward relayer v2 EURC 0xEEa4…5321: off since 2026-11-17, its keeper stopped (the v2 series retired, OI 0).
   ("forward relayer v2 cNGN", "0x3ACeFDe146161D1b9ca2fdB8a3B38122818d763f", 0.00005),  # 0.000020/day, 46 tx
   ("EURC v3 keeper relayer", "0x0AbAac33E5ab7E62dED100Be465032A3636b12e5", 0.0035),  # 0.0029/day, ~2,700 tx
