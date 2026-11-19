@@ -159,7 +159,7 @@ exists; the tests use stand-in modules).
 | 2 | `BookCustodian` and its tests | done 2026-11-19 |
 | 3 | Adversarial review (not the author's) and fixes | two independent reviews, 2026-11-19; the second found nothing above low; its lows fixed |
 | 4 | Deploy, our own accounts first | deployed 2026-11-19 (`scripts/deploy-book-custodian.s.sol`, `test/fork/DeployBookCustodianFork.t.sol`); our accounts not yet moved |
-| 5 | Services and app: relay paths, owner checks, migration flow, trading key | 3–4 days |
+| 5 | Services and app: relay paths, owner checks, migration flow, trading key | built 2026-11-19, not deployed: execution `POST /custodian` (2fbc5085, end to end on a Base fork), markets `POST /custodian` + `GET /custodian/accounts` (63d5c491), infra env (not applied), app behind `NEXT_PUBLIC_CUSTODIAN_ENABLED` (trading-app 65f4dd1, unpushed). Migration of a Matching account with a position: not yet in the app |
 | 6 | External audit before user accounts migrate at scale | lead time |
 
 ## Decisions (change any)
