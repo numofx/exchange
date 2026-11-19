@@ -5,6 +5,31 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-19 01:25–01:38 UTC: options retired: maker #44 stopped, 1,000.05 USDC to #43, options delisted (chain, ECS)
+
+Owner asked to move #44's USDC to the EURC maker and retire the options orderbook (the app dropped its options page in
+trading-app `eaed4a4`). Option total position under v2 was 0 beforehand: no trader held an option.
+
+- **#44's maker stopped:** `desired_count_market_maker_options` 1 → 0 in `counts.auto.tfvars` (untracked, so recorded
+  here). The plan had 1 change (the service's desired count), applied 01:25:13. Four quotes outlived the stop: buy
+  and sell on the 0.00062 C and the 0.00072 P. `migrate-spot-mm.ts cancel` with `SPOT_SYMBOL` set per strike (cancel is
+  per market) cleared them, and `move-usdc` then found none resting.
+- **1,000.05 USDC #44 → #43** (`move-usdc 44 43 1000050000 --execute`, the MM key from SSM in a subshell, publicnode RPC):
+  - withdrawal `0xf630ddbc…16a1` (block 59,307,598), approve `0x8ed2493a…b5d9`, deposit `0x9f6fa2ed…722f` (59,307,608);
+  - #43 3,826.27 USDC cash plus its 3,272.44 EURC;
+  - #44 keeps 5,664 wei of cash (dust below one USDC unit).
+  - This returns the 1,000 USDC that #43 lent #44 on 2026-11-02.
+- **Delisted** in `7d18810d`: `option_series = []`, `mm_options_subaccount_id = ""` (keeps the emptied #44 off the canary's
+  value floor).
+  - The plan was 4 add, 4 change, 4 destroy: the task definitions of markets, matcher, execution and the options maker.
+  - The changes were `OPTION_SERIES` removed, the canary accounts `42,43,39,40,44` → `42,43,39,40` and the options
+    maker's account cleared.
+  - Applied 01:32:24 under `with-matcher-mute.sh`. The SSO session expired before the wrapper unmuted, so the leftover
+    `/numo/pager/mute_matcher_dead_until` was deleted by hand at ~01:42.
+  - **Read back:** matcher :67, markets :68, execution :46, all COMPLETED 1/1, and the options maker 0/0. Matcher
+    heartbeat 3 s. `/markets` lists no options.
+  - **Rollback:** revert `7d18810d`'s two infra defaults and apply, then fund #44 again and set its count back.
+
 ## 2026-11-19 01:07–01:11 UTC: execution-service c39ec112: the settlement canary scans in chunks again (ECS)
 
 - **Why.** Since `SEND_RPC_URL` (`/numo/exchange/rpc_fallback_url`) moved to publicnode during the Alchemy outage, the
