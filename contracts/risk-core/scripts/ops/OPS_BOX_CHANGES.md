@@ -5,6 +5,27 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-19 03:31–03:48 UTC: BookTakeModule custody to the vault; services deployed with /book-takes, /book-depth, /book-take (vault, ECS)
+
+- **Ops checkout** `/home/ec2-user/exchange-ops` `59cf37c5` → `8e10ce27`. The fast-forward first aborted on a local
+  `check_signer_balance.py` (the copy installed at 02:10); it was byte-identical to `origin/main`'s (`78ccd9e5…`), so
+  the local edit was dropped and the fast-forward made, leaving the same file.
+- **Action 0, `acceptOwnership()`**, proposed by `propose_book_take_module.py --propose` (`run-with-ssm-mark.sh`, as
+  ec2-user). The first attempt hit an RPC 429 in the chain checks, before any proposal; the retry proposed MPCVault
+  `5d8c4e77…`. Owner approved: tx `0x1898f15fbadc1402a34286fc0a7224995673157f3e2e02b1f42d51940e9644a4` (block
+  59,343,941, status 1). After: owner the vault, no pending owner, Matching does not allow it.
+- **Action 1, `Matching.setAllowedModule(module, true)`**, proposed as MPCVault `22189055…` (after one more RPC 429
+  in the checks): **awaiting the owner**.
+- **Services** (owner's go-ahead, applied before the switch: until it lands a take is refused, 422): images
+  `markets:adef99f11bb8` (markets, matcher, migrate) and `execution:adef99f11bb8`, plus `book_take_module_address`
+  (`BOOK_TAKE_MODULE_ADDRESS`, `BOOK_TAKE_BOOKS` = the EURC v2 and cNGN books on both; `EXECUTOR_BOOK_TAKE_URL` on the
+  API). Applied 03:44:41–45 (4 add, 3 change, 4 destroy, exactly those deltas); old tasks STOPPED by 03:48:30.
+  Matching gap ~62 s (old matcher stopping 03:44:58, new started 03:46:00). Rollback: `markets:4ccb4698fec1`,
+  `execution:c39ec1128990`, `book_take_module_address = ""`.
+- **Read back:** `/book-depth?symbol=cNGN-30NOV26` 0.00068538 / 0.00068744 at a lot, one contract 0.00068445 /
+  0.00068837; `EURC-30NOV26` 1.095619 / 1.097379. `POST /book-takes` refuses a malformed take (400, names the module).
+  Canary ok. The only error lines: the old matcher's shutdown (`context canceled`) and the probe's INFO rejection.
+
 ## 2026-11-19 03:27 UTC: BookTakeModule deployed, inert until the vault batch (chain)
 
 - **Owner's decision:** let the trading app's users take from the OnchainBooks for the 30NOV26 series without gas

@@ -83,7 +83,9 @@ variable "image_markets" {
   # Rollback is df70d1e726e1 with onchain_book_v2_address = "", in one apply.
   # 2026-11-18: main 0f52e76a (ONCHAIN_BOOK_CNGN: the matcher indexes the cNGN book). Rollback is 6bb45f2f367d, in one apply.
   # 2026-11-19: main 4ccb4698 (CNGN_SPOT_DELISTED / EURC_SPOT_DELISTED). Rollback is 0f52e76a3390, in one apply.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:4ccb4698fec1"
+  # 2026-11-19: main adef99f1 (BookTakeModule: POST /book-takes and /book-depth on the API, POST /book-take on
+  # execution). Rollback is 4ccb4698fec1, in one apply.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:adef99f11bb8"
 }
 
 variable "image_execution" {
@@ -98,7 +100,9 @@ variable "image_execution" {
   # 2026-11-18: main c39ec112 (15fc964: the whitelist scan walks 49,999-block chunks from the SRM's deploy block and
   # resumes after a failed pass; publicnode, SEND_RPC_URL since the Alchemy outage, refuses wider). Rollback is
   # d2c409c4ef25, in one apply.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/execution:c39ec1128990"
+  # 2026-11-19: main adef99f1 (BookTakeModule: POST /book-takes and /book-depth on the API, POST /book-take on
+  # execution). Rollback is c39ec1128990, in one apply.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/execution:adef99f11bb8"
 }
 
 variable "secret_backend" {
