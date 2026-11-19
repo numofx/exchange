@@ -182,6 +182,20 @@ locals {
     { name = "BOOK_TAKE_BOOKS", value = local.book_take_books },
   ]
 
+  # BookCustodian relay (POST /custodian on both services). Needs the book-take books, so absent without them too.
+  custodian_assets = join(",", [var.cngn_perp_cash_address, var.eurc_spot_asset_address])
+  markets_custodian_env = var.custodian_address == "" || var.book_take_module_address == "" ? [] : [
+    { name = "CUSTODIAN_ADDRESS", value = var.custodian_address },
+    { name = "CUSTODIAN_ASSETS", value = local.custodian_assets },
+    { name = "CUSTODIAN_DEPLOY_BLOCK", value = tostring(var.custodian_deploy_block) },
+    { name = "EXECUTOR_CUSTODIAN_URL", value = "http://execution-service.${var.internal_namespace}:8081/custodian" },
+  ]
+  execution_custodian_env = var.custodian_address == "" || var.book_take_module_address == "" ? [] : [
+    { name = "CUSTODIAN_ADDRESS", value = var.custodian_address },
+    { name = "CUSTODIAN_MANAGER", value = var.deposit_manager_address },
+    { name = "CUSTODIAN_ASSETS", value = local.custodian_assets },
+  ]
+
   # Spot delisted (2026-11-19, owner): off /markets and the matcher, no orders, while the escrows stay deposit and
   # withdrawal assets (cNGN and EURC are futures collateral too). Absent while false, like eurc_spot_env.
   spot_delist_env = concat(
@@ -266,7 +280,7 @@ resource "aws_ecs_task_definition" "markets" {
       { name = "WITHDRAWAL_ASSET_ADDRESSES", value = local.withdrawal_asset_addresses },
       { name = "EXECUTOR_WITHDRAW_URL", value = "http://execution-service.${var.internal_namespace}:8081/withdraw" },
       { name = "EXECUTOR_WITHDRAW_TIMEOUT", value = "45s" },
-    ], local.future_env, local.markets_deposit_env, local.eurc_spot_env, local.spot_delist_env, local.markets_book_take_env)
+    ], local.future_env, local.markets_deposit_env, local.eurc_spot_env, local.spot_delist_env, local.markets_book_take_env, local.markets_custodian_env)
 
     secrets = [
       { name = "INDEX_STATUS_TOKEN", valueFrom = local.secret_arns.index_status_token },
@@ -510,6 +524,8 @@ resource "aws_ecs_task_definition" "execution" {
       local.execution_deposit_env,
       # Signed OnchainBook takes; empty unless book_take_module_address.
       local.execution_book_take_env,
+      # BookCustodian relay; empty unless custodian_address.
+      local.execution_custodian_env,
     )
 
     secrets = concat(

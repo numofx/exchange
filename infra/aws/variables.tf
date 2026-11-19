@@ -761,3 +761,17 @@ variable "book_take_module_address" {
   type    = string
   default = "0x1D1FcAa8C1677dF51dda4F26bc391B91b98dEBE3"
 }
+
+# BookCustodian (contracts/risk-core/deployments/8453/BOOK_CUSTODIAN.json, docs/book-custodian-spec.md): app users'
+# accounts held so the OnchainBooks can act on them; POST /custodian relays its calls, GET /custodian/accounts finds a
+# wallet's. Empty leaves both off (503). Its deposit and withdrawal assets are cash and the EURC asset, as allowed on
+# chain at deploy; the cNGN asset is not whitelisted on engine v2.
+variable "custodian_address" {
+  type    = string
+  default = "0xD8EBF2216Fd4ECA79272E76ad22131592EA0dfd6"
+}
+
+variable "custodian_deploy_block" {
+  type    = number
+  default = 59581388
+}

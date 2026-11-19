@@ -42,6 +42,7 @@ type Server struct {
 	// withdrawals serves POST /withdrawals; nil when not fully configured, and the endpoint answers 503.
 	withdrawals *withdrawalService
 	bookTakes   *bookTakeService
+	custodian   *custodianService
 	bookDepth   *bookDepthService
 	// deposits serves POST /deposits; nil unless DEPOSITS_ENABLED and fully configured, and the endpoint answers 503.
 	deposits *depositService
@@ -266,6 +267,7 @@ func NewServer(cfg config.Config, pool *pgxpool.Pool, registry *instruments.Regi
 		signatures:   signatures,
 		withdrawals:  newWithdrawalService(cfg, signatures),
 		bookTakes:    newBookTakeService(cfg, signatures),
+		custodian:    newCustodianService(cfg),
 		bookDepth:    newBookDepthService(bookDepthChain(cfg), cfg.BookTakeBooks),
 		deposits:     newDepositService(cfg, signatures, pool),
 		perp:         newPerpStateReader(cfg),
@@ -314,6 +316,11 @@ func (s *Server) Run(ctx context.Context) error {
 		"interval", s.cfg.OrdersPruneInterval.String(),
 		"batch", s.cfg.OrdersPruneBatch,
 	)
+
+	// The custodian's account index, rebuilt in the background: GET /custodian/accounts answers 503 until it is.
+	if s.custodian != nil {
+		go s.custodian.index.run(hubCtx)
+	}
 
 	s.logRegisteredMarkets()
 	slog.Info(

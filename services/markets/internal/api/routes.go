@@ -26,6 +26,8 @@ func (s *Server) routes(integrations *integrationCache) chi.Router {
 	router.Post("/orders/cancel", s.handleCancelOrder)
 	router.Post("/withdrawals", s.handleCreateWithdrawal)
 	router.Post("/book-takes", s.handleCreateBookTake)
+	router.Post("/custodian", s.handleCustodian)
+	router.Get("/custodian/accounts", s.handleCustodianAccounts)
 	router.Post("/deposits", s.handleCreateDeposit)
 	router.Get("/deposits/{action_hash}", s.handleGetDeposit)
 	router.Get("/ws", s.handleWS)

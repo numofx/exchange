@@ -66,6 +66,14 @@ type Config struct {
 	BookTakeModuleAddress string
 	BookTakeBooks         []string
 	ExecutorBookTakeURL   string
+	// CustodianAddress is BookCustodian (contracts/risk-core, docs/book-custodian-spec.md, deployed 2026-11-19).
+	// POST /custodian relays its calls to ExecutorCustodianURL (execution-service's POST /custodian) for the books in
+	// BookTakeBooks and the assets in CustodianAssets; GET /custodian/accounts indexes its events from
+	// CustodianDeployBlock. Address or URL unset: both answer 503.
+	CustodianAddress     string
+	CustodianAssets      []string
+	CustodianDeployBlock uint64
+	ExecutorCustodianURL string
 	// Signed deposits (POST /deposits), through the deployed DepositModule with the venue paying gas. Off unless
 	// DEPOSITS_ENABLED; when on and anything below is missing, the endpoint answers 503 rather than half-check.
 	DepositsEnabled bool
@@ -237,6 +245,8 @@ func Load() (Config, error) {
 		ExecutorWithdrawURL:     strings.TrimSpace(os.Getenv("EXECUTOR_WITHDRAW_URL")),
 		BookTakeModuleAddress:   strings.ToLower(strings.TrimSpace(os.Getenv("BOOK_TAKE_MODULE_ADDRESS"))),
 		ExecutorBookTakeURL:     strings.TrimSpace(os.Getenv("EXECUTOR_BOOK_TAKE_URL")),
+		CustodianAddress:        strings.ToLower(strings.TrimSpace(os.Getenv("CUSTODIAN_ADDRESS"))),
+		ExecutorCustodianURL:    strings.TrimSpace(os.Getenv("EXECUTOR_CUSTODIAN_URL")),
 		ExecutorManagerData:     "0x",
 		ExpectedOrderOwner:      os.Getenv("EXPECTED_ORDER_OWNER"),
 		ExpectedOrderSigner:     os.Getenv("EXPECTED_ORDER_SIGNER"),
@@ -291,6 +301,16 @@ func Load() (Config, error) {
 	cfg.WithdrawalAssetAddresses = withdrawalAssets(cfg)
 	for _, book := range getenvCSV("BOOK_TAKE_BOOKS", "") {
 		cfg.BookTakeBooks = append(cfg.BookTakeBooks, strings.ToLower(book))
+	}
+	for _, asset := range getenvCSV("CUSTODIAN_ASSETS", "") {
+		cfg.CustodianAssets = append(cfg.CustodianAssets, strings.ToLower(asset))
+	}
+	if raw := strings.TrimSpace(os.Getenv("CUSTODIAN_DEPLOY_BLOCK")); raw != "" {
+		block, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse CUSTODIAN_DEPLOY_BLOCK: %w", err)
+		}
+		cfg.CustodianDeployBlock = block
 	}
 
 	cfg.AlertWebhookURL = strings.TrimSpace(os.Getenv("ALERT_WEBHOOK_URL"))
