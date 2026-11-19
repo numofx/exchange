@@ -85,7 +85,9 @@ variable "image_markets" {
   # 2026-11-19: main 4ccb4698 (CNGN_SPOT_DELISTED / EURC_SPOT_DELISTED). Rollback is 0f52e76a3390, in one apply.
   # 2026-11-19: main adef99f1 (BookTakeModule: POST /book-takes and /book-depth on the API, POST /book-take on
   # execution). Rollback is 4ccb4698fec1, in one apply.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:adef99f11bb8"
+  # 2026-11-19: main 22fe88df (EURC-31DEC26 listed; /book-depth finds a series on any book market and reports
+  # market_id). Rollback is adef99f11bb8, in one apply.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:22fe88df57b1"
 }
 
 variable "image_execution" {
@@ -102,7 +104,9 @@ variable "image_execution" {
   # d2c409c4ef25, in one apply.
   # 2026-11-19: main adef99f1 (BookTakeModule: POST /book-takes and /book-depth on the API, POST /book-take on
   # execution). Rollback is c39ec1128990, in one apply.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/execution:adef99f11bb8"
+  # 2026-11-19: main 22fe88df (EURC-31DEC26 listed; /book-depth finds a series on any book market and reports
+  # market_id). Rollback is adef99f11bb8, in one apply.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/execution:22fe88df57b1"
 }
 
 variable "secret_backend" {
