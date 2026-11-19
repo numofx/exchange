@@ -56,7 +56,9 @@ contract OnchainBookCngnFork is Test {
     (index,) = FUTURE.indexFeed().getSpot();
 
     book = new OnchainBook(subAccounts, IAsset(address(CASH)), FEE_ACCOUNT);
-    mkt = book.createMarket(FUTURE, SUB_ID, IOnchainBookManager(address(ENGINE)), StreamsIndexAdapter(address(0)), TICK, LOT);
+    mkt = book.createMarket(
+      FUTURE, SUB_ID, IOnchainBookManager(address(ENGINE)), StreamsIndexAdapter(address(0)), TICK, LOT
+    );
     book.setMarketParams(mkt, FEE_RATE, 1, 1 hours, 10, true);
     book.setSelfPricedTtlCap(mkt, 60);
     book.setMakerAllowed(maker, true);

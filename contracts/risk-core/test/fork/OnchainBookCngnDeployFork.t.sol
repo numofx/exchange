@@ -64,7 +64,9 @@ contract OnchainBookCngnDeployFork is Test {
   }
 
   function testAUsedDeployerMustBeNamed() public {
-    vm.expectRevert(bytes("deployer key must be single use: it has sent transactions before (name it in USED_DEPLOYER to accept)"));
+    vm.expectRevert(
+      bytes("deployer key must be single use: it has sent transactions before (name it in USED_DEPLOYER to accept)")
+    );
     script.checkDeployer(params, DEPLOYER, 7, address(0));
     script.checkDeployer(params, DEPLOYER, 7, DEPLOYER);
   }
