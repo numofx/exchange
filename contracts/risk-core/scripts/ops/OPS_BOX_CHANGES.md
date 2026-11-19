@@ -5,6 +5,19 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-19 ~06:10 UTC: EURC-31DEC26 keeper installed in dry run (listing run-sheet L5, first half) (SSM `88ca2d4e-…`)
+
+- `/etc/numo/future-feeds-v3-eurc-31dec26.env` from `exchange-ops`'s copy (sha-checked against main's, `c6618899…`,
+  `DRY_RUN=true` asserted), then `systemctl enable --now numo-future-feeds-v3@eurc-31dec26` (the existing
+  `numo-future-feeds-v3@.service`, checkout `exchange-future-v3`). Relayer key `forward_relayer_key_v3_eurc_canary`
+  (`0x35ee…bDD5`): the canary instance that used it is disabled, so one key, one sender.
+- **First ticks:** marks to carry, 1.098331 on index 1.096416 (`/book` returns 400: the series is not on `/markets`
+  until L6); "would post reports" (both v3 instances post for the shared adapter until 30NOV26's keeper stops, as the
+  run-sheet accepts); `forward-mark-late` (true: no mark since listing on 2026-11-18), posted to Slack at most every
+  15 minutes until it goes live.
+- **Not yet live:** `0x35ee…bDD5` holds 0.00002 ETH; L3 (fund ~0.02 ETH, owner) comes before `DRY_RUN=false`.
+- Undo: `systemctl disable --now numo-future-feeds-v3@eurc-31dec26`.
+
 ## 2026-11-19 ~04:03 UTC: BookTakeModule switched on (vault)
 
 - **Action 1, `Matching.setAllowedModule(0x1D1F…EBE3, true)`** (MPCVault `22189055…`), approved by the owner: tx
