@@ -80,8 +80,8 @@ The state this produced is in the generated **Live SRM state** section above.
 
 - `manager`: the shared `srm` above, `0x3195Bd7e02d93982bCF8b34DF5B941fFCaE1E49b`
 - `baseAsset` (wrapped cNGN): `0x9D806fD040a719D27a8E5E77dc5aE0ED1e089493` — **unchanged**, shared with the deliverable stack
-- `spotFeed` (LyraStaticSpotFeed): `0xec4ad7B2679f54eB3e971B10120cB56cF1c061A4` — `0.000743376685636834` USDC per cNGN, confidence `1e18`
-- `stableFeed` (LyraStaticSpotFeed): `0x507D645682737C6640dc73b5aC858654BcB9854f` — `1e18`, confidence `1e18`
+- `spotFeed` (NumoStaticSpotFeed): `0xec4ad7B2679f54eB3e971B10120cB56cF1c061A4` — `0.000743376685636834` USDC per cNGN, confidence `1e18`
+- `stableFeed` (NumoStaticSpotFeed): `0x507D645682737C6640dc73b5aC858654BcB9854f` — `1e18`, confidence `1e18`
 - Market id: **2** (`createMarket` is action 4; `lastMarketId` was 1)
 - Cap: `204853778399937200000000000` — 10% of live cNGN supply at generation. Gates deposits, not trading. **Alert at 80%**: `163883022719949760000000000`
 - Batch hash: `0x911288c57e4ea05fe01f257f928bd80b5e00fa4cd3bd9ff4129b96a43bb1b67f` — the value
@@ -113,7 +113,7 @@ Settings 2 and 4 are **global to the SRM**, not per-market.
 
 Artifact: [deployments/8453/MARKET1_INERT_VAULT_ACTIONS.json](deployments/8453/MARKET1_INERT_VAULT_ACTIONS.json)
 
-Market 1 was moved off the live `LyraSpotFeed` `0xDAe566adc61086535986AfBd80093B1DD8686797`
+Market 1 was moved off the live `NumoSpotFeed` `0xDAe566adc61086535986AfBd80093B1DD8686797`
 (3600s heartbeat) at `marginFactor 0.98e18` onto the shared static `1e18` feed at `marginFactor 0`.
 Current values are in the generated **Live SRM state** section above, not repeated here.
 
@@ -157,7 +157,7 @@ Artifacts: `deployments/8453/MARGIN_ENGINE_V2.json`, `MARGIN_ENGINE_V2_VAULT_ACT
 | MarginEngine v2 | `0x0705219a1594d5Fc5dC2573da4082cAf3e1B0950` |
 | MarginEnginePortfolioViewer | `0xD4CF97DE5E488322542c3CB202f3b23e67412d03` |
 | FutureAsset (cNGN-30NOV26) | `0xcACEe66ad41fD1472a47D7D5Fe372FFbFac9AA75` |
-| LyraForwardFeed | `0x24474D8A95EB8Be9070ede58E09405B410c277Df` |
+| NumoForwardFeed | `0x24474D8A95EB8Be9070ede58E09405B410c277Df` |
 | Pool account | #37 (owned and managed by v2) |
 
 - **Markets**: 1 NGN (cNGN escrow `0x37c9…7c98`, the future), 2 EUR (EURC escrow `0xfD2A…6cD9`); no perp. Same cash,
@@ -192,7 +192,7 @@ two owner-only engine setters in the vault's setup batch.
 | Contract | Address |
 | --- | --- |
 | FutureAsset (EURC-30NOV26) | `0x6Ff7084D6F1760a57b9475a41F54b12279cD7744` |
-| LyraForwardFeed (index: EURC feed `0xaaE6…C435`) | `0xB67fCd9A66efc3C12Be3Ea2bBB97385004394d14` |
+| NumoForwardFeed (index: EURC feed `0xaaE6…C435`) | `0xB67fCd9A66efc3C12Be3Ea2bBB97385004394d14` |
 | Pool account | #37, v2's, shared with cNGN-30NOV26 |
 
 1. **Deployed 2026-10-30 05:11 UTC**, Base blocks 53273869–53273881, at exchange 2a40c7b by the used deployer
@@ -222,7 +222,7 @@ MM 15% of spot on a naked short, option confidence threshold 0.8, vol surface 40
 | Contract | Address |
 | --- | --- |
 | OptionAsset (cNGN options, 30NOV26) | `0xA6a05dC25127CecbC048C7e6CBE35e1c8e503821` |
-| LyraVolFeed (signer: KMS `alias/numo-exchange-vol-signer`) | `0xf2dB01CF76e11A83d8510dACDD69aB62b3BAC5E0` |
+| NumoVolFeed (signer: KMS `alias/numo-exchange-vol-signer`) | `0xf2dB01CF76e11A83d8510dACDD69aB62b3BAC5E0` |
 | FutureFixingSettlementFeed (reads cNGN-30NOV26 `0xcACE…AA75`) | `0x5D899c7e521EA787693384A1D61a689e988A1692` |
 | Vol signer (KMS) | `0x30b9c910777a0B08fCfD645bca4121bDDC12fbf5` |
 

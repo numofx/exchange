@@ -5,7 +5,7 @@ import "forge-std/console2.sol";
 
 import {Utils} from "./utils.sol";
 
-import {LyraERC20} from "../src/l2/LyraERC20.sol";
+import {NumoERC20} from "../src/l2/NumoERC20.sol";
 
 
 // Deploy mocked contracts: then write to script/input as input for deploying core and v2 markets
@@ -24,14 +24,14 @@ contract DeployERC20s is Utils {
 
     // write to shared file: eg: deployments/31337/shared.json
     string memory objKey = "network-config";
-    vm.serializeAddress(objKey, "usdc", address(new LyraERC20("USDC", "USDC", 6)));
-    vm.serializeAddress(objKey, "btc", address(new LyraERC20("Lyra WBTC", "WBTC", 8)));
-    vm.serializeAddress(objKey, "eth", address(new LyraERC20("Lyra WETH", "WETH", 18)));
-    vm.serializeAddress(objKey, "usdt", address(new LyraERC20("Lyra USDT", "USDT", 6)));
-    vm.serializeAddress(objKey, "snx", address(new LyraERC20("Lyra SNX", "SNX", 18)));
-    vm.serializeAddress(objKey, "wsteth", address(new LyraERC20("Lyra x Lido wstETH", "wstETH", 18)));
-//    vm.serializeAddress(objKey, "rsweth", address(new LyraERC20("Lyra rswETH", "wstETH", 18)));
-//    vm.serializeAddress(objKey, "susde", address(new LyraERC20("Lyra Staked USDe", "sUSDe", 18)));
+    vm.serializeAddress(objKey, "usdc", address(new NumoERC20("USDC", "USDC", 6)));
+    vm.serializeAddress(objKey, "btc", address(new NumoERC20("Numo WBTC", "WBTC", 8)));
+    vm.serializeAddress(objKey, "eth", address(new NumoERC20("Numo WETH", "WETH", 18)));
+    vm.serializeAddress(objKey, "usdt", address(new NumoERC20("Numo USDT", "USDT", 6)));
+    vm.serializeAddress(objKey, "snx", address(new NumoERC20("Numo SNX", "SNX", 18)));
+    vm.serializeAddress(objKey, "wsteth", address(new NumoERC20("Numo x Lido wstETH", "wstETH", 18)));
+//    vm.serializeAddress(objKey, "rsweth", address(new NumoERC20("Numo rswETH", "wstETH", 18)));
+//    vm.serializeAddress(objKey, "susde", address(new NumoERC20("Numo Staked USDe", "sUSDe", 18)));
 
     vm.serializeAddress(objKey, "feedSigners", feedSigners);
     vm.serializeUint(objKey, "requiredSigners", 1);

@@ -8,8 +8,8 @@ import "openzeppelin/utils/math/SafeCast.sol";
 import "openzeppelin/utils/math/Math.sol";
 import "openzeppelin/utils/math/SignedMath.sol";
 
-import "lyra-utils/decimals/DecimalMath.sol";
-import "lyra-utils/decimals/SignedDecimalMath.sol";
+import "numo-utils/decimals/DecimalMath.sol";
+import "numo-utils/decimals/SignedDecimalMath.sol";
 
 import {ISubAccounts} from "../../interfaces/ISubAccounts.sol";
 import {IAsset} from "../../interfaces/IAsset.sol";

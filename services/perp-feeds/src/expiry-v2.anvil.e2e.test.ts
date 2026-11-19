@@ -104,7 +104,7 @@ for (const series of SERIES) describe(`v2 expiry keeper against a real FutureAss
   before(async () => {
     at.submitter = await deploy('OracleDataSubmitter.sol', 'OracleDataSubmitter');
     at.subAccounts = await deploy('SubAccounts.sol', 'SubAccounts', ['Accounts', 'ACC']);
-    at.index = await deploy('LyraSpotFeed.sol', 'LyraSpotFeed');
+    at.index = await deploy('NumoSpotFeed.sol', 'NumoSpotFeed');
     at.future = await deploy('FutureAssetV2.sol', 'FutureAssetV2', [at.subAccounts, series.contractSize]);
     await send(at.index, 'addSigner', [privateKeyToAccount(INDEX_SIGNER_KEY).address, true]);
     await send(at.index, 'setHeartbeat', [86_400n]);

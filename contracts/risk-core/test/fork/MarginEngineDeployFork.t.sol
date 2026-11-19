@@ -20,8 +20,8 @@ import {IFutureAsset} from "../../src/interfaces/IFutureAsset.sol";
 import {ISpotFeed} from "../../src/interfaces/ISpotFeed.sol";
 import {ISpotDiffFeed} from "../../src/interfaces/ISpotDiffFeed.sol";
 import {IManager} from "../../src/interfaces/IManager.sol";
-import {IBaseLyraFeed} from "../../src/interfaces/IBaseLyraFeed.sol";
-import {BaseLyraFeed} from "../../src/feeds/BaseLyraFeed.sol";
+import {IBaseNumoFeed} from "../../src/interfaces/IBaseNumoFeed.sol";
+import {BaseNumoFeed} from "../../src/feeds/BaseNumoFeed.sol";
 import {MessageHashUtils} from "openzeppelin/utils/cryptography/MessageHashUtils.sol";
 
 interface IOwnableLike {
@@ -158,7 +158,7 @@ contract MarginEngineDeployFork is Test {
   }
 
   /**
-   * BaseManager is upgradeable-shaped since Lyra #362 (Ownable2StepUpgradeable, storage for what were immutables), but
+   * BaseManager is upgradeable-shaped since Numo #362 (Ownable2StepUpgradeable, storage for what were immutables), but
    * the engine is deployed directly: its constructor sets the owner and every field, and no initializer is exposed.
    * Straight after deploy the deployer owns it with the vault nominated; nobody else can take it, call an initializer,
    * or rewrite its wiring; the vault owns it once the setup batch accepts.
@@ -424,14 +424,14 @@ contract MarginEngineDeployFork is Test {
 
   /// @dev Publish a forward for this contract's expiry, signed by the forward key: forward = index + `diff`.
   function _publishForward(int96 diff) internal {
-    IBaseLyraFeed.FeedData memory feedData = IBaseLyraFeed.FeedData({
+    IBaseNumoFeed.FeedData memory feedData = IBaseNumoFeed.FeedData({
       data: abi.encode(params.expiry, uint(0), uint(0), diff, uint64(1e18)),
       timestamp: uint64(block.timestamp),
       deadline: block.timestamp + 5,
       signers: new address[](1),
       signatures: new bytes[](1)
     });
-    BaseLyraFeed feed = BaseLyraFeed(address(d.forwardFeed));
+    BaseNumoFeed feed = BaseNumoFeed(address(d.forwardFeed));
     bytes32 structHash =
       keccak256(abi.encode(feed.FEED_DATA_TYPEHASH(), keccak256(feedData.data), feedData.deadline, feedData.timestamp));
     (uint8 v, bytes32 r, bytes32 sig) =
@@ -473,14 +473,14 @@ contract MarginEngineDeployFork is Test {
     _executeVaultBatch();
     _holdIndex(spot);
     uint pk = uint(keccak256("not-the-forward-signer"));
-    IBaseLyraFeed.FeedData memory feedData = IBaseLyraFeed.FeedData({
+    IBaseNumoFeed.FeedData memory feedData = IBaseNumoFeed.FeedData({
       data: abi.encode(params.expiry, uint(0), uint(0), int96(0), uint64(1e18)),
       timestamp: uint64(block.timestamp),
       deadline: block.timestamp + 5,
       signers: new address[](1),
       signatures: new bytes[](1)
     });
-    BaseLyraFeed feed = BaseLyraFeed(address(d.forwardFeed));
+    BaseNumoFeed feed = BaseNumoFeed(address(d.forwardFeed));
     bytes32 structHash =
       keccak256(abi.encode(feed.FEED_DATA_TYPEHASH(), keccak256(feedData.data), feedData.deadline, feedData.timestamp));
     (uint8 v, bytes32 r, bytes32 sig) =
@@ -494,7 +494,7 @@ contract MarginEngineDeployFork is Test {
   function testTheForwardSignerMustNotSignTheIndex() public {
     DeployMarginEngine.Params memory p = params;
     vm.prank(VAULT);
-    BaseLyraFeed(params.indexFeed).addSigner(p.forwardSigner, true);
+    BaseNumoFeed(params.indexFeed).addSigner(p.forwardSigner, true);
     vm.expectRevert(bytes("FORWARD_SIGNER must not also sign the index"));
     script.checkParams(p);
   }
@@ -987,7 +987,7 @@ contract MarginEngineDeployFork is Test {
       d.future.recordFixingSample(d.subId);
     }
 
-    // the feed goes stale: getSpot reverts, as LyraSpotFeed does past its heartbeat
+    // the feed goes stale: getSpot reverts, as NumoSpotFeed does past its heartbeat
     vm.clearMockedCalls();
     vm.mockCallRevert(params.indexFeed, abi.encodeWithSelector(ISpotFeed.getSpot.selector), "stale");
     vm.warp(expiry - 30 minutes);

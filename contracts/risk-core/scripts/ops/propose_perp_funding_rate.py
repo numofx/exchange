@@ -5,7 +5,7 @@ MPCVault for a human to approve. One action, from deployments/8453/CNGN_PERP_FUN
 It NEVER signs, executes or broadcasts itself: the signing request is created without a callback
 client signer, which routes it to the MPCVault app.
 
-Why: the deployed constant is Lyra's generic +0.0000125e18 per hour ("borrow the base asset"), about
+Why: the deployed constant is upstream's generic +0.0000125e18 per hour ("borrow the base asset"), about
 +10.95% APR, paid by on-chain longs (long cNGN). On a cNGN perp quoted in USDC the carry longs should
 pay is r_USD - r_NGN, which is negative: long cNGN should RECEIVE the rate differential. The rate is
 set here as -(spread APR) / 8760 per hour, with the spread the operator chooses.

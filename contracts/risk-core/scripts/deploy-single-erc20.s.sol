@@ -5,7 +5,7 @@ import "forge-std/console2.sol";
 
 import {Utils} from "./utils.sol";
 
-import {LyraERC20} from "../src/l2/LyraERC20.sol";
+import {NumoERC20} from "../src/l2/NumoERC20.sol";
 
 
 // Deploy contracts manually, must override config file manually to use this
@@ -19,7 +19,7 @@ contract DeploySingleERC20 is Utils {
 
     console2.log("Start deploying ERC20 contracts! deployer: ", deployer);
 
-    LyraERC20 snx = new LyraERC20("Lyra SNX", "SNX", 18);
+    NumoERC20 snx = new NumoERC20("Numo SNX", "SNX", 18);
 
     console2.log("Deployed SNX: ", address(snx));
 

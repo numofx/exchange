@@ -35,7 +35,7 @@ contract UNIT_PerpOIAndCap is Test {
   int128 spot = 1500e18;
 
   function setUp() public {
-    subAccounts = new SubAccounts("Lyra", "LYRA");
+    subAccounts = new SubAccounts("Numo", "NUMO");
     feed = new MockFeeds();
     perpFeed = new MockSpotDiffFeed(feed);
 

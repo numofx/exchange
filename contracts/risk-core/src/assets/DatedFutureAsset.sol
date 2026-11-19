@@ -3,7 +3,7 @@ pragma solidity ^0.8.18;
 
 import "openzeppelin/utils/math/SafeCast.sol";
 
-import "lyra-utils/decimals/SignedDecimalMath.sol";
+import "numo-utils/decimals/SignedDecimalMath.sol";
 
 import {ISubAccounts} from "../interfaces/ISubAccounts.sol";
 import {IManager} from "../interfaces/IManager.sol";

@@ -3,8 +3,8 @@ pragma solidity ^0.8.18;
 
 import "openzeppelin/utils/math/SignedMath.sol";
 import "openzeppelin/utils/math/SafeCast.sol";
-import "lyra-utils/decimals/SignedDecimalMath.sol";
-import "lyra-utils/encoding/OptionEncoding.sol";
+import "numo-utils/decimals/SignedDecimalMath.sol";
+import "numo-utils/encoding/OptionEncoding.sol";
 
 import {ManagerWhitelist} from "./utils/ManagerWhitelist.sol";
 
@@ -18,7 +18,7 @@ import {GlobalSubIdOITracking} from "./utils/GlobalSubIdOITracking.sol";
 
 /**
  * @title OptionAsset
- * @author Lyra
+ * @author Numo
  * @notice Option asset that defines subIds, value and settlement
  */
 contract OptionAsset is IOptionAsset, PositionTracking, GlobalSubIdOITracking, ManagerWhitelist {

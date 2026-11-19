@@ -6,8 +6,8 @@ import {FutureAsset} from "../src/assets/FutureAsset.sol";
 import {StreamsIndexAdapter, IStreamsVerifierProxy} from "../src/feeds/StreamsIndexAdapter.sol";
 import {EurcIndexFeed} from "../src/feeds/EurcIndexFeed.sol";
 import {MarginEngine} from "../src/risk-managers/MarginEngine.sol";
-import {LyraForwardFeed} from "../src/feeds/LyraForwardFeed.sol";
-import {LyraSpotFeed} from "../src/feeds/LyraSpotFeed.sol";
+import {NumoForwardFeed} from "../src/feeds/NumoForwardFeed.sol";
+import {NumoSpotFeed} from "../src/feeds/NumoSpotFeed.sol";
 import {IFutureAsset} from "../src/interfaces/IFutureAsset.sol";
 import {IFutureAssetV3} from "../src/interfaces/IFutureAssetV3.sol";
 import {IPositionTracking} from "../src/interfaces/IPositionTracking.sol";
@@ -155,7 +155,7 @@ contract DeployEurcFutureV3 is Utils {
     StreamsIndexAdapter adapter;
     EurcIndexFeed indexFeed;
     FutureAsset future;
-    LyraForwardFeed forwardFeed;
+    NumoForwardFeed forwardFeed;
     uint96 subId;
     /// @dev 0 when deployed without a canary
     uint96 canarySubId;
@@ -258,7 +258,7 @@ contract DeployEurcFutureV3 is Utils {
       revert("deployer key must be single use: it has sent transactions before (name it in USED_DEPLOYER to accept)");
     }
     if (deployer == params.vault) revert("deployer is the vault");
-    if (LyraSpotFeed(params.cngnIndexFeed).isSigner(deployer)) revert("deployer signs the index");
+    if (NumoSpotFeed(params.cngnIndexFeed).isSigner(deployer)) revert("deployer signs the index");
     if (deployer == params.forwardSigner) revert("deployer signs the forward");
   }
 
@@ -314,7 +314,7 @@ contract DeployEurcFutureV3 is Utils {
 
     if (params.forwardSigner == address(0)) revert("FORWARD_SIGNER is zero");
     if (params.forwardSigner == params.vault) revert("FORWARD_SIGNER must not be the vault");
-    if (LyraSpotFeed(params.cngnIndexFeed).isSigner(params.forwardSigner)) {
+    if (NumoSpotFeed(params.cngnIndexFeed).isSigner(params.forwardSigner)) {
       revert("FORWARD_SIGNER must not also sign the cNGN index");
     }
     uint ref = referencePrice(params);
@@ -415,7 +415,7 @@ contract DeployEurcFutureV3 is Utils {
     d.future.setTotalPositionCap(engine, 0);
     d.future.setMarkBounds(MAX_MARK_DEVIATION, MAX_MARK_DELAY);
     // Marks read the index plus a signed forward difference: stale index, no mark, as for fills.
-    d.forwardFeed = new LyraForwardFeed(d.indexFeed);
+    d.forwardFeed = new NumoForwardFeed(d.indexFeed);
     d.forwardFeed.setHeartbeat(FORWARD_HEARTBEAT);
     d.forwardFeed.addSigner(params.forwardSigner, true);
     d.forwardFeed.setRequiredSigners(1);

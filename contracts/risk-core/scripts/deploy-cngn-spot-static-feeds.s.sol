@@ -4,7 +4,7 @@ pragma solidity ^0.8.0;
 import "forge-std/console2.sol";
 
 import {ISpotFeed} from "../src/interfaces/ISpotFeed.sol";
-import {LyraStaticSpotFeed} from "../src/feeds/static/LyraStaticSpotFeed.sol";
+import {NumoStaticSpotFeed} from "../src/feeds/static/NumoStaticSpotFeed.sol";
 import {Deployment} from "./types.sol";
 import {Utils} from "./utils.sol";
 
@@ -25,7 +25,7 @@ import {Utils} from "./utils.sol";
  *         spot adjustment (_getMarketMargin, _getBaseMarginAndMtM:609, _getDepegMultiplier:427)
  *         and both revert when stale. Live heartbeats on Base are 180s and 3600s respectively, so
  *         a keeper gap halts a fully-funded orderbook whose solvency does not depend on either
- *         price (netMargin reduces to cash at marginFactor 0). LyraStaticSpotFeed has no staleness
+ *         price (netMargin reduces to cash at marginFactor 0). NumoStaticSpotFeed has no staleness
  *         check at all, so neither can halt the book.
  *
  * @dev The frozen price is inert ONLY while marginFactor is 0. See the coupled-settings block in
@@ -68,10 +68,10 @@ contract DeployCNGNSpotStaticFeeds is Utils {
 
     vm.startBroadcast(deployerPrivateKey);
 
-    LyraStaticSpotFeed cngnFeed = new LyraStaticSpotFeed();
+    NumoStaticSpotFeed cngnFeed = new NumoStaticSpotFeed();
     cngnFeed.setSpot(usdcPerCngn, FULL_CONFIDENCE);
 
-    LyraStaticSpotFeed stableFeed = new LyraStaticSpotFeed();
+    NumoStaticSpotFeed stableFeed = new NumoStaticSpotFeed();
     stableFeed.setSpot(STABLE_PRICE, FULL_CONFIDENCE);
 
     address[] memory owned = new address[](2);

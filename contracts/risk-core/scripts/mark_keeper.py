@@ -4,7 +4,7 @@
 Tracks the on-chain cNGN spot feed and sets the future's mark via setMarkPrice,
 signed unattended by the MPCVault Client Signer (see docs/mark-keeper-design.md).
 
-Mark policy (launch): MARK_MODE=spot — mark = the same on-chain LyraSpotFeed the
+Mark policy (launch): MARK_MODE=spot — mark = the same on-chain NumoSpotFeed the
 manager uses for margin, so mark and margin-spot never diverge. (forward/book modes
 are in the design doc; not built — spot only.)
 

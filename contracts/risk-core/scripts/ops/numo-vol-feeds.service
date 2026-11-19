@@ -1,5 +1,5 @@
 # The cNGN options' vol publisher (services/perp-feeds, dist/vol-main.js): signs the hand-set SVI surface into the
-# options' LyraVolFeed, degrading (lower confidence, ATM floor) while the index is uncertain. NOT YET INSTALLED.
+# options' NumoVolFeed, degrading (lower confidence, ATM floor) while the index is uncertain. NOT YET INSTALLED.
 #
 # Before starting it:
 #   - cNGN options deployed (deploy-cngn-options-v2.s.sol): VOL_FEED in the env file from CNGN_OPTIONS_V2.json;

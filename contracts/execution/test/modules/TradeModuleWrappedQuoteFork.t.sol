@@ -366,7 +366,7 @@ contract TradeModuleWrappedQuoteForkTest is ForkBase {
   // ---------------------------------------------------------------------------------------------
 
   /**
-   * @dev Market 1's spot feed is the live LyraSpotFeed with a heartbeat, not the static feed the
+   * @dev Market 1's spot feed is the live NumoSpotFeed with a heartbeat, not the static feed the
    *      cNGN leg uses. Once wrapped USDC is the quote asset, every account holds a market-1
    *      position, so that feed is read on every fill. Warping past the heartbeat halts the book.
    *

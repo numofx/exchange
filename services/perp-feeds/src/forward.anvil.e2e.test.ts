@@ -1,6 +1,6 @@
 /**
  * The forward publisher against the REAL contracts, deployed from risk-core's compiled artifacts onto
- * a local anvil: a LyraSpotFeed index, a LyraForwardFeed on it, a FutureAsset reading both, and the
+ * a local anvil: a NumoSpotFeed index, a NumoForwardFeed on it, a FutureAsset reading both, and the
  * OracleDataSubmitter. It proves the chain accepts what the publisher signs and encodes, and that
  * FutureAsset.pullMark turns it into the mark the publisher meant.
  *
@@ -139,8 +139,8 @@ describe('forward publisher against real contracts on anvil', { skip: !RPC }, ()
   before(async () => {
     at.submitter = await deploy('OracleDataSubmitter.sol', 'OracleDataSubmitter');
     at.subAccounts = await deploy('SubAccounts.sol', 'SubAccounts', ['Accounts', 'ACC']);
-    at.index = await deploy('LyraSpotFeed.sol', 'LyraSpotFeed');
-    at.forward = await deploy('LyraForwardFeed.sol', 'LyraForwardFeed', [at.index]);
+    at.index = await deploy('NumoSpotFeed.sol', 'NumoSpotFeed');
+    at.forward = await deploy('NumoForwardFeed.sol', 'NumoForwardFeed', [at.index]);
     at.future = await deploy('FutureAssetV1.sol', 'FutureAssetV1', [at.subAccounts, CONTRACT_SIZE]);
 
     await send(at.index, 'addSigner', [privateKeyToAccount(INDEX_SIGNER_KEY).address, true]);
@@ -168,7 +168,7 @@ describe('forward publisher against real contracts on anvil', { skip: !RPC }, ()
     };
   }
 
-  it('signs a forward the LyraForwardFeed accepts, and pullMark turns it into the carry forward', async () => {
+  it('signs a forward the NumoForwardFeed accepts, and pullMark turns it into the carry forward', async () => {
     await advance(2);
     const cfg = config();
     const signer = privateKeyToAccount(FORWARD_SIGNER_KEY);

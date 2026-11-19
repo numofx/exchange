@@ -1,7 +1,7 @@
 /**
- * Signed updates for the perp stack's Lyra feeds, and the batch the OracleDataSubmitter relays.
+ * Signed updates for the perp stack's Numo feeds, and the batch the OracleDataSubmitter relays.
  *
- * Mirrors BaseLyraFeed: EIP-712 domain (name, "1", chainId, feed address) over
+ * Mirrors BaseNumoFeed: EIP-712 domain (name, "1", chainId, feed address) over
  * FeedData(bytes data,uint256 deadline,uint64 timestamp), signed by the whitelisted feed signer, and
  * relayed by a separate funded key. The signer never needs ETH; the relayer never needs to be
  * trusted with prices.
@@ -9,6 +9,7 @@
 import { encodeAbiParameters, type Address, type Hex } from 'viem';
 import type { LocalAccount } from 'viem/accounts';
 
+/** The feeds' EIP-712 domain names, fixed in the deployed contracts; not their (renamed) contract names. */
 export type FeedKind = 'LyraSpotFeed' | 'LyraSpotDiffFeed' | 'LyraForwardFeed' | 'LyraVolFeed';
 
 const FEED_DATA_TYPES = {
@@ -21,19 +22,19 @@ const FEED_DATA_TYPES = {
 
 export const FULL_CONFIDENCE = 10n ** 18n;
 
-/** Inner payload of a LyraSpotFeed update: (uint96 price, uint64 confidence). */
+/** Inner payload of a NumoSpotFeed update: (uint96 price, uint64 confidence). */
 export function encodeSpotData(price: bigint, confidence = FULL_CONFIDENCE): Hex {
   if (price <= 0n || price >= 2n ** 96n) throw new Error(`price ${price} does not fit uint96`);
   return encodeAbiParameters([{ type: 'uint96' }, { type: 'uint64' }], [price, confidence]);
 }
 
-/** Inner payload of a LyraSpotDiffFeed update: (int96 diff, uint64 confidence). */
+/** Inner payload of a NumoSpotDiffFeed update: (int96 diff, uint64 confidence). */
 export function encodeSpotDiffData(diff: bigint, confidence = FULL_CONFIDENCE): Hex {
   return encodeAbiParameters([{ type: 'int96' }, { type: 'uint64' }], [diff, confidence]);
 }
 
 /**
- * Inner payload of a LyraForwardFeed update: (uint64 expiry, uint256 settlementStartAggregate,
+ * Inner payload of a NumoForwardFeed update: (uint64 expiry, uint256 settlementStartAggregate,
  * uint256 currentSpotAggregate, int96 fwdSpotDifference, uint64 confidence). The aggregates are only
  * read inside the feed's last 30 minutes before expiry (its settlement TWAP), and the forward
  * publisher stops at last trade, an hour before; they are zero here.
@@ -46,7 +47,7 @@ export function encodeForwardData(expiry: bigint, fwdSpotDifference: bigint, con
 }
 
 /**
- * Inner payload of a LyraVolFeed update: (uint64 expiry, int SVI_a, uint SVI_b, int SVI_rho, int SVI_m, uint SVI_sigma,
+ * Inner payload of a NumoVolFeed update: (uint64 expiry, int SVI_a, uint SVI_b, int SVI_rho, int SVI_m, uint SVI_sigma,
  * uint SVI_fwd, uint64 SVI_refTau, uint64 confidence), raw SVI in total-variance terms (vol-surface.ts).
  */
 export function encodeVolData(p: {

@@ -30,22 +30,22 @@
     {
       "nonce": 43,
       "hash": "0x568a04fe2dd451b0d7f3751b0c9090bc82aaf421d470a8f0105eecb0770b016a",
-      "note": "deploy-eurc-future-v2.s.sol: CREATE LyraForwardFeed"
+      "note": "deploy-eurc-future-v2.s.sol: CREATE NumoForwardFeed"
     },
     {
       "nonce": 44,
       "hash": "0x092087dcd9ae6d5f19ee4fcefd0b2c616397765902735c0a0e7038e80519badd",
-      "note": "deploy-eurc-future-v2.s.sol: LyraForwardFeed.setHeartbeat"
+      "note": "deploy-eurc-future-v2.s.sol: NumoForwardFeed.setHeartbeat"
     },
     {
       "nonce": 45,
       "hash": "0x706978e10e1ab45d7081c438436c422e4e17bf8224e6dcd65cd04dee9ed19a5d",
-      "note": "deploy-eurc-future-v2.s.sol: LyraForwardFeed.addSigner"
+      "note": "deploy-eurc-future-v2.s.sol: NumoForwardFeed.addSigner"
     },
     {
       "nonce": 46,
       "hash": "0x2f0dcd06357598efbdbef0306b2a0bcaa98e46c9db661631c03927665313d521",
-      "note": "deploy-eurc-future-v2.s.sol: LyraForwardFeed.setRequiredSigners"
+      "note": "deploy-eurc-future-v2.s.sol: NumoForwardFeed.setRequiredSigners"
     },
     {
       "nonce": 47,
@@ -65,7 +65,7 @@
     {
       "nonce": 50,
       "hash": "0x75e3a9099bd114b8de9e03c1b0dea550b22ed3364f4f7a65371c8af66135717d",
-      "note": "deploy-eurc-future-v2.s.sol: LyraForwardFeed.transferOwnership"
+      "note": "deploy-eurc-future-v2.s.sol: NumoForwardFeed.transferOwnership"
     },
     {
       "nonce": 51,
@@ -95,22 +95,22 @@
     {
       "nonce": 56,
       "hash": "0x224e7a96951f22c8b56ed05e4a3b661dc642d5e30edd5e90a28f57a6e43ccf17",
-      "note": "deploy-cngn-options-v2.s.sol: CREATE LyraVolFeed (read from chain: the broadcast file mislabels its hashes)"
+      "note": "deploy-cngn-options-v2.s.sol: CREATE NumoVolFeed (read from chain: the broadcast file mislabels its hashes)"
     },
     {
       "nonce": 57,
       "hash": "0xcc6e11807ef34bc4a072f24414c9eba9d0a4fbe7da13836aaca893f02cb30f6c",
-      "note": "deploy-cngn-options-v2.s.sol: LyraVolFeed.setHeartbeat (read from chain: the broadcast file mislabels its hashes)"
+      "note": "deploy-cngn-options-v2.s.sol: NumoVolFeed.setHeartbeat (read from chain: the broadcast file mislabels its hashes)"
     },
     {
       "nonce": 58,
       "hash": "0xeef762ae21810d3b28ef5648ddffd23c43dfbd74159db2966905ce8f407f1aad",
-      "note": "deploy-cngn-options-v2.s.sol: LyraVolFeed.addSigner (read from chain: the broadcast file mislabels its hashes)"
+      "note": "deploy-cngn-options-v2.s.sol: NumoVolFeed.addSigner (read from chain: the broadcast file mislabels its hashes)"
     },
     {
       "nonce": 59,
       "hash": "0x194cadb79bab3973e252382efb66a735605aae34f499c9e041ee1f082fc11ef3",
-      "note": "deploy-cngn-options-v2.s.sol: LyraVolFeed.setRequiredSigners (read from chain: the broadcast file mislabels its hashes)"
+      "note": "deploy-cngn-options-v2.s.sol: NumoVolFeed.setRequiredSigners (read from chain: the broadcast file mislabels its hashes)"
     },
     {
       "nonce": 60,
@@ -120,7 +120,7 @@
     {
       "nonce": 61,
       "hash": "0x6c2b8a5d978f40bf09ada768eb8bcbbe14bef8ee2a2e33cdd4be5683fac5a9bb",
-      "note": "deploy-cngn-options-v2.s.sol: LyraVolFeed.transferOwnership (read from chain: the broadcast file mislabels its hashes)"
+      "note": "deploy-cngn-options-v2.s.sol: NumoVolFeed.transferOwnership (read from chain: the broadcast file mislabels its hashes)"
     },
     {
       "nonce": 62,

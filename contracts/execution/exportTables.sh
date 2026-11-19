@@ -57,7 +57,7 @@ matching_contracts=(
 periphery_contracts=(
   "subAccountCreator SubAccountCreator"
   "auctionUtil AuctionUtils"
-  "settlementUtil LyraSettlementUtils"
+  "settlementUtil NumoSettlementUtils"
 )
 
 

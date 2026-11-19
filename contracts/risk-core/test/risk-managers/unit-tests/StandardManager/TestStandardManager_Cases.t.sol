@@ -4,7 +4,7 @@ pragma solidity ^0.8.13;
 import "./TestStandardManagerBase.t.sol";
 
 import "../../../shared/utils/JsonMechIO.sol";
-import "lyra-utils/decimals/SignedDecimalMath.sol";
+import "numo-utils/decimals/SignedDecimalMath.sol";
 
 /**
  * Focusing on the margin rules for options

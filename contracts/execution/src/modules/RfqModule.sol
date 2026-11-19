@@ -3,8 +3,8 @@ pragma solidity ^0.8.13;
 
 // Libraries
 import "openzeppelin/utils/math/SafeCast.sol";
-import "lyra-utils/decimals/SignedDecimalMath.sol";
-import "lyra-utils/decimals/DecimalMath.sol";
+import "numo-utils/decimals/SignedDecimalMath.sol";
+import "numo-utils/decimals/DecimalMath.sol";
 
 // Inherited
 import {BaseModule} from "./BaseModule.sol";

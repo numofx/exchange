@@ -6,8 +6,8 @@ import "openzeppelin/token/ERC20/utils/SafeERC20.sol";
 import "openzeppelin/utils/math/SignedMath.sol";
 import "openzeppelin/utils/math/SafeCast.sol";
 
-import "lyra-utils/decimals/SignedDecimalMath.sol";
-import "lyra-utils/decimals/DecimalMath.sol";
+import "numo-utils/decimals/SignedDecimalMath.sol";
+import "numo-utils/decimals/DecimalMath.sol";
 import {ISubAccounts} from "../interfaces/ISubAccounts.sol";
 import {IPerpAsset} from "../interfaces/IPerpAsset.sol";
 import {ISpotFeed} from "../interfaces/ISpotFeed.sol";
@@ -23,7 +23,7 @@ import {GlobalSubIdOITracking} from "./utils/GlobalSubIdOITracking.sol";
 
 /**
  * @title PerpAsset
- * @author Lyra
+ * @author Numo
  * @dev settlement refers to the action initiate by the manager that print / burn cash based on accounts' PNL and funding
  *      this contract keep track of users' pending funding and PNL, during trades
  *      and update them when settlement is called

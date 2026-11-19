@@ -2,7 +2,7 @@
 pragma solidity ^0.8.18;
 
 import "forge-std/Test.sol";
-import "lyra-utils/decimals/ConvertDecimals.sol";
+import "numo-utils/decimals/ConvertDecimals.sol";
 
 import "../../../shared/mocks/MockERC20.sol";
 import "../../../risk-managers/mocks/MockDutchAuction.sol";
@@ -32,7 +32,7 @@ contract UNIT_CashAssetAccrueInterest is Test {
   uint smAccount;
 
   function setUp() public {
-    subAccounts = new SubAccounts("Lyra Margin Accounts", "LyraMarginNFTs");
+    subAccounts = new SubAccounts("Numo Margin Accounts", "NumoMarginNFTs");
 
     manager = new MockManager(address(subAccounts));
 

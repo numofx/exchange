@@ -9,8 +9,8 @@ import {DeployCngnPerpStack} from "../../scripts/deploy-cngn-perp-stack.s.sol";
 import {SubAccounts} from "../../src/SubAccounts.sol";
 import {ISubAccounts} from "../../src/interfaces/ISubAccounts.sol";
 import {IBaseManager} from "../../src/interfaces/IBaseManager.sol";
-import {IBaseLyraFeed} from "../../src/interfaces/IBaseLyraFeed.sol";
-import {BaseLyraFeed} from "../../src/feeds/BaseLyraFeed.sol";
+import {IBaseNumoFeed} from "../../src/interfaces/IBaseNumoFeed.sol";
+import {BaseNumoFeed} from "../../src/feeds/BaseNumoFeed.sol";
 import {StandardManager} from "../../src/risk-managers/StandardManager.sol";
 
 interface IOwnableLike {
@@ -132,7 +132,7 @@ contract CngnPerpStackDeployFork is Test {
     _deposit(bob, bobAcc, 5_000e6);
 
     bytes memory managerData = _feedUpdates(0.00072e18);
-    vm.expectRevert(IBaseLyraFeed.BLF_DataTooOld.selector);
+    vm.expectRevert(IBaseNumoFeed.BLF_DataTooOld.selector);
     _tradePerpWithData(bobAcc, aliceAcc, 10_000_000e18, managerData);
   }
 
@@ -244,7 +244,7 @@ contract CngnPerpStackDeployFork is Test {
   function _publish(uint96 index) internal {
     IBaseManager.ManagerData[] memory updates = abi.decode(_feedUpdates(index), (IBaseManager.ManagerData[]));
     for (uint i = 0; i < updates.length; i++) {
-      BaseLyraFeed(updates[i].receiver).acceptData(updates[i].data);
+      BaseNumoFeed(updates[i].receiver).acceptData(updates[i].data);
     }
   }
 
@@ -264,8 +264,8 @@ contract CngnPerpStackDeployFork is Test {
     return abi.encode(updates);
   }
 
-  function _signed(BaseLyraFeed feed, bytes memory data) internal view returns (bytes memory) {
-    IBaseLyraFeed.FeedData memory feedData = IBaseLyraFeed.FeedData({
+  function _signed(BaseNumoFeed feed, bytes memory data) internal view returns (bytes memory) {
+    IBaseNumoFeed.FeedData memory feedData = IBaseNumoFeed.FeedData({
       data: data,
       timestamp: uint64(block.timestamp),
       deadline: block.timestamp + 5,

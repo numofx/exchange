@@ -9,8 +9,8 @@ import "../../../../src/assets/CashAsset.sol";
 
 import "../../../../src/SecurityModule.sol";
 import "../../../../src/SubAccounts.sol";
-import "lyra-utils/decimals/DecimalMath.sol";
-import "lyra-utils/decimals/ConvertDecimals.sol";
+import "numo-utils/decimals/DecimalMath.sol";
+import "numo-utils/decimals/ConvertDecimals.sol";
 
 import "../../../shared/mocks/MockERC20.sol";
 import "../../../shared/mocks/MockManager.sol";
@@ -70,7 +70,7 @@ contract UNIT_InterestRateScenario is Test {
     uint highRateMultiplier = 2 * 1e18;
     uint optimalUtil = 0.6 * 1e18;
 
-    subAccounts = new SubAccounts("Lyra MarginAccounts", "Lyra!");
+    subAccounts = new SubAccounts("Numo MarginAccounts", "Numo!");
 
     manager = new MockManager(address(subAccounts));
 

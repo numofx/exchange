@@ -5,7 +5,7 @@ import "../utils/PPTSATestUtils.sol";
 import "forge-std/console2.sol";
 
 import {SignedMath} from "openzeppelin/utils/math/SignedMath.sol";
-import {DecimalMath} from "lyra-utils/decimals/DecimalMath.sol";
+import {DecimalMath} from "numo-utils/decimals/DecimalMath.sol";
 import "v2-core/src/interfaces/ISubAccounts.sol";
 
 contract PPTSA_ValidationTests is PPTSATestUtils {

@@ -4,7 +4,7 @@ pragma solidity ^0.8.18;
 import "test/shared/utils/JsonMechIO.sol";
 import "test/risk-managers/unit-tests/PMRM/utils/PMRMTestBase.sol";
 
-import "lyra-utils/encoding/OptionEncoding.sol";
+import "numo-utils/encoding/OptionEncoding.sol";
 
 contract LiquidationSimBase is PMRMTestBase {
   using stdJson for string;

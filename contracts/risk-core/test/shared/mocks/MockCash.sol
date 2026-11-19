@@ -3,7 +3,7 @@ pragma solidity ^0.8.18;
 
 import "openzeppelin/token/ERC20/IERC20.sol";
 import "openzeppelin/token/ERC20/extensions/IERC20Metadata.sol";
-import "lyra-utils/decimals/DecimalMath.sol";
+import "numo-utils/decimals/DecimalMath.sol";
 
 import {ICashAsset} from "../../../src/interfaces/ICashAsset.sol";
 import {ISubAccounts} from "../../../src/interfaces/ISubAccounts.sol";

@@ -5,7 +5,7 @@
       "rev": "1801b0541f4fda118a10798fd3486bb7051c5dd6"
     }
   },
-  "lib/lyra-utils": {
+  "lib/numo-utils": {
     "rev": "8f6962cb49525c887d802a1b1d44ac35ed114791"
   },
   "lib/openzeppelin-contracts": {

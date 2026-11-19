@@ -34,7 +34,7 @@ contract INTEGRATION_SecurityModule_CashAsset is Test {
   uint accountId;
 
   function setUp() public {
-    subAccounts = new SubAccounts("Lyra Margin Accounts", "LyraMarginNFTs");
+    subAccounts = new SubAccounts("Numo Margin Accounts", "NumoMarginNFTs");
 
     manager = new MockManager(address(subAccounts));
 

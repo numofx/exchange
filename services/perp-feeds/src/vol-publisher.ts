@@ -83,7 +83,7 @@ export function levels(config: Pick<VolConfig, 'VOL_ATM' | 'VOL_DEGRADED_ATM_FLO
 }
 
 /**
- * Publishes the cNGN options' surface for one expiry (vol-surface.ts) into their LyraVolFeed, through the
+ * Publishes the cNGN options' surface for one expiry (vol-surface.ts) into their NumoVolFeed, through the
  * OracleDataSubmitter: every VOL_PUBLISH_INTERVAL_MS, and at once when the mode changes. Each publish is read back from
  * the chain (the ATM vol and the confidence the feed now returns) and a mismatch alerts.
  *

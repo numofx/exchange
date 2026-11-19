@@ -29,7 +29,7 @@ contract UNIT_OptionAssetOITest is Test {
   uint subId = 99999;
 
   function setUp() public {
-    subAccounts = new SubAccounts("Lyra Margin Accounts", "LyraMarginNFTs");
+    subAccounts = new SubAccounts("Numo Margin Accounts", "NumoMarginNFTs");
 
     manager = new MockManager(address(subAccounts));
 

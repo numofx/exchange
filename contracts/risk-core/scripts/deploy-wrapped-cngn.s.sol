@@ -6,7 +6,7 @@ import "forge-std/console2.sol";
 import {IERC20Metadata} from "openzeppelin/token/ERC20/extensions/IERC20Metadata.sol";
 
 import {WrappedERC20Asset} from "../src/assets/WrappedERC20Asset.sol";
-import {LyraSpotFeed} from "../src/feeds/LyraSpotFeed.sol";
+import {NumoSpotFeed} from "../src/feeds/NumoSpotFeed.sol";
 import {Deployment, ConfigJson} from "./types.sol";
 import {Utils} from "./utils.sol";
 import "./config-mainnet.sol";
@@ -29,7 +29,7 @@ contract DeployWrappedCNGN is Utils {
 
     WrappedERC20Asset wrappedCngn = new WrappedERC20Asset(deployment.subAccounts, IERC20Metadata(cngn));
 
-    LyraSpotFeed spotFeed = new LyraSpotFeed();
+    NumoSpotFeed spotFeed = new NumoSpotFeed();
     spotFeed.setHeartbeat(Config.SPOT_HEARTBEAT);
     for (uint i = 0; i < config.feedSigners.length; ++i) {
       spotFeed.addSigner(config.feedSigners[i], true);

@@ -7,7 +7,7 @@ import "../../../../src/periphery/PerpSettlementHelper.sol";
 import "../../../risk-managers/unit-tests/PMRM_2/utils/PMRM_2TestBase.sol";
 
 import "./utils/PMRM_2Public.sol";
-import "lyra-utils/encoding/OptionEncoding.sol";
+import "numo-utils/encoding/OptionEncoding.sol";
 import {IBaseManager} from "../../../../src/interfaces/IBaseManager.sol";
 
 contract PMRM_2Upgrade is PMRM_2Public {

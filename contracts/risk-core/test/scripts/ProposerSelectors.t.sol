@@ -6,7 +6,7 @@ import "forge-std/Test.sol";
 import {StandardManager} from "../../src/risk-managers/StandardManager.sol";
 import {WrappedERC20Asset} from "../../src/assets/WrappedERC20Asset.sol";
 import {ManagerWhitelist} from "../../src/assets/utils/ManagerWhitelist.sol";
-import {LyraStaticSpotFeed} from "../../src/feeds/static/LyraStaticSpotFeed.sol";
+import {NumoStaticSpotFeed} from "../../src/feeds/static/NumoStaticSpotFeed.sol";
 
 interface IOwnable2StepSelectors {
   function acceptOwnership() external;
@@ -105,9 +105,9 @@ contract FORK_TestProposerSelectors is Test {
   }
 
   /// @dev the static feeds are read with the same owner() selector, so it must reach that getter
-  ///      on LyraStaticSpotFeed too and not only on the manager
+  ///      on NumoStaticSpotFeed too and not only on the manager
   function testOwnerSelectorReachesTheStaticFeedGetter() public {
-    LyraStaticSpotFeed feed = new LyraStaticSpotFeed();
+    NumoStaticSpotFeed feed = new NumoStaticSpotFeed();
     assertEq(
       abi.decode(_read(address(feed), abi.encodeWithSelector(SEL_OWNER)), (address)), feed.owner(), "feed owner()"
     );

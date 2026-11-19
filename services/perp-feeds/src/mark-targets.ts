@@ -105,7 +105,7 @@ export function clamp(price: bigint, index: bigint, maxBasisBps: bigint): bigint
   return price;
 }
 
-/** The signed diff a LyraSpotDiffFeed stores: target minus index, checked to fit int96. */
+/** The signed diff a NumoSpotDiffFeed stores: target minus index, checked to fit int96. */
 export function toSpotDiff(target: bigint, index: bigint): bigint {
   const diff = target - index;
   const limit = 2n ** 95n;

@@ -9,7 +9,7 @@ import {IBasePortfolioViewer} from "../interfaces/IBasePortfolioViewer.sol";
 /**
  * @title ISRMPortfolioViewer
  * @notice view function for Standard Manager
- * @author Lyra
+ * @author Numo
  */
 interface ISRMPortfolioViewer is IBasePortfolioViewer {
   function getSRMPortfolio(uint accountId) external view returns (IStandardManager.StandardManagerPortfolio memory);

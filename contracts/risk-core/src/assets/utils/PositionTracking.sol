@@ -10,7 +10,7 @@ import {IManager} from "../../interfaces/IManager.sol";
 
 /**
  * @title PositionTracking
- * @author Lyra
+ * @author Numo
  * @notice Contract helping assets to track total position size for each manager.
  *         Total Position = sum of all positive & negative balances
  * @dev    Managers must check the position cap themselves

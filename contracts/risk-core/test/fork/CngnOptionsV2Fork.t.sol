@@ -12,9 +12,9 @@ import {CashAsset} from "../../src/assets/CashAsset.sol";
 import {OptionAsset} from "../../src/assets/OptionAsset.sol";
 import {FutureAssetV2 as FutureAsset} from "../../src/legacy/v2/FutureAssetV2.sol";
 import {WrappedERC20Asset} from "../../src/assets/WrappedERC20Asset.sol";
-import {LyraVolFeed} from "../../src/feeds/LyraVolFeed.sol";
+import {NumoVolFeed} from "../../src/feeds/NumoVolFeed.sol";
 import {FutureFixingSettlementFeed} from "../../src/feeds/FutureFixingSettlementFeed.sol";
-import {BaseLyraFeed} from "../../src/feeds/BaseLyraFeed.sol";
+import {BaseNumoFeed} from "../../src/feeds/BaseNumoFeed.sol";
 import {MarginEngine} from "../../src/risk-managers/MarginEngine.sol";
 import {IAsset} from "../../src/interfaces/IAsset.sol";
 import {IManager} from "../../src/interfaces/IManager.sol";
@@ -24,11 +24,11 @@ import {IFutureAsset} from "../../src/interfaces/IFutureAsset.sol";
 import {ISpotFeed} from "../../src/interfaces/ISpotFeed.sol";
 import {IForwardFeed} from "../../src/interfaces/IForwardFeed.sol";
 import {IVolFeed} from "../../src/interfaces/IVolFeed.sol";
-import {IBaseLyraFeed} from "../../src/interfaces/IBaseLyraFeed.sol";
-import {ILyraVolFeed} from "../../src/interfaces/ILyraVolFeed.sol";
-import {OptionEncoding} from "lyra-utils/encoding/OptionEncoding.sol";
-import {Black76} from "lyra-utils/math/Black76.sol";
-import {FixedPointMathLib} from "lyra-utils/math/FixedPointMathLib.sol";
+import {IBaseNumoFeed} from "../../src/interfaces/IBaseNumoFeed.sol";
+import {INumoVolFeed} from "../../src/interfaces/INumoVolFeed.sol";
+import {OptionEncoding} from "numo-utils/encoding/OptionEncoding.sol";
+import {Black76} from "numo-utils/math/Black76.sol";
+import {FixedPointMathLib} from "numo-utils/math/FixedPointMathLib.sol";
 
 /// @dev contracts/execution's Matching and TradeModule, as deployed: declared here, as in EurcFutureV2Fork.
 struct EAction {
@@ -87,7 +87,7 @@ interface IETradeModule {
 /**
  * cNGN-USDC options on the live MarginEngine v2 (0x0705…, cNGN market 1), first expiry 30NOV26 with the future.
  *
- * Deploys an OptionAsset and a LyraVolFeed on a Base fork pinned before any options batch, executes the batch the vault
+ * Deploys an OptionAsset and a NumoVolFeed on a Base fork pinned before any options batch, executes the batch the vault
  * would (whitelist, margin params, oracle contingency, oracles, cap) and proves:
  *   - the batch leaves every live account's margin and every neighbouring setting exactly as it was; and that check
  *     catches the one dangerous action, setOraclesForMarket, which rewrites market 1's spot feed along with the rest;
@@ -135,10 +135,10 @@ contract CngnOptionsV2Fork is Test {
   MarginEngine engine;
   CashAsset cash;
   ISpotFeed spotFeed; // the live cNGN index, market 1's spot
-  IForwardFeed forwardFeed; // the future's LyraForwardFeed
+  IForwardFeed forwardFeed; // the future's NumoForwardFeed
   FutureAsset future;
   OptionAsset option;
-  LyraVolFeed volFeed;
+  NumoVolFeed volFeed;
   FutureFixingSettlementFeed settlement;
 
   DeployCngnOptionsV2 script;
@@ -416,9 +416,9 @@ contract CngnOptionsV2Fork is Test {
 
     vm.warp(block.timestamp + VOL_HEARTBEAT + 1);
     _holdSpot(spot);
-    vm.expectRevert(IBaseLyraFeed.BLF_DataTooOld.selector);
+    vm.expectRevert(IBaseNumoFeed.BLF_DataTooOld.selector);
     engine.getMargin(seller, false);
-    vm.expectRevert(IBaseLyraFeed.BLF_DataTooOld.selector);
+    vm.expectRevert(IBaseNumoFeed.BLF_DataTooOld.selector);
     _trade(seller, buyer, subId, 1e18, 0); // more risk: refused
     engine.getMargin(39, false); // the cNGN future maker: unaffected
 
@@ -472,7 +472,7 @@ contract CngnOptionsV2Fork is Test {
       abi.encodeWithSelector(IForwardFeed.getForwardPrice.selector, EXPIRY + 7 days),
       abi.encode(fwd, 1e18)
     );
-    vm.expectRevert(ILyraVolFeed.LVF_MissingExpiryData.selector);
+    vm.expectRevert(INumoVolFeed.LVF_MissingExpiryData.selector);
     _trade(seller, buyer, other, 1e18, 0);
   }
 
@@ -552,9 +552,9 @@ contract CngnOptionsV2Fork is Test {
     _recordFixing(spot);
     vm.warp(EXPIRY + VOL_HEARTBEAT + 1);
     _holdSpot(spot);
-    vm.expectRevert(ILyraVolFeed.LVF_InvalidVolDataTimestamp.selector);
+    vm.expectRevert(INumoVolFeed.LVF_InvalidVolDataTimestamp.selector);
     this.publishVol(EXPIRY, ATM_VOL);
-    vm.expectRevert(IBaseLyraFeed.BLF_DataTooOld.selector);
+    vm.expectRevert(IBaseNumoFeed.BLF_DataTooOld.selector);
     engine.getMargin(writer, false);
 
     future.fixSettlementFromIndex(uint96(EXPIRY));
@@ -699,7 +699,7 @@ contract CngnOptionsV2Fork is Test {
     uint b = 2 * atmVar;
     int a = int(atmVar) - int(b * sigma / 1e18);
     bytes memory data = abi.encode(expiry, a, b, int(-0.5e18), int(0), sigma, fwd, tau, confidence);
-    IBaseLyraFeed.FeedData memory feedData = IBaseLyraFeed.FeedData({
+    IBaseNumoFeed.FeedData memory feedData = IBaseNumoFeed.FeedData({
       data: data,
       timestamp: uint64(block.timestamp),
       deadline: block.timestamp + 5,

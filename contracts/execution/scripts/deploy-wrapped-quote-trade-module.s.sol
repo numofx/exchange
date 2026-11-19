@@ -57,7 +57,7 @@ import {Utils} from "./utils.sol";
  *
  *      2. ORACLE LIVENESS. Every fill puts wrapped USDC in both accounts, so SRM market 1 is now
  *         read on every margin check (StandardManager.sol:443, 770-772). spotFeeds[1] is still the
- *         live LyraSpotFeed with a 3600s heartbeat that the book was deliberately moved off when
+ *         live NumoSpotFeed with a 3600s heartbeat that the book was deliberately moved off when
  *         the static feeds were deployed (scripts/deploy-cngn-spot-static-feeds.s.sol:24-29, in
  *         risk-core). Leaving it there re-introduces a keeper gap as a book-wide halt. Action 2
  *         repoints market 1 at the static stable feed that already exists on chain.

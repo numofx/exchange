@@ -3,7 +3,7 @@ pragma solidity ^0.8.13;
 
 import "openzeppelin/utils/math/SafeCast.sol";
 import "openzeppelin/utils/math/SignedMath.sol";
-import "lyra-utils/decimals/DecimalMath.sol";
+import "numo-utils/decimals/DecimalMath.sol";
 
 import "openzeppelin/access/Ownable2Step.sol";
 
@@ -18,7 +18,7 @@ import {IGlobalSubIdOITracking} from "../interfaces/IGlobalSubIdOITracking.sol";
 
 /**
  * @title BasePortfolioViewer
- * @author Lyra
+ * @author Numo
  * @notice Read only contract that helps with converting portfolio and balances
  */
 contract BasePortfolioViewer is Ownable2Step, IBasePortfolioViewer {

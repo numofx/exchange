@@ -2,25 +2,25 @@
 
 Scope, design, invariants and evidence for the outside review of [#180](https://github.com/numofx/exchange/pull/180):
 USDC/cNGN dated futures, **cash settled in cNGN**, margined in **one account with spot cNGN and the cNGN-PERP**, on
-**MarginEngine**, a fork of Lyra v2's StandardManager.
+**MarginEngine**, a fork of the upstream v2 StandardManager.
 
 ## 1. What to review
 
 | File | Lines | How to read it |
 |---|---|---|
-| `src/risk-managers/MarginEngine.sol` | 866 | **As a diff against Lyra's StandardManager at #361 (`12cb35a`)**: 453 changed lines. That covers Numo's carried changes and the fork's (see below). The contract header lists the fork's own changes. |
-| `src/risk-managers/MarginEnginePortfolioViewer.sol` | 238 | As a diff against Lyra's `SRMPortfolioViewer.sol` at #361: 205 changed lines. They are the dated-future arrangement, type renames, futures excluded from `depegPenaltyPos`, and the `_checkAssetCap` override. |
-| `src/risk-managers/MarginEngineOptionHelper.sol` | 228 | Against the option margin that Lyra's #361 StandardManager computes inline. `4480270` + `3063ff0` moved it into a helper; this copy renames only the struct types (31 lines against `OptionMarginHelper.sol`). |
+| `src/risk-managers/MarginEngine.sol` | 866 | **As a diff against upstream's StandardManager at #361 (`12cb35a`)**: 453 changed lines. That covers Numo's carried changes and the fork's (see below). The contract header lists the fork's own changes. |
+| `src/risk-managers/MarginEnginePortfolioViewer.sol` | 238 | As a diff against upstream's `SRMPortfolioViewer.sol` at #361: 205 changed lines. They are the dated-future arrangement, type renames, futures excluded from `depegPenaltyPos`, and the `_checkAssetCap` override. |
+| `src/risk-managers/MarginEngineOptionHelper.sol` | 228 | Against the option margin that upstream's #361 StandardManager computes inline. `4480270` + `3063ff0` moved it into a helper; this copy renames only the struct types (31 lines against `OptionMarginHelper.sol`). |
 | `src/libraries/FutureVMLib.sol` | 244 | **New, in full.** Futures VM settlement, futures margin, close-out. |
 | `src/assets/FutureAsset.sol` | 524 | **New, in full.** The dated future: marks, VM accounting, fixing, settlement. |
-| `src/interfaces/IMarginEngine.sol`, `IMarginEnginePortfolioViewer.sol`, `IFutureAsset.sol` | 234, 21, 114 | Interfaces. `IMarginEngine` against Lyra's `IStandardManager` at #361: 38 lines. |
-| `src/risk-managers/BaseManager.sol` | 480 | As a diff against Lyra's at #361: Lyra #362 made it upgradeable, Numo `1e9f8fa` split `executeBid` and moved cash settlement into `_applyCashDelta` (see below). The engine inherits it. |
+| `src/interfaces/IMarginEngine.sol`, `IMarginEnginePortfolioViewer.sol`, `IFutureAsset.sol` | 234, 21, 114 | Interfaces. `IMarginEngine` against upstream's `IStandardManager` at #361: 38 lines. |
+| `src/risk-managers/BaseManager.sol` | 480 | As a diff against upstream at #361: upstream #362 made it upgradeable, Numo `1e9f8fa` split `executeBid` and moved cash settlement into `_applyCashDelta` (see below). The engine inherits it. |
 | `src/risk-managers/BasePortfolioViewer.sol` | 1 word | `_checkAssetCap` made `virtual`. No behaviour change for existing managers. |
 | `scripts/deploy-margin-engine.s.sol` | 585 | The deployment, its postconditions, and the two vault batches it writes. |
 
-### Scope: against Lyra's #361, including Numo's earlier SRM changes (decided)
+### Scope: against upstream's #361, including Numo's earlier SRM changes (decided)
 
-The baseline is Lyra's StandardManager at #361 (`12cb35a`), the last Lyra commit before Numo's changes, not today's. The live perp SRM carries Numo
+The baseline is upstream's StandardManager at #361 (`12cb35a`), the last upstream commit before Numo's changes, not today's. The live perp SRM carries Numo
 changes made after the import, the fork inherits them, and **they are in scope**:
 
 | Commit | What it changed | Diff |
@@ -43,13 +43,13 @@ Every file under `src/` that changed between #361 and the import, and that the e
 
 | File | Since #361 | Verdict |
 |---|---|---|
-| `DutchAuction`, `CashAsset`, `WrappedERC20Asset`, `Allowances`, `ISubAccounts`, `BaseLyraFeed` | `95a0eb5` (forge fmt) | identical to #361 with whitespace removed |
+| `DutchAuction`, `CashAsset`, `WrappedERC20Asset`, `Allowances`, `ISubAccounts`, `BaseNumoFeed` | `95a0eb5` (forge fmt) | identical to #361 apart from whitespace and the Numo rename |
 | `PerpAsset` | `0d81da6`: six functions made `virtual`, for `SquaredPerpAsset` | no behaviour change |
 | **`BaseManager`**, which the engine inherits | see below | **in scope** (decided) |
 
 `BaseManager` is in scope: the engine's pool guard depends on Numo's `_executeBid` split, and a reorder of cash steps
 is exactly what a review should see. Its diff against #361 has two sources:
-- **Lyra #362 (`57cdd00`, PMRM2):** made upgradeable. Immutables became storage, `Ownable2Step` became
+- **Upstream #362 (`57cdd00`, PMRM2):** made upgradeable. Immutables became storage, `Ownable2Step` became
   `Ownable2StepUpgradeable`, and a storage gap was added.
 - **Numo `1e9f8fa`:**
   - `executeBid` was made `virtual`, with its body moved into an internal `_executeBid`. The engine's `executeBid`
@@ -113,15 +113,15 @@ future and forward feed, and could change any setting. Two measures close it:
 **Please confirm this before reviewing the rest.**
 
 Files changed since #361 that the engine does not run: PMRM2 and its libraries, the deliverable-FX manager and asset,
-`SquaredPerp*`, the Chainlink feeds, `SpotPassthroughDiffFeed`, `LyraRateFeedStatic` and `DatedFutureAsset`.
+`SquaredPerp*`, the Chainlink feeds, `SpotPassthroughDiffFeed`, `NumoRateFeedStatic` and `DatedFutureAsset`.
 
 To reproduce the diffs:
 
 ```sh
-git show 12cb35a:src/risk-managers/StandardManager.sol    > /tmp/lyra-StandardManager.sol
-git show 12cb35a:src/risk-managers/SRMPortfolioViewer.sol > /tmp/lyra-SRMPortfolioViewer.sol
-diff -u /tmp/lyra-StandardManager.sol    contracts/risk-core/src/risk-managers/MarginEngine.sol
-diff -u /tmp/lyra-SRMPortfolioViewer.sol contracts/risk-core/src/risk-managers/MarginEnginePortfolioViewer.sol
+git show 12cb35a:src/risk-managers/StandardManager.sol    > /tmp/numo-StandardManager.sol
+git show 12cb35a:src/risk-managers/SRMPortfolioViewer.sol > /tmp/numo-SRMPortfolioViewer.sol
+diff -u /tmp/numo-StandardManager.sol    contracts/risk-core/src/risk-managers/MarginEngine.sol
+diff -u /tmp/numo-SRMPortfolioViewer.sol contracts/risk-core/src/risk-managers/MarginEnginePortfolioViewer.sol
 git show 0d81da6 -- src/risk-managers/StandardManager.sol src/risk-managers/SRMPortfolioViewer.sol src/interfaces/IStandardManager.sol
 git show 4480270 3063ff0
 ```
@@ -142,7 +142,7 @@ These are in the PR and tested, but they hold no funds.
 
 ## 2. Context
 
-- **Lyra v2 accounts.** Each `SubAccounts` account has **exactly one manager**, and this `SubAccounts` has **no
+- **v2 accounts.** Each `SubAccounts` account has **exactly one manager**, and this `SubAccounts` has **no
   `changeManager`**. A position moves to a new manager only by being closed and reopened, or transferred to an
   account under it.
 - **The live venue** (Base) runs spot cNGN-USDC and the cNGN-PERP **in one account under the perp SRM**. Both
@@ -176,7 +176,7 @@ These are in the PR and tested, but they hold no funds.
   - Prices: cNGN per USDC.
   - VM: cNGN per contract, `Δmark × contractSize`.
   - The index and forward feeds are USDC per cNGN; the asset inverts them.
-- **Marks:** `pullMark` is permissionless and rate-limited by `minMarkInterval` (1h). It reads a signed `LyraForwardFeed`
+- **Marks:** `pullMark` is permissionless and rate-limited by `minMarkInterval` (1h). It reads a signed `NumoForwardFeed`
   (forward = index + a signed per-expiry difference). Each mark is held to:
   - a per-mark move limit (5%);
   - an index band, 10% that narrows linearly to 1% over the last 14 days.

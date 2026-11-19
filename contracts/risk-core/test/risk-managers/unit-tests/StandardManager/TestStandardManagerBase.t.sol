@@ -69,7 +69,7 @@ contract TestStandardManagerBase is Test {
   }
 
   function setUp() public virtual {
-    subAccounts = new SubAccounts("Lyra Margin Accounts", "LyraMarginNFTs");
+    subAccounts = new SubAccounts("Numo Margin Accounts", "NumoMarginNFTs");
 
     usdc = new MockERC20("USDC", "USDC");
 

@@ -12,7 +12,7 @@ Basis data only accrues with wall-clock time, so it must start early to be usefu
 Per tick it appends one CSV row sampling, independently:
   er_api     the rate the live feed publishes from (daily refresh)
   alt_fx     an independent free NGN reference, to size source-choice disagreement
-  feed_spot  what the on-chain LyraSpotFeed returns (blank while stale/reverting)
+  feed_spot  what the on-chain NumoSpotFeed returns (blank while stale/reverting)
   mark       the on-chain mark on the future, plus its age
   pool       cNGN/USDC AMM depth and price on Base
 

@@ -25,7 +25,7 @@ See [deployments/8453/matching.json](deployments/8453/matching.json).
 
 Config verified on-chain: SEP-16 future `0xDd9c2Ddf…A1F9` registered as a dated future on
 trade + rfq; relayer `0xeaBca823B4d35d8F2eac09edB55C42D8077fbFcA` authorized as trade
-executor; legacy Lyra keeper NOT authorized.
+executor; legacy Numo keeper NOT authorized.
 
 **Fully live as of 2026-08-08.** All three remaining items are done:
 

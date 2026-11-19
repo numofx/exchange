@@ -8,7 +8,7 @@ set -euo pipefail
 : "${BASE_RPC_URL:?set BASE_RPC_URL}"
 PORT="${E2E_ENGINE_PORT:-8605}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
-(cd "$HERE/../../contracts/risk-core" && forge build src/assets/OptionAsset.sol src/feeds/LyraVolFeed.sol src/feeds/FutureFixingSettlementFeed.sol >/dev/null)
+(cd "$HERE/../../contracts/risk-core" && forge build src/assets/OptionAsset.sol src/feeds/NumoVolFeed.sol src/feeds/FutureFixingSettlementFeed.sol >/dev/null)
 anvil --fork-url "$BASE_RPC_URL" --chain-id 31337 --port "$PORT" --silent &
 ANVIL=$!
 trap 'kill $ANVIL 2>/dev/null || true' EXIT

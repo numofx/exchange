@@ -40,7 +40,7 @@ contract UNIT_TestStandardManager is Test {
   uint marketId;
 
   function setUp() public {
-    subAccounts = new SubAccounts("Lyra Margin Accounts", "LyraMarginNFTs");
+    subAccounts = new SubAccounts("Numo Margin Accounts", "NumoMarginNFTs");
 
     usdc = new MockERC20("USDC", "USDC");
 
@@ -254,8 +254,8 @@ contract UNIT_TestStandardManager is Test {
     _tradePerpContract(aliceAcc, bobAcc, 1e18);
     perp.mockAccountPnlAndFunding(aliceAcc, 0, 1000e18);
 
-    // perp address for Lyra market is unset
-    manager.createMarket("LYRA");
+    // perp address for Numo market is unset
+    manager.createMarket("NUMO");
 
     manager.settlePerpsWithIndex(aliceAcc);
 

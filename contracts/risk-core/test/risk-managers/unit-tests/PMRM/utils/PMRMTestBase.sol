@@ -70,7 +70,7 @@ contract PMRMTestBase is JsonMechIO {
   function setUp() public virtual {
     vm.warp(1640995200); // 1st jan 2022
 
-    subAccounts = new SubAccounts("Lyra Margin Accounts", "LyraMarginNFTs");
+    subAccounts = new SubAccounts("Numo Margin Accounts", "NumoMarginNFTs");
 
     feed = new MockFeeds();
     perpFeed = new MockSpotDiffFeed(feed);

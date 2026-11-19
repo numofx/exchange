@@ -9,7 +9,7 @@ import {ISubAccounts} from "./interfaces/ISubAccounts.sol";
 
 /**
  * @title Allowance
- * @author Lyra
+ * @author Numo
  * @notice Allow more granular allowance setting, supposed to be used by Account
  */
 contract Allowances is IAllowances {

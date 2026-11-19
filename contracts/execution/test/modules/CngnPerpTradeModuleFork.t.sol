@@ -12,8 +12,8 @@ import {IMatching} from "src/interfaces/IMatching.sol";
 import {IAsset} from "v2-core/src/interfaces/IAsset.sol";
 import {IManager} from "v2-core/src/interfaces/IManager.sol";
 import {IBaseManager} from "v2-core/src/interfaces/IBaseManager.sol";
-import {IBaseLyraFeed} from "v2-core/src/interfaces/IBaseLyraFeed.sol";
-import {BaseLyraFeed} from "v2-core/src/feeds/BaseLyraFeed.sol";
+import {IBaseNumoFeed} from "v2-core/src/interfaces/IBaseNumoFeed.sol";
+import {BaseNumoFeed} from "v2-core/src/feeds/BaseNumoFeed.sol";
 import {SubAccounts} from "v2-core/src/SubAccounts.sol";
 import {IERC20Metadata} from "openzeppelin/token/ERC20/extensions/IERC20Metadata.sol";
 import {MessageHashUtils} from "openzeppelin/utils/cryptography/MessageHashUtils.sol";
@@ -317,8 +317,8 @@ contract CngnPerpTradeModuleForkTest is Test {
     return abi.encode(updates);
   }
 
-  function _signed(BaseLyraFeed feed, bytes memory data) internal view returns (bytes memory) {
-    IBaseLyraFeed.FeedData memory feedData = IBaseLyraFeed.FeedData({
+  function _signed(BaseNumoFeed feed, bytes memory data) internal view returns (bytes memory) {
+    IBaseNumoFeed.FeedData memory feedData = IBaseNumoFeed.FeedData({
       data: data,
       timestamp: uint64(block.timestamp),
       deadline: block.timestamp + 5,

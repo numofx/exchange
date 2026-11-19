@@ -10,7 +10,7 @@ import {MockDataReceiver} from "../mock/MockDataReceiver.sol";
 import {IManager} from "v2-core/src/interfaces/IManager.sol";
 import {ISubAccounts} from "v2-core/src/interfaces/ISubAccounts.sol";
 import {IDutchAuction} from "v2-core/src/interfaces/IDutchAuction.sol";
-import {OptionEncoding} from "lyra-utils/encoding/OptionEncoding.sol";
+import {OptionEncoding} from "numo-utils/encoding/OptionEncoding.sol";
 
 import "forge-std/console2.sol";
 import "../../src/interfaces/IRfqModule.sol";

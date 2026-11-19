@@ -11,7 +11,7 @@ import "../src/risk-managers/StandardManager.sol";
 import "../src/risk-managers/SRMPortfolioViewer.sol";
 import "../src/periphery/OracleDataSubmitter.sol";
 
-import "../src/feeds/LyraSpotFeed.sol";
+import "../src/feeds/NumoSpotFeed.sol";
 
 import "openzeppelin/token/ERC20/extensions/IERC20Metadata.sol";
 
@@ -47,7 +47,7 @@ contract DeployCore is Utils {
     /// @dev deploy and initiate contracts
     function _deployCoreContracts(address deployer, ConfigJson memory config) internal returns (Deployment memory deployment)  {
 
-        deployment.subAccounts = new SubAccounts("Lyra Margin Accounts", "LyraMarginNFTs");
+        deployment.subAccounts = new SubAccounts("Numo Margin Accounts", "NumoMarginNFTs");
 
         (uint minRate, uint rateMultiplier, uint highRateMultiplier, uint optimalUtil) = Config.getDefaultInterestRateModel();
         // nonce + 1
@@ -72,7 +72,7 @@ contract DeployCore is Utils {
         deployment.srm.setLiquidation(deployment.auction);
 
         // Deploy the stable feed (price of the chain's USD stable against USD)
-        LyraSpotFeed stableFeed = new LyraSpotFeed();
+        NumoSpotFeed stableFeed = new NumoSpotFeed();
         stableFeed.setHeartbeat(Config.STABLE_HEARTBEAT);
         for (uint i = 0; i < config.feedSigners.length; ++i) {
             stableFeed.addSigner(config.feedSigners[i], true);

@@ -12,7 +12,7 @@ import {BaseTSA, BaseOnChainSigningTSA, CollateralManagementTSA} from "../../../
 import {LeveragedBasisTSA} from "../../../src/tokenizedSubaccounts/LevBasisTSA.sol";
 import {PrincipalProtectedTSA} from "../../../src/tokenizedSubaccounts/PPTSA.sol";
 
-import {OptionEncoding} from "lyra-utils/encoding/OptionEncoding.sol";
+import {OptionEncoding} from "numo-utils/encoding/OptionEncoding.sol";
 
 import {IDutchAuction} from "v2-core/src/interfaces/IDutchAuction.sol";
 import {IManager} from "v2-core/src/interfaces/IManager.sol";
@@ -178,12 +178,12 @@ contract TSATestUtils is IntegrationTestBase, MatchingHelpers {
   function _setFixedSVIDataForExpiry(string memory key, uint64 expiry) internal {
     vm.warp(block.timestamp + 1);
 
-    LyraForwardFeed forwardFeed = markets[key].forwardFeed;
+    NumoForwardFeed forwardFeed = markets[key].forwardFeed;
     (uint fwdPrice,) = forwardFeed.getForwardPrice(uint64(expiry));
 
-    LyraVolFeed volFeed = markets[key].volFeed;
+    NumoVolFeed volFeed = markets[key].volFeed;
 
-    IBaseLyraFeed.FeedData memory feedData = _getFixedVolData(expiry, fwdPrice);
+    IBaseNumoFeed.FeedData memory feedData = _getFixedVolData(expiry, fwdPrice);
 
     // sign data
     bytes memory data = _signFeedData(volFeed, keeperPk, feedData);
@@ -191,7 +191,7 @@ contract TSATestUtils is IntegrationTestBase, MatchingHelpers {
     volFeed.acceptData(data);
   }
 
-  function _getFixedVolData(uint64 expiry, uint fwdPrice) internal view returns (IBaseLyraFeed.FeedData memory) {
+  function _getFixedVolData(uint64 expiry, uint fwdPrice) internal view returns (IBaseNumoFeed.FeedData memory) {
     uint64 SVI_refTau = uint64(Black76.annualise(uint64(expiry - block.timestamp)));
     // vol will be sqrt(1.8)
     int SVI_a = int((1.8e18) * uint(SVI_refTau) / 1e18);
@@ -204,7 +204,7 @@ contract TSATestUtils is IntegrationTestBase, MatchingHelpers {
 
     // example data: a = 1, b = 1.5, sig = 0.05, rho = -0.1, m = -0.05
     bytes memory volData = abi.encode(expiry, SVI_a, SVI_b, SVI_rho, SVI_m, SVI_sigma, SVI_fwd, SVI_refTau, confidence);
-    return IBaseLyraFeed.FeedData({
+    return IBaseNumoFeed.FeedData({
       data: volData,
       timestamp: uint64(block.timestamp),
       deadline: block.timestamp + 5,

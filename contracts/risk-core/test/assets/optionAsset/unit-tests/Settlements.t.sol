@@ -27,7 +27,7 @@ contract UNIT_OptionAssetSettlementsTest is Test {
   uint putId;
 
   function setUp() public {
-    subAccounts = new SubAccounts("Lyra Margin Accounts", "LyraMarginNFTs");
+    subAccounts = new SubAccounts("Numo Margin Accounts", "NumoMarginNFTs");
 
     feed = new MockFeeds();
     option = new OptionAsset(subAccounts, address(feed));

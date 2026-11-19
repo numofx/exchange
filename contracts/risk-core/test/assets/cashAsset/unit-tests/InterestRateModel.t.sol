@@ -3,8 +3,8 @@ pragma solidity ^0.8.18;
 
 import "forge-std/Test.sol";
 import "../../../../src/assets/InterestRateModel.sol";
-import "lyra-utils/decimals/DecimalMath.sol";
-import "lyra-utils/decimals/ConvertDecimals.sol";
+import "numo-utils/decimals/DecimalMath.sol";
+import "numo-utils/decimals/ConvertDecimals.sol";
 
 /**
  * @dev Simple testing for the InterestRateModel

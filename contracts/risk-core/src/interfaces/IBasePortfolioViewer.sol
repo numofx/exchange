@@ -8,7 +8,7 @@ import {IManager} from "../interfaces/IManager.sol";
 
 /**
  * @title IBasePortfolioViewer
- * @author Lyra
+ * @author Numo
  */
 interface IBasePortfolioViewer {
   error BM_AssetCapExceeded();

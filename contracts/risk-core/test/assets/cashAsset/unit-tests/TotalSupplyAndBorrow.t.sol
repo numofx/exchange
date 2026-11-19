@@ -28,7 +28,7 @@ contract UNIT_CashAssetTotalSupplyBorrow is Test {
   uint depositedAmount = 10000 ether;
 
   function setUp() public {
-    subAccounts = new SubAccounts("Lyra Margin Accounts", "LyraMarginNFTs");
+    subAccounts = new SubAccounts("Numo Margin Accounts", "NumoMarginNFTs");
 
     manager = new MockManager(address(subAccounts));
 

@@ -9,7 +9,7 @@ import {IBasePortfolioViewer} from "../interfaces/IBasePortfolioViewer.sol";
 /**
  * @title IMarginEnginePortfolioViewer
  * @notice view function for MarginEngine
- * @author Lyra
+ * @author Numo
  */
 interface IMarginEnginePortfolioViewer is IBasePortfolioViewer {
   function getMarginEnginePortfolio(uint accountId) external view returns (IMarginEngine.MarginEnginePortfolio memory);

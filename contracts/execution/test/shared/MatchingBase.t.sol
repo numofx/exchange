@@ -18,7 +18,7 @@ import {IAsset} from "v2-core/src/interfaces/IAsset.sol";
 import {IManager} from "v2-core/src/interfaces/IManager.sol";
 import {ECDSA} from "openzeppelin/utils/cryptography/ECDSA.sol";
 import {MessageHashUtils} from "openzeppelin/utils/cryptography/MessageHashUtils.sol";
-import {OptionEncoding} from "lyra-utils/encoding/OptionEncoding.sol";
+import {OptionEncoding} from "numo-utils/encoding/OptionEncoding.sol";
 import "../../src/modules/LiquidateModule.sol";
 import "../../src/modules/RfqModule.sol";
 

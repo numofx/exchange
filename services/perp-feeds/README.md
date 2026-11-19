@@ -119,7 +119,7 @@ ANVIL_RPC_URL=http://127.0.0.1:8599 pnpm test    # + the real feed contracts acc
    ± `FORWARD_MAX_BASIS_BPS`, inside the contract's current index band, and inside its per-mark move
    limit (both less `FORWARD_SAFETY_BPS`). If the band and the move limit cannot both be met, it
    publishes nothing and alerts `forward-unreachable`;
-2. signs `forward − index` (USDC per cNGN) into the future's `LyraForwardFeed` and relays it;
+2. signs `forward − index` (USDC per cNGN) into the future's `NumoForwardFeed` and relays it;
 3. calls `FutureAsset.pullMark`, which reads it back, checks it again, and accrues VM.
 
 **Its own process, signer and relayer.** The forward key must not sign the index: the contract
@@ -170,7 +170,7 @@ cannot be reached at startup it stays up, retrying each minute and alerting
 `contracts/risk-core/scripts/ops/`). v1's `numo-future-feeds.service` (USDC-cNGN-30NOV26, 2026-10-13) was removed
 on 2026-11-19 with its series.
 
-`src/forward.anvil.e2e.test.ts` runs it against the real `LyraSpotFeed`, `LyraForwardFeed`,
+`src/forward.anvil.e2e.test.ts` runs it against the real `NumoSpotFeed`, `NumoForwardFeed`,
 `FutureAsset` and `OracleDataSubmitter` on anvil, and `src/expiry.anvil.e2e.test.ts` runs a real fixing
 on `FutureAsset`. The anvil suites share one chain clock, so `pnpm test` runs test files one at a time
 (`--test-concurrency=1`): concurrently, one suite's `evm_increaseTime` expires another's signatures or
@@ -208,7 +208,7 @@ USDC-cNGN-30NOV26 keeps its unit and code path, unchanged, until it settles. Wha
 
 ## Vol publisher (cNGN options)
 
-`dist/vol-main.js` signs the cNGN options' vol surface into their `LyraVolFeed`
+`dist/vol-main.js` signs the cNGN options' vol surface into their `NumoVolFeed`
 (`contracts/risk-core/scripts/deploy-cngn-options-v2.s.sol`), for the one expiry they share with
 cNGN-30NOV26. **Not yet installed**: `numo-vol-feeds.service`, `run-with-ssm-vol.sh` and
 `vol-feeds-cngn-30nov26.env` under `contracts/risk-core/scripts/ops/` say what it needs first.
@@ -242,5 +242,5 @@ a mismatch alerts `vol-readback-mismatch`. It writes what it did to `VOL_STATUS_
 At expiry it stops: the feed refuses data stamped after it, so expired option accounts must be
 settled (`settleOptions`) before the last surface ages out.
 
-`src/vol.anvil.e2e.test.ts` runs it against the real `LyraSpotFeed`, `LyraForwardFeed`,
-`LyraVolFeed` and `OracleDataSubmitter`.
+`src/vol.anvil.e2e.test.ts` runs it against the real `NumoSpotFeed`, `NumoForwardFeed`,
+`NumoVolFeed` and `OracleDataSubmitter`.

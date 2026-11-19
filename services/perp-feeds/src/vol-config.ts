@@ -14,7 +14,7 @@ const bool = z.union([z.literal('true'), z.literal('false')]).transform((value) 
 const BASE_MAINNET = 8453;
 
 /**
- * The vol publisher for cNGN options (vol-main.ts): signs a hand-set SVI surface into the options' LyraVolFeed for one
+ * The vol publisher for cNGN options (vol-main.ts): signs a hand-set SVI surface into the options' NumoVolFeed for one
  * expiry. Its own process, signer and relayer, as the forward publisher: the vol key must not sign the index or the
  * forward (the deploy script refuses that), and a shared relayer races for nonces.
  *
@@ -35,7 +35,7 @@ const envSchema = z
 
     DATA_SUBMITTER: address,
     VOL_FEED: address,
-    /** The cNGN future's LyraForwardFeed: the surface's SVI_fwd, and what the engine prices options against. */
+    /** The cNGN future's NumoForwardFeed: the surface's SVI_fwd, and what the engine prices options against. */
     FORWARD_FEED: address,
     INDEX_FEED: address,
     /** MarginEngine v2: its option threshold for market 1 is what VOL_DEGRADED_CONFIDENCE must sit under. */

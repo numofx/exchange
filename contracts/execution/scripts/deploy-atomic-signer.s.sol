@@ -12,8 +12,8 @@ import {IAsset} from "v2-core/src/interfaces/IAsset.sol";
 import {ICashAsset} from "v2-core/src/interfaces/ICashAsset.sol";
 import {ISubAccounts} from "v2-core/src/interfaces/ISubAccounts.sol";
 import {LiquidateModule} from "../src/modules/LiquidateModule.sol";
-import {LyraAuctionUtils} from "../src/periphery/LyraAuctionUtils.sol";
-import {LyraSettlementUtils} from "../src/periphery/LyraSettlementUtils.sol";
+import {NumoAuctionUtils} from "../src/periphery/NumoAuctionUtils.sol";
+import {NumoSettlementUtils} from "../src/periphery/NumoSettlementUtils.sol";
 import {Matching} from "../src/Matching.sol";
 import {RfqModule} from "../src/modules/RfqModule.sol";
 import {SubAccountCreator} from "../src/periphery/SubAccountCreator.sol";
@@ -51,7 +51,7 @@ contract DeployAtomicSigner is UtilBase {
     if (block.chainid != 957) {
       matching.setTradeExecutor(address(atomicSigningExecutor), true);
     } else {
-      console.log("Must set trade executor manually on Derive mainnet");
+      console.log("Must set trade executor manually on Numo mainnet");
     }
 
     console.log("AtomicSigningExecutor deployed at: ", address(atomicSigningExecutor));

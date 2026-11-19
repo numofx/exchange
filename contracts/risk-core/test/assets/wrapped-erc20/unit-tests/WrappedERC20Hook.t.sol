@@ -21,7 +21,7 @@ contract UNIT_WrappedBaseAssetHook is Test {
   uint accId;
 
   function setUp() public {
-    subAccounts = new SubAccounts("Lyra Margin Accounts", "LyraMarginNFTs");
+    subAccounts = new SubAccounts("Numo Margin Accounts", "NumoMarginNFTs");
 
     manager = new MockManager(address(subAccounts));
     wbtc = new MockERC20("WBTC", "WBTC");

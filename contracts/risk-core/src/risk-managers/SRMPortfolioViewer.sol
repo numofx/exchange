@@ -4,8 +4,8 @@ pragma solidity ^0.8.13;
 import "openzeppelin/utils/math/SafeCast.sol";
 import "openzeppelin/utils/math/SignedMath.sol";
 
-import "lyra-utils/encoding/OptionEncoding.sol";
-import "lyra-utils/arrays/UnorderedMemoryArray.sol";
+import "numo-utils/encoding/OptionEncoding.sol";
+import "numo-utils/arrays/UnorderedMemoryArray.sol";
 
 import {ISubAccounts} from "../interfaces/ISubAccounts.sol";
 import {ISRMPortfolioViewer} from "../interfaces/ISRMPortfolioViewer.sol";
@@ -18,7 +18,7 @@ import {BasePortfolioViewer} from "./BasePortfolioViewer.sol";
 
 /**
  * @title SRMPortfolioViewer
- * @author Lyra
+ * @author Numo
  * @notice Read only contract that helps with converting portfolio and balances
  */
 contract SRMPortfolioViewer is BasePortfolioViewer, ISRMPortfolioViewer {

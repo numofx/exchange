@@ -25,7 +25,7 @@ contract UNIT_CashAssetDeposit is Test {
   IInterestRateModel rateModel;
 
   function setUp() public {
-    subAccounts = new SubAccounts("Lyra Margin Accounts", "LyraMarginNFTs");
+    subAccounts = new SubAccounts("Numo Margin Accounts", "NumoMarginNFTs");
 
     manager = new MockManager(address(subAccounts));
     auction = new MockDutchAuction();

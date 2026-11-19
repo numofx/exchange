@@ -10,8 +10,8 @@ import {MarginEngineV1 as MarginEngine} from "../src/legacy/v1/MarginEngineV1.so
 import {MarginEnginePortfolioViewer} from "../src/risk-managers/MarginEnginePortfolioViewer.sol";
 import {DutchAuction} from "../src/liquidation/DutchAuction.sol";
 import {StandardManager} from "../src/risk-managers/StandardManager.sol";
-import {LyraForwardFeed} from "../src/feeds/LyraForwardFeed.sol";
-import {LyraSpotFeed} from "../src/feeds/LyraSpotFeed.sol";
+import {NumoForwardFeed} from "../src/feeds/NumoForwardFeed.sol";
+import {NumoSpotFeed} from "../src/feeds/NumoSpotFeed.sol";
 import {IAsset} from "../src/interfaces/IAsset.sol";
 import {ICashAsset} from "../src/interfaces/ICashAsset.sol";
 import {IDutchAuction} from "../src/interfaces/IDutchAuction.sol";
@@ -44,7 +44,7 @@ interface ITradeModuleQuote {
  *      either: it is set to the live open interest at the time, once markets-service rejects orders that would
  *      increase it (a cap below open interest under the SRM's viewer freezes holders; see MarginEnginePortfolioViewer).
  *
- * @dev MARKS. A new LyraForwardFeed on the index: forward = index + a signed per-expiry difference, published by
+ * @dev MARKS. A new NumoForwardFeed on the index: forward = index + a signed per-expiry difference, published by
  *      FORWARD_SIGNER, a key of its own. The script refuses one key for the forward and the index.
  *
  * @dev UNITS. Futures prices are cNGN per USDC; the index and forward feeds are USDC per cNGN.
@@ -136,7 +136,7 @@ contract DeployMarginEngine is Utils {
     MarginEngine engine;
     MarginEnginePortfolioViewer viewer;
     FutureAsset future;
-    LyraForwardFeed forwardFeed;
+    NumoForwardFeed forwardFeed;
     uint marketId;
     uint96 subId;
     uint poolAccount;
@@ -244,7 +244,7 @@ contract DeployMarginEngine is Utils {
 
     if (params.forwardSigner == address(0)) revert("FORWARD_SIGNER is zero");
     if (params.forwardSigner == params.vault) revert("FORWARD_SIGNER must not be the vault");
-    if (LyraSpotFeed(params.indexFeed).isSigner(params.forwardSigner)) {
+    if (NumoSpotFeed(params.indexFeed).isSigner(params.forwardSigner)) {
       revert("FORWARD_SIGNER must not also sign the index");
     }
     if (params.initialMark == 0) revert("INITIAL_MARK is zero");
@@ -358,7 +358,7 @@ contract DeployMarginEngine is Utils {
         MAX_SAMPLE_GAP,
         FALLBACK_DELAY
       );
-    d.forwardFeed = new LyraForwardFeed(ISpotFeed(params.indexFeed));
+    d.forwardFeed = new NumoForwardFeed(ISpotFeed(params.indexFeed));
     d.forwardFeed.setHeartbeat(FORWARD_HEARTBEAT);
     d.forwardFeed.addSigner(params.forwardSigner, true);
     d.forwardFeed.setRequiredSigners(1);

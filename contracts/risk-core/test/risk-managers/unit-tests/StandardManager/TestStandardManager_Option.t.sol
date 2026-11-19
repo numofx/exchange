@@ -7,7 +7,7 @@ import "../../../../src/risk-managers/SRMPortfolioViewer.sol";
 import "../../../../src/risk-managers/StandardManager.sol";
 import "../../../../src/periphery/OptionSettlementHelper.sol";
 
-import "lyra-utils/encoding/OptionEncoding.sol";
+import "numo-utils/encoding/OptionEncoding.sol";
 
 import "../../../../src/SubAccounts.sol";
 import {IBaseManager} from "../../../../src/interfaces/IBaseManager.sol";
@@ -50,7 +50,7 @@ contract UNIT_TestStandardManager_Option is Test {
   uint feeRecipient;
 
   function setUp() public {
-    subAccounts = new SubAccounts("Lyra Margin Accounts", "LyraMarginNFTs");
+    subAccounts = new SubAccounts("Numo Margin Accounts", "NumoMarginNFTs");
 
     usdc = new MockERC20("USDC", "USDC");
 

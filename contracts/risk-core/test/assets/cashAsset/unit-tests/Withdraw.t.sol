@@ -30,7 +30,7 @@ contract UNIT_CashAssetWithdraw is Test {
   uint depositedAmount;
 
   function setUp() public {
-    subAccounts = new SubAccounts("Lyra Margin Accounts", "LyraMarginNFTs");
+    subAccounts = new SubAccounts("Numo Margin Accounts", "NumoMarginNFTs");
 
     manager = new MockManager(address(subAccounts));
     badManager = new MockManager(address(subAccounts));
@@ -164,7 +164,7 @@ contract UNIT_CashAssetWithdrawLargeDecimals is Test {
   uint accountId;
 
   function setUp() public {
-    subAccounts = new SubAccounts("Lyra Margin Accounts", "LyraMarginNFTs");
+    subAccounts = new SubAccounts("Numo Margin Accounts", "NumoMarginNFTs");
 
     manager = new MockManager(address(subAccounts));
 

@@ -10,8 +10,8 @@ import {LiquidateModule} from "../src/modules/LiquidateModule.sol";
 import {RfqModule} from "../src/modules/RfqModule.sol";
 import {WithdrawalModule} from "../src/modules/WithdrawalModule.sol";
 import {SubAccountCreator} from "../src/periphery/SubAccountCreator.sol";
-import {LyraSettlementUtils} from "../src/periphery/LyraSettlementUtils.sol";
-import {LyraAuctionUtils} from "../src/periphery/LyraAuctionUtils.sol";
+import {NumoSettlementUtils} from "../src/periphery/NumoSettlementUtils.sol";
+import {NumoAuctionUtils} from "../src/periphery/NumoAuctionUtils.sol";
 import {DutchAuction} from "v2-core/src/liquidation/DutchAuction.sol";
 import {TSAShareHandler} from "../src/tokenizedSubaccounts/TSAShareHandler.sol";
 import {AtomicSigningExecutor} from "../src/AtomicSigningExecutor.sol";
@@ -72,16 +72,16 @@ contract DeployAll is Utils {
     /////
     // helpers
 
-    deployment.settlementUtil = new LyraSettlementUtils();
+    deployment.settlementUtil = new NumoSettlementUtils();
     deployment.subAccountCreator = new SubAccountCreator(ISubAccounts(config.subAccounts), deployment.matching);
-    deployment.auctionUtil = new LyraAuctionUtils(
+    deployment.auctionUtil = new NumoAuctionUtils(
       ISubAccounts(config.subAccounts), DutchAuction(config.auction), config.srm
     );
     deployment.tsaShareHandler = new TSAShareHandler();
     deployment.atomicSigningExecutor = new AtomicSigningExecutor(deployment.matching);
 
     // whitelist helpers
-    // Legacy Lyra keeper — skipped on clean deployments (e.g. mainnet) via SKIP_LEGACY_EXECUTOR=true.
+    // Legacy Numo keeper — skipped on clean deployments (e.g. mainnet) via SKIP_LEGACY_EXECUTOR=true.
     if (!vm.envOr("SKIP_LEGACY_EXECUTOR", false)) {
       deployment.matching.setTradeExecutor(0xf00A105BC009eA3a250024cbe1DCd0509c71C52b, true);
     }

@@ -3,7 +3,7 @@ pragma solidity ^0.8.18;
 
 import {SafeERC20} from "openzeppelin/token/ERC20/utils/SafeERC20.sol";
 import {SafeCast} from "openzeppelin/utils/math/SafeCast.sol";
-import {ConvertDecimals} from "lyra-utils/decimals/ConvertDecimals.sol";
+import {ConvertDecimals} from "numo-utils/decimals/ConvertDecimals.sol";
 
 import {IERC20Metadata} from "openzeppelin/token/ERC20/extensions/IERC20Metadata.sol";
 import {ISubAccounts} from "../interfaces/ISubAccounts.sol";
@@ -17,7 +17,7 @@ import {PositionTracking} from "./utils/PositionTracking.sol";
  * @title Wrapped ERC20 Asset
  * @dev   Users can deposit the given ERC20, and can only have positive balances.
  * @dev   Fee-on-transfer tokens are not supported
- * @author Lyra
+ * @author Numo
  */
 contract WrappedERC20Asset is ManagerWhitelist, PositionTracking, IWrappedERC20Asset {
   using SafeERC20 for IERC20Metadata;
@@ -63,7 +63,7 @@ contract WrappedERC20Asset is ManagerWhitelist, PositionTracking, IWrappedERC20A
   }
 
   /**
-   * @notice Withdraw ERC20 asset from a Lyra account
+   * @notice Withdraw ERC20 asset from a Numo account
    * @param accountId account id to withdraw
    * @param assetAmount the amount of the wrapped asset to withdraw in its native decimals
    * @param recipient ERC20 recipient

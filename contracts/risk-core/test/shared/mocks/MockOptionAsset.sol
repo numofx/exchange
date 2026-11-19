@@ -3,7 +3,7 @@ pragma solidity ^0.8.18;
 
 import "openzeppelin/token/ERC20/IERC20.sol";
 import "openzeppelin/utils/math/SafeCast.sol";
-import "lyra-utils/decimals/SignedDecimalMath.sol";
+import "numo-utils/decimals/SignedDecimalMath.sol";
 
 import {IOptionAsset} from "../../../src/interfaces/IOptionAsset.sol";
 import {MockPositionTracking} from "./MockPositionTracking.sol";

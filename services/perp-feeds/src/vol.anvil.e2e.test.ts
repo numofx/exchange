@@ -1,6 +1,6 @@
 /**
  * The vol publisher against the REAL contracts, deployed from risk-core's compiled artifacts onto a local anvil: a
- * LyraSpotFeed index, a LyraForwardFeed on it, the options' LyraVolFeed, and the OracleDataSubmitter. It proves the
+ * NumoSpotFeed index, a NumoForwardFeed on it, the options' NumoVolFeed, and the OracleDataSubmitter. It proves the
  * chain accepts what the publisher signs and encodes, and that the feed then reads back the surface meant: the set ATM
  * vol at full confidence, and the floor at the degraded confidence. The engine is not deployed: tick() reads only the
  * feeds (checkStartup's engine reads are the unit tests' and the fork test's).
@@ -134,9 +134,9 @@ describe('vol publisher against real contracts on anvil', { skip: !RPC }, () => 
 
   before(async () => {
     at.submitter = await deploy('OracleDataSubmitter.sol', 'OracleDataSubmitter');
-    at.index = await deploy('LyraSpotFeed.sol', 'LyraSpotFeed');
-    at.forward = await deploy('LyraForwardFeed.sol', 'LyraForwardFeed', [at.index]);
-    at.vol = await deploy('LyraVolFeed.sol', 'LyraVolFeed');
+    at.index = await deploy('NumoSpotFeed.sol', 'NumoSpotFeed');
+    at.forward = await deploy('NumoForwardFeed.sol', 'NumoForwardFeed', [at.index]);
+    at.vol = await deploy('NumoVolFeed.sol', 'NumoVolFeed');
     await send(at.index, 'addSigner', [privateKeyToAccount(INDEX_SIGNER_KEY).address, true]);
     await send(at.index, 'setHeartbeat', [86_400n]);
     await send(at.forward, 'addSigner', [privateKeyToAccount(FORWARD_SIGNER_KEY).address, true]);
@@ -148,7 +148,7 @@ describe('vol publisher against real contracts on anvil', { skip: !RPC }, () => 
     await publishIndexAndForward();
   });
 
-  it('signs a surface the LyraVolFeed accepts: the set ATM vol, at full confidence', async () => {
+  it('signs a surface the NumoVolFeed accepts: the set ATM vol, at full confidence', async () => {
     await advance(2);
     const { p, alerts } = publisher(VOL_SIGNER_KEY, healthy);
     assert.equal(await p.tick(), 'published');

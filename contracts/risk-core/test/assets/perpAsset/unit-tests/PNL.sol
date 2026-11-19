@@ -40,7 +40,7 @@ contract UNIT_PerpAssetPNL is Test {
 
   function setUp() public {
     // deploy contracts
-    subAccounts = new SubAccounts("Lyra", "LYRA");
+    subAccounts = new SubAccounts("Numo", "NUMO");
 
     spotFeed = new MockFeeds();
     spotFeed.setSpot(initPrice, 1e18);

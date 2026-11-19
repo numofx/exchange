@@ -3,7 +3,7 @@ pragma solidity ^0.8.18;
 
 /**
  * @title ISpotFeed
- * @author Lyra
+ * @author Numo
  * @notice Spot feed adapter
  * @dev `spotPrice` always assumed to return 18 decimal place uint
  */

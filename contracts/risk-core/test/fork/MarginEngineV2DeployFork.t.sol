@@ -15,8 +15,8 @@ import {IFutureAsset} from "../../src/interfaces/IFutureAsset.sol";
 import {IMarginEngine} from "../../src/interfaces/IMarginEngine.sol";
 import {ISpotFeed} from "../../src/interfaces/ISpotFeed.sol";
 import {IManager} from "../../src/interfaces/IManager.sol";
-import {IBaseLyraFeed} from "../../src/interfaces/IBaseLyraFeed.sol";
-import {BaseLyraFeed} from "../../src/feeds/BaseLyraFeed.sol";
+import {IBaseNumoFeed} from "../../src/interfaces/IBaseNumoFeed.sol";
+import {BaseNumoFeed} from "../../src/feeds/BaseNumoFeed.sol";
 
 interface IOwnableLike {
   function owner() external view returns (address);
@@ -331,14 +331,14 @@ contract MarginEngineV2DeployFork is Test {
   ///////////////////
 
   function _publishForward(int96 diff) internal {
-    IBaseLyraFeed.FeedData memory feedData = IBaseLyraFeed.FeedData({
+    IBaseNumoFeed.FeedData memory feedData = IBaseNumoFeed.FeedData({
       data: abi.encode(params.expiry, uint(0), uint(0), diff, uint64(1e18)),
       timestamp: uint64(block.timestamp),
       deadline: block.timestamp + 5,
       signers: new address[](1),
       signatures: new bytes[](1)
     });
-    BaseLyraFeed feed = BaseLyraFeed(address(d.forwardFeed));
+    BaseNumoFeed feed = BaseNumoFeed(address(d.forwardFeed));
     bytes32 structHash =
       keccak256(abi.encode(feed.FEED_DATA_TYPEHASH(), keccak256(feedData.data), feedData.deadline, feedData.timestamp));
     (uint8 v, bytes32 r, bytes32 sig) =

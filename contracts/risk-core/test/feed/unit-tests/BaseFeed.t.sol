@@ -3,11 +3,11 @@ pragma solidity ^0.8.18;
 
 import "forge-std/Test.sol";
 
-import "../../../src/feeds/LyraSpotFeed.sol";
-import "./LyraFeedTestUtils.sol";
+import "../../../src/feeds/NumoSpotFeed.sol";
+import "./NumoFeedTestUtils.sol";
 
-contract UNIT_LyraSpotFeed is LyraFeedTestUtils {
-  LyraSpotFeed feed;
+contract UNIT_NumoSpotFeed is NumoFeedTestUtils {
+  NumoSpotFeed feed;
 
   bytes32 domainSeparator;
 
@@ -18,7 +18,7 @@ contract UNIT_LyraSpotFeed is LyraFeedTestUtils {
   address private pkOwner2;
 
   function setUp() public {
-    feed = new LyraSpotFeed();
+    feed = new NumoSpotFeed();
     domainSeparator = feed.domainSeparator();
 
     // set signer
@@ -33,7 +33,7 @@ contract UNIT_LyraSpotFeed is LyraFeedTestUtils {
     feed.addSigner(pkOwner2, true);
   }
 
-  // shared function in BaseLyraFeed
+  // shared function in BaseNumoFeed
 
   function testDomainSeparator() public {
     assertEq(feed.domainSeparator(), domainSeparator);
@@ -51,14 +51,14 @@ contract UNIT_LyraSpotFeed is LyraFeedTestUtils {
   }
 
   function testCannotSetSignerRequiredToZero() public {
-    vm.expectRevert(IBaseLyraFeed.BLF_InvalidRequiredSigners.selector);
+    vm.expectRevert(IBaseNumoFeed.BLF_InvalidRequiredSigners.selector);
     feed.setRequiredSigners(0);
   }
 
   function testCanUseMultipleSigners() public {
     feed.setRequiredSigners(2);
 
-    IBaseLyraFeed.FeedData memory spotData = _getDefaultSpotDataMultipleSigners(2);
+    IBaseNumoFeed.FeedData memory spotData = _getDefaultSpotDataMultipleSigners(2);
     bytes32 structHash = hashFeedData(feed, spotData);
 
     // signed by pk
@@ -79,17 +79,17 @@ contract UNIT_LyraSpotFeed is LyraFeedTestUtils {
   }
 
   function testCannotUpdateWithNoSigners() public {
-    IBaseLyraFeed.FeedData memory spotData = _getDefaultSpotDataMultipleSigners(0);
+    IBaseNumoFeed.FeedData memory spotData = _getDefaultSpotDataMultipleSigners(0);
     bytes memory data = abi.encode(spotData);
 
-    vm.expectRevert(IBaseLyraFeed.BLF_NotEnoughSigners.selector);
+    vm.expectRevert(IBaseNumoFeed.BLF_NotEnoughSigners.selector);
     feed.acceptData(data);
   }
 
   function testCannotUpdateIfNotEnoughSigners() public {
     feed.setRequiredSigners(2);
 
-    IBaseLyraFeed.FeedData memory spotData = _getDefaultSpotDataMultipleSigners(1);
+    IBaseNumoFeed.FeedData memory spotData = _getDefaultSpotDataMultipleSigners(1);
     bytes32 structHash = hashFeedData(feed, spotData);
 
     // signed by pk
@@ -99,14 +99,14 @@ contract UNIT_LyraSpotFeed is LyraFeedTestUtils {
 
     bytes memory data = abi.encode(spotData);
 
-    vm.expectRevert(IBaseLyraFeed.BLF_NotEnoughSigners.selector);
+    vm.expectRevert(IBaseNumoFeed.BLF_NotEnoughSigners.selector);
     feed.acceptData(data);
   }
 
   function testCannotUseSameSigner() public {
     feed.setRequiredSigners(2);
 
-    IBaseLyraFeed.FeedData memory spotData = _getDefaultSpotDataMultipleSigners(2);
+    IBaseNumoFeed.FeedData memory spotData = _getDefaultSpotDataMultipleSigners(2);
     bytes32 structHash = hashFeedData(feed, spotData);
 
     // signatures[0]: signed by pk
@@ -119,24 +119,24 @@ contract UNIT_LyraSpotFeed is LyraFeedTestUtils {
     spotData.signers[1] = pkOwner;
 
     bytes memory data = abi.encode(spotData);
-    vm.expectRevert(IBaseLyraFeed.BLF_DuplicatedSigner.selector);
+    vm.expectRevert(IBaseNumoFeed.BLF_DuplicatedSigner.selector);
     feed.acceptData(data);
   }
 
   function testCannotSubmitMismatchedData() public {
-    IBaseLyraFeed.FeedData memory spotData = _getDefaultSpotDataMultipleSigners(3);
+    IBaseNumoFeed.FeedData memory spotData = _getDefaultSpotDataMultipleSigners(3);
     spotData.signatures = new bytes[](0);
     spotData.signers[0] = pkOwner;
     bytes memory data = abi.encode(spotData);
 
-    vm.expectRevert(IBaseLyraFeed.BLF_SignatureSignersLengthMismatch.selector);
+    vm.expectRevert(IBaseNumoFeed.BLF_SignatureSignersLengthMismatch.selector);
     feed.acceptData(data);
   }
 
   function testCannotUseSameSigner2() public {
     feed.setRequiredSigners(3);
 
-    IBaseLyraFeed.FeedData memory spotData = _getDefaultSpotDataMultipleSigners(3);
+    IBaseNumoFeed.FeedData memory spotData = _getDefaultSpotDataMultipleSigners(3);
     bytes32 structHash = hashFeedData(feed, spotData);
 
     // signed by pk
@@ -153,21 +153,21 @@ contract UNIT_LyraSpotFeed is LyraFeedTestUtils {
     spotData.signers[2] = pkOwner;
 
     bytes memory data = abi.encode(spotData);
-    vm.expectRevert(IBaseLyraFeed.BLF_DuplicatedSigner.selector);
+    vm.expectRevert(IBaseNumoFeed.BLF_DuplicatedSigner.selector);
     feed.acceptData(data);
   }
 
   function testCanHashFeedData() public view {
-    IBaseLyraFeed.FeedData memory spotData = _getDefaultSpotDataMultipleSigners(3);
+    IBaseNumoFeed.FeedData memory spotData = _getDefaultSpotDataMultipleSigners(3);
     feed.hashFeedData(spotData);
   }
 
-  function _getDefaultSpotDataMultipleSigners(uint numSigners) internal view returns (IBaseLyraFeed.FeedData memory) {
+  function _getDefaultSpotDataMultipleSigners(uint numSigners) internal view returns (IBaseNumoFeed.FeedData memory) {
     uint96 price = 1000e18;
     uint64 confidence = 1e18;
     bytes memory spotData = abi.encode(price, confidence);
 
-    return IBaseLyraFeed.FeedData({
+    return IBaseNumoFeed.FeedData({
       data: spotData,
       timestamp: uint64(block.timestamp),
       deadline: block.timestamp + 5,

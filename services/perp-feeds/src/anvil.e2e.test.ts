@@ -110,10 +110,10 @@ describe('publishers against real feed contracts on anvil', { skip: !RPC }, () =
 
   before(async () => {
     feeds.submitter = await deploy('OracleDataSubmitter.sol', 'OracleDataSubmitter');
-    feeds.index = await deploy('LyraSpotFeed.sol', 'LyraSpotFeed');
-    feeds.mark = await deploy('LyraSpotDiffFeed.sol', 'LyraSpotDiffFeed', [feeds.index]);
-    feeds.ask = await deploy('LyraSpotDiffFeed.sol', 'LyraSpotDiffFeed', [feeds.index]);
-    feeds.bid = await deploy('LyraSpotDiffFeed.sol', 'LyraSpotDiffFeed', [feeds.index]);
+    feeds.index = await deploy('NumoSpotFeed.sol', 'NumoSpotFeed');
+    feeds.mark = await deploy('NumoSpotDiffFeed.sol', 'NumoSpotDiffFeed', [feeds.index]);
+    feeds.ask = await deploy('NumoSpotDiffFeed.sol', 'NumoSpotDiffFeed', [feeds.index]);
+    feeds.bid = await deploy('NumoSpotDiffFeed.sol', 'NumoSpotDiffFeed', [feeds.index]);
     for (const feed of [feeds.index, feeds.mark, feeds.ask, feeds.bid]) {
       await send(feed, 'addSigner', [signer.address, true]);
       await send(feed, 'setHeartbeat', [1200n]);
@@ -126,7 +126,7 @@ describe('publishers against real feed contracts on anvil', { skip: !RPC }, () =
     await publicClient.request({ method: 'evm_mine' as never, params: [] as never });
   });
 
-  it('publishes an index the LyraSpotFeed accepts, inverted to USDC per cNGN', async () => {
+  it('publishes an index the NumoSpotFeed accepts, inverted to USDC per cNGN', async () => {
     const cfg = config();
     const clock = { now: Date.now() };
     const publisher = new IndexPublisher(cfg, createChain(cfg), fixedProviders([1374, 1372, 1376]), async () => {}, () => clock.now, parity);
@@ -150,7 +150,7 @@ describe('publishers against real feed contracts on anvil', { skip: !RPC }, () =
     assert.deepEqual(after, before);
   });
 
-  it('publishes mark and impacts the LyraSpotDiffFeeds accept, from a book', async () => {
+  it('publishes mark and impacts the NumoSpotDiffFeeds accept, from a book', async () => {
     const cfg = config();
     const [index] = (await publicClient.readContract({ address: feeds.index, abi: ownerAbi, functionName: 'getSpot' })) as [bigint, bigint];
     const E18 = 10n ** 18n;

@@ -1,7 +1,7 @@
 /**
  * Settling expired options (cNGN options on MarginEngine v2). Pure: chain.ts reads the holdings, this decides.
  *
- * Why the keeper does it: an option's vol cannot be published past its expiry (LyraVolFeed refuses data stamped after
+ * Why the keeper does it: an option's vol cannot be published past its expiry (NumoVolFeed refuses data stamped after
  * it), so once the last surface ages out (30 minutes) an account still holding an expired option cannot be margined,
  * and so cannot trade, withdraw or be liquidated, until `settleOptions(option, account)` turns the option into cash at
  * the settlement price. That price is the dated future's own (FutureFixingSettlementFeed): fixed from the index at
