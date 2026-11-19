@@ -87,7 +87,9 @@ variable "image_markets" {
   # execution). Rollback is 4ccb4698fec1, in one apply.
   # 2026-11-19: main 22fe88df (EURC-31DEC26 listed; /book-depth finds a series on any book market and reports
   # market_id). Rollback is adef99f11bb8, in one apply.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:22fe88df57b1"
+  # 2026-11-19: main f52cc949 (BookCustodian relay: POST /custodian on both, GET /custodian/accounts on the API;
+  # CUSTODIAN_* env). Rollback is 22fe88df57b1 with custodian_address = "", in one apply.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:f52cc9490002"
 }
 
 variable "image_execution" {
@@ -106,7 +108,9 @@ variable "image_execution" {
   # execution). Rollback is c39ec1128990, in one apply.
   # 2026-11-19: main 22fe88df (EURC-31DEC26 listed; /book-depth finds a series on any book market and reports
   # market_id). Rollback is adef99f11bb8, in one apply.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/execution:22fe88df57b1"
+  # 2026-11-19: main f52cc949 (BookCustodian relay: POST /custodian on both, GET /custodian/accounts on the API;
+  # CUSTODIAN_* env). Rollback is 22fe88df57b1 with custodian_address = "", in one apply.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/execution:f52cc9490002"
 }
 
 variable "secret_backend" {
