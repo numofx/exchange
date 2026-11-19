@@ -1,4 +1,4 @@
-# BookCustodian: spec (2026-11-19; built, not deployed)
+# BookCustodian: spec (2026-11-19; built and reviewed once, not deployed)
 
 Option A of `onchain-fifo-book-scope.md`, decided by the owner 2026-11-19: a contract holds app users' trading
 accounts so the OnchainBooks can act on them, built now, and accounts migrate into it mid-series once it is reviewed.
@@ -7,77 +7,95 @@ EURC-31DEC26 lists on time on today's path (`Matching` + `BookTakeModule`). Noth
 Model: Phoenix's (accounts held by the exchange side, a wallet authority and a trading-only delegate), with our
 gasless relay in front. Perpl and Phoenix were read for this (`onchain-fifo-book-scope.md`).
 
-## Guarantees (the contract is built around these; each is a test)
+Code: `src/periphery/BookCustodian.sol`. Tests: `test/fork/BookCustodianFork.t.sol`.
 
-1. **Only the user's wallet withdraws, and only to itself.** A trading key can take (and, with FIFO, post and cancel)
-   but never withdraw, exit, delegate or change keys.
+## Guarantees (each is a test)
+
+1. **Only the user's wallet withdraws, and only to itself.** A trading key can take, and act through modules the
+   owner allowed for keys (`KeyModule`); never withdraw, exit, use any other module, clear grants or change keys.
 2. **The exit always works.** `exit(accountId)`, called by the wallet itself, sends the account (the SubAccounts NFT,
-   with its positions and balances) to the wallet. No relayer, no admin, no pause, no cooldown can block it.
+   with its positions and balances) to the wallet, and first zeroes every allowance the custodian left on it. No
+   relayer, no admin, no pause, no allowlist, no cooldown can block it.
 3. **No admin path to balances.** The owner (the vault) has no function that moves an account, a balance or a
-   position. The contract is not upgradeable and has no `delegatecall`.
-4. **A book or module gets power over accounts only after a 48-hour timelock.** Approving a book on SubAccounts gives
-   it standing power over every account the custodian holds, so `allowBook` is queued and executable after 48 h,
-   leaving users time to exit. Revoking is immediate (it only removes power).
-   *As built, stronger:* nothing ever holds standing power. A book or module is ERC-721 approved on the one account
-   in the call (`SubAccounts.approve`), cleared afterwards, and the call reverts unless the account is still the
-   custodian's (`BC_AccountLeft`). No `setApprovalForAll`, ever. Managers and deposit assets are on the same
-   timelocked allowlist: a relayer pairing a wallet's permit with an unlisted "asset" could otherwise keep the tokens.
+   position. Not upgradeable, no `delegatecall`. A test pins the whole external surface from the compiled ABI.
+4. **Nothing is ever ERC-721 approved on an account.** An approved address could re-delegate the account to itself
+   (`setAssetAllowances`), which outlives the call (the 2026-11-19 review proved it, F1). Instead:
+   - a **book** gets SubAccounts subId allowances for exactly the signed order: its size on the series, in its
+     direction, and its `maxFee` on cash (an immutable of the custodian, not the book's say), zeroed after the call;
+   - a **module** gets only the allowances the signer lists in the signed `Act` (`grants`): zeroed after the call, or,
+     with `persist` (a resting order's power to settle), recorded per account (at most 16) until the wallet calls
+     `clearGrants` or exits;
+   - books, modules, key modules, managers and deposit assets are usable only 48 hours after the owner queues them,
+     so users can leave first. Disallowing is immediate. A disallowed module's persisted grants stay until the wallet
+     clears them or exits (the wallet's own choice; no admin path touches them).
 5. **A signature authorizes one action once.** EIP-712, per-signer nonces, a deadline; the account is part of what is
    signed, so a signature for one account cannot act on another.
 
 What it cannot promise (the layer below, as today): the vault's admin powers on SubAccounts' assets and the
-MarginEngine (freezes, caps), liquidation under maintenance margin, and token issuers' freezes.
-
-## State
-
-| | |
-|---|---|
-| `accountOwner[accountId]` | the wallet the account belongs to; zero for an account the custodian does not hold |
-| `tradingKey[wallet]` | `{key, validUntil}`: one trading-only delegate per wallet |
-| `nonceUsed[signer][nonce]` | replay protection, per signer |
-| `allowed[kind][target]`, `eta[kind][target]` | one allowlist and queue for managers, deposit assets, books and modules |
-| `paused` | the owner may pause new takes and module actions; never exit, withdraw or key changes |
+MarginEngine (freezes, caps), liquidation under maintenance margin, and token issuers' freezes. An account's manager
+can move the account (SubAccounts authorizes it); a take or action during which that happens reverts.
 
 ## Functions
 
 **Accounts and deposits** (anyone may relay; the signer is what is checked):
-- `openAccount(wallet, manager)`, by anyone (an empty account harms no one, so no signature): `SubAccounts.createAccount`
-  under an allowed manager (MarginEngine v2), recorded to the wallet.
-- `depositWithPermit(accountId, asset, amount, permit)`: EIP-2612 permit from the account's own wallet, then the
-  asset's `deposit`. A failed permit is tolerated (it may have been front-run); the tokens can only go from the
-  account's wallet into that wallet's account. USDC and EURC support permits on Base (read 2026-11-19); cNGN does not, so cNGN uses
-  `deposit(accountId, asset, amount)` after an ERC-20 `approve`, as the app does today.
-- `onERC721Received` / `depositAccount`: a wallet sends its own SubAccounts account in; recorded to the sender. Only
-  accounts under an allowed manager.
+- `openAccount(wallet, manager)`, by anyone (an empty account harms no one): `SubAccounts.createAccount` under an
+  allowed manager (MarginEngine v2), recorded to the wallet.
+- `deposit(accountId, asset, amount)`: the caller's own tokens after an ERC-20 `approve` (cNGN has no permit).
+- `depositWithPermit(accountId, asset, amount, deadline, v, r, s)`: EIP-2612 permit from the account's own wallet
+  (USDC and EURC on Base). A relayer's call needs the permit to succeed, or, if it was front-run, exactly `amount`
+  approved; only the wallet itself can use a standing approval (review F3).
+- `onERC721Received`: a wallet sends its own account in with `safeTransferFrom`; recorded to it. The operator must be
+  the owner (review F4: never an approved operator or manager), and the account under an allowed manager.
 
-**Trading** (signed by the wallet or its trading key; relayed by anyone, so the venue's relayer is a convenience, not
-a gate):
-- `take(TakeAuth, sig)`: the book's `take` for the account, as `BookTakeModule` does today, with `reduceOnly` as the
-  router does. The custodian is the account's owner, so `take` authorizes it directly; no lending.
-- Module actions (FIFO post, cancel, change later): `act(module, accountId, data, sig)`. For the call the custodian
-  approves the module on that one account (`SubAccounts.approve(module, accountId)`), calls it, then revokes. A module
-  is an allowlisted, timelocked contract, so FIFO arrives without a new custodian or a second migration.
+**Trading**:
+- `take(Take, signature, reports)`: the book's `take` for the account, all-or-nothing as signed, self-trade Abort.
+  `reports` are Data Streams reports the book verifies, so a relayer may attach fresh ones (review F8). `reduceOnly`
+  cuts the size to the opposing position, in whole lots (review F6).
+- `act(Action, signature)`: an allowed module's `onAct(accountId, wallet, signer, data)`, with the signed grants. The
+  module is told who signed (review F2).
+- `clearGrants(accountId)`: the wallet zeroes every persisted grant.
 
 **Leaving** (the wallet only):
-- `withdraw(accountId, asset, amount, deadline, sig)` or the wallet calling it directly: the asset's `withdraw` to the
-  wallet, never elsewhere. The engine refuses one below initial margin, as now. The venue's "no borrowed cash out"
-  rule stays in markets-service for relayed withdrawals; a direct withdrawal is the user's own call.
-- `exit(accountId)`: the wallet only, `msg.sender` checked, no signature path needed: the NFT to the wallet and the
-  record deleted. Also `exitFor` with the wallet's signature, so a relayer can do it for a wallet with no ETH.
+- `withdraw(accountId, asset, amount)` from the wallet, or `withdrawFor(..., nonce, deadline, signature)` with the
+  wallet's own signature: the asset's `withdraw` to the wallet, never elsewhere. The engine refuses one below initial
+  margin. The venue's "no borrowed cash out" rule stays in markets-service for relayed withdrawals.
+- `exit(accountId)` from the wallet, or `exitFor(accountId, nonce, deadline, signature)`. An account the engine has
+  already moved out just has its record cleared.
 
-**Keys**: `setTradingKey(key, validUntil)` and `revokeTradingKey()`, the wallet only (direct or signed).
+**Keys**: `setTradingKey(key, validUntil)` from the wallet (zero key revokes), or `setTradingKeyFor` with its
+signature. `cancelNonce(nonce)` burns any of the caller's nonces.
 
-**Owner (vault)**: `queue`, `cancelQueued`, `enable` (48 h after queueing), `disallow` (immediate), `setPaused`;
-nothing else. `Ownable2Step`. The constructor may allow entries at once: before deployment there are no accounts.
-`exit` of an account the engine has moved out (its manager may) just clears the record.
+**Owner (vault)**: `queue`, `cancelQueued`, `enable` (48 h after queueing), `disallow` (immediate), `setPaused`
+(takes and actions only); `Ownable2Step`. The constructor may allow entries at once: before deployment there are no
+accounts.
 
 ## Signed types (EIP-712, domain `NumoBookCustodian`, version `1`, Base)
 
-`Take` (accountId, book, marketId, isBuy, amount, limitPrice, minFill, maxFee, deadline, maxLevels, reduceOnly,
-nonce), `Act` (accountId, module, keccak(data), nonce, deadline), `Withdraw` (accountId, asset, amount, nonce,
-deadline), `Exit` (accountId, nonce, deadline), `SetTradingKey` (wallet, key, validUntil, nonce, deadline). Type strings
-are the `*_TYPEHASH` constants. Any signer can burn a nonce with `cancelNonce`. EIP-1271
-for contract wallets, so a smart wallet can sign.
+The type strings are the `*_TYPEHASH` constants:
+`Take(uint256 accountId,address book,uint256 marketId,bool isBuy,uint256 amount,uint256 limitPrice,uint256 minFill,uint256 maxFee,uint64 deadline,uint16 maxLevels,bool reduceOnly,uint256 nonce)`,
+`Act(uint256 accountId,address module,bytes data,Grant[] grants,bool persist,uint256 nonce,uint64 deadline)` with
+`Grant(address asset,uint256 subId,uint256 positive,uint256 negative)`,
+`Withdraw(uint256 accountId,address asset,uint256 amount,uint256 nonce,uint64 deadline)`,
+`Exit(uint256 accountId,uint256 nonce,uint64 deadline)`,
+`SetTradingKey(address wallet,address key,uint64 validUntil,uint256 nonce,uint64 deadline)`.
+`takeDigest` and `actDigest` return what to sign.
+
+## Notes for the services and the app (from the review)
+
+- **Contract wallets** (review F5): OpenZeppelin's `SignatureChecker` uses only EIP-1271 for an address with code,
+  EIP-7702-delegated EOAs included. A wallet whose delegate has no `isValidSignature` cannot use the signed paths;
+  direct `exit` and `withdraw` still work. The app checks `code.length` before offering a relayed path.
+- **`maxFee` binds the priority tax too** (F8): the relayer chooses the gas price, and OnchainBook charges a priority
+  tax on it (0 on both live books, read 2026-11-19; the book owner can raise it). The app signs a tight `maxFee`.
+- **Key rotation** (F9): rotating a key away and back revives the old key's unexpired, unused signatures. Takes are
+  signed with 60 s deadlines, so this is narrow; the app never reuses a key.
+- **Account discovery** from the custodian's events only, never `ownerOf == custodian`: anyone can create accounts
+  owned by the custodian that it never recorded (`createAccountWithApproval(custodian, …)`), and those are inert.
+- **`CashAsset.forceWithdraw`** pays `ownerOf(account)`, which would be the custodian, with no way out. It is
+  manager-only and MarginEngine does not call it today; a manager change that does would need a custodian change.
+- **FIFO self-trade identity** (F7): OnchainBook's self-trade check compares owners, and every custodian account has
+  the same owner. A FIFO book or module must compare recorded wallets (`accountOwner`), or custodian users could never
+  trade with one another.
 
 ## Migration out of `Matching`
 
@@ -87,14 +105,14 @@ for contract wallets, so a smart wallet can sign.
 - **Accounts with an open position** keep it by moving the account itself: the wallet's `requestWithdrawAccount`
   (one transaction), the venue's `completeWithdrawAccount` 30 minutes later, then the wallet's
   `safeTransferFrom(wallet, custodian, id)` (a second). Two wallet transactions with gas; the venue may send the
-  wallet enough ETH for them.
-- **Flat accounts** move gaslessly: a signed `WithdrawalModule` withdrawal (today's), then `openAccountFor` and
+  wallet enough ETH for them. Tested on a fork with a position carried across and closed from the custodian.
+- **Flat accounts** move gaslessly: a signed `WithdrawalModule` withdrawal (today's), then `openAccount` and
   `depositWithPermit` into a new custodian account. cNGN needs an `approve` first.
 - The app does it per user, with the account's state shown before and after. Our own accounts (#57, #61) go first.
 
 ## Services
 
-- **execution-service:** submits custodian calls (`take`, `act`, `withdraw`, `exitFor`, `openAccountFor`,
+- **execution-service:** submits custodian calls (`take`, `act`, `withdrawFor`, `exitFor`, `openAccount`,
   `depositWithPermit`) from the executor, policy-checked and simulated first as for `/book-take`.
 - **markets-service:** the owner check reads `accountOwner` (instead of `Matching.subAccountToOwner`) for custodian
   accounts; `/book-takes` gains the custodian path; account discovery from the custodian's events.
@@ -103,32 +121,28 @@ for contract wallets, so a smart wallet can sign.
 
 ## Tests
 
-As built: `test/fork/BookCustodianFork.t.sol` on the live SubAccounts, MarginEngine v2, cash, cNGN book and Matching.
-`testTheExternalSurfaceIsExactlyTheReviewedOne` pins every external function from the compiled ABI, so an added
-function (an admin path) fails CI until it is reviewed here. Not covered yet: exit of an account mid-auction (needs
-an underwater account on a fork), a FIFO module (none exists).
+`test/fork/BookCustodianFork.t.sol`, on the live SubAccounts, MarginEngine v2, cash, the cNGN book and Matching
+(37 tests). Each review finding has a `testReview*` test that failed against the first version. 42 mutations, each
+removing or weakening one guard, are each caught by the suite (run 2026-11-19).
 
-Unit and fork (live MarginEngine v2, the live books): every guarantee above as a test that fails when its guard is
-removed (break it, see it fail, put it back); a malicious module and a malicious book (queued, not yet allowed: no
-power; allowed: power only over the account in the call for a module); replay, wrong account, expired, a trading key
-trying to withdraw, exit, delegate; exit while paused; exit of an account under liquidation; migration both ways on a
-fork from a real `Matching` account.
+Not covered yet: exit of an account mid-auction (needs an underwater account on a fork); a real FIFO module (none
+exists; the tests use stand-in modules).
 
 ## Plan
 
-| | Work | Estimate |
+| | Work | Status |
 |---|---|---|
-| 1 | This spec, reviewed by the owner | now |
-| 2 | `BookCustodian` and its tests (unit, fork, guards broken and restored) | done 2026-11-19: `src/periphery/BookCustodian.sol`, `test/fork/BookCustodianFork.t.sol` (25 tests; 28 guard mutations, each caught) |
-| 3 | Internal adversarial review (a second pass, not the author's) and fixes | 1–2 days |
-| 4 | Deploy, books queued (48 h), our own accounts first | after 3 |
+| 1 | This spec, reviewed by the owner | done 2026-11-19 |
+| 2 | `BookCustodian` and its tests | done 2026-11-19 |
+| 3 | Adversarial review (not the author's) and fixes | first review and fixes done 2026-11-19; a fresh review of the fixed version next |
+| 4 | Deploy, our own accounts first | after 3; a separate go-ahead |
 | 5 | Services and app: relay paths, owner checks, migration flow, trading key | 3–4 days |
 | 6 | External audit before user accounts migrate at scale | lead time |
 
-## Decisions in this draft (change any)
+## Decisions (change any)
 
-- **48 h** timelock on books and modules.
-- **Modules** for future actions (FIFO), so there is one migration, ever.
+- **48 h** timelock on everything that gains power over accounts.
+- **Modules** for future actions (FIFO), with signed, bounded grants, so there is one migration, ever.
 - **Pause** covers takes and module actions only.
-- **One trading key** per wallet, with an expiry.
+- **One trading key** per wallet, with an expiry; keys reach only `KeyModule`s.
 - **Venue-funded gas** for the two migration transactions of accounts with open positions.
