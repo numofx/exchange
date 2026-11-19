@@ -207,6 +207,11 @@
           "nonce": 17,
           "hash": "0x7139d44e35bb02206807b2ec0b8b8ebc87e0aa1dc3b2fffebbc0632442e51398",
           "note": "deploy-book-take-module.s.sol: BookTakeModule.transferOwnership(vault)"
+        },
+        {
+          "nonce": 18,
+          "hash": "0x3cf921ee6326a8724331a13c991c4bf5e92cf0cd391dc790105609b94a31e74b",
+          "note": "deploy-book-custodian.s.sol: CREATE BookCustodian 0xD8EBF2216Fd4ECA79272E76ad22131592EA0dfd6 (owner the vault from the constructor; allowed: engine v2, both books, cash and the EURC asset)"
         }
       ]
     }

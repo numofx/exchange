@@ -1,8 +1,14 @@
-# BookCustodian: spec (2026-11-19; built, reviewed twice, not deployed)
+# BookCustodian: spec (2026-11-19; built, reviewed twice, deployed, not yet used)
 
 Option A of `onchain-fifo-book-scope.md`, decided by the owner 2026-11-19: a contract holds app users' trading
 accounts so the OnchainBooks can act on them, built now, and accounts migrate into it mid-series once it is reviewed.
-EURC-31DEC26 lists on time on today's path (`Matching` + `BookTakeModule`). Nothing here is deployed.
+EURC-31DEC26 lists on time on today's path (`Matching` + `BookTakeModule`).
+
+**Deployed** 2026-11-19 16:44 UTC on Base: `0xD8EBF2216Fd4ECA79272E76ad22131592EA0dfd6` (block 59,581,388, tx
+`0x3cf921ee…e74b`, deployer `0x4FECe…263f` nonce 18; `deployments/8453/BOOK_CUSTODIAN.json`). Owner the vault from the
+constructor. Allowed at construction: MarginEngine v2, the EURC v2 and cNGN books, cash (USDC) and the EURC asset. The
+cNGN asset is not whitelisted on engine v2, so it is not allowed. No modules. Nothing uses it until the services and
+app do; no external audit yet, so no user accounts before one.
 
 Model: Phoenix's (accounts held by the exchange side, a wallet authority and a trading-only delegate), with our
 gasless relay in front. Perpl and Phoenix were read for this (`onchain-fifo-book-scope.md`).
@@ -152,7 +158,7 @@ exists; the tests use stand-in modules).
 | 1 | This spec, reviewed by the owner | done 2026-11-19 |
 | 2 | `BookCustodian` and its tests | done 2026-11-19 |
 | 3 | Adversarial review (not the author's) and fixes | two independent reviews, 2026-11-19; the second found nothing above low; its lows fixed |
-| 4 | Deploy, our own accounts first | after 3; a separate go-ahead |
+| 4 | Deploy, our own accounts first | deployed 2026-11-19 (`scripts/deploy-book-custodian.s.sol`, `test/fork/DeployBookCustodianFork.t.sol`); our accounts not yet moved |
 | 5 | Services and app: relay paths, owner checks, migration flow, trading key | 3–4 days |
 | 6 | External audit before user accounts migrate at scale | lead time |
 
