@@ -2269,3 +2269,32 @@ needs nothing from here, except that the `spot.ts` edit below must be discarded 
 
 Not changed: `INDEX_STATUS_PUSH_URL` keeps `/v1/internal/index-status`, which is still served. `exchange-perp`'s
 `dist/book.js` still says `/v1/book`, because no running service uses that checkout's feeds.
+
+## 2026-11-19: checkouts moved onto the rewritten history
+
+`main` was rewritten and force-pushed (`7f9e7e01` -> `65e48c5d`): the upstream v2 histories became two import commits and
+every later commit was replayed with the same tree, so every hash changed. Old -> new is in
+`infra/aws/history-rewrite-commit-map.txt`. No file under any checkout changed: each move below is to the commit with
+the byte-identical tree (checked on the box before each checkout), and gitignored files such as the patched
+`dist/book.js` are untouched. Nothing was restarted.
+
+Moved (`git fetch origin main && git checkout --detach <new>`, as ec2-user):
+
+| checkout | old | new |
+|---|---|---|
+| `exchange-eurc-depth` | `acd87d4c` | `3078e888` |
+| `exchange-feeds` | `1c7c8386` | `8f98ddc1` |
+| `exchange-future-v2` | `840526ab` | `40bc05b0` |
+| `exchange-future-v3` | `eab54d37` | `a783f8f8` |
+| `exchange-keeper-v2` | `5cae8100` | `720b05db` |
+| `exchange-ops` | `8e10ce27` | `643fa10a` |
+| `exchange-vol` | `6466668a` | `c49ade76` |
+
+Left on the old history because their trees are dirty (every dirty file equals a committed version or is recorded above;
+none is unrecorded work). Their new equivalents: `exchange` (`main`, shallow) `bf9da895` -> `9d54e560`;
+`exchange-pager` `21dc4238` -> `0a241df3`; `exchange-perp` (`ops-main`) `af584bca` -> `0142047c`; `exchange-rebalance`
+`4cbb7e77` -> `cdc6fe0e`. **Never `git pull` in these:** it fails with "refusing to merge unrelated histories", and
+forcing it merges the old history back. Move with `git fetch origin main && git checkout <new>` (the dirty files carry
+over, since the trees are identical) or re-clone.
+
+`exchange-future` and `exchange-engine-keeper`, named in older entries, no longer exist on the box.
