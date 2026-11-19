@@ -30,6 +30,17 @@ trading-app `eaed4a4`). Option total position under v2 was 0 beforehand: no trad
     heartbeat 3 s. `/markets` lists no options.
   - **Rollback:** revert `7d18810d`'s two infra defaults and apply, then fund #44 again and set its count back.
 
+## 2026-11-19 ~02:25 UTC: v1 MarginEngine deployer swept to the cNGN forward relayer and the feed signer (chain)
+
+- **Sent by the owner** from `0x67DB5d0070E6d9A8F9684e97FaA4342603f0F737` (local keystore `numo-me-deployer`, not in
+  SSM), idle since the v1 deploy:
+  - 0.0008 ETH → forward relayer v2 cNGN `0x3ACe…763f`, tx `0x78e53ba3424e37e37b8b9ae1a8b1ff03953a110ed6634724ea36fe8d11cfdcb8`
+    (block 59,318,245);
+  - 0.002 ETH → feed signer `0xC9F1…0FDc`, tx `0xf87a117195cb0b40338ed3e0fd132d4fc93844fe9ac2539c3369fa7fb43a0363`
+    (block 59,318,298).
+- **After:** deployer 0.000106; relayer 0.001136 (~22.7 days, past the 30 Nov expiry); feed signer 0.009371 (~7.8
+  days). Balance alert rerun on the box: every wallet `ok`, no LOW GAS. The feed signer still needs ~0.01 before 30 Nov.
+
 ## 2026-11-19 02:03–02:10 UTC: vol feed stopped, its relayer's ETH to the executor (SSM, chain)
 
 - **Owner's decision** ("stop the vol feed and send 0.0019 ETH from 0xE5b8 to the executor"), after options were
