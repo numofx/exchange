@@ -5,6 +5,17 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-19 ~06:45 UTC: EURC-31DEC26 keeper live (listing run-sheet L3, L5) (owner, SSM `c39dbd9b-…`)
+
+- **L3:** the owner sent 0.015 ETH to the relayer `0x35eeBd8E94F9c4a6b13EBa9fD676f7d0fDa8bDD5` (read back 0.015020).
+  Not the run-sheet's 0.02: measured just before, the 30NOV26 keeper's relayer `0x0AbA…12e5` spent 0.000288 ETH and
+  275 transactions in 24 h (blocks 59,326,352–59,369,552), a tenth of the 0.0029/day its balance-check rate assumes;
+  0.015 covers the series to 31 Dec with room.
+- **L5:** `DRY_RUN=false` in `/etc/numo/future-feeds-v3-eurc-31dec26.env` (backup `.bak-dryrun`; the repo's copy set
+  to match), restart. First mark `0x616ea54bb35678e52a587600d99c6997904c48e7064f0a401366072765eb6f63` (status 1):
+  `futureContracts(1798729200).markPrice` 1.098378 (carry, on index 1.096464), read back on chain. Reports posted
+  `0x8971b8f3…`. `forward-mark-late` clears with it.
+
 ## 2026-11-19 ~06:10 UTC: EURC-31DEC26 keeper installed in dry run (listing run-sheet L5, first half) (SSM `88ca2d4e-…`)
 
 - `/etc/numo/future-feeds-v3-eurc-31dec26.env` from `exchange-ops`'s copy (sha-checked against main's, `c6618899…`,
