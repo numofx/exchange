@@ -30,6 +30,22 @@ trading-app `eaed4a4`). Option total position under v2 was 0 beforehand: no trad
     heartbeat 3 s. `/markets` lists no options.
   - **Rollback:** revert `7d18810d`'s two infra defaults and apply, then fund #44 again and set its count back.
 
+## 2026-11-19 ~02:10 UTC: v1's keeper and forward-feed units removed from the box (SSM `5b64692f-…`)
+
+- **Owner's decision:** v1 fully gone, after the delisting above. Both units were disabled and inactive (since
+  2026-10-28); only comments in the v2 units named them, and no unit, timer or cron used their checkouts.
+- **Moved, not deleted,** to `/home/ec2-user/retired-v1-20261119/`: `numo-future-feeds.service`,
+  `numo-engine-keeper.service` and its `.d` drop-in; `/etc/numo/future-feeds.env`, `engine-keeper.env` and their
+  `.bak-*`; the checkouts `exchange-future` and `exchange-engine-keeper` (525 MB each). `daemon-reload`; both units
+  now "could not be found". `numo-engine-keeper-v2`, `numo-future-feeds-v2@cngn-30nov26` and
+  `numo-future-feeds-v3@eurc-30nov26` still active. Undo: move them back and `daemon-reload`.
+- **Repo:** the four templates deleted (`engine-keeper.env`, `future-feeds.env`, `numo-engine-keeper.service`,
+  `numo-future-feeds.service`); comments naming them updated (v2 units, perp-feeds README and forward-main,
+  DEPLOYED_ADDRESSES now points EURC_SPOT_FEED at engine-keeper-v2.env).
+- **Not done:** the v1 MarginEngine deployer `0x67DB5d0070E6d9A8F9684e97FaA4342603f0F737` holds 0.0029 ETH; its key
+  is not in SSM (likely the owner's local keystore), so the owner sweeps it. `0xE5b8…ae6de` (v1's forward relayer)
+  is NOT v1-only: the cNGN options vol feed has sent from it since 2026-11-02.
+
 ## 2026-11-19 01:48–01:52 UTC: USDC-cNGN-30NOV26 (v1) delisted; its stopped maker's service deleted (ECS)
 
 - **Owner's decision:** retire USDC-cNGN-30NOV26 completely. FutureAsset `0xDCFa…1Bc19` under MarginEngine v1

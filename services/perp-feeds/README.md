@@ -165,9 +165,10 @@ the contract's `minMarkInterval` plus `FORWARD_TICK_MS`, which an on-time mark w
 cannot be reached at startup it stays up, retrying each minute and alerting
 `forward-signer-unavailable`, rather than crash-looping under systemd; a signing failure later alerts
 `forward-sign-failed`. Config: `src/forward-config.ts`. Unit:
-`numo-future-feeds.service`, secrets through `run-with-ssm-forward.sh`, non-secret config in
-`/etc/numo/future-feeds.env` (`contracts/risk-core/scripts/ops/future-feeds.env`, as installed). Running on
-the ops box since 2026-10-13 for USDC-cNGN-30NOV26, from its own checkout `/home/ec2-user/exchange-future`.
+`numo-future-feeds-v2@<series>.service` / `numo-future-feeds-v3@<series>.service`, secrets through
+`run-with-ssm-forward.sh`, non-secret config in `/etc/numo/future-feeds-v*-<series>.env` (templates in
+`contracts/risk-core/scripts/ops/`). v1's `numo-future-feeds.service` (USDC-cNGN-30NOV26, 2026-10-13) was removed
+on 2026-11-19 with its series.
 
 `src/forward.anvil.e2e.test.ts` runs it against the real `LyraSpotFeed`, `LyraForwardFeed`,
 `FutureAsset` and `OracleDataSubmitter` on anvil, and `src/expiry.anvil.e2e.test.ts` runs a real fixing

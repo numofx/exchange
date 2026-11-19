@@ -11,8 +11,8 @@ import { installRpcCounter } from './rpc-count.js';
 import { StreamsPoster, adapterAbi, indexFeedAbi, signedReportSource, standInReportSource, type ReportSource } from './streams-poster.js';
 
 /**
- * The keeper for a dated future, one unit per series (numo-future-feeds.service for v1's
- * USDC-cNGN-30NOV26, numo-future-feeds-v2@<series>.service for each v2 series): its own signer,
+ * The keeper for a dated future, one unit per series (numo-future-feeds-v2@ / -v3@<series>.service;
+ * v1's numo-future-feeds.service was removed 2026-11-19): its own signer,
  * held in KMS, and its own relayer. Each tick runs the forward publisher (forward-publisher.ts: marks
  * until last trade), then the VM pool's deficit cover and the expiry keeper (expiry-keeper.ts: losers
  * settled while the pool's net is below zero; fixing samples, the fixing, and close-out). Their writes

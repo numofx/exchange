@@ -352,7 +352,7 @@ Steps, in order:
 2. `scripts/ops/propose_eurc_spot_batch.py --propose` from the ops box — configure. Refuses unless the engine has
    exactly one market before `createMarket` and exactly two after it.
 3. Services live with the escrow: markets-service (`EURC_SPOT_ASSET_ADDRESS`), the engine keeper (`EURC_ESCROW`,
-   `EURC_SPOT_FEED` in `scripts/ops/engine-keeper.env`), the maker (`infra/aws/market-maker-eurc.tf`).
+   `EURC_SPOT_FEED` in `scripts/ops/engine-keeper-v2.env`), the maker (`infra/aws/market-maker-eurc.tf`).
 4. `--batch enable --rehearsed --propose` — `setWhitelistManager(engine, true)`, the switch that opens deposits.
    **Depth stress gate:** the proposer takes a fresh `eurc_depth` reading and refuses unless 50% of the 2% sell depth
    *without the main pool's largest LP* is at least the on-chain cap. That depth is the main pool re-swapped locally
