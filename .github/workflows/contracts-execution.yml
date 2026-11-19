@@ -52,7 +52,7 @@ jobs:
           # DepositModuleForkTest is the only proof the live DepositModule opens and funds a perp
           # account -- what POST /v1/deposits relies on -- so it gets the same guard.
           # BookTakeModuleForkTest is the only proof a signed take fills on the live OnchainBook through Matching.
-          for suite in TradeModuleWrappedQuoteForkTest DepositModuleForkTest BookTakeModuleForkTest; do
+          for suite in TradeModuleWrappedQuoteForkTest DepositModuleForkTest BookTakeModuleForkTest DeployBookTakeModuleForkTest; do
             out=$(forge test --match-contract "$suite" -vv)
             echo "$out"
             grep -qE 'Suite result: ok\..*0 skipped' <<<"$out" || {
