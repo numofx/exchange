@@ -5,6 +5,23 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-19 03:27 UTC: BookTakeModule deployed, inert until the vault batch (chain)
+
+- **Owner's decision:** let the trading app's users take from the OnchainBooks for the 30NOV26 series without gas
+  or a new account: a Matching module that takes for the account it is handed (`BookTakeModule`, `f6592e4e`).
+- **Deployed** by `deploy-book-take-module.s.sol` (`b0b24fab`) from the risk-core deployer `0x4FECe…263f`
+  (SSM `/numo/deploy/onchain_book_v2_deployer_key`, read into a subshell), nonces 14–17, all status 1:
+  - CREATE `BookTakeModule` **`0x1D1FcAa8C1677dF51dda4F26bc391B91b98dEBE3`** (`0xcdfe9fc8…c023`, block 59,342,355);
+  - `setBookAllowed(EURC book 0x83C5…89d5, true)` (`0x1cc76c95…dbb4`), `setBookAllowed(cNGN book 0x5a35…8Bd4,
+    true)` (`0x3d93027a…0350`), `transferOwnership(vault)` (`0x7139d44e…1398`, 59,342,384).
+  - Dry run first (0.000021 ETH estimated); the deployer keeps 0.000115 ETH. Recorded in
+    `DEPLOYER_AUDITED_TXS.json` (others, 0x4FECe, nonces 14–17).
+- **Read back:** owner the deployer, pendingOwner the vault, Matching = `0x9E90…F191`, both books allowed and approved
+  on SubAccounts, `Matching.allowedModules(module)` false: inert.
+- **Next:** the vault batch, one action at a time via `propose_book_take_module.py` (from the ops box): 0
+  `acceptOwnership` (digest `0x38fade2f…1d99`), then 1 `Matching.setAllowedModule(module, true)` (`0x0d31fcf6…fb32`).
+  Proven on a fork (`DeployBookTakeModuleForkTest`): refused before the batch, a signed take fills on both books after.
+
 ## 2026-11-19 02:47 UTC: rebalance check disabled with spot (SSM `93bc165a-…`)
 
 - **Owner's decision**, after spot was delisted and its makers emptied: `systemctl disable --now

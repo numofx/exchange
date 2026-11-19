@@ -1,0 +1,18 @@
+[
+  {
+    "description": "bookTake.acceptOwnership() [CUSTODY - before the switch: the owner allows books, and an allowed book moves positions and cash in the accounts the module holds]",
+    "caller": "vault",
+    "to": "0x1D1FcAa8C1677dF51dda4F26bc391B91b98dEBE3",
+    "value": "0",
+    "data": "0x79ba5097",
+    "digest": "0x38fade2ffe763854822b81da5c99b67c479054ff825a1d0138c3a3debd3b1d99"
+  },
+  {
+    "description": "matching.setAllowedModule(bookTake, true) [THE ENABLING SWITCH: Matching then runs signed book takes]",
+    "caller": "vault",
+    "to": "0x9E90A9cD13d859Bd6a08168082FB1F6F7405F191",
+    "value": "0",
+    "data": "0xb1b628250000000000000000000000001d1fcaa8c1677df51dda4f26bc391b91b98debe30000000000000000000000000000000000000000000000000000000000000001",
+    "digest": "0x0d31fcf6353699db30732a44b55582cef30a2baf9ea10f81ccd5ba07ee1afb32"
+  }
+]

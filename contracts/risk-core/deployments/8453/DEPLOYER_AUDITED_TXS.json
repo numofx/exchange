@@ -187,6 +187,26 @@
           "nonce": 13,
           "hash": "0xa1cd18278050f69fdd8722c1cbaada9e61744f6f54de61014ad4fe30ecfcb1a0",
           "note": "cNGN OnchainBook deploy (deploy-onchain-book-cngn.s.sol at 1cc624c, 2026-11-18): create OnchainBookRouter. Reviewed: ONCHAIN_BOOK_CNGN.json; the key reused by name (USED_DEPLOYER)."
+        },
+        {
+          "nonce": 14,
+          "hash": "0xcdfe9fc876cc088b4ef6996e052e86633dde63b84053b9e008fb6c48f266c023",
+          "note": "deploy-book-take-module.s.sol: CREATE BookTakeModule 0x1D1FcAa8C1677dF51dda4F26bc391B91b98dEBE3"
+        },
+        {
+          "nonce": 15,
+          "hash": "0x1cc76c955b6df84e0bc29df81eb7707f0bb7f03d616da13a05aaced2dd8acdb4",
+          "note": "deploy-book-take-module.s.sol: BookTakeModule.setBookAllowed(EURC-30NOV26 book 0x83C5\u202689d5, true)"
+        },
+        {
+          "nonce": 16,
+          "hash": "0x3d93027a916b23fceca5ff9594c58699d82d6d6282e50c4fd5e3d6565e180350",
+          "note": "deploy-book-take-module.s.sol: BookTakeModule.setBookAllowed(cNGN-30NOV26 book 0x5a35\u20268Bd4, true)"
+        },
+        {
+          "nonce": 17,
+          "hash": "0x7139d44e35bb02206807b2ec0b8b8ebc87e0aa1dc3b2fffebbc0632442e51398",
+          "note": "deploy-book-take-module.s.sol: BookTakeModule.transferOwnership(vault)"
         }
       ]
     }
