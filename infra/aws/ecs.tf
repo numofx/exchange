@@ -12,8 +12,12 @@ locals {
   # future_series' manager (v2). Accounts are probed through their own manager and the wrappers' backing sums
   # totalPosition across these, so an engine missing here would leave its accounts unwatched and its escrow
   # positions uncounted (a false BACKING MISMATCH once anything is deposited under it).
+  #
+  # MarginEngine v1 by its address: its series is delisted (2026-11-19, cngn_future_* empty) but the engine still holds
+  # escrow credit (0.000001 cNGN), and the wrapper check sums every engine's.
+  margin_engine_v1 = "0xA19E296021c9DF25b90D96C2A0793CC3D0800758"
   canary_other_managers = distinct([
-    for a in concat([var.cngn_future_manager_address], [for s in var.future_series : s.manager_address]) : lower(a)
+    for a in compact(concat([local.margin_engine_v1, var.cngn_future_manager_address], [for s in var.future_series : s.manager_address])) : lower(a)
   ])
   # The makers' accounts, each only once it is set: spot (#34), the v1 future (#32), EURC-USDC (#36), and the v2
   # futures (#39 cNGN-30NOV26, #40 EURC-30NOV26), and the options maker (market-maker-options.tf), whose getMargin

@@ -301,20 +301,24 @@ variable "cngn_perp_close_only" {
   }
 }
 
+# MarginEngine v1's USDC-cNGN-30NOV26 (FutureAsset 0xDCFa…1Bc19 under 0xA19E…0758), DELISTED 2026-11-19 (owner's
+# decision): flat since 2026-10-31 (totalPosition 0, cap 0), no maker since that day, nothing to settle. All three empty
+# lists nothing (markets-service: "all three or none"). v1's engine stays watched by the canary (ecs.tf
+# local.margin_engine_v1). Relisting is these three defaults and close_only back.
 variable "cngn_future_asset_address" {
   type    = string
-  default = "0xDCFa4Ee0772647aBd24E8592596b5fe4F001Bc19" # FutureAsset
+  default = ""
 }
 
 variable "cngn_future_expiry" {
-  description = "The series' expiry (its subId), unix seconds. 1796047200 = 2026-11-30 14:00 UTC."
+  description = "The series' expiry (its subId), unix seconds. Was 1796047200 (2026-11-30 14:00 UTC) until delisted."
   type        = string
-  default     = "1796047200"
+  default     = ""
 }
 
 variable "cngn_future_manager_address" {
   type    = string
-  default = "0xA19E296021c9DF25b90D96C2A0793CC3D0800758" # MarginEngine
+  default = ""
 }
 
 # MarginEngine v2 step 4 (risk-core docs/margin-engine-v2.md): v1's series above is listed close-only
@@ -322,7 +326,7 @@ variable "cngn_future_manager_address" {
 # while false, so adding the variable changes nothing deployed.
 variable "cngn_future_close_only" {
   type    = bool
-  default = true
+  default = false # markets-service refuses it without the series
 }
 
 # Further futures series, listed beside the cngn_future_* one (markets-service FUTURE_SERIES, README

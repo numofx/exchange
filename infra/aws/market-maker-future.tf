@@ -1,3 +1,6 @@
+# RETIRED 2026-11-19 with its series (cngn_future_asset_address empty: no service, no task definition; the log group
+# keeps its history).
+#
 # The USDC-cNGN-30NOV26 market maker: the cNGN future under the MarginEngine, quoted on its own model
 # (market-maker #35). The same mm-bot repository and MM key as the spot and perp makers, from its own
 # account under the engine, as its own service so it can be stopped or rolled back alone.
@@ -55,7 +58,7 @@ variable "mm_future_carry_rate_apr" {
 }
 
 resource "aws_ecs_task_definition" "market_maker_future" {
-  count                    = var.image_market_maker_future == "" ? 0 : 1
+  count                    = var.image_market_maker_future == "" || var.cngn_future_asset_address == "" ? 0 : 1
   family                   = "${var.name}-market-maker-future"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
@@ -153,7 +156,7 @@ resource "aws_ecs_task_definition" "market_maker_future" {
 
 # Stop before start, as for the spot and perp makers: two bots on one book.
 resource "aws_ecs_service" "market_maker_future" {
-  count           = var.image_market_maker_future == "" ? 0 : 1
+  count           = var.image_market_maker_future == "" || var.cngn_future_asset_address == "" ? 0 : 1
   name            = "market-maker-future"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.market_maker_future[0].arn

@@ -30,6 +30,23 @@ trading-app `eaed4a4`). Option total position under v2 was 0 beforehand: no trad
     heartbeat 3 s. `/markets` lists no options.
   - **Rollback:** revert `7d18810d`'s two infra defaults and apply, then fund #44 again and set its count back.
 
+## 2026-11-19 01:48–01:52 UTC: USDC-cNGN-30NOV26 (v1) delisted; its stopped maker's service deleted (ECS)
+
+- **Owner's decision:** retire USDC-cNGN-30NOV26 completely. FutureAsset `0xDCFa…1Bc19` under MarginEngine v1
+  `0xA19E…0758`: `totalPosition(v1)` 0 and `totalPositionCap(v1)` 0 (read 01:3x; flat since 2026-10-31), its maker
+  stopped 2026-10-31, keeper and forward feed disabled since 2026-10-28. Nobody holds it, so nothing settles on 30 Nov.
+- **Change** (laptop, terraform 1.13.3 from main): `cngn_future_asset_address`, `_expiry`, `_manager_address` empty
+  and `cngn_future_close_only` false (markets-service: "all three or none"; close-only refused without the series).
+  Proved first by loading markets-service's config from the live task's env with them blanked: lists `cNGN-30NOV26`
+  and `EURC-30NOV26` only. The settlement canary keeps v1's engine by address (`local.margin_engine_v1`: it still
+  holds 0.000001 cNGN of escrow credit); execution-service's task definition did not change. `market-maker-future`
+  is gated on the series too: its service and task definition destroyed (it was at 0), the log group kept.
+- **Applied** 01:48:24–01:48:53 (2 add, 2 change, 4 destroy; env-only on markets-service and matcher, images unchanged).
+  Old tasks STOPPED by 01:52:08. Matching gap: old matcher stopping 01:48:48, new started 01:49:43, ~55 s.
+- **After:** `/markets` lists EURC-30NOV26, EURC-USDC, cNGN-30NOV26, cNGN-USDC; `/book?symbol=USDC-cNGN-30NOV26` is
+  `unknown_market`; spot books unchanged (8/8, 4/4); no errors in either service's logs.
+- **Undo:** restore the four variables (`0xDCFa…1Bc19`, `1796047200`, `0xA19E…0758`, close_only true) and apply.
+
 ## 2026-11-19 01:07–01:11 UTC: execution-service c39ec112: the settlement canary scans in chunks again (ECS)
 
 - **Why.** Since `SEND_RPC_URL` (`/numo/exchange/rpc_fallback_url`) moved to publicnode during the Alchemy outage, the
