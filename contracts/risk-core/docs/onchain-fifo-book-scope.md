@@ -51,6 +51,25 @@ makers multiplies counterparties, so:
 
 Post, cancel and change touch only the book (no settlement): ~60–120k gas, in Perpl's range.
 
+**Measured 2026-11-19 (phase 0)**, `test/fork/SettlementBatchGasFork.t.sol`: N makers each sell the taker one
+cNGN-30NOV26 contract on the live MarginEngine v2 (block 59,357,000), every account cold, the taker's 15 bps fee to
+account 22 with each fill. Settlement gas only (the book's walk is extra):
+
+| Counterparties | One batch each (`_settle` today) | One batch for the take | Saved |
+|---|---|---|---|
+| 1 | 846k | 836k | — |
+| 2 | 1.41M | 1.21M | 14% |
+| 4 | 2.54M | 2.00M | 21% |
+| 8 | 4.80M | 3.71M | 23% |
+
+- Each further counterparty: ~564k today, ~411k batched. Batching drops the taker's repeated margin check (~150k); the
+  remaining ~410k is the counterparty account's own check, removable only by reserving margin in the engine.
+- At Base's 0.006 gwei: 8 counterparties ~0.000022 ETH, 16 ~0.000042 ETH (~$0.13 at $3k). Gas does not rule FIFO
+  out on the current engine. **No engine change for v1.**
+- **Decision:** settle a take in one batch; cap distinct counterparties at 16 (~7M gas settled). One failing
+  counterparty reverts a whole batch, so on a revert the take falls back to per-counterparty batches with today's
+  skip-and-re-plan (B5a), paying the ~150k each only when something fails.
+
 ### 3. Size: the book is at the contract size limit
 
 `OnchainBook` is 23,563 bytes of runtime code; EIP-170 allows 24,576. The FIFO code cannot be added inline. Put it
