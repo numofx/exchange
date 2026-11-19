@@ -375,6 +375,17 @@ variable "future_series" {
     contract_size   = "1000"
     amount_scale    = "1000000000000000" # 1 EURC: 1e18 per 1,000 EURC contract
     taker_fee_bps   = 5                  # as v2's: EURC-USDC spot's 5
+    }, {
+    # EURC-31DEC26 (listing run-sheet L6): listed on the v3 future 2026-11-18 (L4), expiry Thu 2026-12-31 15:00 UTC,
+    # last trade 14:30. Its book is market 2 on the EURC v2 OnchainBook (next-series run-sheet).
+    asset_address   = "0xC350243c1d07Ff598770ECe12323799D2EFbB227"
+    expiry          = 1798729200
+    manager_address = "0x0705219a1594d5Fc5dC2573da4082cAf3e1B0950"
+    kind            = "linear"
+    base_asset      = "EURC"
+    contract_size   = "1000"
+    amount_scale    = "1000000000000000" # 1 EURC: 1e18 per 1,000 EURC contract
+    taker_fee_bps   = 5
   }]
 
   validation {
