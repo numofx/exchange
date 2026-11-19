@@ -21,7 +21,7 @@ export const PROVISIONAL_SPONSORED_GAS = 1_000_000n;
 
 export type GateOptions = {
   /** "deposits" or "withdrawals": names the pause in messages and alerts. */
-  subject: 'deposits' | 'withdrawals';
+  subject: GateSubject;
   /** The 503 a paused request is refused with: the subject's own rejection error. */
   reject: (message: string) => Error;
   /** Absent for withdrawals: no floor. */
@@ -33,6 +33,11 @@ export type GateOptions = {
   now?: () => number;
   log?: (level: 'info' | 'error', message: string, fields: Record<string, unknown>) => void;
 };
+
+export type GateSubject = 'deposits' | 'withdrawals' | 'book takes';
+const FLOOR_NOUN: Record<GateSubject, string> = { deposits: 'deposit', withdrawals: 'withdrawal', 'book takes': 'book-take' };
+/** A log event name: `book_takes_paused`, never one with a space. */
+const slug = (subject: GateSubject) => subject.replace(' ', '_');
 
 type Pause = { kind: 'floor' | 'budget'; message: string };
 
@@ -100,7 +105,7 @@ export class SponsorGate {
         kind: 'floor',
         message:
           `${this.opts.subject} are paused: the executor holds ${formatEther(balance)} ETH, below the ${formatEther(floor)} ETH ` +
-          `${this.opts.subject === 'deposits' ? 'deposit' : 'withdrawal'} floor that keeps a gas reserve for settlement; retry later`,
+          `${FLOOR_NOUN[this.opts.subject]} floor that keeps a gas reserve for settlement; retry later`,
       };
     }
     return this.budgetReason();
@@ -125,9 +130,9 @@ export class SponsorGate {
     this.paused = pause;
     if (!changed && !due) return;
     this.lastAlertAt = this.now();
-    this.log('error', `${this.opts.subject}_paused`, { kind: pause.kind, reason: pause.message });
-    const others = this.opts.subject === 'deposits' ? 'withdrawals' : 'deposits';
-    await this.alert(`NUMO ${this.opts.subject.toUpperCase()} PAUSED\n${pause.message}\nSettlement and ${others} are unaffected.`);
+    this.log('error', `${slug(this.opts.subject)}_paused`, { kind: pause.kind, reason: pause.message });
+    const others = (Object.keys(FLOOR_NOUN) as GateSubject[]).filter((other) => other !== this.opts.subject).join(' and ');
+    await this.alert(`NUMO ${this.opts.subject.toUpperCase()} PAUSED\n${pause.message}\nSettlement, ${others} are unaffected.`);
   }
 
   private async resume(): Promise<void> {
@@ -135,7 +140,7 @@ export class SponsorGate {
     const was = this.paused.kind;
     this.paused = undefined;
     this.lastAlertAt = 0;
-    this.log('info', `${this.opts.subject}_resumed`, { was });
+    this.log('info', `${slug(this.opts.subject)}_resumed`, { was });
     await this.alert(`NUMO ${this.opts.subject.toUpperCase()} RESUMED\nThe ${was === 'floor' ? 'executor balance is above the floor' : 'hourly gas budget has room'} again.`);
   }
 
@@ -145,7 +150,7 @@ export class SponsorGate {
     try {
       await (this.opts.post ?? defaultPost)(url, text);
     } catch (error) {
-      this.log('error', `${this.opts.subject}_alert_failed`, { error: error instanceof Error ? error.message : String(error) });
+      this.log('error', `${slug(this.opts.subject)}_alert_failed`, { error: error instanceof Error ? error.message : String(error) });
     }
   }
 }

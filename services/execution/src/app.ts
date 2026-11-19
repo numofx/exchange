@@ -8,6 +8,7 @@ import type { MatchExecutor } from './executor.js';
 import { depositRequestSchema, executeMatchRequestSchema, withdrawRequestSchema } from './types.js';
 import { WithdrawalRejectedError } from './withdrawal.js';
 import { DepositRejectedError } from './deposit.js';
+import { BookTakeRejectedError } from './book-take.js';
 
 export function buildApp(args: {
   config: AppConfig;
@@ -20,6 +21,8 @@ export function buildApp(args: {
   withdrawal?: { moduleAddress: `0x${string}`; assetAddresses: readonly `0x${string}`[] };
   /** Submits sponsored deposits. Absent unless DEPOSITS_ENABLED; POST /deposit then answers 503. */
   depositor?: Pick<MatchExecutor, 'deposit'>;
+  /** Submits signed OnchainBook takes. Absent unless configured; POST /book-take then answers 503. */
+  bookTaker?: Pick<MatchExecutor, 'bookTake'>;
   /** Where the request log goes; stdout when absent. Tests pass one to read what a failure logged. */
   logStream?: { write(line: string): void };
 }): FastifyInstance {
@@ -49,6 +52,7 @@ export function buildApp(args: {
   app.post('/execute', async (req, reply) => handleExecute(args.executor, req.body, reply));
   app.post('/withdraw', async (req, reply) => handleWithdraw(args.withdrawer, req.body, reply));
   app.post('/deposit', async (req, reply) => handleDeposit(args.depositor, req.body, reply));
+  app.post('/book-take', async (req, reply) => handleBookTake(args.bookTaker, req.body, reply));
 
   return app;
 }
@@ -101,6 +105,25 @@ async function handleDeposit(depositor: Pick<MatchExecutor, 'deposit'> | undefin
       return reply
         .code(error.status)
         .send(error.revert === undefined ? { error: error.message } : { error: error.message, revert: error.revert });
+    }
+    return sendError(reply, error);
+  }
+}
+
+/**
+ * 200 with the receipt (or `receipt_status: 'timeout'`), 422 for a take that breaks policy or would revert, with
+ * `revert` naming the revert, and 503 when takes are off or paused (gas budget or executor floor).
+ */
+async function handleBookTake(bookTaker: Pick<MatchExecutor, 'bookTake'> | undefined, body: unknown, reply: FastifyReply) {
+  if (!bookTaker) {
+    return reply.code(503).send({ error: 'book takes are not enabled on this executor' });
+  }
+  try {
+    const request = withdrawRequestSchema.parse(body);
+    return reply.code(200).send(await bookTaker.bookTake(request));
+  } catch (error) {
+    if (error instanceof BookTakeRejectedError) {
+      return reply.code(error.status).send(error.revert === undefined ? { error: error.message } : { error: error.message, revert: error.revert });
     }
     return sendError(reply, error);
   }

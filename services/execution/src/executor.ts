@@ -41,6 +41,7 @@ import {
   describeSimulationRevert,
   withdrawalRevertErrorsAbi,
 } from './withdrawal.js';
+import { BookTakeRejectedError, type BookTakeRequest, assertBookTakePolicy, bookTakeRevertErrorsAbi } from './book-take.js';
 
 export type ExecutorDependencies = {
   matchingAbi: Abi;
@@ -61,6 +62,8 @@ export type ExecutorDependencies = {
   };
   /** Sponsored deposits. Absent unless DEPOSITS_ENABLED; `deposit` then refuses. */
   deposit?: NonNullable<AppConfig['deposit']>;
+  /** Signed OnchainBook takes through BookTakeModule. Absent unless configured; `bookTake` then refuses. */
+  bookTake?: NonNullable<AppConfig['bookTake']> & { alertWebhookUrl?: string };
 };
 
 export class MatchExecutor {
@@ -76,6 +79,8 @@ export class MatchExecutor {
   readonly depositGate?: SponsorGate;
   /** Gas budget (no floor) for sponsored withdrawals; undefined unless withdrawals are configured. */
   readonly withdrawalGate?: SponsorGate;
+  /** Floor and gas budget for book takes; undefined unless they are configured. */
+  readonly bookTakeGate?: SponsorGate;
   /**
    * Deposits by action hash, so a retried request (a client timeout, a double click) gets the same result instead of
    * a second broadcast. Kept for two hours: an action expires within one, after which it could not be resubmitted
@@ -139,6 +144,17 @@ export class MatchExecutor {
         maxGasWeiPerHour: deps.withdrawal.maxGasWeiPerHour,
         readBalance,
         alertWebhookUrl: deps.withdrawal.alertWebhookUrl,
+        log,
+      });
+    }
+    if (deps.bookTake) {
+      this.bookTakeGate = new SponsorGate({
+        subject: 'book takes',
+        reject: (message) => new BookTakeRejectedError(message, undefined, 503),
+        minExecutorWei: deps.bookTake.minExecutorWei,
+        maxGasWeiPerHour: deps.bookTake.maxGasWeiPerHour,
+        readBalance,
+        alertWebhookUrl: deps.bookTake.alertWebhookUrl,
         log,
       });
     }
@@ -319,6 +335,56 @@ export class MatchExecutor {
       return { accepted: true, tx_hash: 'dry-run' };
     }
 
+    try {
+      const receipt = await this.publicClient.waitForTransactionReceipt({
+        hash: txHash,
+        timeout: this.config.withdrawalReceiptTimeoutMs,
+      });
+      gate.record(receiptCostWei(receipt));
+      return buildReceiptResponse(txHash, receipt);
+    } catch (error) {
+      if (error instanceof WaitForTransactionReceiptTimeoutError) {
+        gate.record(PROVISIONAL_SPONSORED_GAS * (await this.publicClient.getGasPrice().catch(() => 0n)));
+        return { accepted: false, tx_hash: txHash, receipt_status: 'timeout' };
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Submits one user-signed BookTakeModule action through `Matching.verifyAndMatch`: a take on the OnchainBook for
+   * the signed account, the venue paying gas. Policy first (book-take.ts), then a simulation with the module's, the
+   * book's and the engine's errors in the ABI, so a take the chain would refuse is refused by name and costs nothing;
+   * only then the floor and budget, and the send, in the same queue as settlements. Past the receipt timeout the
+   * outcome is reported as unknown, never as failed: the transaction may still mine.
+   */
+  async bookTake(request: BookTakeRequest): Promise<ExecuteMatchResponse> {
+    const bookTake = this.deps.bookTake;
+    if (!bookTake) {
+      throw new BookTakeRejectedError('book takes are not enabled on this executor', undefined, 503);
+    }
+    assertBookTakePolicy(request, {
+      moduleAddress: bookTake.moduleAddress,
+      bookAddresses: bookTake.bookAddresses,
+      nowSeconds: Math.floor(Date.now() / 1000),
+    });
+    const gate = this.bookTakeGate!;
+    await gate.check();
+    const abi = [...this.deps.matchingAbi, ...bookTakeRevertErrorsAbi] as Abi;
+    const txHash = await this.submitVerifyAndMatch(buildWithdrawArgs(request), {
+      abi,
+      onSimulationError: (error) => {
+        const revert = describeSimulationRevert(error);
+        if (revert !== undefined) {
+          throw new BookTakeRejectedError(`take would revert: ${revert}`, revert);
+        }
+        throw error;
+      },
+      beforeSend: () => gate.assertBudget(),
+    });
+    if (txHash === 'dry-run') {
+      return { accepted: true, tx_hash: 'dry-run' };
+    }
     try {
       const receipt = await this.publicClient.waitForTransactionReceipt({
         hash: txHash,

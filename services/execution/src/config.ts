@@ -42,6 +42,14 @@ const envSchema = z.object({
   // ETH of gas sponsored withdrawals may spend per rolling hour, measured from receipts; past it, 503. Separate from
   // the deposit budget, and with no executor floor: a user can always withdraw while the executor can pay.
   WITHDRAWAL_MAX_GAS_ETH_PER_HOUR: z.string().regex(/^\d+(\.\d+)?$/).default('0.002'),
+  // Signed takes on the OnchainBook (POST /book-take). Off unless both are set: the module, and the books this executor
+  // submits takes on (BookTakeModule's own allowlist is the chain's check; this is the executor's).
+  BOOK_TAKE_MODULE_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
+  BOOK_TAKE_BOOKS: z.string().default(''),
+  // ~1M gas a take (one maker settled): 0.003 ETH an hour is a few hundred takes at today's base fee.
+  BOOK_TAKE_MAX_GAS_ETH_PER_HOUR: z.string().regex(/^\d+(\.\d+)?$/).default('0.003'),
+  // Takes stop while the executor holds less than this, so trading never spends the gas withdrawals need.
+  BOOK_TAKE_MIN_EXECUTOR_ETH: z.string().regex(/^\d+(\.\d+)?$/).default('0.004'),
   // Signed deposits (POST /deposit). Off unless DEPOSITS_ENABLED is "true" and the module, the assets and the
   // manager are all named; see deposit.ts. The venue pays gas for every deposit, so it is opt-in and budgeted.
   DEPOSITS_ENABLED: z.union([z.literal('true'), z.literal('false')]).default('false'),
@@ -117,6 +125,13 @@ export type AppConfig = {
   withdrawalAssetAddresses: `0x${string}`[];
   withdrawalReceiptTimeoutMs: number;
   withdrawalMaxGasWeiPerHour: bigint;
+  /** Undefined unless BOOK_TAKE_MODULE_ADDRESS and BOOK_TAKE_BOOKS are both set. */
+  bookTake?: {
+    moduleAddress: `0x${string}`;
+    bookAddresses: `0x${string}`[];
+    maxGasWeiPerHour: bigint;
+    minExecutorWei: bigint;
+  };
   alertWebhookUrl?: string;
   /** Undefined unless DEPOSITS_ENABLED and every address is set. */
   deposit?: {
@@ -193,6 +208,7 @@ export function loadConfig(): AppConfig {
     withdrawalAssetAddresses: parseAddressList('WITHDRAWAL_ASSET_ADDRESSES', parsed.WITHDRAWAL_ASSET_ADDRESSES),
     withdrawalReceiptTimeoutMs: parsed.WITHDRAWAL_RECEIPT_TIMEOUT_MS,
     withdrawalMaxGasWeiPerHour: parseEther(parsed.WITHDRAWAL_MAX_GAS_ETH_PER_HOUR),
+    bookTake: parseBookTakeConfig(parsed),
     alertWebhookUrl: parsed.ALERT_WEBHOOK_URL ? parsed.ALERT_WEBHOOK_URL : undefined,
     deposit: parseDepositConfig(parsed),
     settlementCanary: parsed.SETTLEMENT_CANARY_MANAGER
@@ -366,4 +382,24 @@ export function loadDeploymentAddresses(chainId: number): {
 } {
   const d = getDeployment(chainId);
   return { matching: d.matching, trade: d.trade, withdrawal: d.withdrawal };
+}
+
+export function parseBookTakeConfig(parsed: {
+  BOOK_TAKE_MODULE_ADDRESS?: string;
+  BOOK_TAKE_BOOKS: string;
+  BOOK_TAKE_MAX_GAS_ETH_PER_HOUR: string;
+  BOOK_TAKE_MIN_EXECUTOR_ETH: string;
+}): AppConfig['bookTake'] {
+  const books = parseAddressList('BOOK_TAKE_BOOKS', parsed.BOOK_TAKE_BOOKS);
+  if (!parsed.BOOK_TAKE_MODULE_ADDRESS && books.length === 0) return undefined;
+  // Half-configured is a misconfiguration, not "off": refuse to start rather than run a policy with no books.
+  if (!parsed.BOOK_TAKE_MODULE_ADDRESS || books.length === 0) {
+    throw new Error('BOOK_TAKE_MODULE_ADDRESS and BOOK_TAKE_BOOKS must be set together');
+  }
+  return {
+    moduleAddress: getAddress(parsed.BOOK_TAKE_MODULE_ADDRESS) as `0x${string}`,
+    bookAddresses: books,
+    maxGasWeiPerHour: parseEther(parsed.BOOK_TAKE_MAX_GAS_ETH_PER_HOUR),
+    minExecutorWei: parseEther(parsed.BOOK_TAKE_MIN_EXECUTOR_ETH),
+  };
 }

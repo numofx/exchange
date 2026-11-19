@@ -74,6 +74,7 @@ const executor = await MatchExecutor.create(config, {
   additionalTradeModules: config.perpTradeModuleAddress ? [config.perpTradeModuleAddress] : [],
   withdrawal,
   deposit: config.deposit,
+  bookTake: config.bookTake ? { ...config.bookTake, alertWebhookUrl: config.alertWebhookUrl } : undefined,
 });
 
 const canaryOptions = settlementCanaryOptions(config, (level, message, fields) => {
@@ -84,6 +85,7 @@ canary?.start();
 // Reports a deposit pause (executor below its floor, or the hourly gas budget spent) even when nobody is depositing.
 executor.depositGate?.watch(300_000);
 executor.withdrawalGate?.watch(300_000);
+executor.bookTakeGate?.watch(300_000);
 
 const app = buildApp({
   config,
@@ -94,6 +96,7 @@ const app = buildApp({
   withdrawer: withdrawal ? executor : undefined,
   withdrawal,
   depositor: config.deposit ? executor : undefined,
+  bookTaker: config.bookTake ? executor : undefined,
 });
 
 app.listen({ host: config.host, port: config.port }).catch((error) => {
