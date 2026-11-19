@@ -734,3 +734,11 @@ variable "eurc_spot_delisted" {
   type    = bool
   default = true
 }
+
+# BookTakeModule (contracts/execution/deployments/8453/BOOK_TAKE_MODULE.json): signed takes on the OnchainBooks for
+# accounts Matching holds, the executor paying gas. Empty leaves POST /book-takes and /book-take off (503). Inert on
+# chain until the vault's batch (propose_book_take_module.py) has Matching allow it.
+variable "book_take_module_address" {
+  type    = string
+  default = "0x1D1FcAa8C1677dF51dda4F26bc391B91b98dEBE3"
+}

@@ -169,6 +169,19 @@ locals {
     { name = "EURC_SPOT_ASSET_ADDRESS", value = var.eurc_spot_asset_address },
   ]
 
+  # Signed OnchainBook takes through BookTakeModule (contracts/execution, 2026-11-19): POST /book-takes on the API,
+  # POST /book-take on execution-service, which submits them. Absent while book_take_module_address is empty.
+  book_take_books = join(",", [var.onchain_book_v2_maker_book, var.onchain_book_cngn_maker_book])
+  markets_book_take_env = var.book_take_module_address == "" ? [] : [
+    { name = "BOOK_TAKE_MODULE_ADDRESS", value = var.book_take_module_address },
+    { name = "BOOK_TAKE_BOOKS", value = local.book_take_books },
+    { name = "EXECUTOR_BOOK_TAKE_URL", value = "http://execution-service.${var.internal_namespace}:8081/book-take" },
+  ]
+  execution_book_take_env = var.book_take_module_address == "" ? [] : [
+    { name = "BOOK_TAKE_MODULE_ADDRESS", value = var.book_take_module_address },
+    { name = "BOOK_TAKE_BOOKS", value = local.book_take_books },
+  ]
+
   # Spot delisted (2026-11-19, owner): off /markets and the matcher, no orders, while the escrows stay deposit and
   # withdrawal assets (cNGN and EURC are futures collateral too). Absent while false, like eurc_spot_env.
   spot_delist_env = concat(
@@ -253,7 +266,7 @@ resource "aws_ecs_task_definition" "markets" {
       { name = "WITHDRAWAL_ASSET_ADDRESSES", value = local.withdrawal_asset_addresses },
       { name = "EXECUTOR_WITHDRAW_URL", value = "http://execution-service.${var.internal_namespace}:8081/withdraw" },
       { name = "EXECUTOR_WITHDRAW_TIMEOUT", value = "45s" },
-    ], local.future_env, local.markets_deposit_env, local.eurc_spot_env, local.spot_delist_env)
+    ], local.future_env, local.markets_deposit_env, local.eurc_spot_env, local.spot_delist_env, local.markets_book_take_env)
 
     secrets = [
       { name = "INDEX_STATUS_TOKEN", valueFrom = local.secret_arns.index_status_token },
@@ -495,6 +508,8 @@ resource "aws_ecs_task_definition" "execution" {
       var.executor_kms_signing ? [{ name = "EXECUTOR_KMS_KEY_ID", value = aws_kms_key.executor[0].arn }] : [],
       # Sponsored deposits; empty unless deposits_enabled (deposits.tf).
       local.execution_deposit_env,
+      # Signed OnchainBook takes; empty unless book_take_module_address.
+      local.execution_book_take_env,
     )
 
     secrets = concat(
