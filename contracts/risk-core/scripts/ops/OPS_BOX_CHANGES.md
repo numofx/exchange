@@ -5,6 +5,20 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-19 01:07–01:11 UTC: execution-service c39ec112: the settlement canary scans in chunks again (ECS)
+
+- **Why.** Since `SEND_RPC_URL` (`/numo/exchange/rpc_fallback_url`) moved to publicnode during the Alchemy outage, the
+  ECS canary's whitelist scan (one `getLogs` from the deploy block) was refused, so every invariant check "failed to
+  run": 200 consecutive red passes by 01:07:27 (about 3 h 20 m), as the box canary had been before `3d1cafc`.
+- **Fix** (`15fc964`, in image `execution:c39ec1128990`): 49,999-block chunks from block 51,998,433, resuming after a
+  failed pass. Proved first on the laptop with the live task's env and SSM RPCs (alerts and heartbeat unset): one
+  pass, `ok: true`, no failures, 141 s for the full scan.
+- **Deploy** (laptop, terraform 1.13.3 from main; the plan touched only execution-service's task definition and
+  service, image the only change): td :45, applied 01:07:09. The service runs at 0% minimum healthy, so the old task
+  stopped before the new one started (01:08:43): no settlement for about 1.5 min. First pass on the new task 01:10:52
+  `ok: true`, every pass since green. Rollback: `d2c409c4ef25`, in one apply.
+- **Still open:** executor deposits stay paused (0.002 ETH against the 0.006 floor) until it is funded.
+
 ## 2026-11-18 23:17–23:30 UTC: cNGN-30NOV26 cutover: #39 stopped, 2,700 USDC to #60, book enabled, maker live, canary (vault, chain, ECS)
 
 Owner approved the cutover, with enable proposed first, 2026-11-18.

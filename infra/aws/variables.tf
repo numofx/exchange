@@ -94,7 +94,10 @@ variable "image_execution" {
   # SEND_RPC_URL, the keyed endpoint). Rollback is 3fe2553fb2d2, in one apply.
   # 2026-11-17: main d2c409c (the settlement canary's whitelist scan through SEND_RPC_URL: the public RPC refuses a
   # full-range getLogs, so every invariant check had failed to run). Rollback is 917da470fdd4, in one apply.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/execution:d2c409c4ef25"
+  # 2026-11-18: main c39ec112 (15fc964: the whitelist scan walks 49,999-block chunks from the SRM's deploy block and
+  # resumes after a failed pass; publicnode, SEND_RPC_URL since the Alchemy outage, refuses wider). Rollback is
+  # d2c409c4ef25, in one apply.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/execution:c39ec1128990"
 }
 
 variable "secret_backend" {
