@@ -71,13 +71,12 @@ resource "aws_ecs_task_definition" "market_maker_book" {
       { name = "MM_BOOK_POLL_SECONDS", value = "5" },
       { name = "MM_BOOK_DRY_RUN", value = "false" },
       { name = "MM_SIGNER_BACKEND", value = "local" },
+      # var.book_maker_rpc_url (variables.tf): publicnode 403s a receipt lookup for an unmined tx, and the bot resent
+      # every 5 s cycle (2026-11-19).
+      { name = "MM_RPC_URL", value = var.book_maker_rpc_url },
     ]
     secrets = [
       { name = "MM_OWNER_PRIVATE_KEY", valueFrom = local.secret_arns.mm_private_key },
-      # The keyed endpoint, not mm_rpc_url: the maker sends transactions and waits for their receipts, and the public
-      # one (publicnode) refused a fresh receipt as an "archive request" (2026-11-16 21:47, after setCurve had landed).
-      # ~5 reads a 5 s cycle, ~90k calls a day, billed per call (secrets.tf).
-      { name = "MM_RPC_URL", valueFrom = local.secret_arns.rpc_fallback_url },
       # Pinged at most once a minute while the book is quoted; healthchecks.io alerts after 10 minutes without.
       { name = "MM_BOOK_HEARTBEAT_URL", valueFrom = local.secret_arns.book_maker_heartbeat_url },
     ]

@@ -91,7 +91,7 @@ func DefaultRegistry(cfg config.Config) *Registry {
 			QuoteAssetAddress:  strings.ToLower(strings.TrimSpace(cfg.QuoteAsset())),
 			// Set when spot runs on the perp stack (SPOT_MARGIN_MANAGER_ADDRESS = the perp SRM).
 			MarginManagerAddress: strings.ToLower(strings.TrimSpace(cfg.SpotMarginManagerAddress)),
-			Enabled:              strings.TrimSpace(cfg.CNGNSpotAssetAddress) != "",
+			Enabled:              strings.TrimSpace(cfg.CNGNSpotAssetAddress) != "" && !cfg.CNGNSpotDelisted,
 			UIPriceDecimals:      10,
 			UISizeDecimals:       6,
 		},
@@ -214,7 +214,7 @@ func eurcSpotMetadata(cfg config.Config) Metadata {
 		QuoteAssetAddress:  strings.ToLower(strings.TrimSpace(cfg.QuoteAsset())),
 		// Both spots are under the MarginEngine, so they share SPOT_MARGIN_MANAGER_ADDRESS.
 		MarginManagerAddress: strings.ToLower(strings.TrimSpace(cfg.SpotMarginManagerAddress)),
-		Enabled:              strings.TrimSpace(cfg.EURCSpotAssetAddress) != "",
+		Enabled:              strings.TrimSpace(cfg.EURCSpotAssetAddress) != "" && !cfg.EURCSpotDelisted,
 		// ~1.12 USDC per EURC: five places is a hundredth of a basis point.
 		UIPriceDecimals: 5,
 		UISizeDecimals:  6,

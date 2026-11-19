@@ -98,6 +98,12 @@ type Config struct {
 	// EURC, under the same MarginEngine, TradeModule and quote asset as cNGN spot. Empty: EURC-USDC is
 	// not listed. A withdrawable asset by default when set.
 	EURCSpotAssetAddress string
+	// CNGNSpotDelisted (CNGN_SPOT_DELISTED) and EURCSpotDelisted (EURC_SPOT_DELISTED) take a spot market off
+	// /markets and refuse its orders, the matcher loading it no more, while its escrow address stays: the
+	// escrows are also what cNGN and EURC are deposited into and withdrawn from (withdrawalAssets), and futures
+	// accounts hold them as collateral. Blanking the address instead would strand every holder.
+	CNGNSpotDelisted bool
+	EURCSpotDelisted bool
 	// SpotMarginManagerAddress is the manager the spot markets' accounts live under (both cNGN-USDC and
 	// EURC-USDC: they are under the same MarginEngine), when spot runs
 	// on the perp stack (the unified account): set to the perp SRM so the venue refuses spot orders
@@ -231,6 +237,8 @@ func Load() (Config, error) {
 
 		CNGNSpotAssetAddress:         strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_SPOT_ASSET_ADDRESS"))),
 		EURCSpotAssetAddress:         strings.ToLower(strings.TrimSpace(os.Getenv("EURC_SPOT_ASSET_ADDRESS"))),
+		CNGNSpotDelisted:             getenvBool("CNGN_SPOT_DELISTED", false),
+		EURCSpotDelisted:             getenvBool("EURC_SPOT_DELISTED", false),
 		SpotMarginManagerAddress:     strings.ToLower(strings.TrimSpace(os.Getenv("SPOT_MARGIN_MANAGER_ADDRESS"))),
 		CNGNPerpAssetAddress:         strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_ASSET_ADDRESS"))),
 		CNGNPerpTradeModuleAddress:   strings.ToLower(strings.TrimSpace(os.Getenv("CNGN_PERP_TRADE_MODULE_ADDRESS"))),

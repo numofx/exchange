@@ -111,10 +111,12 @@ resource "aws_ecs_task_definition" "market_maker_book_v2" {
       { name = "MM_BOOK_POLL_SECONDS", value = "5" },
       { name = "MM_BOOK_DRY_RUN", value = tostring(var.market_maker_book_v2_dry_run) },
       { name = "MM_SIGNER_BACKEND", value = "local" },
+      # var.book_maker_rpc_url (variables.tf): publicnode 403s a receipt lookup for an unmined tx, and the bot resent
+      # every 5 s cycle (2026-11-19).
+      { name = "MM_RPC_URL", value = var.book_maker_rpc_url },
     ]
     secrets = [
       { name = "MM_OWNER_PRIVATE_KEY", valueFrom = local.secret_arns.mm_private_key },
-      { name = "MM_RPC_URL", valueFrom = local.secret_arns.rpc_fallback_url },
       { name = "MM_BOOK_HEARTBEAT_URL", valueFrom = local.secret_arns_book_v2.book_maker_v2_heartbeat_url },
     ]
 

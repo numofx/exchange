@@ -28,7 +28,9 @@ locals {
   # its value floor ("too little held for getMargin on it to prove anything") for 27 hours, so a real settlement
   # failure on any other account would have read as the same red. A running maker's account is always watched.
   canary_accounts = compact(concat(
-    [var.mm_subaccount_id, var.desired_count_market_maker_future > 0 ? var.mm_future_subaccount_id : "", var.mm_eurc_subaccount_id],
+    # The spot makers (#42, #43) likewise since 2026-11-19, when both were stopped and emptied: $0 accounts read red.
+    [var.desired_count_market_maker > 0 ? var.mm_subaccount_id : "", var.desired_count_market_maker_future > 0 ? var.mm_future_subaccount_id : "",
+    var.desired_count_market_maker_eurc > 0 ? var.mm_eurc_subaccount_id : ""],
     [for k in sort(keys(var.mm_future_v2_subaccount_ids)) : var.mm_future_v2_subaccount_ids[k]],
     [var.mm_options_subaccount_id],
   ))
@@ -167,6 +169,13 @@ locals {
     { name = "EURC_SPOT_ASSET_ADDRESS", value = var.eurc_spot_asset_address },
   ]
 
+  # Spot delisted (2026-11-19, owner): off /markets and the matcher, no orders, while the escrows stay deposit and
+  # withdrawal assets (cNGN and EURC are futures collateral too). Absent while false, like eurc_spot_env.
+  spot_delist_env = concat(
+    var.cngn_spot_delisted ? [{ name = "CNGN_SPOT_DELISTED", value = "true" }] : [],
+    var.eurc_spot_delisted ? [{ name = "EURC_SPOT_DELISTED", value = "true" }] : [],
+  )
+
   # What signed withdrawals may pay out of: one list for markets-service (which verifies) and
   # execution-service (which submits), so the two cannot disagree. compact drops the EURC escrow while it is
   # unset, so the string is the one both services had before EURC existed.
@@ -244,7 +253,7 @@ resource "aws_ecs_task_definition" "markets" {
       { name = "WITHDRAWAL_ASSET_ADDRESSES", value = local.withdrawal_asset_addresses },
       { name = "EXECUTOR_WITHDRAW_URL", value = "http://execution-service.${var.internal_namespace}:8081/withdraw" },
       { name = "EXECUTOR_WITHDRAW_TIMEOUT", value = "45s" },
-    ], local.future_env, local.markets_deposit_env, local.eurc_spot_env)
+    ], local.future_env, local.markets_deposit_env, local.eurc_spot_env, local.spot_delist_env)
 
     secrets = [
       { name = "INDEX_STATUS_TOKEN", valueFrom = local.secret_arns.index_status_token },
@@ -295,7 +304,7 @@ resource "aws_ecs_task_definition" "matcher" {
       # Hostname preserved from Railway — see internal_namespace.
       { name = "EXECUTOR_URL", value = "http://execution-service.${var.internal_namespace}:8081/execute" },
       { name = "MATCHER_HEALTH_ADDR", value = ":8082" },
-    ], local.future_env, local.eurc_spot_env, local.onchain_book_env)
+    ], local.future_env, local.eurc_spot_env, local.spot_delist_env, local.onchain_book_env)
 
     secrets = [
       { name = "DATABASE_URL", valueFrom = local.secret_arns.database_url },

@@ -428,3 +428,35 @@ func TestAnUnresolvedUnpricedSeriesIsNotListed(t *testing.T) {
 		t.Fatal("an unpriced series is listed")
 	}
 }
+
+// A delisted spot is gone from the registry, so /markets, order intake and the matcher drop it, while the config
+// keeps its escrow address: withdrawals and deposits read the address, not the listing.
+func TestDelistedSpotIsUnlistedButItsEscrowStays(t *testing.T) {
+	cfg := config.Config{
+		CNGNSpotAssetAddress: "0xF000000000000000000000000000000000000123",
+		EURCSpotAssetAddress: "0xE000000000000000000000000000000000000456",
+		CNGNSpotDelisted:     true,
+		EURCSpotDelisted:     true,
+	}
+	registry := DefaultRegistry(cfg)
+	for _, symbol := range []string{CNGNSpotSymbol, EURCSpotSymbol} {
+		if _, ok := registry.Resolve(symbol); ok {
+			t.Fatalf("delisted spot %s still resolves by symbol", symbol)
+		}
+	}
+	// By address it still resolves, unlisted: its past fills keep their market in history.
+	for _, asset := range []string{"0xf000000000000000000000000000000000000123", "0xe000000000000000000000000000000000000456"} {
+		if item, ok := registry.ByAssetAndSubID(asset, "0"); !ok || item.Enabled {
+			t.Fatalf("delisted spot %s: by address ok=%v enabled=%v", asset, ok, item.Enabled)
+		}
+	}
+	for _, item := range registry.Enabled() {
+		if item.ContractType == "spot" {
+			t.Fatalf("delisted spot %s still enabled", item.Symbol)
+		}
+	}
+	cfg.EURCSpotDelisted = false
+	if _, ok := DefaultRegistry(cfg).Resolve(EURCSpotSymbol); !ok {
+		t.Fatalf("EURC-USDC unlisted by CNGN_SPOT_DELISTED alone")
+	}
+}

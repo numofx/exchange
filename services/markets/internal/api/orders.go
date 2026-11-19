@@ -316,8 +316,10 @@ func isAllowedInstrument(cfg config.Config, assetAddress string, subID string) b
 	if len(registry.Enabled()) == 0 {
 		return true
 	}
-	_, ok := registry.ByAssetAndSubID(assetAddress, subID)
-	return ok
+	// Enabled too: a delisted spot (CNGN_SPOT_DELISTED) keeps its address, so it still resolves for its fills'
+	// history, but takes no orders.
+	item, ok := registry.ByAssetAndSubID(assetAddress, subID)
+	return ok && item.Enabled
 }
 
 type parsedTradeActionData struct {

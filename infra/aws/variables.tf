@@ -711,3 +711,25 @@ variable "onchain_book_cngn_start_block" {
   # The book's create transaction (0x061036ba58…, block 59,258,624).
   default = 59258624
 }
+
+# The OnchainBook makers' RPC (market-maker-book, -book-v2, -book-cngn). Not rpc_fallback_url: publicnode answers
+# eth_getTransactionReceipt for a not-yet-mined tx with HTTP 403 "Archive requests require a personal token" where a
+# node answers null, and the bot took each as a failed cycle and resent its update every 5 s poll (2026-11-19: the cNGN
+# maker 120 sends in 10 minutes, ~10x its cadence). mainnet.base.org answers null. Public, so plain env, not a secret.
+variable "book_maker_rpc_url" {
+  type    = string
+  default = "https://mainnet.base.org"
+}
+
+# Spot delisted 2026-11-19 (owner's decision, after both makers' inventory went to 0x8f49…1B7a): markets-service
+# CNGN_SPOT_DELISTED / EURC_SPOT_DELISTED (needs markets image with them). The asset addresses above stay set: they
+# are also the cNGN and EURC deposit and withdrawal assets, and futures accounts hold both as collateral.
+variable "cngn_spot_delisted" {
+  type    = bool
+  default = true
+}
+
+variable "eurc_spot_delisted" {
+  type    = bool
+  default = true
+}
