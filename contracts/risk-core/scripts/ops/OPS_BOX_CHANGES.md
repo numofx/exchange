@@ -5,6 +5,19 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-19 02:47 UTC: rebalance check disabled with spot (SSM `93bc165a-…`)
+
+- **Owner's decision**, after spot was delisted and its makers emptied: `systemctl disable --now
+  numo-rebalance-check.timer`, the service stopped and `reset-failed` (its last run had failed: HyperFX's empty book).
+  Now `inactive disabled`; no rebalance timer listed. Unit files and `/home/ec2-user/exchange-rebalance` left in place,
+  inert. Undo: `systemctl enable --now numo-rebalance-check.timer`.
+- **Its dead-man's switch** (healthchecks.io "rebalance-check", pinged by run-with-heartbeat.sh) will alert once its
+  grace runs out: the SSM API key is read-only (as with the perp pager's), so the owner pauses or deletes it in the
+  dashboard.
+- **Swept for money tied to spot:** #42/#43/#34/#36/#26/#15 hold dust (< 0.001 USDC each); #10 (DFXM manager) holds
+  a 31.03 USDC claim on the legacy CashAsset `0x6B23…6fc6`, which holds 2.00 USDC: not recoverable. The MM wallet
+  (EURC book makers), executor and feed signer stay funded: each still has a live job.
+
 ## 2026-11-19 02:28–02:43 UTC: book makers on mainnet.base.org; spot delisted, escrows still withdrawable (ECS)
 
 - **Book makers' RPC** (`4ccb4698`, applied 02:28:53; old tasks STOPPED by 02:33:52): `market-maker-book`, `-book-v2`
