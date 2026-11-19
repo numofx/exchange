@@ -5,6 +5,20 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-19 ~07:00 UTC: correction: the keeper relayer burns ~0.0029 ETH/day; balance check watches 31DEC26's relayer
+
+- **Correction to the entry below (~06:45):** "0.000288 ETH and 275 transactions in 24 h" was a ~4 h window (the block
+  count was converted to time at the wrong block time). Re-measured over 24.0 h (blocks 58,938,825 to head, by
+  timestamp): the 30NOV26 keeper's relayer spent **0.00294 ETH, 2,757 tx**. The balance check's 0.0035/day was right.
+  So the 0.015 ETH sent to 31DEC26's relayer lasts ~5 days at that rate, not to expiry (~0.12 ETH to 31 Dec), most of
+  it posting the shared adapter's reports, which both keepers do until 30NOV26's stops.
+- **The other rates, re-measured over the same 24 h** (net of top-ups in the window), are all at or under the check's:
+  feed signer ~0.0006/day (0.0012), forward relayer v2 cNGN ~0.00003 (0.00005), MM wallet 0.0016 (0.002). The cNGN
+  book maker cannot be measured yet (funded and launched inside the window, across the publicnode-bug hours).
+- **`check_signer_balance.py`** watches `0x35ee…bDD5` (EURC-31DEC26 keeper relayer) at 0.0035/day. Installed in
+  `/home/ec2-user/exchange` and `exchange-ops` (both `78ccd9e5…` before, now `2430a108…`; backups `.bak-20261119d`).
+  One run: it warns, correctly, ~4.3 days left; every other wallet `ok`.
+
 ## 2026-11-19 ~06:45 UTC: EURC-31DEC26 keeper live (listing run-sheet L3, L5) (owner, SSM `c39dbd9b-…`)
 
 - **L3:** the owner sent 0.015 ETH to the relayer `0x35eeBd8E94F9c4a6b13EBa9fD676f7d0fDa8bDD5` (read back 0.015020).

@@ -47,6 +47,9 @@ WALLETS: list[tuple[str, str, float]] = [
   # forward relayer v2 EURC 0xEEa4…5321: off since 2026-11-17, its keeper stopped (the v2 series retired, OI 0).
   ("forward relayer v2 cNGN", "0x3ACeFDe146161D1b9ca2fdB8a3B38122818d763f", 0.00005),  # 0.000020/day, 46 tx
   ("EURC v3 keeper relayer", "0x0AbAac33E5ab7E62dED100Be465032A3636b12e5", 0.0035),  # 0.0029/day, ~2,700 tx
+  # EURC-31DEC26's keeper (live 2026-11-19), the same work as 30NOV26's: 0.0029/day re-measured 2026-11-19 over 24 h
+  # (2,757 tx), so the same rate. Both post the shared adapter's reports until 30NOV26's keeper stops.
+  ("EURC-31DEC26 keeper relayer", "0x35eeBd8E94F9c4a6b13EBa9fD676f7d0fDa8bDD5", 0.0035),
   # The MM wallet, as owner of both OnchainBook makers. v1 (#56, pegged): up to ~100 updateSplines a day, 0.000042.
   # v2 (#58, self-priced, from 2026-11-17), at the 50-tick reprice and the full ladder: nonce and balance at Base blocks
   # 58,761,126 and 58,825,377 (19:10 to 22:44 UTC), 551 sends (~3,700 a day, nearly all ~25 s refreshes), 0.000243 ETH,
