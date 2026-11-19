@@ -11,7 +11,11 @@ the only place the box's real state is written down. Newest first.
   `0xe7fecf0a2bc3c2aec15da0cbdd603217ba17a1a07ad2c0214d847c033dde9e64` (block 59,353,070, status 1).
 - **Read back:** `Matching.allowedModules(module)` true; owner the vault. Signed takes through `POST /book-takes`
   now settle on the EURC v2 and cNGN books. The batch is complete; the proposer reports nothing left to propose.
-- Not yet: the trading app's book-take change (trading-app `cef2a97`, committed, not pushed: a push deploys it).
+- **App deployed** (trading-app `cef2a97`, owner's go-ahead; Vercel success 04:08:36). **First live take**, from the
+  app by the owner: account #61 (Matching-held, owner `0xeaBc…bFcA`) bought 0.01 cNGN-30NOV26 contract at 0.00068668,
+  tx `0x2f16a702eb5aefbddfce1817d4ec5a6b145e3c474054e98025eaa1caa2d71bc2` (block 59,355,340, status 1), sent by the
+  executor through Matching: 1,054,822 gas, 0.0000063 ETH. #61 holds +1e16 of the future and 9.985537 USDC cash
+  (fee ~0.0103); Matching holds #61 again. On the tape as trade 557, `source: book`, same tx.
 
 ## 2026-11-19 03:31–03:48 UTC: BookTakeModule custody to the vault; services deployed with /book-takes, /book-depth, /book-take (vault, ECS)
 
