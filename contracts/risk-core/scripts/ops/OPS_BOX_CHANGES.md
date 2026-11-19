@@ -5,6 +5,28 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-19 02:28–02:43 UTC: book makers on mainnet.base.org; spot delisted, escrows still withdrawable (ECS)
+
+- **Book makers' RPC** (`4ccb4698`, applied 02:28:53; old tasks STOPPED by 02:33:52): `market-maker-book`, `-book-v2`
+  and `-book-cngn` read `MM_RPC_URL` from `var.book_maker_rpc_url` = `https://mainnet.base.org` instead of
+  `/numo/exchange/rpc_fallback_url` (publicnode). Cause, reproduced: publicnode answers `eth_getTransactionReceipt`
+  for an unmined hash with HTTP 403 "Archive requests require a personal token" (base.org: `null`), so every cycle
+  "failed" and resent: the cNGN maker 120 sends per 10 minutes, the MM wallet ~620. **After** (02:34–02:39, after
+  the old tasks stopped): cNGN maker 6 sends in 5 min (its 50 s refresh), 0 failed cycles; MM wallet 12 sends; the
+  EURC makers 5 failed cycles each, base.org's "25/second request limit" (shared egress), recovered next cycle.
+  Its cadence-based burn (check_signer_balance) was right; the burn since its launch was not.
+- **Spot delisted** (owner): markets `4ccb4698fec1` adds `CNGN_SPOT_DELISTED` / `EURC_SPOT_DELISTED` (off /markets,
+  orders refused by `isAllowedInstrument`; still resolvable by address so past fills render; tests broken and
+  restored for both guards). The escrow addresses stay: `WITHDRAWAL_ASSET_ADDRESSES` and `DEPOSIT_ASSETS` unchanged on
+  markets-service and execution-service (read back), since ~25,586 cNGN and ~9 EURC are still held by others.
+  Canary accounts `42,43,39,40` → `39,40` (a spot maker's account only while it runs, as #32's): it had gone red on
+  the emptied #42/#43 ($0.000019, $0.000001) for ~17 passes.
+- **Applied** 02:38:10–02:38:13 (4 add, 3 change, 4 destroy: markets, matcher, migrate image + flags; execution the
+  canary accounts only). Old tasks STOPPED by 02:42:26. Matching gap ~55 s (old matcher stopping 02:38:28, new
+  started 02:39:23). **After:** `/markets` = EURC-30NOV26, cNGN-30NOV26; `/book?symbol=cNGN-USDC` and `EURC-USDC`
+  `unknown_market`; no errors in matcher or markets-service; canary `ok: true`. Rollback: `image_markets`
+  `0f52e76a3390` and the two `*_spot_delisted` false, in one apply.
+
 ## 2026-11-19 02:16–02:23 UTC: spot makers stopped, #42 and #43 emptied to the owner's wallet 0x8f49…1B7a (ECS, chain)
 
 - **Owner's decision:** withdraw all spot market-maker liquidity to MPCVault "Market-Maker EURC-USDC"

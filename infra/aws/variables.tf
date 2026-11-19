@@ -82,7 +82,8 @@ variable "image_markets" {
   # 2026-11-17: main 6bb45f2 (9780841: the matcher indexes more than one OnchainBook, v2 beside v1; no migration).
   # Rollback is df70d1e726e1 with onchain_book_v2_address = "", in one apply.
   # 2026-11-18: main 0f52e76a (ONCHAIN_BOOK_CNGN: the matcher indexes the cNGN book). Rollback is 6bb45f2f367d, in one apply.
-  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:0f52e76a3390"
+  # 2026-11-19: main 4ccb4698 (CNGN_SPOT_DELISTED / EURC_SPOT_DELISTED). Rollback is 0f52e76a3390, in one apply.
+  default = "957261948743.dkr.ecr.us-east-1.amazonaws.com/numo-exchange/markets:4ccb4698fec1"
 }
 
 variable "image_execution" {
