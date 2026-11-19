@@ -41,6 +41,8 @@ type Server struct {
 	orderHistoryAuth wsauth.Verifier
 	// withdrawals serves POST /withdrawals; nil when not fully configured, and the endpoint answers 503.
 	withdrawals *withdrawalService
+	bookTakes   *bookTakeService
+	bookDepth   *bookDepthService
 	// deposits serves POST /deposits; nil unless DEPOSITS_ENABLED and fully configured, and the endpoint answers 503.
 	deposits *depositService
 	// perp reads cNGN-PERP's chain state for /markets and /positions; nil without a perp.
@@ -263,6 +265,8 @@ func NewServer(cfg config.Config, pool *pgxpool.Pool, registry *instruments.Regi
 		custody:      newCustodyChecker(cfg),
 		signatures:   signatures,
 		withdrawals:  newWithdrawalService(cfg, signatures),
+		bookTakes:    newBookTakeService(cfg, signatures),
+		bookDepth:    newBookDepthService(bookDepthChain(cfg), cfg.BookTakeBooks),
 		deposits:     newDepositService(cfg, signatures, pool),
 		perp:         newPerpStateReader(cfg),
 		futureSeries: newFutureSeriesReaders(cfg, registry),

@@ -60,6 +60,12 @@ type Config struct {
 	// It must exceed that service's WITHDRAWAL_RECEIPT_TIMEOUT_MS, or the API reports an unknown
 	// outcome for a withdrawal that was about to land.
 	ExecutorWithdrawTimeout time.Duration
+	// BookTakeModuleAddress is BookTakeModule (contracts/execution, 2026-11-19): a signed take on an OnchainBook for
+	// an account Matching holds. BookTakeBooks are the books POST /book-takes accepts (lowercased), and
+	// ExecutorBookTakeURL execution-service's POST /book-take. Any of the three unset: the endpoint answers 503.
+	BookTakeModuleAddress string
+	BookTakeBooks         []string
+	ExecutorBookTakeURL   string
 	// Signed deposits (POST /deposits), through the deployed DepositModule with the venue paying gas. Off unless
 	// DEPOSITS_ENABLED; when on and anything below is missing, the endpoint answers 503 rather than half-check.
 	DepositsEnabled bool
@@ -229,6 +235,8 @@ func Load() (Config, error) {
 		ExecutorURL:             os.Getenv("EXECUTOR_URL"),
 		WithdrawalModuleAddress: strings.ToLower(strings.TrimSpace(os.Getenv("WITHDRAWAL_MODULE_ADDRESS"))),
 		ExecutorWithdrawURL:     strings.TrimSpace(os.Getenv("EXECUTOR_WITHDRAW_URL")),
+		BookTakeModuleAddress:   strings.ToLower(strings.TrimSpace(os.Getenv("BOOK_TAKE_MODULE_ADDRESS"))),
+		ExecutorBookTakeURL:     strings.TrimSpace(os.Getenv("EXECUTOR_BOOK_TAKE_URL")),
 		ExecutorManagerData:     "0x",
 		ExpectedOrderOwner:      os.Getenv("EXPECTED_ORDER_OWNER"),
 		ExpectedOrderSigner:     os.Getenv("EXPECTED_ORDER_SIGNER"),
@@ -281,6 +289,9 @@ func Load() (Config, error) {
 	cfg.ExecutorTimeout = getenvDurationDefault("EXECUTOR_TIMEOUT", 5*time.Second)
 	cfg.ExecutorWithdrawTimeout = getenvDurationDefault("EXECUTOR_WITHDRAW_TIMEOUT", 45*time.Second)
 	cfg.WithdrawalAssetAddresses = withdrawalAssets(cfg)
+	for _, book := range getenvCSV("BOOK_TAKE_BOOKS", "") {
+		cfg.BookTakeBooks = append(cfg.BookTakeBooks, strings.ToLower(book))
+	}
 
 	cfg.AlertWebhookURL = strings.TrimSpace(os.Getenv("ALERT_WEBHOOK_URL"))
 	cfg.DepositsEnabled = getenvBool("DEPOSITS_ENABLED", false)
