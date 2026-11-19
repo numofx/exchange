@@ -399,16 +399,10 @@ variable "option_series" {
   # cngn-options-enable). Strikes chosen 2026-11-02 around the forward ~0.000721: -14%, -7%, at, +7%, +14%, each a call and
   # a put (10 markets). Taker fee 15 bps of the premium, the user's choice (about $0.05 on a 1M cNGN ATM option at ~$32).
   # Orders sized in thousands of cNGN (amount_scale 1e21), as the cNGN future's order unit.
-  default = [{
-    asset_address    = "0xA6a05dC25127CecbC048C7e6CBE35e1c8e503821"
-    manager_address  = "0x0705219a1594d5Fc5dC2573da4082cAf3e1B0950"
-    vol_feed_address = "0xf2dB01CF76e11A83d8510dACDD69aB62b3BAC5E0"
-    base_asset       = "cNGN"
-    expiry           = 1796047200
-    strikes          = ["0.00062", "0.00067", "0.00072", "0.00077", "0.00082"]
-    amount_scale     = "1000000000000000000000"
-    taker_fee_bps    = 15
-  }]
+  # Delisted 2026-11-19 (total position 0 under v2, the maker #44 stopped and emptied): the cNGN-30NOV26 options were
+  # OptionAsset 0xA6a05dC25127CecbC048C7e6CBE35e1c8e503821 under v2, vol feed 0xf2dB01CF…C5E0, expiry 1796047200, strikes
+  # 0.00062/0.00067/0.00072/0.00077/0.00082 (call and put), amount_scale 1e21, taker fee 15 bps of the premium.
+  default = []
 
   validation {
     condition     = alltrue([for s in var.option_series : s.taker_fee_bps >= 0 && s.taker_fee_bps <= 1000 && floor(s.taker_fee_bps) == s.taker_fee_bps])

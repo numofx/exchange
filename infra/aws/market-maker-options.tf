@@ -27,7 +27,10 @@ variable "mm_options_subaccount_id" {
   # Opened 2026-11-02 (engine-account --market=cNGN-30NOV26, under the MM-key grant; create 0x603e928e…, block
   # 53400565) and funded with 1,000 USDC moved from #43 (move-usdc: withdraw 0x953afdbe…, deposit 0xa2a744cb…, block
   # 53400596). #44: 1,000.05 USDC, IM surplus 1,000.05.
-  default = "44"
+  # Retired 2026-11-19: the options delisted (option_series empty) and #44's 1,000.05 USDC moved back to #43
+  # (move-usdc: withdraw 0xf630ddbc…, deposit 0x9f6fa2ed…, block 59307608). Empty keeps it at zero replicas and
+  # out of the canary, whose value floor would read an emptied #44 as red.
+  default = ""
 }
 
 variable "desired_count_market_maker_options" {
