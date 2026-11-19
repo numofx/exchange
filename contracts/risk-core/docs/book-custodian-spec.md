@@ -1,4 +1,4 @@
-# BookCustodian: spec (draft, 2026-11-19)
+# BookCustodian: spec (2026-11-19; built, not deployed)
 
 Option A of `onchain-fifo-book-scope.md`, decided by the owner 2026-11-19: a contract holds app users' trading
 accounts so the OnchainBooks can act on them, built now, and accounts migrate into it mid-series once it is reviewed.
@@ -18,6 +18,10 @@ gasless relay in front. Perpl and Phoenix were read for this (`onchain-fifo-book
 4. **A book or module gets power over accounts only after a 48-hour timelock.** Approving a book on SubAccounts gives
    it standing power over every account the custodian holds, so `allowBook` is queued and executable after 48 h,
    leaving users time to exit. Revoking is immediate (it only removes power).
+   *As built, stronger:* nothing ever holds standing power. A book or module is ERC-721 approved on the one account
+   in the call (`SubAccounts.approve`), cleared afterwards, and the call reverts unless the account is still the
+   custodian's (`BC_AccountLeft`). No `setApprovalForAll`, ever. Managers and deposit assets are on the same
+   timelocked allowlist: a relayer pairing a wallet's permit with an unlisted "asset" could otherwise keep the tokens.
 5. **A signature authorizes one action once.** EIP-712, per-signer nonces, a deadline; the account is part of what is
    signed, so a signature for one account cannot act on another.
 
@@ -31,17 +35,17 @@ MarginEngine (freezes, caps), liquidation under maintenance margin, and token is
 | `accountOwner[accountId]` | the wallet the account belongs to; zero for an account the custodian does not hold |
 | `tradingKey[wallet]` | `{key, validUntil}`: one trading-only delegate per wallet |
 | `nonceUsed[signer][nonce]` | replay protection, per signer |
-| `bookAllowed[book]`, `bookEta[book]` | the book allowlist and its queue |
-| `moduleAllowed[module]`, `moduleEta[module]` | action modules (below) and their queue |
-| `takePaused` | the owner may pause new takes and module actions; never exit, withdraw or key changes |
+| `allowed[kind][target]`, `eta[kind][target]` | one allowlist and queue for managers, deposit assets, books and modules |
+| `paused` | the owner may pause new takes and module actions; never exit, withdraw or key changes |
 
 ## Functions
 
 **Accounts and deposits** (anyone may relay; the signer is what is checked):
-- `openAccount(wallet, manager)` direct, or `openAccountFor` with the wallet's signature: `SubAccounts.createAccount`
-  under the MarginEngine, recorded to the wallet. The manager must be one the custodian allows (MarginEngine v2).
-- `depositWithPermit(accountId, asset, amount, permit)`: EIP-2612 permit from the wallet, then the asset's
-  `deposit`. USDC and EURC support permits on Base (read 2026-11-19); cNGN does not, so cNGN uses
+- `openAccount(wallet, manager)`, by anyone (an empty account harms no one, so no signature): `SubAccounts.createAccount`
+  under an allowed manager (MarginEngine v2), recorded to the wallet.
+- `depositWithPermit(accountId, asset, amount, permit)`: EIP-2612 permit from the account's own wallet, then the
+  asset's `deposit`. A failed permit is tolerated (it may have been front-run); the tokens can only go from the
+  account's wallet into that wallet's account. USDC and EURC support permits on Base (read 2026-11-19); cNGN does not, so cNGN uses
   `deposit(accountId, asset, amount)` after an ERC-20 `approve`, as the app does today.
 - `onERC721Received` / `depositAccount`: a wallet sends its own SubAccounts account in; recorded to the sender. Only
   accounts under an allowed manager.
@@ -63,14 +67,16 @@ a gate):
 
 **Keys**: `setTradingKey(key, validUntil)` and `revokeTradingKey()`, the wallet only (direct or signed).
 
-**Owner (vault)**: queue, execute and revoke books and modules; pause and unpause takes and module actions; nothing
-else. `Ownable2Step`.
+**Owner (vault)**: `queue`, `cancelQueued`, `enable` (48 h after queueing), `disallow` (immediate), `setPaused`;
+nothing else. `Ownable2Step`. The constructor may allow entries at once: before deployment there are no accounts.
+`exit` of an account the engine has moved out (its manager may) just clears the record.
 
 ## Signed types (EIP-712, domain `NumoBookCustodian`, version `1`, Base)
 
-`OpenAccount`, `Take` (accountId, book, marketId, isBuy, amount, limitPrice, minFill, maxFee, deadline, maxLevels,
-reduceOnly, nonce), `Act` (module, accountId, keccak(data), nonce, deadline), `Withdraw` (accountId, asset, amount,
-nonce, deadline), `Exit` (accountId, nonce, deadline), `SetTradingKey` (key, validUntil, nonce, deadline). EIP-1271
+`Take` (accountId, book, marketId, isBuy, amount, limitPrice, minFill, maxFee, deadline, maxLevels, reduceOnly,
+nonce), `Act` (accountId, module, keccak(data), nonce, deadline), `Withdraw` (accountId, asset, amount, nonce,
+deadline), `Exit` (accountId, nonce, deadline), `SetTradingKey` (wallet, key, validUntil, nonce, deadline). Type strings
+are the `*_TYPEHASH` constants. Any signer can burn a nonce with `cancelNonce`. EIP-1271
 for contract wallets, so a smart wallet can sign.
 
 ## Migration out of `Matching`
@@ -97,6 +103,11 @@ for contract wallets, so a smart wallet can sign.
 
 ## Tests
 
+As built: `test/fork/BookCustodianFork.t.sol` on the live SubAccounts, MarginEngine v2, cash, cNGN book and Matching.
+`testTheExternalSurfaceIsExactlyTheReviewedOne` pins every external function from the compiled ABI, so an added
+function (an admin path) fails CI until it is reviewed here. Not covered yet: exit of an account mid-auction (needs
+an underwater account on a fork), a FIFO module (none exists).
+
 Unit and fork (live MarginEngine v2, the live books): every guarantee above as a test that fails when its guard is
 removed (break it, see it fail, put it back); a malicious module and a malicious book (queued, not yet allowed: no
 power; allowed: power only over the account in the call for a module); replay, wrong account, expired, a trading key
@@ -108,7 +119,7 @@ fork from a real `Matching` account.
 | | Work | Estimate |
 |---|---|---|
 | 1 | This spec, reviewed by the owner | now |
-| 2 | `BookCustodian` and its tests (unit, fork, guards broken and restored) | 3–4 days |
+| 2 | `BookCustodian` and its tests (unit, fork, guards broken and restored) | done 2026-11-19: `src/periphery/BookCustodian.sol`, `test/fork/BookCustodianFork.t.sol` (25 tests; 28 guard mutations, each caught) |
 | 3 | Internal adversarial review (a second pass, not the author's) and fixes | 1–2 days |
 | 4 | Deploy, books queued (48 h), our own accounts first | after 3 |
 | 5 | Services and app: relay paths, owner checks, migration flow, trading key | 3–4 days |
