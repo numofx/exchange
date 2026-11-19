@@ -17,7 +17,9 @@ the only place the box's real state is written down. Newest first.
   service, image the only change): td :45, applied 01:07:09. The service runs at 0% minimum healthy, so the old task
   stopped before the new one started (01:08:43): no settlement for about 1.5 min. First pass on the new task 01:10:52
   `ok: true`, every pass since green. Rollback: `d2c409c4ef25`, in one apply.
-- **Still open:** executor deposits stay paused (0.002 ETH against the 0.006 floor) until it is funded.
+- **Executor funded.** The owner sent 0.005 ETH to the executor `0xF68ebcC8934B068655E1A4367Ba6C0e564678703` (0.00208
+  -> 0.00708, over the 0.006 deposit floor); the gate's 5-minute re-check logged `deposits_resumed` (was: floor) at
+  01:18:41. Paused since at least 2026-11-16. Headroom over the floor is ~0.001 ETH.
 
 ## 2026-11-18 23:17–23:30 UTC: cNGN-30NOV26 cutover: #39 stopped, 2,700 USDC to #60, book enabled, maker live, canary (vault, chain, ECS)
 
