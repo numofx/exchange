@@ -7,6 +7,7 @@ import {
   encodeFunctionData,
   getAddress,
   http,
+  toEventSelector,
   type Abi,
   type LocalAccount,
 } from 'viem';
@@ -42,6 +43,7 @@ import {
   withdrawalRevertErrorsAbi,
 } from './withdrawal.js';
 import { BookTakeRejectedError, type BookTakeRequest, assertBookTakePolicy, bookTakeRevertErrorsAbi } from './book-take.js';
+import { CustodianRejectedError, type CustodianRequest, buildCustodianCall, custodianAbi } from './custodian.js';
 
 export type ExecutorDependencies = {
   matchingAbi: Abi;
@@ -64,6 +66,8 @@ export type ExecutorDependencies = {
   deposit?: NonNullable<AppConfig['deposit']>;
   /** Signed OnchainBook takes through BookTakeModule. Absent unless configured; `bookTake` then refuses. */
   bookTake?: NonNullable<AppConfig['bookTake']> & { alertWebhookUrl?: string };
+  /** Relayed BookCustodian calls. Absent unless configured; `custodian` then refuses. */
+  custodian?: NonNullable<AppConfig['custodian']> & { alertWebhookUrl?: string };
 };
 
 export class MatchExecutor {
@@ -81,6 +85,8 @@ export class MatchExecutor {
   readonly withdrawalGate?: SponsorGate;
   /** Floor and gas budget for book takes; undefined unless they are configured. */
   readonly bookTakeGate?: SponsorGate;
+  /** Floor and gas budget for relayed custodian calls; undefined unless they are configured. */
+  readonly custodianGate?: SponsorGate;
   /**
    * Deposits by action hash, so a retried request (a client timeout, a double click) gets the same result instead of
    * a second broadcast. Kept for two hours: an action expires within one, after which it could not be resubmitted
@@ -158,6 +164,17 @@ export class MatchExecutor {
         log,
       });
     }
+    if (deps.custodian) {
+      this.custodianGate = new SponsorGate({
+        subject: 'custodian calls',
+        reject: (message) => new CustodianRejectedError(message, undefined, 503),
+        minExecutorWei: deps.custodian.minExecutorWei,
+        maxGasWeiPerHour: deps.custodian.maxGasWeiPerHour,
+        readBalance,
+        alertWebhookUrl: deps.custodian.alertWebhookUrl,
+        log,
+      });
+    }
   }
 
   /**
@@ -186,18 +203,28 @@ export class MatchExecutor {
     },
   ): Promise<`0x${string}` | 'dry-run'> {
     assertSignerIsOwner(args[0]);
+    return this.submitCall({ address: this.deps.matchingAddress, functionName: 'verifyAndMatch', args }, options);
+  }
 
+  /**
+   * Simulate, then estimate and send, one contract call from the executor, in the send queue. Any call the venue pays
+   * for goes through here (Matching through submitVerifyAndMatch, which guards the signer first).
+   */
+  private submitCall(
+    call: { address: `0x${string}`; functionName: string; args: readonly unknown[] },
+    options: { abi: Abi; onSimulationError?: (error: unknown) => never; beforeSend?: () => void; afterBlock?: bigint },
+  ): Promise<`0x${string}` | 'dry-run'> {
     return this.enqueueSend(async () => {
       try {
         await readAtOrAfter(options.afterBlock, (at) =>
           this.publicClient.simulateContract({
             account: this.account,
-            address: this.deps.matchingAddress,
+            address: call.address,
             abi: options.abi,
-            functionName: 'verifyAndMatch',
-            args,
+            functionName: call.functionName,
+            args: call.args,
             ...at,
-          }),
+          } as never),
         );
       } catch (error) {
         options.onSimulationError?.(error);
@@ -219,18 +246,18 @@ export class MatchExecutor {
       const estimate = await readAtOrAfter(options.afterBlock, (at) =>
         this.publicClient.estimateContractGas({
           account: this.account,
-          address: this.deps.matchingAddress,
+          address: call.address,
           abi: options.abi,
-          functionName: 'verifyAndMatch',
-          args,
+          functionName: call.functionName,
+          args: call.args,
           ...at,
-        }),
+        } as never),
       );
       return this.broadcast({
-        address: this.deps.matchingAddress,
+        address: call.address,
         abi: options.abi,
-        functionName: 'verifyAndMatch',
-        args,
+        functionName: call.functionName,
+        args: call.args,
         gas: withGasHeadroom(estimate),
       });
     });
@@ -392,6 +419,61 @@ export class MatchExecutor {
       });
       gate.record(receiptCostWei(receipt));
       return buildReceiptResponse(txHash, receipt);
+    } catch (error) {
+      if (error instanceof WaitForTransactionReceiptTimeoutError) {
+        gate.record(PROVISIONAL_SPONSORED_GAS * (await this.publicClient.getGasPrice().catch(() => 0n)));
+        return { accepted: false, tx_hash: txHash, receipt_status: 'timeout' };
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Relays one BookCustodian call (custodian.ts), the venue paying gas: policy first, then a simulation with the
+   * custodian's and the book's errors in the ABI, so a call the chain would refuse (a bad signature, a spent nonce, a
+   * take that cannot fill) is refused by name and costs nothing; then the floor and budget, and the send, in the same
+   * queue as settlements. Past the receipt timeout the outcome is reported as unknown, never as failed.
+   */
+  async custodian(request: CustodianRequest): Promise<ExecuteMatchResponse & { account_id?: string }> {
+    const custodian = this.deps.custodian;
+    if (!custodian) {
+      throw new CustodianRejectedError('custodian calls are not enabled on this executor', undefined, 503);
+    }
+    const call = buildCustodianCall(request, {
+      bookAddresses: custodian.bookAddresses,
+      assetAddresses: custodian.assetAddresses,
+      manager: custodian.manager,
+      nowSeconds: Math.floor(Date.now() / 1000),
+    });
+    const gate = this.custodianGate!;
+    await gate.check();
+    const txHash = await this.submitCall(
+      { address: custodian.address, functionName: call.functionName, args: call.args },
+      {
+        abi: custodianAbi as Abi,
+        onSimulationError: (error) => {
+          const revert = describeSimulationRevert(error);
+          if (revert !== undefined) {
+            throw new CustodianRejectedError(`${call.functionName} would revert: ${revert}`, revert);
+          }
+          throw error;
+        },
+        beforeSend: () => gate.assertBudget(),
+      },
+    );
+    if (txHash === 'dry-run') {
+      return { accepted: true, tx_hash: 'dry-run' };
+    }
+    try {
+      const receipt = await this.publicClient.waitForTransactionReceipt({
+        hash: txHash,
+        timeout: this.config.withdrawalReceiptTimeoutMs,
+      });
+      gate.record(receiptCostWei(receipt));
+      const response = buildReceiptResponse(txHash, receipt);
+      // openAccount's new id, from the custodian's own event in this receipt
+      const opened = openedAccountId(receipt.logs, custodian.address);
+      return opened === undefined ? response : { ...response, account_id: opened.toString() };
     } catch (error) {
       if (error instanceof WaitForTransactionReceiptTimeoutError) {
         gate.record(PROVISIONAL_SPONSORED_GAS * (await this.publicClient.getGasPrice().catch(() => 0n)));
@@ -655,4 +737,14 @@ export const GAS_HEADROOM_MIN = 100_000n;
 export function withGasHeadroom(estimate: bigint): bigint {
   const scaled = (estimate * GAS_HEADROOM_PCT) / 100n;
   return scaled > estimate + GAS_HEADROOM_MIN ? scaled : estimate + GAS_HEADROOM_MIN;
+}
+
+/** `AccountOpened(accountId, wallet, manager)` emitted by the custodian in these logs, if any. */
+export function openedAccountId(
+  logs: readonly { address: string; topics: readonly string[] }[],
+  custodian: `0x${string}`,
+): bigint | undefined {
+  const topic = toEventSelector('AccountOpened(uint256,address,address)');
+  const log = logs.find((l) => getAddress(l.address) === getAddress(custodian) && l.topics[0] === topic);
+  return log?.topics[1] === undefined ? undefined : BigInt(log.topics[1]);
 }

@@ -31,7 +31,7 @@ test('deposits pause below the executor floor, naming both amounts, and alert on
   await assert.rejects(g.check(), is503(/deposit floor/));
   assert.equal(posted.length, 1, 'one alert per pause, not one per refused deposit');
   assert.match(posted[0]!, /^NUMO DEPOSITS PAUSED/);
-  assert.match(posted[0]!, /Settlement, withdrawals and book takes are unaffected/);
+  assert.match(posted[0]!, /Settlement, withdrawals, book takes and custodian calls are unaffected/);
 });
 
 test('deposits pass at the floor and above', async () => {
@@ -124,7 +124,7 @@ test('withdrawals pause at their own hourly gas budget, with their own alert', a
   await assert.rejects(g.check(), withdrawal503(/^withdrawals are paused: sponsored withdrawals spent 0\.002 ETH/));
   assert.throws(() => g.assertBudget(), withdrawal503(/withdrawals are paused/));
   assert.match(posted[0]!, /^NUMO WITHDRAWALS PAUSED/);
-  assert.match(posted[0]!, /Settlement, deposits and book takes are unaffected/);
+  assert.match(posted[0]!, /Settlement, deposits, book takes and custodian calls are unaffected/);
 });
 
 test('the deposit and withdrawal budgets are separate', async () => {

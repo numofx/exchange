@@ -34,8 +34,13 @@ export type GateOptions = {
   log?: (level: 'info' | 'error', message: string, fields: Record<string, unknown>) => void;
 };
 
-export type GateSubject = 'deposits' | 'withdrawals' | 'book takes';
-const FLOOR_NOUN: Record<GateSubject, string> = { deposits: 'deposit', withdrawals: 'withdrawal', 'book takes': 'book-take' };
+export type GateSubject = 'deposits' | 'withdrawals' | 'book takes' | 'custodian calls';
+const FLOOR_NOUN: Record<GateSubject, string> = {
+  deposits: 'deposit',
+  withdrawals: 'withdrawal',
+  'book takes': 'book-take',
+  'custodian calls': 'custodian',
+};
 /** A log event name: `book_takes_paused`, never one with a space. */
 const slug = (subject: GateSubject) => subject.replace(' ', '_');
 
@@ -131,7 +136,8 @@ export class SponsorGate {
     if (!changed && !due) return;
     this.lastAlertAt = this.now();
     this.log('error', `${slug(this.opts.subject)}_paused`, { kind: pause.kind, reason: pause.message });
-    const others = (Object.keys(FLOOR_NOUN) as GateSubject[]).filter((other) => other !== this.opts.subject).join(' and ');
+    const rest = (Object.keys(FLOOR_NOUN) as GateSubject[]).filter((other) => other !== this.opts.subject);
+    const others = `${rest.slice(0, -1).join(', ')} and ${rest[rest.length - 1]}`;
     await this.alert(`NUMO ${this.opts.subject.toUpperCase()} PAUSED\n${pause.message}\nSettlement, ${others} are unaffected.`);
   }
 

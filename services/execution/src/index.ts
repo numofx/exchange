@@ -75,6 +75,7 @@ const executor = await MatchExecutor.create(config, {
   withdrawal,
   deposit: config.deposit,
   bookTake: config.bookTake ? { ...config.bookTake, alertWebhookUrl: config.alertWebhookUrl } : undefined,
+  custodian: config.custodian ? { ...config.custodian, alertWebhookUrl: config.alertWebhookUrl } : undefined,
 });
 
 const canaryOptions = settlementCanaryOptions(config, (level, message, fields) => {
@@ -86,6 +87,7 @@ canary?.start();
 executor.depositGate?.watch(300_000);
 executor.withdrawalGate?.watch(300_000);
 executor.bookTakeGate?.watch(300_000);
+executor.custodianGate?.watch(300_000);
 
 const app = buildApp({
   config,
@@ -97,6 +99,7 @@ const app = buildApp({
   withdrawal,
   depositor: config.deposit ? executor : undefined,
   bookTaker: config.bookTake ? executor : undefined,
+  custodian: config.custodian ? executor : undefined,
 });
 
 app.listen({ host: config.host, port: config.port }).catch((error) => {

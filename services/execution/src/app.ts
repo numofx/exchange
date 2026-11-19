@@ -9,6 +9,7 @@ import { depositRequestSchema, executeMatchRequestSchema, withdrawRequestSchema 
 import { WithdrawalRejectedError } from './withdrawal.js';
 import { DepositRejectedError } from './deposit.js';
 import { BookTakeRejectedError } from './book-take.js';
+import { CustodianRejectedError, custodianRequestSchema } from './custodian.js';
 
 export function buildApp(args: {
   config: AppConfig;
@@ -23,6 +24,8 @@ export function buildApp(args: {
   depositor?: Pick<MatchExecutor, 'deposit'>;
   /** Submits signed OnchainBook takes. Absent unless configured; POST /book-take then answers 503. */
   bookTaker?: Pick<MatchExecutor, 'bookTake'>;
+  /** Relays BookCustodian calls. Absent unless configured; POST /custodian then answers 503. */
+  custodian?: Pick<MatchExecutor, 'custodian'>;
   /** Where the request log goes; stdout when absent. Tests pass one to read what a failure logged. */
   logStream?: { write(line: string): void };
 }): FastifyInstance {
@@ -53,6 +56,7 @@ export function buildApp(args: {
   app.post('/withdraw', async (req, reply) => handleWithdraw(args.withdrawer, req.body, reply));
   app.post('/deposit', async (req, reply) => handleDeposit(args.depositor, req.body, reply));
   app.post('/book-take', async (req, reply) => handleBookTake(args.bookTaker, req.body, reply));
+  app.post('/custodian', async (req, reply) => handleCustodian(args.custodian, req.body, reply));
 
   return app;
 }
@@ -123,6 +127,25 @@ async function handleBookTake(bookTaker: Pick<MatchExecutor, 'bookTake'> | undef
     return reply.code(200).send(await bookTaker.bookTake(request));
   } catch (error) {
     if (error instanceof BookTakeRejectedError) {
+      return reply.code(error.status).send(error.revert === undefined ? { error: error.message } : { error: error.message, revert: error.revert });
+    }
+    return sendError(reply, error);
+  }
+}
+
+/**
+ * 200 with the receipt (and `account_id` for an opened account), 422 for a call that breaks policy or would revert,
+ * with `revert` naming the revert, and 503 when custodian calls are off or paused.
+ */
+async function handleCustodian(custodian: Pick<MatchExecutor, 'custodian'> | undefined, body: unknown, reply: FastifyReply) {
+  if (!custodian) {
+    return reply.code(503).send({ error: 'custodian calls are not enabled on this executor' });
+  }
+  try {
+    const request = custodianRequestSchema.parse(body);
+    return reply.code(200).send(await custodian.custodian(request));
+  } catch (error) {
+    if (error instanceof CustodianRejectedError) {
       return reply.code(error.status).send(error.revert === undefined ? { error: error.message } : { error: error.message, revert: error.revert });
     }
     return sendError(reply, error);

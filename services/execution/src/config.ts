@@ -50,6 +50,13 @@ const envSchema = z.object({
   BOOK_TAKE_MAX_GAS_ETH_PER_HOUR: z.string().regex(/^\d+(\.\d+)?$/).default('0.003'),
   // Takes stop while the executor holds less than this, so trading never spends the gas withdrawals need.
   BOOK_TAKE_MIN_EXECUTOR_ETH: z.string().regex(/^\d+(\.\d+)?$/).default('0.004'),
+  // Relayed BookCustodian calls (POST /custodian; custodian.ts). Off unless CUSTODIAN_ADDRESS is set, and then the
+  // manager and the assets must be named too. Takes are relayed on BOOK_TAKE_BOOKS.
+  CUSTODIAN_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
+  CUSTODIAN_MANAGER: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional().or(z.literal('')),
+  CUSTODIAN_ASSETS: z.string().default(''),
+  CUSTODIAN_MAX_GAS_ETH_PER_HOUR: z.string().regex(/^\d+(\.\d+)?$/).default('0.003'),
+  CUSTODIAN_MIN_EXECUTOR_ETH: z.string().regex(/^\d+(\.\d+)?$/).default('0.004'),
   // Signed deposits (POST /deposit). Off unless DEPOSITS_ENABLED is "true" and the module, the assets and the
   // manager are all named; see deposit.ts. The venue pays gas for every deposit, so it is opt-in and budgeted.
   DEPOSITS_ENABLED: z.union([z.literal('true'), z.literal('false')]).default('false'),
@@ -132,6 +139,15 @@ export type AppConfig = {
     maxGasWeiPerHour: bigint;
     minExecutorWei: bigint;
   };
+  /** Undefined unless CUSTODIAN_ADDRESS is set (and then the manager, assets and books must be too). */
+  custodian?: {
+    address: `0x${string}`;
+    manager: `0x${string}`;
+    assetAddresses: `0x${string}`[];
+    bookAddresses: `0x${string}`[];
+    maxGasWeiPerHour: bigint;
+    minExecutorWei: bigint;
+  };
   alertWebhookUrl?: string;
   /** Undefined unless DEPOSITS_ENABLED and every address is set. */
   deposit?: {
@@ -209,6 +225,7 @@ export function loadConfig(): AppConfig {
     withdrawalReceiptTimeoutMs: parsed.WITHDRAWAL_RECEIPT_TIMEOUT_MS,
     withdrawalMaxGasWeiPerHour: parseEther(parsed.WITHDRAWAL_MAX_GAS_ETH_PER_HOUR),
     bookTake: parseBookTakeConfig(parsed),
+    custodian: parseCustodianConfig(parsed),
     alertWebhookUrl: parsed.ALERT_WEBHOOK_URL ? parsed.ALERT_WEBHOOK_URL : undefined,
     deposit: parseDepositConfig(parsed),
     settlementCanary: parsed.SETTLEMENT_CANARY_MANAGER
@@ -401,5 +418,30 @@ export function parseBookTakeConfig(parsed: {
     bookAddresses: books,
     maxGasWeiPerHour: parseEther(parsed.BOOK_TAKE_MAX_GAS_ETH_PER_HOUR),
     minExecutorWei: parseEther(parsed.BOOK_TAKE_MIN_EXECUTOR_ETH),
+  };
+}
+
+export function parseCustodianConfig(parsed: {
+  CUSTODIAN_ADDRESS?: string;
+  CUSTODIAN_MANAGER?: string;
+  CUSTODIAN_ASSETS: string;
+  BOOK_TAKE_BOOKS: string;
+  CUSTODIAN_MAX_GAS_ETH_PER_HOUR: string;
+  CUSTODIAN_MIN_EXECUTOR_ETH: string;
+}): AppConfig['custodian'] {
+  if (!parsed.CUSTODIAN_ADDRESS) return undefined;
+  const assets = parseAddressList('CUSTODIAN_ASSETS', parsed.CUSTODIAN_ASSETS);
+  const books = parseAddressList('BOOK_TAKE_BOOKS', parsed.BOOK_TAKE_BOOKS);
+  // Half-configured is a misconfiguration, not "off": refuse to start rather than relay with an empty policy.
+  if (!parsed.CUSTODIAN_MANAGER || assets.length === 0 || books.length === 0) {
+    throw new Error('CUSTODIAN_ADDRESS needs CUSTODIAN_MANAGER, CUSTODIAN_ASSETS and BOOK_TAKE_BOOKS');
+  }
+  return {
+    address: getAddress(parsed.CUSTODIAN_ADDRESS) as `0x${string}`,
+    manager: getAddress(parsed.CUSTODIAN_MANAGER) as `0x${string}`,
+    assetAddresses: assets,
+    bookAddresses: books,
+    maxGasWeiPerHour: parseEther(parsed.CUSTODIAN_MAX_GAS_ETH_PER_HOUR),
+    minExecutorWei: parseEther(parsed.CUSTODIAN_MIN_EXECUTOR_ETH),
   };
 }
