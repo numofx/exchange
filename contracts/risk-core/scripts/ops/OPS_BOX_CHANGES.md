@@ -5,6 +5,18 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-19 ~07:10 UTC: EURC-31DEC26 keeper STREAMS_REFRESH_S 20 → 30 (SSM `5eb32fa0-…`)
+
+- **Why:** to stop the two v3 keepers both posting the shared adapter's reports. The ceiling is the index's
+  `indexMaxAge`, 60 s (EurcIndexFeed, immutable): refresh + 2 × FORWARD_TICK_MS (15 s) must fit, so 30 is the most.
+  `/etc/numo/future-feeds-v3-eurc-31dec26.env` (backup `.bak-refresh20`; the repo's copy set to match), restart.
+- **Measured 10 min after:** 30NOV26's relayer 9 posts, 31DEC26's 13, together one every ~27 s (~3,170/day, against
+  2,757 for one keeper alone). Each keeper posts only when the stored report is older than its own refresh, so they
+  alternate rather than double: the overlap was ~15%, not 2×, and this saves little. Kept (harmless, within the limit).
+- **The real cost:** ~0.003 ETH/day of report posting for the EURC index, whichever relayer pays. 31DEC26's relayer
+  now pays ~0.002/day (0.015 lasts ~7 days) and all of it after 30 Nov: ~0.11 ETH to 31 Dec. The lever is a new index
+  feed with a longer `indexMaxAge` (a risk decision, not taken).
+
 ## 2026-11-19 ~07:00 UTC: correction: the keeper relayer burns ~0.0029 ETH/day; balance check watches 31DEC26's relayer
 
 - **Correction to the entry below (~06:45):** "0.000288 ETH and 275 transactions in 24 h" was a ~4 h window (the block
