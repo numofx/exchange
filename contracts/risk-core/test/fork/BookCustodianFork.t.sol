@@ -98,6 +98,21 @@ contract ManagerBook {
   }
 }
 
+/// @dev A manager, which SubAccounts lets move its accounts without approval.
+contract MovingManager {
+  ISubAccounts immutable subAccounts;
+
+  constructor(ISubAccounts s) {
+    subAccounts = s;
+  }
+
+  function handleAdjustment(uint, uint, address, ISubAccounts.AssetDelta[] memory, bytes memory) external {}
+
+  function move(uint id, address to) external {
+    subAccounts.transferFrom(subAccounts.ownerOf(id), to, id);
+  }
+}
+
 /// @dev Review F1, book path: a book that tries to leave itself a standing allowance on the taker's account.
 contract AllowancePlantingBook {
   ISubAccounts immutable subAccounts;
@@ -597,6 +612,12 @@ contract BookCustodianFork is Test {
     // a reduce-only sell of everything, all or nothing: one whole contract fills, the half lot stays
     assertEq(_take(_order(b, BOOK, false, 5 * CONTRACT, true), walletPk), CONTRACT);
     assertEq(_position(b), int(LOT / 2));
+
+    // what is left is under a lot: a reduce-only take refuses rather than fill nothing and spend the nonce
+    BookCustodian.Take memory t = _order(b, BOOK, false, CONTRACT, true);
+    bytes memory sig = _takeSig(walletPk, t);
+    vm.expectRevert(BookCustodian.BC_NotReducing.selector);
+    custodian.take(t, sig, "");
   }
 
   function testPauseStopsTakesOnly() public {
@@ -814,6 +835,8 @@ contract BookCustodianFork is Test {
     custodian.act(_x(acc, address(m), "", _cashGrant(50e18), true, 2, deadline), sig);
     vm.prank(wallet);
     custodian.exit(acc);
+    assertEq(_cashAllowance(acc, address(m)), 0, "zeroed by exit itself");
+    assertEq(custodian.persistedGrants(acc).length, 0);
     vm.prank(wallet);
     subAccounts.safeTransferFrom(wallet, address(custodian), acc);
     assertEq(_cashAllowance(acc, address(m)), 0, "nothing revives on return");
@@ -826,7 +849,7 @@ contract BookCustodianFork is Test {
     uint64 deadline = uint64(block.timestamp + 60);
     BookCustodian.Grant[] memory g = new BookCustodian.Grant[](17);
     for (uint i; i < 17; ++i) {
-      g[i] = BookCustodian.Grant({asset: address(CASH), subId: 0, positive: 0, negative: 1});
+      g[i] = BookCustodian.Grant({asset: address(CASH), subId: i, positive: 0, negative: 1});
     }
     bytes memory sig = _actSig(walletPk, _x(acc, address(m), "", g, true, 1, deadline));
     vm.expectRevert(BookCustodian.BC_TooManyGrants.selector);
@@ -860,6 +883,76 @@ contract BookCustodianFork is Test {
     custodian.exitFor(acc, 3, deadline, e);
     vm.expectRevert(BookCustodian.BC_Expired.selector);
     custodian.setTradingKeyFor(wallet, key, 1e10, 4, deadline, k);
+  }
+
+  function _persistCash(BookCustodian.Action memory x) internal {
+    bytes memory sig = _actSig(walletPk, x);
+    custodian.act(x, sig);
+  }
+
+  /// Review 2, R2: a persisted grant is the total for its key, held once; zero removes it; a call-only grant may not
+  /// overwrite (and then zero) a resting order's grant.
+  function testReviewPersistedGrantsAreOnePerKey() public {
+    CashMoveModule m = new CashMoveModule(subAccounts, IAsset(address(CASH)));
+    _allow(BookCustodian.Kind.Module, address(m));
+    uint64 deadline = uint64(block.timestamp + 60);
+    _persistCash(_x(acc, address(m), "", _cashGrant(50e18), true, 1, deadline));
+    _persistCash(_x(acc, address(m), "", _cashGrant(20e18), true, 2, deadline));
+    assertEq(_cashAllowance(acc, address(m)), 20e18, "the latest total");
+    assertEq(custodian.persistedGrants(acc).length, 1, "one slot per key");
+
+    BookCustodian.Action memory x = _x(acc, address(m), "", _cashGrant(5e18), false, 3, deadline);
+    bytes memory sig = _actSig(walletPk, x);
+    vm.expectRevert(BookCustodian.BC_GrantPersisted.selector);
+    custodian.act(x, sig);
+
+    _persistCash(_x(acc, address(m), "", _cashGrant(0), true, 4, deadline));
+    assertEq(_cashAllowance(acc, address(m)), 0);
+    assertEq(custodian.persistedGrants(acc).length, 0, "zero frees the slot");
+  }
+
+  /// Review 2, R1: an account its manager moved out (no `exit`) and that comes back, to the same wallet or another,
+  /// arrives with no live grant; and nothing deposits into it while it is away.
+  function testReviewGrantsDoNotReviveAfterAManagerMove() public {
+    MovingManager mm = new MovingManager(subAccounts);
+    CashMoveModule m = new CashMoveModule(subAccounts, IAsset(address(CASH)));
+    _allow(BookCustodian.Kind.Manager, address(mm));
+    _allow(BookCustodian.Kind.Module, address(m));
+    uint id = custodian.openAccount(wallet, IManager(address(mm)));
+    uint64 deadline = uint64(block.timestamp + 60);
+    _persistCash(_x(id, address(m), "", _cashGrant(50e18), true, 1, deadline));
+    assertEq(allowances.negativeSubIdAllowance(id, address(custodian), IAsset(address(CASH)), 0, address(m)), 50e18);
+
+    mm.move(id, other);
+    deal(USDC, wallet, 10e6);
+    vm.startPrank(wallet);
+    IERC20(USDC).approve(address(custodian), 10e6);
+    vm.expectRevert(BookCustodian.BC_AccountLeft.selector);
+    custodian.deposit(id, CASH, 10e6);
+    custodian.exit(id); // the record goes; the account is already elsewhere
+    vm.stopPrank();
+
+    vm.prank(other);
+    subAccounts.safeTransferFrom(other, address(custodian), id);
+    assertEq(custodian.accountOwner(id), other);
+    assertEq(allowances.negativeSubIdAllowance(id, address(custodian), IAsset(address(CASH)), 0, address(m)), 0);
+    assertEq(custodian.persistedGrants(id).length, 0);
+  }
+
+  /// Review 2, R3: a queued entry not enabled within the grace window must be queued again.
+  function testReviewAQueueExpires() public {
+    vm.startPrank(vault);
+    custodian.queue(BookCustodian.Kind.Book, EURC_BOOK);
+    vm.warp(block.timestamp + 48 hours + 7 days + 1);
+    vm.expectRevert(BookCustodian.BC_QueueExpired.selector);
+    custodian.enable(BookCustodian.Kind.Book, EURC_BOOK);
+    vm.stopPrank();
+  }
+
+  /// Review 2, R5: an account cannot be opened for an address that can never exit it.
+  function testReviewNoAccountForTheCustodianItself() public {
+    vm.expectRevert(BookCustodian.BC_ZeroAddress.selector);
+    custodian.openAccount(address(custodian), ENGINE);
   }
 
   /////////////
@@ -963,10 +1056,11 @@ contract BookCustodianFork is Test {
   function testTheExternalSurfaceIsExactlyTheReviewedOne() public view {
     string[] memory got =
       vm.parseJsonKeys(vm.readFile("out/BookCustodian.sol/BookCustodian.json"), ".methodIdentifiers");
-    string[45] memory want = [
+    string[46] memory want = [
       "ACT_TYPEHASH()",
       "DELAY()",
       "EXIT_TYPEHASH()",
+      "GRACE()",
       "GRANT_TYPEHASH()",
       "MAX_PERSISTED_GRANTS()",
       "SET_TRADING_KEY_TYPEHASH()",

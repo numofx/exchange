@@ -149,6 +149,8 @@ contract BookCustodian is Ownable2Step, ReentrancyGuard, EIP712, IERC721Receiver
   }
 
   uint public constant DELAY = 48 hours;
+  /// @notice A queued entry must be enabled within this long after its eta, or be queued again (with a new notice).
+  uint public constant GRACE = 7 days;
   /// @dev bounds the zeroing loop in `exit`
   uint public constant MAX_PERSISTED_GRANTS = 16;
   /// @dev OnchainBook.SelfTradeMode.Abort
@@ -217,6 +219,8 @@ contract BookCustodian is Ownable2Step, ReentrancyGuard, EIP712, IERC721Receiver
   error BC_PermitFailed();
   error BC_NotOwnerSending();
   error BC_TooManyGrants();
+  error BC_QueueExpired();
+  error BC_GrantPersisted();
 
   /// @param initialKinds,initialTargets allowed at once: there are no accounts to protect before deployment
   constructor(
@@ -241,7 +245,7 @@ contract BookCustodian is Ownable2Step, ReentrancyGuard, EIP712, IERC721Receiver
 
   /// @notice A new account under an allowed manager, recorded to `wallet`. Anyone may open one: it starts empty.
   function openAccount(address wallet, IManager manager) external nonReentrant returns (uint accountId) {
-    if (wallet == address(0)) revert BC_ZeroAddress();
+    if (wallet == address(0) || wallet == address(this)) revert BC_ZeroAddress();
     if (!allowed[Kind.Manager][address(manager)]) revert BC_NotAllowed();
     accountId = subAccounts.createAccount(address(this), manager);
     accountOwner[accountId] = wallet;
@@ -262,6 +266,9 @@ contract BookCustodian is Ownable2Step, ReentrancyGuard, EIP712, IERC721Receiver
     if (from == address(0)) revert BC_ZeroAddress();
     if (operator != from) revert BC_NotOwnerSending();
     if (!allowed[Kind.Manager][address(subAccounts.manager(accountId))]) revert BC_NotAllowed();
+    // Grants left from an earlier stint (the account left without `exit`, e.g. moved by its manager) are keyed under
+    // this contract as owner, so they would revive now: zero them before anyone can use the account.
+    if (_persisted[accountId].length > 0) _clearGrants(accountId);
     accountOwner[accountId] = from;
     emit AccountDeposited(accountId, from);
     return IERC721Receiver.onERC721Received.selector;
@@ -270,6 +277,7 @@ contract BookCustodian is Ownable2Step, ReentrancyGuard, EIP712, IERC721Receiver
   /// @notice Deposit the caller's own tokens (after an ERC-20 approve) into a held account.
   function deposit(uint accountId, ICustodianAsset asset, uint amount) external nonReentrant {
     _held(accountId);
+    _checkHeld(accountId);
     _deposit(accountId, asset, msg.sender, amount);
   }
 
@@ -288,6 +296,7 @@ contract BookCustodian is Ownable2Step, ReentrancyGuard, EIP712, IERC721Receiver
     bytes32 s
   ) external nonReentrant {
     address wallet = _held(accountId);
+    _checkHeld(accountId);
     IERC20 token = _depositToken(asset);
     try IERC20Permit(address(token)).permit(wallet, address(this), amount, permitDeadline, v, r, s) {}
     catch {
@@ -365,9 +374,10 @@ contract BookCustodian is Ownable2Step, ReentrancyGuard, EIP712, IERC721Receiver
     if (!allowed[Kind.Module][x.module]) revert BC_NotAllowed();
     if (signer != wallet && !allowed[Kind.KeyModule][x.module]) revert BC_NotAllowed();
 
+    if (x.persist) _persist(x);
+    else _refusePersistedKeys(x);
     IAllowances.SubIdAllowance[] memory a = _allowances(x.grants);
     if (a.length > 0) subAccounts.setSubIdAllowances(x.accountId, x.module, a);
-    if (x.persist) _persist(x);
 
     IBookCustodianModule(x.module).onAct(x.accountId, wallet, signer, x.data);
 
@@ -492,6 +502,7 @@ contract BookCustodian is Ownable2Step, ReentrancyGuard, EIP712, IERC721Receiver
     uint when = eta[kind][target];
     if (when == 0) revert BC_NotQueued();
     if (block.timestamp < when) revert BC_TooEarly();
+    if (block.timestamp > when + GRACE) revert BC_QueueExpired();
     delete eta[kind][target];
     _setAllowed(kind, target, true);
   }
@@ -580,12 +591,45 @@ contract BookCustodian is Ownable2Step, ReentrancyGuard, EIP712, IERC721Receiver
     );
   }
 
+  /**
+   * @dev A persisted grant's amount is the total for its (module, asset, subId), as SubAccounts sets allowances: a
+   *      later persisted grant on the same key replaces it, and one of zero removes the key.
+   */
   function _persist(Action calldata x) internal {
     GrantKey[] storage keys = _persisted[x.accountId];
-    if (keys.length + x.grants.length > MAX_PERSISTED_GRANTS) revert BC_TooManyGrants();
     for (uint i; i < x.grants.length; ++i) {
-      keys.push(GrantKey({module: x.module, asset: x.grants[i].asset, subId: x.grants[i].subId}));
+      Grant calldata g = x.grants[i];
+      (bool found, uint at) = _findKey(keys, x.module, g.asset, g.subId);
+      if (g.positive == 0 && g.negative == 0) {
+        if (found) {
+          keys[at] = keys[keys.length - 1];
+          keys.pop();
+        }
+      } else if (!found) {
+        if (keys.length == MAX_PERSISTED_GRANTS) revert BC_TooManyGrants();
+        keys.push(GrantKey({module: x.module, asset: g.asset, subId: g.subId}));
+      }
     }
+  }
+
+  /// @dev A call-only grant would overwrite, then zero, a resting order's persisted grant on the same key.
+  function _refusePersistedKeys(Action calldata x) internal view {
+    GrantKey[] storage keys = _persisted[x.accountId];
+    for (uint i; i < x.grants.length; ++i) {
+      (bool found,) = _findKey(keys, x.module, x.grants[i].asset, x.grants[i].subId);
+      if (found) revert BC_GrantPersisted();
+    }
+  }
+
+  function _findKey(GrantKey[] storage keys, address module, address asset, uint subId)
+    internal
+    view
+    returns (bool, uint)
+  {
+    for (uint i; i < keys.length; ++i) {
+      if (keys[i].module == module && keys[i].asset == asset && keys[i].subId == subId) return (true, i);
+    }
+    return (false, 0);
   }
 
   function _allowances(Grant[] calldata grants) internal pure returns (IAllowances.SubIdAllowance[] memory a) {
@@ -632,16 +676,16 @@ contract BookCustodian is Ownable2Step, ReentrancyGuard, EIP712, IERC721Receiver
 
   /**
    * @dev Persisted grants are zeroed first (bounded by MAX_PERSISTED_GRANTS), so none revives if the account comes
-   *      back. An account the margin engine moved out (its manager may) is already gone: the record is just cleared.
+   *      back. An account its manager moved out is already gone: only the record is cleared.
    */
   function _exit(uint accountId, address wallet) internal {
     delete accountOwner[accountId];
     if (subAccounts.ownerOf(accountId) == address(this)) {
       if (_persisted[accountId].length > 0) _clearGrants(accountId);
       subAccounts.transferFrom(address(this), wallet, accountId);
-    } else {
-      delete _persisted[accountId];
     }
+    // An account already moved out keeps its grant list: the grants are dormant (keyed under this contract as owner)
+    // and are zeroed by `onERC721Received` if it ever comes back.
     emit Exited(accountId, wallet);
   }
 
@@ -667,6 +711,7 @@ contract BookCustodian is Ownable2Step, ReentrancyGuard, EIP712, IERC721Receiver
     if (t.isBuy ? position >= 0 : position <= 0) revert BC_NotReducing();
     uint size = uint(position < 0 ? -position : position);
     if (m.lotSize > 0) size -= size % m.lotSize;
+    if (size == 0) revert BC_NotReducing();
     return t.amount < size ? t.amount : size;
   }
 }

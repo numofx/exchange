@@ -1,4 +1,4 @@
-# BookCustodian: spec (2026-11-19; built and reviewed once, not deployed)
+# BookCustodian: spec (2026-11-19; built, reviewed twice, not deployed)
 
 Option A of `onchain-fifo-book-scope.md`, decided by the owner 2026-11-19: a contract holds app users' trading
 accounts so the OnchainBooks can act on them, built now, and accounts migrate into it mid-series once it is reviewed.
@@ -23,10 +23,14 @@ Code: `src/periphery/BookCustodian.sol`. Tests: `test/fork/BookCustodianFork.t.s
    - a **book** gets SubAccounts subId allowances for exactly the signed order: its size on the series, in its
      direction, and its `maxFee` on cash (an immutable of the custodian, not the book's say), zeroed after the call;
    - a **module** gets only the allowances the signer lists in the signed `Act` (`grants`): zeroed after the call, or,
-     with `persist` (a resting order's power to settle), recorded per account (at most 16) until the wallet calls
-     `clearGrants` or exits;
+     with `persist` (a resting order's power to settle), recorded once per (module, asset, subId), at most 16 per
+     account, until the wallet calls `clearGrants` or exits. A persisted amount is the total for its key: a later
+     persisted grant replaces it, zero removes it, and a call-only grant on a persisted key is refused. An account
+     that left without `exit` (its manager moved it) and comes back has any leftover grant zeroed on arrival;
+     nothing deposits into it while it is away;
    - books, modules, key modules, managers and deposit assets are usable only 48 hours after the owner queues them,
-     so users can leave first. Disallowing is immediate. A disallowed module's persisted grants stay until the wallet
+     so users can leave first, and must be enabled within 7 days after that or be queued again. Disallowing is
+     immediate. A disallowed module's persisted grants stay until the wallet
      clears them or exits (the wallet's own choice; no admin path touches them).
 5. **A signature authorizes one action once.** EIP-712, per-signer nonces, a deadline; the account is part of what is
    signed, so a signature for one account cannot act on another.
@@ -93,6 +97,19 @@ The type strings are the `*_TYPEHASH` constants:
   owned by the custodian that it never recorded (`createAccountWithApproval(custodian, …)`), and those are inert.
 - **`CashAsset.forceWithdraw`** pays `ownerOf(account)`, which would be the custodian, with no way out. It is
   manager-only and MarginEngine does not call it today; a manager change that does would need a custodian change.
+- **Send accounts in with `safeTransferFrom` only** (review 2, R4): one sent with plain `transferFrom` reaches the
+  custodian with no record and no way out, and cannot safely be recovered (anyone can create custodian-owned
+  accounts).
+- **The series is not signed** (R6): a `Take` signs `book` and `marketId`; the future, subId and lot come from
+  `book.markets()`. Safe for OnchainBook (a market's future and subId are fixed at `createMarket`); a future book
+  whose markets can change would need them signed.
+- **reduceOnly relaxes all-or-nothing** (R6): `minFill` is clamped to the reduced size, so a reduce-only take fills
+  what the position allows. Under one lot it refuses (`BC_NotReducing`).
+- **A KeyModule bounds a stolen key only as far as the module does** (R6): a key may sign grants, including
+  persisted ones, which outlive revoking the key. A FIFO KeyModule needs its own price band and must never let cash
+  leave the account except to settle a fill.
+- **A relayer can choose which of the wallet's accounts** an exact-allowance permit deposit lands in (R6); the funds
+  stay the wallet's.
 - **FIFO self-trade identity** (F7): OnchainBook's self-trade check compares owners, and every custodian account has
   the same owner. A FIFO book or module must compare recorded wallets (`accountOwner`), or custodian users could never
   trade with one another.
@@ -122,8 +139,8 @@ The type strings are the `*_TYPEHASH` constants:
 ## Tests
 
 `test/fork/BookCustodianFork.t.sol`, on the live SubAccounts, MarginEngine v2, cash, the cNGN book and Matching
-(37 tests). Each review finding has a `testReview*` test that failed against the first version. 42 mutations, each
-removing or weakening one guard, are each caught by the suite (run 2026-11-19).
+(41 tests). Each review finding has a `testReview*` test that failed against the version reviewed. 50 mutations,
+each removing or weakening one guard, are each caught by the suite (run 2026-11-19).
 
 Not covered yet: exit of an account mid-auction (needs an underwater account on a fork); a real FIFO module (none
 exists; the tests use stand-in modules).
@@ -134,7 +151,7 @@ exists; the tests use stand-in modules).
 |---|---|---|
 | 1 | This spec, reviewed by the owner | done 2026-11-19 |
 | 2 | `BookCustodian` and its tests | done 2026-11-19 |
-| 3 | Adversarial review (not the author's) and fixes | first review and fixes done 2026-11-19; a fresh review of the fixed version next |
+| 3 | Adversarial review (not the author's) and fixes | two independent reviews, 2026-11-19; the second found nothing above low; its lows fixed |
 | 4 | Deploy, our own accounts first | after 3; a separate go-ahead |
 | 5 | Services and app: relay paths, owner checks, migration flow, trading key | 3–4 days |
 | 6 | External audit before user accounts migrate at scale | lead time |
