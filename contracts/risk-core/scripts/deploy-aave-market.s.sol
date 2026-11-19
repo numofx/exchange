@@ -4,16 +4,16 @@ pragma solidity ^0.8.0;
 import "openzeppelin/token/ERC20/extensions/IERC20Metadata.sol";
 import {OptionAsset} from "../src/assets/OptionAsset.sol";
 import {WrappedERC20Asset} from "../src/assets/WrappedERC20Asset.sol";
-import {LyraSpotFeed} from "../src/feeds/LyraSpotFeed.sol";
-import {LyraVolFeed} from "../src/feeds/LyraVolFeed.sol";
-import {LyraRateFeedStatic} from "../src/feeds/static/LyraRateFeedStatic.sol";
-import {LyraForwardFeed} from "../src/feeds/LyraForwardFeed.sol";
+import {NumoSpotFeed} from "../src/feeds/NumoSpotFeed.sol";
+import {NumoVolFeed} from "../src/feeds/NumoVolFeed.sol";
+import {NumoRateFeedStatic} from "../src/feeds/static/NumoRateFeedStatic.sol";
+import {NumoForwardFeed} from "../src/feeds/NumoForwardFeed.sol";
 import {BasePortfolioViewer} from "../src/risk-managers/BasePortfolioViewer.sol";
 import {IManager} from "../src/interfaces/IManager.sol";
-import {LyraSpotDiffFeed} from "../src/feeds/LyraSpotDiffFeed.sol";
+import {NumoSpotDiffFeed} from "../src/feeds/NumoSpotDiffFeed.sol";
 import {PerpAsset} from "../src/assets/PerpAsset.sol";
 import {IStandardManager} from "../src/interfaces/IStandardManager.sol";
-import {LyraRateFeed} from "../src/feeds/LyraRateFeed.sol";
+import {NumoRateFeed} from "../src/feeds/NumoRateFeed.sol";
 
 import "forge-std/console2.sol";
 import {Deployment, ConfigJson, Market} from "./types.sol";
@@ -77,19 +77,19 @@ contract DeployAAVEMarket is Utils {
     //  "spotFeed": "0x19CdEC5F8154C61AD92a014b1A29D1015B1FDc6B",
     //  "volFeed": "0x5899934A9072F8440b1c7943ed336B993560c27D"
 
-    market.iapFeed = LyraSpotDiffFeed(address(0xF367a32a5c9855ab1184407ABEFC037d3F739EC7));
-    market.ibpFeed = LyraSpotDiffFeed(address(0x500d875245dD56b8Dfbb9049e860607e4EbDBa3d));
+    market.iapFeed = NumoSpotDiffFeed(address(0xF367a32a5c9855ab1184407ABEFC037d3F739EC7));
+    market.ibpFeed = NumoSpotDiffFeed(address(0x500d875245dD56b8Dfbb9049e860607e4EbDBa3d));
     market.perp = PerpAsset(address(0x5c5413680641747Df53989F8cE4c85F79a28bcac));
-    market.perpFeed = LyraSpotDiffFeed(address(0x04DAA671922Ad60EfD55BE73B180Cf62d3dc3b09));
+    market.perpFeed = NumoSpotDiffFeed(address(0x04DAA671922Ad60EfD55BE73B180Cf62d3dc3b09));
     market.base = WLWrappedERC20Asset(address(0x23B154C5E9d218F8f713DBcaE8dcfDDF1A425214));
-    market.spotFeed = LyraSpotFeed(address(0x19CdEC5F8154C61AD92a014b1A29D1015B1FDc6B));
-    market.forwardFeed = LyraForwardFeed(address(0xF4901E996946597F476293B134A47be272d612B6));
+    market.spotFeed = NumoSpotFeed(address(0x19CdEC5F8154C61AD92a014b1A29D1015B1FDc6B));
+    market.forwardFeed = NumoForwardFeed(address(0xF4901E996946597F476293B134A47be272d612B6));
     market.option = OptionAsset(address(0x7a08009fEc93bFf4cdD8319eD228a0D7f73a8706));
-    market.volFeed = LyraVolFeed(address(0x5899934A9072F8440b1c7943ed336B993560c27D));
+    market.volFeed = NumoVolFeed(address(0x5899934A9072F8440b1c7943ed336B993560c27D));
 
 //
-//    market.forwardFeed = new LyraForwardFeed(market.spotFeed);
-//    market.volFeed = new LyraVolFeed();
+//    market.forwardFeed = new NumoForwardFeed(market.spotFeed);
+//    market.volFeed = new NumoVolFeed();
 //
 //    // init feeds
 //    market.volFeed.setHeartbeat(Config.VOL_HEARTBEAT);

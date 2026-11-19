@@ -5,7 +5,7 @@ import "forge-std/Test.sol";
 
 import "../../src/SubAccounts.sol";
 import "../../src/assets/WrappedERC20Asset.sol";
-import "../../src/feeds/static/LyraStaticSpotFeed.sol";
+import "../../src/feeds/static/NumoStaticSpotFeed.sol";
 import "../../src/interfaces/IStandardManager.sol";
 import "../../src/risk-managers/StandardManager.sol";
 import {CNGNSpotBatch} from "../../scripts/cngn-spot-batch.sol";
@@ -44,8 +44,8 @@ contract FORK_TestCNGNSpotResume is Test {
   StandardManager internal srm;
   WrappedERC20Asset internal cngnAsset;
   IERC20Metadata internal cngn;
-  LyraStaticSpotFeed internal staticCngnFeed;
-  LyraStaticSpotFeed internal staticStableFeed;
+  NumoStaticSpotFeed internal staticCngnFeed;
+  NumoStaticSpotFeed internal staticStableFeed;
   uint internal marketId;
   uint internal baseCap;
   uint internal cngnScale;
@@ -72,11 +72,11 @@ contract FORK_TestCNGNSpotResume is Test {
     cngnScale = 10 ** (18 - cngn.decimals());
     baseCap = cngn.totalSupply() * cngnScale * 10 / 100;
 
-    staticCngnFeed = new LyraStaticSpotFeed();
+    staticCngnFeed = new NumoStaticSpotFeed();
     staticCngnFeed.setSpot(USDC_PER_CNGN, 1e18);
     staticCngnFeed.transferOwnership(vault);
 
-    staticStableFeed = new LyraStaticSpotFeed();
+    staticStableFeed = new NumoStaticSpotFeed();
     staticStableFeed.setSpot(1e18, 1e18);
     staticStableFeed.transferOwnership(vault);
 
@@ -215,7 +215,7 @@ contract FORK_TestCNGNSpotResume is Test {
   function testFork_ForeignConfigurationReportsDiverged() public {
     _executePrefix(7); // market created, oracles not yet set
 
-    LyraStaticSpotFeed impostor = new LyraStaticSpotFeed();
+    NumoStaticSpotFeed impostor = new NumoStaticSpotFeed();
     impostor.setSpot(USDC_PER_CNGN, 1e18);
     vm.prank(vault);
     srm.setOraclesForMarket(marketId, ISpotFeed(address(impostor)), IForwardFeed(address(0)), IVolFeed(address(0)));

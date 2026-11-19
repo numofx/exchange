@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.0;
 
-import {IntLib} from "lyra-utils/math/IntLib.sol";
-import {OptionEncoding} from "lyra-utils/encoding/OptionEncoding.sol";
+import {IntLib} from "numo-utils/math/IntLib.sol";
+import {OptionEncoding} from "numo-utils/encoding/OptionEncoding.sol";
 import {SafeCast} from "openzeppelin/utils/math/SafeCast.sol";
-import {DecimalMath} from "lyra-utils/decimals/DecimalMath.sol";
-import {SignedDecimalMath} from "lyra-utils/decimals/SignedDecimalMath.sol";
+import {DecimalMath} from "numo-utils/decimals/DecimalMath.sol";
+import {SignedDecimalMath} from "numo-utils/decimals/SignedDecimalMath.sol";
 
 import {BaseOnChainSigningTSA} from "./BaseOnChainSigningTSA.sol";
 import {ITradeModule} from "../interfaces/ITradeModule.sol";

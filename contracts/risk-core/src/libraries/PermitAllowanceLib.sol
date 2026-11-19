@@ -5,7 +5,7 @@ import {IAllowances} from "../interfaces/IAllowances.sol";
 
 /**
  * @title PermitAllowanceLib
- * @author Lyra
+ * @author Numo
  * @notice hash function for PermitAllowance object
  */
 library PermitAllowanceLib {

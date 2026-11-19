@@ -5,7 +5,7 @@ import {IAsset} from "../../../src/interfaces/IAsset.sol";
 import {ISubAccounts} from "../../../src/interfaces/ISubAccounts.sol";
 import {IManager} from "../../../src/interfaces/IManager.sol";
 
-import "lyra-utils/decimals/DecimalMath.sol";
+import "numo-utils/decimals/DecimalMath.sol";
 
 contract MockManager is IManager {
   ISubAccounts subAccounts;

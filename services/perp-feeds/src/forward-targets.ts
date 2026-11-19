@@ -1,5 +1,5 @@
 /**
- * The forward a dated future (cNGN, or on v2 any base quoted in USDC) is marked to, and the diff its LyraForwardFeed stores.
+ * The forward a dated future (cNGN, or on v2 any base quoted in USDC) is marked to, and the diff its NumoForwardFeed stores.
  *
  * Two contracts, by `version`:
  *  - v1 (src/legacy/v1/FutureAssetV1, USDC-cNGN-<expiry>): prices here are cNGN per USDC at 18dp, the

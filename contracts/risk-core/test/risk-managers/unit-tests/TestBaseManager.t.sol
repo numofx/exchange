@@ -2,7 +2,7 @@
 pragma solidity ^0.8.18;
 
 import "forge-std/Test.sol";
-import "lyra-utils/encoding/OptionEncoding.sol";
+import "numo-utils/encoding/OptionEncoding.sol";
 
 import {IManager} from "../../../src/interfaces/IManager.sol";
 import {IBaseManager} from "../../../src/interfaces/IBaseManager.sol";
@@ -43,7 +43,7 @@ contract UNIT_TestBaseManager is Test {
   SRMPortfolioViewer viewer;
 
   function setUp() public {
-    subAccounts = new SubAccounts("Lyra Accounts", "LyraAccount");
+    subAccounts = new SubAccounts("Numo Accounts", "NumoAccount");
 
     feed = new MockFeeds();
     usdc = new MockERC20("USDC", "USDC");

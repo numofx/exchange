@@ -9,7 +9,7 @@ the next touch of the contract.
 ## Why
 
 `_getFundingRate = premium / convergencePeriod + staticInterestRate`, clamped to ±0.4%/h. With mark ≈ index
-the premium is zero and the whole rate is the static term, which deploy left at Lyra's generic
+the premium is zero and the whole rate is the static term, which deploy left at upstream's generic
 `+0.0000125e18` (+0.00125%/h, +10.95% APR, "borrow the base asset"). A positive rate is paid by on-chain
 longs, which are long cNGN. On a cNGN perp quoted in USDC the carry longs should pay is r_USD − r_NGN, which
 is negative: long cNGN should receive the differential and long USD should pay. The sign is inverted and the

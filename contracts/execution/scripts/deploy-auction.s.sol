@@ -3,13 +3,13 @@ pragma solidity ^0.8.0;
 
 import "forge-std/console2.sol";
 import {Utils} from "./utils.sol";
-import "../src/periphery/LyraSettlementUtils.sol";
+import "../src/periphery/NumoSettlementUtils.sol";
 import {ISubAccounts} from "v2-core/src/interfaces/ISubAccounts.sol";
 import {ISecurityModule} from "v2-core/src/interfaces/ISecurityModule.sol";
 import {ICashAsset} from "v2-core/src/interfaces/ICashAsset.sol";
 import {IMatching} from "../src/interfaces/IMatching.sol";
 import {DutchAuction} from "v2-core/src/liquidation/DutchAuction.sol";
-import {LyraAuctionUtils} from "../src/periphery/LyraAuctionUtils.sol";
+import {NumoAuctionUtils} from "../src/periphery/NumoAuctionUtils.sol";
 import {LiquidateModule} from "../src/modules/LiquidateModule.sol";
 import {Matching} from "../src/Matching.sol";
 
@@ -37,7 +37,7 @@ contract DeployNewAuction is Utils {
 
 
     DutchAuction auction = new DutchAuction(subAccounts, securityModule, cash);
-    LyraAuctionUtils auctionUtils = new LyraAuctionUtils(subAccounts, auction, srm);
+    NumoAuctionUtils auctionUtils = new NumoAuctionUtils(subAccounts, auction, srm);
 
 //    BaseManager(srm).setLiquidation(auction);
 //    BaseManager(ethPMRM).setLiquidation(auction);

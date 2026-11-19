@@ -12,9 +12,9 @@ import {InterestRateModel} from "../src/assets/InterestRateModel.sol";
 import {DutchAuction} from "../src/liquidation/DutchAuction.sol";
 import {StandardManager} from "../src/risk-managers/StandardManager.sol";
 import {SRMPortfolioViewer} from "../src/risk-managers/SRMPortfolioViewer.sol";
-import {LyraSpotFeed} from "../src/feeds/LyraSpotFeed.sol";
-import {LyraSpotDiffFeed} from "../src/feeds/LyraSpotDiffFeed.sol";
-import {LyraStaticSpotFeed} from "../src/feeds/static/LyraStaticSpotFeed.sol";
+import {NumoSpotFeed} from "../src/feeds/NumoSpotFeed.sol";
+import {NumoSpotDiffFeed} from "../src/feeds/NumoSpotDiffFeed.sol";
+import {NumoStaticSpotFeed} from "../src/feeds/static/NumoStaticSpotFeed.sol";
 import {IDutchAuction} from "../src/interfaces/IDutchAuction.sol";
 import {IStandardManager} from "../src/interfaces/IStandardManager.sol";
 import {IForwardFeed} from "../src/interfaces/IForwardFeed.sol";
@@ -27,7 +27,7 @@ import "./config-mainnet.sol";
 /**
  * @title DeployCngnPerpStack
  *
- * @dev A USDC-settled NGN perpetual on its own Lyra-style stack, beside the legacy one rather than
+ * @dev A USDC-settled NGN perpetual on its own Numo-style stack, beside the legacy one rather than
  *      inside it. The legacy SRM's cashAsset is the CashAsset 0x6B232A…, which holds ~2 USDC
  *      against far larger claims; every perp PnL, funding and OI-fee transfer on an SRM moves in
  *      its cashAsset (BaseManager._applyCashDelta), so a perp there would pay winners in cash that
@@ -44,8 +44,8 @@ import "./config-mainnet.sol";
  *      so PnL lands in USDC cash with no conversion. The venue displays the inverse (cNGN per USDC)
  *      with long/short flipped; that translation lives in markets-service, not here.
  *
- * @dev FEEDS. The index is a LyraSpotFeed signed by FEED_SIGNER — the revived cNGN signer, fed by
- *      the rate-picker index publisher. Mark and the two impact prices are LyraSpotDiffFeeds on that
+ * @dev FEEDS. The index is a NumoSpotFeed signed by FEED_SIGNER — the revived cNGN signer, fed by
+ *      the rate-picker index publisher. Mark and the two impact prices are NumoSpotDiffFeeds on that
  *      index, published from the venue's own book, and must be pushed to the feeds directly or through
  *      a TradeModule's managerData: SubAccounts runs the perp's adjustment, which reads them, before
  *      the SRM processes managerData on a raw transfer. They are still whitelisted SRM callees. A feed that goes stale makes getSpot revert,
@@ -114,11 +114,11 @@ contract DeployCngnPerpStack is Utils {
     StandardManager srm;
     SecurityModule securityModule;
     DutchAuction auction;
-    LyraStaticSpotFeed stableFeed;
-    LyraSpotFeed indexFeed;
-    LyraSpotDiffFeed markFeed;
-    LyraSpotDiffFeed impactAskFeed;
-    LyraSpotDiffFeed impactBidFeed;
+    NumoStaticSpotFeed stableFeed;
+    NumoSpotFeed indexFeed;
+    NumoSpotDiffFeed markFeed;
+    NumoSpotDiffFeed impactAskFeed;
+    NumoSpotDiffFeed impactBidFeed;
     PerpAsset perp;
     uint marketId;
     uint feeRecipientAccount;
@@ -207,7 +207,7 @@ contract DeployCngnPerpStack is Utils {
     stack.auction = new DutchAuction(subAccounts, stack.securityModule, stack.cash);
     stack.srm.setLiquidation(stack.auction);
 
-    stack.stableFeed = new LyraStaticSpotFeed();
+    stack.stableFeed = new NumoStaticSpotFeed();
     stack.stableFeed.setSpot(STABLE_PRICE, 1e18);
 
     stack.viewer.setStandardManager(stack.srm);
@@ -230,10 +230,10 @@ contract DeployCngnPerpStack is Utils {
   }
 
   function _deployFeeds(Stack memory stack, Params memory params) internal {
-    stack.indexFeed = new LyraSpotFeed();
-    stack.markFeed = new LyraSpotDiffFeed(stack.indexFeed);
-    stack.impactAskFeed = new LyraSpotDiffFeed(stack.indexFeed);
-    stack.impactBidFeed = new LyraSpotDiffFeed(stack.indexFeed);
+    stack.indexFeed = new NumoSpotFeed();
+    stack.markFeed = new NumoSpotDiffFeed(stack.indexFeed);
+    stack.impactAskFeed = new NumoSpotDiffFeed(stack.indexFeed);
+    stack.impactBidFeed = new NumoSpotDiffFeed(stack.indexFeed);
 
     stack.indexFeed.setHeartbeat(INDEX_HEARTBEAT);
     stack.markFeed.setHeartbeat(Config.PERP_HEARTBEAT);

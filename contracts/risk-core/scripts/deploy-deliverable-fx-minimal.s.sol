@@ -18,8 +18,8 @@ import {InterestRateModel} from "../src/assets/InterestRateModel.sol";
 import {SecurityModule} from "../src/SecurityModule.sol";
 import {DutchAuction} from "../src/liquidation/DutchAuction.sol";
 import {WrappedERC20Asset} from "../src/assets/WrappedERC20Asset.sol";
-import {LyraERC20} from "../src/l2/LyraERC20.sol";
-import {LyraSpotFeed} from "../src/feeds/LyraSpotFeed.sol";
+import {NumoERC20} from "../src/l2/NumoERC20.sol";
+import {NumoSpotFeed} from "../src/feeds/NumoSpotFeed.sol";
 import {BasePortfolioViewer} from "../src/risk-managers/BasePortfolioViewer.sol";
 import {DeliverableFXManager} from "../src/risk-managers/DeliverableFXManager.sol";
 import {DeliverableFXFutureAsset} from "../src/assets/DeliverableFXFutureAsset.sol";
@@ -135,7 +135,7 @@ contract DeployDeliverableFXMinimal is Utils {
     internal
     returns (SubAccounts subAccounts, CashAsset cash, SecurityModule securityModule, DutchAuction auction)
   {
-    subAccounts = new SubAccounts("Lyra Margin Accounts", "LyraMarginNFTs");
+    subAccounts = new SubAccounts("Numo Margin Accounts", "NumoMarginNFTs");
 
     (uint minRate, uint rateMultiplier, uint highRateMultiplier, uint optimalUtil) = Config.getDefaultInterestRateModel();
     InterestRateModel rateModel = new InterestRateModel(minRate, rateMultiplier, highRateMultiplier, optimalUtil);
@@ -177,13 +177,13 @@ contract DeployDeliverableFXMinimal is Utils {
     cngnUnderlying = vm.envOr("CNGN_TOKEN_ADDRESS", address(0));
     if (cngnUnderlying == address(0)) {
       // 6 decimals to match the canonical cNGN deployment on Base mainnet
-      cngnUnderlying = address(new LyraERC20("cNGN", "cNGN", 6));
+      cngnUnderlying = address(new NumoERC20("cNGN", "cNGN", 6));
     }
     wrappedCngn = new WrappedERC20Asset(subAccounts, IERC20Metadata(cngnUnderlying));
 
     address cngnSpotFeedExisting = vm.envOr("CNGN_SPOT_FEED_ADDRESS", address(0));
     if (cngnSpotFeedExisting == address(0)) {
-      LyraSpotFeed spotFeed = new LyraSpotFeed();
+      NumoSpotFeed spotFeed = new NumoSpotFeed();
       spotFeed.setHeartbeat(Config.SPOT_HEARTBEAT);
       spotFeed.addSigner(deployer, true);
       spotFeed.setRequiredSigners(1);

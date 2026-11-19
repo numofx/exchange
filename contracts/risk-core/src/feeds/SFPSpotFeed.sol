@@ -13,7 +13,7 @@ interface IStrandsSFP {
 
 /**
  * @title StrandsSFPSpotFeed
- * @author Lyra
+ * @author Numo
  * @notice Spot feed for StrandsSFP using StrandsSFP.getSharePrice
  */
 contract SFPSpotFeed is ISpotFeed, Ownable2Step {

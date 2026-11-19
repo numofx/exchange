@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.18;
 
-import {SVITestParams} from "lyra-utils-test/math/SVI.t.sol";
+import {SVITestParams} from "numo-utils-test/math/SVI.t.sol";
 import {IDataReceiver} from "../../../src/interfaces/IDataReceiver.sol";
 import {IForwardFeed} from "../../../src/interfaces/IForwardFeed.sol";
 import {IInterestRateFeed} from "../../../src/interfaces/IInterestRateFeed.sol";
@@ -10,7 +10,7 @@ import {ISettlementFeed} from "../../../src/interfaces/ISettlementFeed.sol";
 import {ISpotFeed} from "../../../src/interfaces/ISpotFeed.sol";
 import {IVolFeed} from "../../../src/interfaces/IVolFeed.sol";
 
-import {SVI} from "lyra-utils/math/SVI.sol";
+import {SVI} from "numo-utils/math/SVI.sol";
 
 import "forge-std/console.sol";
 

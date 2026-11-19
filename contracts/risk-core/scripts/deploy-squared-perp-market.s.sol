@@ -9,7 +9,7 @@ import "./config-mainnet.sol";
 
 import {ISpotFeed} from "../src/interfaces/ISpotFeed.sol";
 import {IManager} from "../src/interfaces/IManager.sol";
-import {LyraSpotDiffFeed} from "../src/feeds/LyraSpotDiffFeed.sol";
+import {NumoSpotDiffFeed} from "../src/feeds/NumoSpotDiffFeed.sol";
 import {ChainlinkSpotFeed, IAggregatorV3} from "../src/feeds/ChainlinkSpotFeed.sol";
 import {InvertedChainlinkSpotFeed} from "../src/feeds/InvertedChainlinkSpotFeed.sol";
 import {SquaredPerpAsset} from "../src/assets/SquaredPerpAsset.sol";
@@ -27,9 +27,9 @@ contract DeploySquaredPerpMarket is Utils {
 
   struct SquaredPerpDeployment {
     SquaredPerpAsset perp;
-    LyraSpotDiffFeed perpFeed;
-    LyraSpotDiffFeed iapFeed;
-    LyraSpotDiffFeed ibpFeed;
+    NumoSpotDiffFeed perpFeed;
+    NumoSpotDiffFeed iapFeed;
+    NumoSpotDiffFeed ibpFeed;
     BasePortfolioViewer viewer;
     SquaredPerpManager manager;
     ISpotFeed spotFeed;
@@ -61,9 +61,9 @@ contract DeploySquaredPerpMarket is Utils {
   ) internal returns (SquaredPerpDeployment memory squaredPerpDeployment) {
     squaredPerpDeployment.spotFeed = _getSquaredPerpSpotFeed(marketName);
 
-    squaredPerpDeployment.perpFeed = new LyraSpotDiffFeed(squaredPerpDeployment.spotFeed);
-    squaredPerpDeployment.iapFeed = new LyraSpotDiffFeed(squaredPerpDeployment.spotFeed);
-    squaredPerpDeployment.ibpFeed = new LyraSpotDiffFeed(squaredPerpDeployment.spotFeed);
+    squaredPerpDeployment.perpFeed = new NumoSpotDiffFeed(squaredPerpDeployment.spotFeed);
+    squaredPerpDeployment.iapFeed = new NumoSpotDiffFeed(squaredPerpDeployment.spotFeed);
+    squaredPerpDeployment.ibpFeed = new NumoSpotDiffFeed(squaredPerpDeployment.spotFeed);
 
     squaredPerpDeployment.perpFeed.setHeartbeat(Config.PERP_HEARTBEAT);
     squaredPerpDeployment.iapFeed.setHeartbeat(Config.IMPACT_PRICE_HEARTBEAT);

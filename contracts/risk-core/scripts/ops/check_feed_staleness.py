@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Feed staleness monitor for the Base deliverable FX market.
 
-Reads each LyraSpotFeed's packed spotDetail word (slot 6: uint96 price,
+Reads each NumoSpotFeed's packed spotDetail word (slot 6: uint96 price,
 uint64 confidence, uint64 timestamp) via raw JSON-RPC and alerts a webhook
 when the last update is older than the warning threshold — before the
 on-chain heartbeat hard-freezes the market.
@@ -94,7 +94,7 @@ def feed_age(url: str, feed: str) -> tuple[int, float]:
 
 
 def diff_feed_age(url: str, feed: str) -> int:
-  """Age of a LyraSpotDiffFeed's last update, from its public spotDiffDetails() getter."""
+  """Age of a NumoSpotDiffFeed's last update, from its public spotDiffDetails() getter."""
   out = rpc(url, "eth_call", [{"to": feed, "data": SEL_SPOT_DIFF_DETAILS}, "latest"])
   raw = out[2:] if out.startswith("0x") else out
   ts = int(raw[128:192], 16)  # (int96 spotDiff, uint64 confidence, uint64 timestamp)

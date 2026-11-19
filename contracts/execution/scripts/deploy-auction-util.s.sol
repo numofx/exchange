@@ -3,7 +3,7 @@ pragma solidity ^0.8.0;
 
 import "forge-std/console2.sol";
 import {Utils} from "./utils.sol";
-import "../src/periphery/LyraAuctionUtils.sol";
+import "../src/periphery/NumoAuctionUtils.sol";
 
 import {ISubAccounts} from "v2-core/src/interfaces/ISubAccounts.sol";
 import {DutchAuction} from "v2-core/src/liquidation/DutchAuction.sol";
@@ -24,7 +24,7 @@ contract DeployAuctionUtil is Utils {
     address auctions = abi.decode(vm.parseJson(file, ".auction"), (address));
     address srm = abi.decode(vm.parseJson(file, ".srm"), (address));
 
-    LyraAuctionUtils auctionUtils = new LyraAuctionUtils(ISubAccounts(subAccounts), DutchAuction(auctions), srm);
+    NumoAuctionUtils auctionUtils = new NumoAuctionUtils(ISubAccounts(subAccounts), DutchAuction(auctions), srm);
 
     console2.log("auction utils address: ", address(auctionUtils));
   }

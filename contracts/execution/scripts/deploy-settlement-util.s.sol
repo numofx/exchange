@@ -3,7 +3,7 @@ pragma solidity ^0.8.0;
 
 import "forge-std/console2.sol";
 import {Utils} from "./utils.sol";
-import "../src/periphery/LyraSettlementUtils.sol";
+import "../src/periphery/NumoSettlementUtils.sol";
 
 
 contract DeploySettlementUtils is Utils {
@@ -16,7 +16,7 @@ contract DeploySettlementUtils is Utils {
     address deployer = vm.addr(deployerPrivateKey);
     console2.log("deployer: ", deployer);
 
-    LyraSettlementUtils settlementUtils = new LyraSettlementUtils();
+    NumoSettlementUtils settlementUtils = new NumoSettlementUtils();
 
     console2.log("settlement utils address: ", address(settlementUtils));
   }

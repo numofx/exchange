@@ -2,15 +2,15 @@
 pragma solidity ^0.8.18;
 
 import "openzeppelin/utils/math/SafeCast.sol";
-import "lyra-utils/decimals/DecimalMath.sol";
-import "lyra-utils/decimals/SignedDecimalMath.sol";
+import "numo-utils/decimals/DecimalMath.sol";
+import "numo-utils/decimals/SignedDecimalMath.sol";
 
 import {ISubAccounts} from "../interfaces/ISubAccounts.sol";
 import {PerpAsset} from "./PerpAsset.sol";
 
 /**
  * @title SquaredPerpAsset
- * @author Lyra
+ * @author Numo
  * @dev Perp variant that transforms spot and perp prices into squared prices while
  *      retaining the existing perp accounting, funding, and settlement flow.
  *      Prices are normalized back to 18 decimals via DecimalMath.

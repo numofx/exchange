@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 pragma solidity ^0.8.20;
 
-import {IntLib} from "lyra-utils/math/IntLib.sol";
-import {FixedPointMathLib} from "lyra-utils/math/FixedPointMathLib.sol";
-import {OptionEncoding} from "lyra-utils/encoding/OptionEncoding.sol";
-import {Black76} from "lyra-utils/math/Black76.sol";
+import {IntLib} from "numo-utils/math/IntLib.sol";
+import {FixedPointMathLib} from "numo-utils/math/FixedPointMathLib.sol";
+import {OptionEncoding} from "numo-utils/encoding/OptionEncoding.sol";
+import {Black76} from "numo-utils/math/Black76.sol";
 import {SafeCast} from "openzeppelin/utils/math/SafeCast.sol";
-import {DecimalMath} from "lyra-utils/decimals/DecimalMath.sol";
-import {SignedDecimalMath} from "lyra-utils/decimals/SignedDecimalMath.sol";
-import {ConvertDecimals} from "lyra-utils/decimals/ConvertDecimals.sol";
+import {DecimalMath} from "numo-utils/decimals/DecimalMath.sol";
+import {SignedDecimalMath} from "numo-utils/decimals/SignedDecimalMath.sol";
+import {ConvertDecimals} from "numo-utils/decimals/ConvertDecimals.sol";
 
 import {BaseTSA} from "./BaseOnChainSigningTSA.sol";
 import {ISubAccounts} from "v2-core/src/interfaces/ISubAccounts.sol";
@@ -71,6 +71,8 @@ contract LeveragedBasisTSA is CollateralManagementTSA {
     uint minSignatureExpiry;
     uint maxSignatureExpiry;
   }
+
+  // The "lyra.storage" namespace is kept: the slot below is its hash, and deployed proxies use it.
 
   /// @custom:storage-location erc7201:lyra.storage.LeveragedBasisTSA
   struct LBTSAStorage {

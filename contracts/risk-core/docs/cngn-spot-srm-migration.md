@@ -59,12 +59,12 @@ adjustment (`_getMarketMargin`, `_getBaseMarginAndMtM:609`, `_getDepegMultiplier
 revert when stale. Live heartbeats on Base are **180s** and **3600s**. A keeper gap therefore halts
 a fully-funded orderbook whose solvency does not depend on either price.
 
-**Fix:** deploy two `LyraStaticSpotFeed`s — one holding the inverted cNGN price, one holding
-`1e18` for the stable feed. `LyraStaticSpotFeed.getSpot()` has no staleness check and cannot revert.
+**Fix:** deploy two `NumoStaticSpotFeed`s — one holding the inverted cNGN price, one holding
+`1e18` for the stable feed. `NumoStaticSpotFeed.getSpot()` has no staleness check and cannot revert.
 `testFork_TradesWithNoLiveOracleAfterHeartbeatsWouldHaveExpired` warps 30 days, shows the old feed
 reverting, and settles a trade anyway.
 
-Note `LyraStaticSpotFeed` does **not** hardcode confidence — it is whatever `setSpot` is given, and
+Note `NumoStaticSpotFeed` does **not** hardcode confidence — it is whatever `setSpot` is given, and
 defaults to 0. Nothing on the spot path reads it: all three `spotConf` consumers are unreachable
 (`_getNetPerpMargin` returns at `position == 0`, `_getNetOptionMarginAndMtM`'s body is loop-only
 over empty `expiryHoldings`, `_getBaseMarginAndMtM` returns at the `baseMargin == 0` short-circuit
@@ -89,7 +89,7 @@ This block is duplicated in `DEPLOYED_ADDRESSES.md` next to the addresses.
 `SubAccounts` writes `manager[accountId]` only in `_createAccount` (`src/SubAccounts.sol:97`). There
 is no `changeManager` — the interface still declares an `AccountManagerChanged` event
 (`ISubAccounts.sol:226`) that nothing emits — and `SubAccounts` is not upgradeable. **An account
-created under DFXM can never move to the SRM.** This is inherited from upstream Derive verbatim, so
+created under DFXM can never move to the SRM.** This is inherited from upstream verbatim, so
 redeploying upstream does not fix it.
 
 Migration is therefore: register the market → clients pass the SRM address to

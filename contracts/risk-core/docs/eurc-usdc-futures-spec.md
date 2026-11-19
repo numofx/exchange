@@ -728,7 +728,7 @@ Decided 2026-11-14 (kept for the record):
 - Base verifier proxy and fee: recorded in A2.1, no fee today.
 - Step 2 spline policy for DEX skews (B6); `feeBypassedCaller` (B4).
 - Parameters: tick size, `takeMaxAge`, gas floor, ttl limits, refill rates, makers-per-market cap, tax.
-- Licensing: risk-core files are BUSL-1.1 (Lyra/Derive v2 lineage). Confirm the terms permit this product before
+- Licensing: risk-core files are BUSL-1.1 (upstream v2 lineage). Confirm the terms permit this product before
   mainnet.
 
 ### B14a. Stage 2 decision sheet (2026-11-16, for the 2026-11-24 go/no-go)
@@ -748,7 +748,7 @@ env (`deploy-onchain-book.s.sol`) or a vault `setMarketParams` later, never a co
 | Taker fee | **the registry's, today 5 bps** | Not chosen here: the proposer refuses an enable whose fee differs from `/markets`. | — |
 | DEX-skew policy (B6) | **Maker-side: widen the half-spread when the Aerodrome pool is thin or the EURC dexprice stream diverges from the push feed; stop quoting past a set divergence.** No contract change. | The index is a DEX-weighted stream; the book cannot tell a skew from a move. | Quote only in deep-liquidity hours (a schedule in the maker). |
 | Rehearsal | **Mainnet canary**, as Stage 1 (A1.4): deploy closed, enable with our maker quoting one small curve, take against it from a throwaway account, then raise size. | The 2026-11-15 precedent; Sepolia lacks the verifier and the live engine. | Base Sepolia with a short-dated series (B12 as written; ~3 h). |
-| Licence | **Owner to confirm** | `LICENSE` names Numo Foundation as licensor, Additional Use Grant: none, Change Date 2029-03-20 for code from 2025-02-17 (GPL-3.0-or-later after). Whether the upstream Lyra/Derive v2 BUSL permits Numo's production use is outside this repo. | — |
+| Licence | **Owner to confirm** | `LICENSE` names Numo Foundation as licensor, Additional Use Grant: none, Change Date 2029-03-20 for code from 2025-02-17 (GPL-3.0-or-later after). Whether the upstream v2 BUSL permits Numo's production use is outside this repo. | — |
 
 ## B15. Implementation record (Stage 2 started 2026-11-15)
 

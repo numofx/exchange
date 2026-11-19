@@ -6,9 +6,9 @@ import "openzeppelin/utils/math/SignedMath.sol";
 import "openzeppelin/utils/math/Math.sol";
 import "openzeppelin/utils/ReentrancyGuard.sol";
 
-import "lyra-utils/decimals/DecimalMath.sol";
-import "lyra-utils/decimals/SignedDecimalMath.sol";
-import "lyra-utils/arrays/UnorderedMemoryArray.sol";
+import "numo-utils/decimals/DecimalMath.sol";
+import "numo-utils/decimals/SignedDecimalMath.sol";
+import "numo-utils/arrays/UnorderedMemoryArray.sol";
 
 import {ISubAccounts} from "../interfaces/ISubAccounts.sol";
 import {IAsset} from "../interfaces/IAsset.sol";
@@ -33,7 +33,7 @@ import {OptionMarginHelper} from "./OptionMarginHelper.sol";
 
 /**
  * @title StandardManager
- * @author Lyra
+ * @author Numo
  * @notice Risk Manager that margin perp and option in isolation.
  */
 contract StandardManager is IStandardManager, ILiquidatableManager, BaseManager, ReentrancyGuard {

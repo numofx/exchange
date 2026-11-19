@@ -3,7 +3,7 @@ pragma solidity ^0.8.18;
 
 /**
  * @title ISecurityModule
- * @author Lyra
+ * @author Numo
  * @notice interface for ISecurityModule. For full functionality, see src/SecurityModule
  */
 interface ISecurityModule {

@@ -56,7 +56,7 @@ const KEYS = {
 const FEED_SIGNER = privateKeyToAccount(keccak256(toHex('numo.perp-keeper.e2e.feed-signer')));
 
 /**
- * A signed Lyra feed update, as services/perp-feeds signs it (feed-data.ts). Inlined rather than
+ * A signed Numo feed update, as services/perp-feeds signs it (feed-data.ts). Inlined rather than
  * imported so the two services stay separate packages; the perp-feeds anvil suite pins the format.
  */
 async function signedUpdate(kind: 'LyraSpotFeed' | 'LyraSpotDiffFeed', feed: Address, data: Hex, timestamp: bigint, deadline: bigint) {

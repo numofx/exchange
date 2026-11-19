@@ -9,9 +9,9 @@ import "openzeppelin/utils/math/SignedMath.sol";
 import "openzeppelin/utils/math/Math.sol";
 import "openzeppelin/utils/ReentrancyGuard.sol";
 
-import "lyra-utils/decimals/DecimalMath.sol";
-import "lyra-utils/decimals/SignedDecimalMath.sol";
-import "lyra-utils/arrays/UnorderedMemoryArray.sol";
+import "numo-utils/decimals/DecimalMath.sol";
+import "numo-utils/decimals/SignedDecimalMath.sol";
+import "numo-utils/arrays/UnorderedMemoryArray.sol";
 
 import {ISubAccounts} from "../../interfaces/ISubAccounts.sol";
 import {IAsset} from "../../interfaces/IAsset.sol";
@@ -40,7 +40,7 @@ import {FutureVMLibV1 as FutureVMLib} from "./FutureVMLibV1.sol";
 
 /**
  * @title MarginEngine
- * @author Lyra (StandardManager), forked by Numo
+ * @author Numo
  * @notice A fork of StandardManager that margins spot (the base asset), perps, options and cNGN-settled dated futures in
  *         one account. Each market is margined as in StandardManager; positions are margined gross (no offsets).
  * @dev    The fork's changes, against StandardManager:

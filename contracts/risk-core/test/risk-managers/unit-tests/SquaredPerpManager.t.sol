@@ -42,7 +42,7 @@ contract UNIT_SquaredPerpManager is Test {
   uint bobAcc;
 
   function setUp() public {
-    subAccounts = new SubAccounts("Lyra Margin Accounts", "LYRA");
+    subAccounts = new SubAccounts("Numo Margin Accounts", "NUMO");
     usdc = new MockERC20("USDC", "USDC");
     cash = new MockCash(usdc, subAccounts);
     viewer = new BasePortfolioViewer(subAccounts, cash);

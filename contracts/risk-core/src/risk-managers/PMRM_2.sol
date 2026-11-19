@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.27;
 
-import "lyra-utils/decimals/DecimalMath.sol";
+import "numo-utils/decimals/DecimalMath.sol";
 
-import "lyra-utils/decimals/SignedDecimalMath.sol";
-import "lyra-utils/encoding/OptionEncoding.sol";
+import "numo-utils/decimals/SignedDecimalMath.sol";
+import "numo-utils/encoding/OptionEncoding.sol";
 import "openzeppelin/utils/ReentrancyGuard.sol";
 import "openzeppelin/utils/math/Math.sol";
 import "openzeppelin/utils/math/SafeCast.sol";
 
 import "openzeppelin/utils/math/SignedMath.sol";
 import {BaseManager} from "./BaseManager.sol";
-import {FixedPointMathLib} from "lyra-utils/math/FixedPointMathLib.sol";
+import {FixedPointMathLib} from "numo-utils/math/FixedPointMathLib.sol";
 import {IAsset} from "../interfaces/IAsset.sol";
 import {IBasePortfolioViewer} from "../interfaces/IBasePortfolioViewer.sol";
 import {ICashAsset} from "../interfaces/ICashAsset.sol";
@@ -34,7 +34,7 @@ import {BaseManagerUpgradeable} from "./BaseManagerUpgradeable.sol";
 
 /**
  * @title PMRM_2
- * @author Derive
+ * @author Numo
  * @notice Risk Manager that uses a SPAN like methodology to margin an options portfolio.
  */
 contract PMRM_2 is IPMRM_2, ILiquidatableManager, BaseManagerUpgradeable, ReentrancyGuardUpgradeable {

@@ -4,7 +4,7 @@ pragma solidity ^0.8.0;
 import "../utils/PPTSATestUtils.sol";
 
 import {SignedMath} from "openzeppelin/utils/math/SignedMath.sol";
-import "lyra-utils/decimals/SignedDecimalMath.sol";
+import "numo-utils/decimals/SignedDecimalMath.sol";
 import "v2-core/test/assets/cashAsset/mocks/MockInterestRateModel.sol";
 
 contract PPTSA_ValidationTests is PPTSATestUtils {

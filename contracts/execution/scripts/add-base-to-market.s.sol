@@ -16,13 +16,13 @@ import {IStandardManager} from "v2-core/src/interfaces/IStandardManager.sol";
 import {StandardManager} from "v2-core/src/risk-managers/StandardManager.sol";
 import {SRMPortfolioViewer} from "v2-core/src/risk-managers/SRMPortfolioViewer.sol";
 import {IVolFeed} from "v2-core/src/interfaces/IVolFeed.sol";
-import {LyraForwardFeed} from "v2-core/src/feeds/LyraForwardFeed.sol";
-import {LyraRateFeedStatic} from "v2-core/src/feeds/static/LyraRateFeedStatic.sol";
-import {LyraSpotDiffFeed} from "v2-core/src/feeds/LyraSpotDiffFeed.sol";
+import {NumoForwardFeed} from "v2-core/src/feeds/NumoForwardFeed.sol";
+import {NumoRateFeedStatic} from "v2-core/src/feeds/static/NumoRateFeedStatic.sol";
+import {NumoSpotDiffFeed} from "v2-core/src/feeds/NumoSpotDiffFeed.sol";
 
-import {LyraSpotFeed} from "v2-core/src/feeds/LyraSpotFeed.sol";
+import {NumoSpotFeed} from "v2-core/src/feeds/NumoSpotFeed.sol";
 
-import {LyraVolFeed} from "v2-core/src/feeds/LyraVolFeed.sol";
+import {NumoVolFeed} from "v2-core/src/feeds/NumoVolFeed.sol";
 import {OptionAsset} from "v2-core/src/assets/OptionAsset.sol";
 
 // get all default params
@@ -75,14 +75,14 @@ contract DeployMarket is UtilBase {
     address marketERC20;
     if ((keccak256(abi.encodePacked(marketName)) == keccak256(abi.encodePacked("SFP")))) {
       marketERC20 = _getV2CoreContract("strands", "sfp");
-      // cast as LyraSpotFeed for simplicity
-      market.spotFeed = LyraSpotFeed(address(new SFPSpotFeed(IStrandsSFP(marketERC20))));
+      // cast as NumoSpotFeed for simplicity
+      market.spotFeed = NumoSpotFeed(address(new SFPSpotFeed(IStrandsSFP(marketERC20))));
     } else {
       marketERC20 = _getV2CoreContract("shared", vm.toLowercase(marketName));
 
       console.log("target erc20:", marketERC20);
 
-      market.spotFeed = new LyraSpotFeed();
+      market.spotFeed = new NumoSpotFeed();
 
       // init feeds
       market.spotFeed.setHeartbeat(Config.SPOT_HEARTBEAT);

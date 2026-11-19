@@ -1,7 +1,7 @@
 /**
  * The keeper's expired-option sweep (options.ts, chain.ts settleExpiredOptions) on the live MarginEngine v2, on an anvil
  * fork of Base. cNGN options are attached to market 1 as deploy-cngn-options-v2.s.sol's batches would (an OptionAsset
- * settling on a FutureFixingSettlementFeed over cNGN-30NOV26, a LyraVolFeed, market 1's oracles with the live spot
+ * settling on a FutureFixingSettlementFeed over cNGN-30NOV26, a NumoVolFeed, market 1's oracles with the live spot
  * written back), bob writes alice a put and a call at the forward, and then, past expiry:
  *
  *   - before the future's price is fixed the sweep settles nothing and reports both accounts as awaiting;
@@ -210,7 +210,7 @@ describe('the keeper settles expired cNGN options on MarginEngine v2, on a fork 
     // The deploy (operator as deployer) and the setup batch (the vault), as deploy-cngn-options-v2.s.sol writes them.
     at.settlement = await deploy(operator, 'FutureFixingSettlementFeed.sol', 'FutureFixingSettlementFeed', [FUTURE]);
     at.option = await deploy(operator, 'OptionAsset.sol', 'OptionAsset', [SUB_ACCOUNTS, at.settlement]);
-    at.vol = await deploy(operator, 'LyraVolFeed.sol', 'LyraVolFeed');
+    at.vol = await deploy(operator, 'NumoVolFeed.sol', 'NumoVolFeed');
     await write(operator, at.option, 'setWhitelistManager', [ENGINE, true]);
     await write(operator, at.vol, 'addSigner', [privateKeyToAccount(KEYS.vol).address, true]);
     await write(operator, at.vol, 'setHeartbeat', [1_800n]);

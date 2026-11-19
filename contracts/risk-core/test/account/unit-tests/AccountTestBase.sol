@@ -31,7 +31,7 @@ contract AccountTestBase is Test {
     alice = address(0xaa);
     bob = address(0xbb);
 
-    subAccounts = new SubAccounts("Lyra Margin Accounts", "LyraMarginNFTs");
+    subAccounts = new SubAccounts("Numo Margin Accounts", "NumoMarginNFTs");
 
     /* mock tokens that can be deposited into accounts */
     usdc = new MockERC20("USDC", "USDC");

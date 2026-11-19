@@ -4,7 +4,7 @@ pragma solidity ^0.8.0;
 import "forge-std/console2.sol";
 import {Utils} from "./utils.sol";
 import "v2-core/src/assets/WrappedERC20Asset.sol";
-import "v2-core/src/l2/LyraERC20.sol";
+import "v2-core/src/l2/NumoERC20.sol";
 
 
 contract DeployBaseAsset is Utils {
@@ -19,7 +19,7 @@ contract DeployBaseAsset is Utils {
 
     address deployer = vm.addr(deployerPrivateKey);
     console2.log("Deployer: ", deployer);
-    LyraERC20 erc20 = new LyraERC20(name, ticker, decimals);
+    NumoERC20 erc20 = new NumoERC20(name, ticker, decimals);
     console2.log("ERC20 address: ", address(erc20));
 
     _writeToDeployments(string.concat("erc20-", ticker), string.concat("{\"erc20\": \"", vm.toString(address(erc20)), "\"}"));

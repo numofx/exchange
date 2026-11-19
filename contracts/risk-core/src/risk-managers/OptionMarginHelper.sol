@@ -4,9 +4,9 @@ pragma solidity ^0.8.13;
 import "openzeppelin/utils/math/SafeCast.sol";
 import "openzeppelin/utils/math/SignedMath.sol";
 
-import "lyra-utils/decimals/DecimalMath.sol";
-import "lyra-utils/decimals/SignedDecimalMath.sol";
-import "lyra-utils/math/Black76.sol";
+import "numo-utils/decimals/DecimalMath.sol";
+import "numo-utils/decimals/SignedDecimalMath.sol";
+import "numo-utils/math/Black76.sol";
 
 import {IStandardManager} from "../interfaces/IStandardManager.sol";
 

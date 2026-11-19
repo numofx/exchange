@@ -5,11 +5,11 @@ import "openzeppelin/token/ERC20/extensions/IERC20Metadata.sol";
 import {OptionAsset} from "../src/assets/OptionAsset.sol";
 import {PerpAsset} from "../src/assets/PerpAsset.sol";
 import {WrappedERC20Asset} from "../src/assets/WrappedERC20Asset.sol";
-import {LyraSpotFeed} from "../src/feeds/LyraSpotFeed.sol";
-import {LyraSpotDiffFeed} from "../src/feeds/LyraSpotDiffFeed.sol";
-import {LyraVolFeed} from "../src/feeds/LyraVolFeed.sol";
-import {LyraRateFeedStatic} from "../src/feeds/static/LyraRateFeedStatic.sol";
-import {LyraForwardFeed} from "../src/feeds/LyraForwardFeed.sol";
+import {NumoSpotFeed} from "../src/feeds/NumoSpotFeed.sol";
+import {NumoSpotDiffFeed} from "../src/feeds/NumoSpotDiffFeed.sol";
+import {NumoVolFeed} from "../src/feeds/NumoVolFeed.sol";
+import {NumoRateFeedStatic} from "../src/feeds/static/NumoRateFeedStatic.sol";
+import {NumoForwardFeed} from "../src/feeds/NumoForwardFeed.sol";
 import {PMRM} from "../src/risk-managers/PMRM.sol";
 import {PMRMLib} from "../src/risk-managers/PMRMLib.sol";
 import {BasePortfolioViewer} from "../src/risk-managers/BasePortfolioViewer.sol";
@@ -68,14 +68,14 @@ contract DeployMarket is Utils {
     address marketERC20;
     if ((keccak256(abi.encodePacked(marketName)) == keccak256(abi.encodePacked("SFP")))) {
       marketERC20 = vm.parseJsonAddress(_readDeploymentFile("strands"), ".sfp");
-      // cast as LyraSpotFeed for simplicity
-      market.spotFeed = LyraSpotFeed(address(new SFPSpotFeed(IStrandsSFP(marketERC20))));
+      // cast as NumoSpotFeed for simplicity
+      market.spotFeed = NumoSpotFeed(address(new SFPSpotFeed(IStrandsSFP(marketERC20))));
     } else {
       marketERC20 = _getMarketERC20(marketName);
 
       console2.log("target erc20:", marketERC20);
 
-      market.spotFeed = new LyraSpotFeed();
+      market.spotFeed = new NumoSpotFeed();
 
       // init feeds
       market.spotFeed.setHeartbeat(Config.SPOT_HEARTBEAT);

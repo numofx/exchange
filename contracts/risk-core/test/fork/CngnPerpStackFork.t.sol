@@ -13,12 +13,12 @@ import "../../src/assets/InterestRateModel.sol";
 import "../../src/liquidation/DutchAuction.sol";
 import "../../src/risk-managers/StandardManager.sol";
 import "../../src/risk-managers/SRMPortfolioViewer.sol";
-import "../../src/feeds/LyraSpotFeed.sol";
-import "../../src/feeds/LyraSpotDiffFeed.sol";
-import "../../src/feeds/static/LyraStaticSpotFeed.sol";
+import "../../src/feeds/NumoSpotFeed.sol";
+import "../../src/feeds/NumoSpotDiffFeed.sol";
+import "../../src/feeds/static/NumoStaticSpotFeed.sol";
 import {IManager} from "../../src/interfaces/IManager.sol";
 import {IBaseManager} from "../../src/interfaces/IBaseManager.sol";
-import {IBaseLyraFeed} from "../../src/interfaces/IBaseLyraFeed.sol";
+import {IBaseNumoFeed} from "../../src/interfaces/IBaseNumoFeed.sol";
 import {IDataReceiver} from "../../src/interfaces/IDataReceiver.sol";
 
 import {Config} from "../../scripts/config-mainnet.sol";
@@ -65,11 +65,11 @@ contract CngnPerpStackFork is Test {
   SecurityModule securityModule;
   DutchAuction auction;
   PerpAsset perp;
-  LyraSpotFeed indexFeed;
-  LyraSpotDiffFeed markFeed;
-  LyraSpotDiffFeed impactAskFeed;
-  LyraSpotDiffFeed impactBidFeed;
-  LyraStaticSpotFeed stableFeed;
+  NumoSpotFeed indexFeed;
+  NumoSpotDiffFeed markFeed;
+  NumoSpotDiffFeed impactAskFeed;
+  NumoSpotDiffFeed impactBidFeed;
+  NumoStaticSpotFeed stableFeed;
 
   uint aliceAcc;
   uint bobAcc;
@@ -531,7 +531,7 @@ contract CngnPerpStackFork is Test {
     auction = new DutchAuction(subAccounts, securityModule, cash);
     srm.setLiquidation(auction);
 
-    stableFeed = new LyraStaticSpotFeed();
+    stableFeed = new NumoStaticSpotFeed();
     stableFeed.setSpot(1e18, 1e18);
 
     viewer.setStandardManager(srm);
@@ -551,10 +551,10 @@ contract CngnPerpStackFork is Test {
   }
 
   function _deployPerp() internal {
-    indexFeed = new LyraSpotFeed();
-    markFeed = new LyraSpotDiffFeed(indexFeed);
-    impactAskFeed = new LyraSpotDiffFeed(indexFeed);
-    impactBidFeed = new LyraSpotDiffFeed(indexFeed);
+    indexFeed = new NumoSpotFeed();
+    markFeed = new NumoSpotDiffFeed(indexFeed);
+    impactAskFeed = new NumoSpotDiffFeed(indexFeed);
+    impactBidFeed = new NumoSpotDiffFeed(indexFeed);
 
     indexFeed.setHeartbeat(20 minutes);
     markFeed.setHeartbeat(Config.PERP_HEARTBEAT);
@@ -631,8 +631,8 @@ contract CngnPerpStackFork is Test {
     _sign(impactBidFeed, abi.encode(int96(0), uint64(1e18)));
   }
 
-  function _sign(BaseLyraFeed feed, bytes memory data) internal {
-    IBaseLyraFeed.FeedData memory feedData = IBaseLyraFeed.FeedData({
+  function _sign(BaseNumoFeed feed, bytes memory data) internal {
+    IBaseNumoFeed.FeedData memory feedData = IBaseNumoFeed.FeedData({
       data: data,
       timestamp: uint64(block.timestamp),
       deadline: block.timestamp + 5,

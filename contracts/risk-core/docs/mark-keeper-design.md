@@ -27,7 +27,7 @@ identical across modes. The three modes are a **liquidity progression**, not alt
 
 | `MARK_MODE` | `targetMark()` | When |
 |---|---|---|
-| `spot` | on-chain `LyraSpotFeed.getSpot()` (cNGN/USDC, 1e18) | **launch** — thin book, simplest, zero maintenance |
+| `spot` | on-chain `NumoSpotFeed.getSpot()` (cNGN/USDC, 1e18) | **launch** — thin book, simplest, zero maintenance |
 | `forward` | `spot × (1 + r · (T − t))`, `r` a governance param | when the cNGN→NGN→MMF carry becomes real money and you want to stop leaking it |
 | `book` | manipulation-resistant VWAP/mid of the SEP-16 orderbook, **fallback to `forward`** | the CME end-state — once the book has genuine two-sided/arb flow that prices the carry itself |
 
@@ -100,7 +100,7 @@ human quorum. Two processes run on the EC2 host:
 2. **Mark keeper** (ours): the loop + the callback server.
 
 Per cycle the keeper:
-1. Reads on-chain `series.markPrice` / `lastMarkTime` and `LyraSpotFeed.getSpot()`; computes the
+1. Reads on-chain `series.markPrice` / `lastMarkTime` and `NumoSpotFeed.getSpot()`; computes the
    clamped target (above). Skips if no trigger.
 2. `CreateSigningRequest` with a **custom payload** = ABI-encoded
    `setMarkPrice(subId, markTime, target)` to the future contract on Base.

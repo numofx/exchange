@@ -83,7 +83,7 @@ contract TestMarginEngine_FutureV3 is Test {
 
   function setUp() public {
     vm.warp(1_790_000_000);
-    subAccounts = new SubAccounts("Lyra Margin Accounts", "LyraMarginNFTs");
+    subAccounts = new SubAccounts("Numo Margin Accounts", "NumoMarginNFTs");
     usdc = new MockERC20("USDC", "USDC");
     usdc.setDecimals(6);
     cash = new MockCash(usdc, subAccounts);

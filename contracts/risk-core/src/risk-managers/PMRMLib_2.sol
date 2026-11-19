@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.27;
 
-import "lyra-utils/decimals/DecimalMath.sol";
-import "lyra-utils/decimals/SignedDecimalMath.sol";
-import "lyra-utils/math/Black76.sol";
+import "numo-utils/decimals/DecimalMath.sol";
+import "numo-utils/decimals/SignedDecimalMath.sol";
+import "numo-utils/math/Black76.sol";
 import {IPMRMLib_2} from "../interfaces/IPMRMLib_2.sol";
 import {IPMRM_2} from "../interfaces/IPMRM_2.sol";
 import {ISpotFeed} from "../interfaces/ISpotFeed.sol";

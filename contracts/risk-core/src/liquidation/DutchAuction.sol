@@ -12,13 +12,13 @@ import {ISubAccounts} from "../interfaces/ISubAccounts.sol";
 import "openzeppelin/utils/ReentrancyGuard.sol";
 import "openzeppelin/utils/math/SafeCast.sol";
 import "openzeppelin/utils/math/SignedMath.sol";
-import "lyra-utils/decimals/DecimalMath.sol";
-import "lyra-utils/decimals/SignedDecimalMath.sol";
+import "numo-utils/decimals/DecimalMath.sol";
+import "numo-utils/decimals/SignedDecimalMath.sol";
 import "openzeppelin/access/Ownable2Step.sol";
 
 /**
  * @title Dutch Auction
- * @author Lyra
+ * @author Numo
  * @notice This module is used to liquidate an account that does not meet the margin requirements
  * There are 3 stages of an auction on an account:
  *

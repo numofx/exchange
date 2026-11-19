@@ -44,7 +44,7 @@ export type ForwardOutcome =
 
 /**
  * Marks a dated future from its forward (v1 USDC-cNGN, or a v2 series on any base, FUTURE_VERSION): each tick, once the contract's minMarkInterval has
- * passed, it works out the forward (forward-targets.ts), signs it into the future's LyraForwardFeed
+ * passed, it works out the forward (forward-targets.ts), signs it into the future's NumoForwardFeed
  * and calls FutureAsset.pullMark, which reads it back, checks it against the index band and move
  * limit, and accrues VM. Stops at last trade, except on v3: there, from last trade until the series settles, the
  * contract marks from the index itself (spec A8.3: margin follows the price to expiry and through a recovery), and this

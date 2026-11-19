@@ -6,9 +6,9 @@ import "openzeppelin/token/ERC20/utils/SafeERC20.sol";
 import "openzeppelin/utils/math/SignedMath.sol";
 import "openzeppelin/utils/math/Math.sol";
 import "openzeppelin/utils/math/SafeCast.sol";
-import "lyra-utils/decimals/SignedDecimalMath.sol";
-import "lyra-utils/decimals/DecimalMath.sol";
-import "lyra-utils/decimals/ConvertDecimals.sol";
+import "numo-utils/decimals/SignedDecimalMath.sol";
+import "numo-utils/decimals/DecimalMath.sol";
+import "numo-utils/decimals/ConvertDecimals.sol";
 import "openzeppelin/access/Ownable2Step.sol";
 
 import {ISubAccounts} from "../interfaces/ISubAccounts.sol";
@@ -23,7 +23,7 @@ import {ManagerWhitelist} from "./utils/ManagerWhitelist.sol";
  * @title Cash asset with built-in lending feature.
  * @dev   Users can deposit a stable token and credit this cash asset into their subAccounts.
  *        Users can borrow cash by having a negative balance in their account (if allowed by manager).
- * @author Lyra
+ * @author Numo
  */
 contract CashAsset is ICashAsset, Ownable2Step, ManagerWhitelist {
   using SafeERC20 for IERC20Metadata;
@@ -195,7 +195,7 @@ contract CashAsset is ICashAsset, Ownable2Step, ManagerWhitelist {
   }
 
   /**
-   * @notice Withdraw stable token from a Lyra account
+   * @notice Withdraw stable token from a Numo account
    * @param accountId account id to withdraw
    * @param stableAmount amount of stable asset in its native decimals
    * @param recipient stable token recipient

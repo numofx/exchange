@@ -28,7 +28,7 @@ sepolia = "https://sepolia.infura.io/v3/26251a7744c548a3adbc17880fc70764"
 
 numo_testnet = "https://l2-prod-testnet-0eakp60405.t.conduit.xyz"
 
-numo_mainnet = "https://rpc.lyra.finance"
+numo_mainnet = "https://mainnet.base.org"
 
 # Celo mainnet (42220). Keyed RPC — set CELO_RPC_URL in .env, never inline the key here.
 celo = "${CELO_RPC_URL}"

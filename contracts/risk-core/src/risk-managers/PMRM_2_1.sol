@@ -5,7 +5,7 @@ import "./PMRM_2.sol";
 
 /**
  * @title PMRM_2_1
- * @author Derive
+ * @author Numo
  * @notice Upgrade to PMRM_2 adding per-account risk library overrides
  */
 contract PMRM_2_1 is PMRM_2 {

@@ -4,8 +4,8 @@ pragma solidity ^0.8.18;
 import "openzeppelin/token/ERC20/extensions/IERC20Metadata.sol";
 import "openzeppelin/token/ERC20/utils/SafeERC20.sol";
 import "openzeppelin/utils/math/SafeCast.sol";
-import "lyra-utils/decimals/DecimalMath.sol";
-import "lyra-utils/decimals/ConvertDecimals.sol";
+import "numo-utils/decimals/DecimalMath.sol";
+import "numo-utils/decimals/ConvertDecimals.sol";
 import "openzeppelin/access/Ownable2Step.sol";
 
 import {IAsset} from "./interfaces/IAsset.sol";
@@ -17,7 +17,7 @@ import {ISecurityModule} from "./interfaces/ISecurityModule.sol";
 
 /**
  * @title SecurityModule
- * @author Lyra
+ * @author Numo
  * @notice Module used to store fund to bail out insolvent accounts
  */
 contract SecurityModule is Ownable2Step, ISecurityModule {
@@ -108,7 +108,7 @@ contract SecurityModule is Ownable2Step, ISecurityModule {
   /**
    * @notice request a payout from the security module
    * @param targetAccount Account ID requested to pay to
-   * @param cashAmountNeeded Amount of Lyra cash to pay. In 18 decimals
+   * @param cashAmountNeeded Amount of Numo cash to pay. In 18 decimals
    * @return cashAmountPaid amount of cash covered by this request
    */
   function requestPayout(uint targetAccount, uint cashAmountNeeded)

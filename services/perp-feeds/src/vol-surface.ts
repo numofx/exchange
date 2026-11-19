@@ -1,10 +1,10 @@
 /**
  * The cNGN options' vol surface: a hand-set SVI per expiry (decided 2026-11-01: ATM vol set by governance, realised-vol
- * blending later). LyraVolFeed stores raw SVI in total-variance terms and the engine reads
+ * blending later). NumoVolFeed stores raw SVI in total-variance terms and the engine reads
  *
  *   w(k) = a + b * (rho * (k - m) + sqrt((k - m)^2 + sigma^2)),   k = ln(K / SVI_fwd),   vol = sqrt(w / refTau)
  *
- * (lyra-utils SVI.sol). The surface here is parameterised the way an operator thinks: an ATM vol, and a shape held
+ * (numo-utils SVI.sol). The surface here is parameterised the way an operator thinks: an ATM vol, and a shape held
  * fixed relative to ATM variance, so that raising the ATM level (the degrade floor) raises the whole curve with it:
  *
  *   atmVar = atmVol^2 * tau,   b = bMult * atmVar,   a = atmVar - b * sigma   (m = 0, so w(0) = atmVar exactly)
@@ -74,7 +74,7 @@ export function shapeProblem(shape: SurfaceShape): string | null {
 
 /**
  * Raw SVI for `expiry` at `atmVol`, published at `nowSec` against the forward `fwd`. Throws when the expiry has
- * passed (LyraVolFeed refuses data stamped after expiry), or on a shape or level that would not be a surface.
+ * passed (NumoVolFeed refuses data stamped after expiry), or on a shape or level that would not be a surface.
  */
 export function buildSvi(args: {
   expiry: bigint;

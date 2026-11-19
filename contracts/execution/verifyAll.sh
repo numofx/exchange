@@ -25,33 +25,33 @@ core_contracts=(
   "securityModule ./src/SecurityModule.sol"
   "srm ./src/risk-managers/StandardManager.sol"
   "srmViewer ./src/risk-managers/SRMPortfolioViewer.sol"
-  "stableFeed ./src/feeds/LyraSpotFeed.sol"
+  "stableFeed ./src/feeds/NumoSpotFeed.sol"
   "subAccounts ./src/SubAccounts.sol"
 )
 
 market_contracts=(
   "base ./src/assets/WrappedERC20Asset.sol"
-  "forwardFeed ./src/feeds/LyraForwardFeed.sol"
-  "iapFeed ./src/feeds/LyraSpotDiffFeed.sol"
-  "ibpFeed ./src/feeds/LyraSpotDiffFeed.sol"
+  "forwardFeed ./src/feeds/NumoForwardFeed.sol"
+  "iapFeed ./src/feeds/NumoSpotDiffFeed.sol"
+  "ibpFeed ./src/feeds/NumoSpotDiffFeed.sol"
   "option ./src/assets/OptionAsset.sol"
   "perp ./src/assets/PerpAsset.sol"
-  "perpFeed ./src/feeds/LyraSpotDiffFeed.sol"
+  "perpFeed ./src/feeds/NumoSpotDiffFeed.sol"
   "pmrm ./src/risk-managers/PMRM.sol"
   "pmrmLib ./src/risk-managers/PMRMLib.sol"
   "pmrmViewer ./src/risk-managers/BasePortfolioViewer.sol"
-  "rateFeed ./src/feeds/LyraRateFeedStatic.sol"
-  "spotFeed ./src/feeds/LyraSpotFeed.sol"
+  "rateFeed ./src/feeds/NumoRateFeedStatic.sol"
+  "spotFeed ./src/feeds/NumoSpotFeed.sol"
   "spotFeed ./src/feeds/SFPSpotFeed.sol"
-  "volFeed ./src/feeds/LyraVolFeed.sol"
+  "volFeed ./src/feeds/NumoVolFeed.sol"
 )
 
 
 matching_contracts=(
-  "auctionUtil ./src/periphery/LyraAuctionUtils.sol"
+  "auctionUtil ./src/periphery/NumoAuctionUtils.sol"
   "deposit ./src/modules/DepositModule.sol"
   "matching ./src/Matching.sol"
-  "settlementUtil ./src/periphery/LyraSettlementUtils.sol"
+  "settlementUtil ./src/periphery/NumoSettlementUtils.sol"
   "subAccountCreator ./src/periphery/SubAccountCreator.sol"
   "trade ./src/modules/TradeModule.sol"
   "transfer ./src/modules/TransferModule.sol"
@@ -67,14 +67,14 @@ matching_contracts=(
 #chainId=901
 #explorer=https://explorerl2new-prod-testnet-0eakp60405.t.conduit.xyz/api
 chainId=957
-explorer="https://explorer.lyra.finance/api"
+explorer="https://base.blockscout.com/api"
 cd ../../exchange-core
 
 # Core
 echo "Core"
 
 # TODO: handle individual ERC20s nicer
-#forge verify-contract --verifier etherscan --verifier-url "https://sepolia-optimism.etherscan.io/api" "0x0b3639A094854796E3b236DB08646ffd21C0B1B2" "./src/l2/LyraERC20.sol:LyraERC20"
+#forge verify-contract --verifier etherscan --verifier-url "https://sepolia-optimism.etherscan.io/api" "0x0b3639A094854796E3b236DB08646ffd21C0B1B2" "./src/l2/NumoERC20.sol:NumoERC20"
 
 
 for tuple in "${core_contracts[@]}"; do

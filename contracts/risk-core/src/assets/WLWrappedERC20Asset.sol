@@ -3,7 +3,7 @@ pragma solidity ^0.8.18;
 
 import {SafeERC20} from "openzeppelin/token/ERC20/utils/SafeERC20.sol";
 import {SafeCast} from "openzeppelin/utils/math/SafeCast.sol";
-import {ConvertDecimals} from "lyra-utils/decimals/ConvertDecimals.sol";
+import {ConvertDecimals} from "numo-utils/decimals/ConvertDecimals.sol";
 
 import {IERC20Metadata} from "openzeppelin/token/ERC20/extensions/IERC20Metadata.sol";
 import {ISubAccounts} from "../interfaces/ISubAccounts.sol";
@@ -14,7 +14,7 @@ import {WrappedERC20Asset} from "./WrappedERC20Asset.sol";
  * @title Whitelisted Wrapped ERC20 Asset
  * @dev   Select users (subaccounts) can deposit the given ERC20, and can only have positive balances.
  * @dev   Fee-on-transfer and rebasing tokens are not supported
- * @author Lyra
+ * @author Numo
  */
 contract WLWrappedERC20Asset is WrappedERC20Asset {
   using SafeERC20 for IERC20Metadata;

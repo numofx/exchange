@@ -3,7 +3,7 @@ pragma solidity ^0.8.18;
 
 import "../../../risk-managers/unit-tests/PMRM_2/utils/PMRM_2TestBase.sol";
 
-import "lyra-utils/encoding/OptionEncoding.sol";
+import "numo-utils/encoding/OptionEncoding.sol";
 
 contract TestPMRM_2_OIFee is PMRM_2TestBase {
   function testChargeOIFees() public {

@@ -4,7 +4,7 @@ pragma solidity ^0.8.18;
 import "forge-std/Test.sol";
 
 import "../../src/assets/WrappedERC20Asset.sol";
-import "../../src/feeds/static/LyraStaticSpotFeed.sol";
+import "../../src/feeds/static/NumoStaticSpotFeed.sol";
 import "../../src/interfaces/ISpotFeed.sol";
 import "../../src/risk-managers/StandardManager.sol";
 import {CNGNSpotBatch} from "../../scripts/cngn-spot-batch.sol";
@@ -43,8 +43,8 @@ contract FORK_TestCNGNSpotPreconditions is Test {
   ISpotFeed internal liveCngnFeed;
   address internal cngnToken;
 
-  LyraStaticSpotFeed internal staticCngnFeed;
-  LyraStaticSpotFeed internal staticStableFeed;
+  NumoStaticSpotFeed internal staticCngnFeed;
+  NumoStaticSpotFeed internal staticStableFeed;
   PreconditionHarness internal harness;
 
   function setUp() public {
@@ -66,11 +66,11 @@ contract FORK_TestCNGNSpotPreconditions is Test {
 
     harness = new PreconditionHarness();
 
-    staticCngnFeed = new LyraStaticSpotFeed();
+    staticCngnFeed = new NumoStaticSpotFeed();
     staticCngnFeed.setSpot(USDC_PER_CNGN, 1e18);
     staticCngnFeed.transferOwnership(vault);
 
-    staticStableFeed = new LyraStaticSpotFeed();
+    staticStableFeed = new NumoStaticSpotFeed();
     staticStableFeed.setSpot(1e18, 1e18);
     staticStableFeed.transferOwnership(vault);
   }
@@ -112,7 +112,7 @@ contract FORK_TestCNGNSpotPreconditions is Test {
   /// @dev THE regression guard: the live DFXM feed is cNGN-per-USDC and must never be wired into
   ///      the SRM's USD-per-base slot
   function testFork_RefusesTheLiveFeedBecauseItIsInverted() public {
-    LyraStaticSpotFeed wrongWayRound = new LyraStaticSpotFeed();
+    NumoStaticSpotFeed wrongWayRound = new NumoStaticSpotFeed();
     wrongWayRound.setSpot(CNGN_PER_USDC, 1e18); // 1500e18 instead of ~0.000667e18
     wrongWayRound.transferOwnership(vault);
 
@@ -125,7 +125,7 @@ contract FORK_TestCNGNSpotPreconditions is Test {
 
   /// @dev a feed deployed weeks ago against a rate that has since moved
   function testFork_RefusesADriftedStaticPrice() public {
-    LyraStaticSpotFeed drifted = new LyraStaticSpotFeed();
+    NumoStaticSpotFeed drifted = new NumoStaticSpotFeed();
     drifted.setSpot(USDC_PER_CNGN * 80 / 100, 1e18); // 20% away, tolerance is 5%
     drifted.transferOwnership(vault);
 
@@ -138,7 +138,7 @@ contract FORK_TestCNGNSpotPreconditions is Test {
 
   /// @dev within tolerance is fine: the point is to catch material drift, not to demand equality
   function testFork_AcceptsDriftInsideTolerance() public {
-    LyraStaticSpotFeed nudged = new LyraStaticSpotFeed();
+    NumoStaticSpotFeed nudged = new NumoStaticSpotFeed();
     nudged.setSpot(USDC_PER_CNGN * 98 / 100, 1e18); // 2%
     nudged.transferOwnership(vault);
 
@@ -150,7 +150,7 @@ contract FORK_TestCNGNSpotPreconditions is Test {
   /// @dev actions 8 and 9 are acceptOwnership(); without a pending transfer they revert mid-batch,
   ///      and a mid-batch revert on an EOA leaves partial state rather than rolling back
   function testFork_RefusesAFeedTheVaultCannotAccept() public {
-    LyraStaticSpotFeed unowned = new LyraStaticSpotFeed();
+    NumoStaticSpotFeed unowned = new NumoStaticSpotFeed();
     unowned.setSpot(USDC_PER_CNGN, 1e18); // never transferred
 
     CNGNSpotBatch.Ctx memory ctx = _ctx();
@@ -181,7 +181,7 @@ contract FORK_TestCNGNSpotPreconditions is Test {
   }
 
   function testFork_RefusesAStableFeedThatIsNotOne() public {
-    LyraStaticSpotFeed wrong = new LyraStaticSpotFeed();
+    NumoStaticSpotFeed wrong = new NumoStaticSpotFeed();
     wrong.setSpot(0.98e18, 1e18);
     wrong.transferOwnership(vault);
 

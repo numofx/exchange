@@ -9,7 +9,7 @@ import {IManagerWhitelist} from "../../../src/interfaces/IManagerWhitelist.sol";
 /**
  * @title ManagerWhitelist
  * @dev   Contract for assets to control whitelisted managers.
- * @author Lyra
+ * @author Numo
  */
 abstract contract ManagerWhitelist is IManagerWhitelist, Ownable2Step {
   /// @dev Account contract address

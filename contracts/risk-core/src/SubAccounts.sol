@@ -7,7 +7,7 @@ import "openzeppelin/utils/ReentrancyGuard.sol";
 import {ISubAccounts} from "./interfaces/ISubAccounts.sol";
 import "openzeppelin/utils/cryptography/EIP712.sol";
 import "openzeppelin/utils/cryptography/SignatureChecker.sol";
-import "lyra-utils/arrays/UnorderedMemoryArray.sol";
+import "numo-utils/arrays/UnorderedMemoryArray.sol";
 
 import {IAsset} from "./interfaces/IAsset.sol";
 import {IManager} from "./interfaces/IManager.sol";
@@ -17,7 +17,7 @@ import {PermitAllowanceLib} from "./libraries/PermitAllowanceLib.sol";
 
 /**
  * @title SubAccounts
- * @author Lyra
+ * @author Numo
  * @notice Base layer that manages:
  *         1. balances for each (subAccounts, asset, subId)
  *         2. routing of manager, asset, allowance hooks / checks during any balance adjustment event
@@ -57,6 +57,7 @@ contract SubAccounts is Allowances, ERC721, EIP712, ReentrancyGuard, ISubAccount
   //    Constructor     //
   ////////////////////////
 
+  /// @dev "Lyra" is the EIP-712 domain name of the deployed SubAccounts; kept so permits stay valid.
   constructor(string memory name_, string memory symbol_) ERC721(name_, symbol_) EIP712("Lyra", "1") {}
 
   ////////////////////////

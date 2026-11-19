@@ -11,11 +11,11 @@ import "openzeppelin/access/Ownable2Step.sol";
 import {Utils} from "../scripts/utils.sol";
 import "../scripts/config-mainnet.sol";
 
-contract LyraForkTest is Utils {
+contract NumoForkTest is Utils {
   function setUp() external {}
 
   function testDeploy() external {
-    // NOTE: currently skipping please run with --fork-url https://rpc.lyra.finance and comment out to test.
+    // NOTE: currently skipping please run with --fork-url https://mainnet.base.org and comment out to test.
     return;
 
     vm.deal(address(0xB176A44D819372A38cee878fB0603AEd4d26C5a5), 1 ether);
@@ -33,7 +33,7 @@ contract LyraForkTest is Utils {
       IStandardManager.BaseMarginParams memory baseMarginParams
     ) = Config.getSRMParams(marketName);
 
-    LyraSpotFeed spotFeed = LyraSpotFeed(0xb147274cB65D5285d18245594E0Bec791De7Cb46);
+    NumoSpotFeed spotFeed = NumoSpotFeed(0xb147274cB65D5285d18245594E0Bec791De7Cb46);
     WrappedERC20Asset base = WrappedERC20Asset(0x95FE344A0f420A7aC1B1E69CB1474179a40db882);
     SRMPortfolioViewer viewer = SRMPortfolioViewer(0xAA8f9D05599F1a5d5929c40342c06a5Da063a4dE);
     // THE IMPORTANT COMMANDS START HERE

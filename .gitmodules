@@ -7,8 +7,8 @@
 [submodule "contracts/risk-core/lib/openzeppelin-contracts-upgradeable"]
 	path = contracts/risk-core/lib/openzeppelin-contracts-upgradeable
 	url = https://github.com/OpenZeppelin/openzeppelin-contracts-upgradeable
-[submodule "contracts/risk-core/lib/lyra-utils"]
-	path = contracts/risk-core/lib/lyra-utils
+[submodule "contracts/risk-core/lib/numo-utils"]
+	path = contracts/risk-core/lib/numo-utils
 	url = https://github.com/derivexyz/derive-utils
 	branch = master
 [submodule "contracts/execution/lib/forge-std"]
@@ -20,6 +20,6 @@
 [submodule "contracts/execution/lib/openzeppelin-contracts-upgradeable"]
 	path = contracts/execution/lib/openzeppelin-contracts-upgradeable
 	url = https://github.com/OpenZeppelin/openzeppelin-contracts-upgradeable
-[submodule "contracts/execution/lib/lyra-utils"]
-	path = contracts/execution/lib/lyra-utils
+[submodule "contracts/execution/lib/numo-utils"]
+	path = contracts/execution/lib/numo-utils
 	url = https://github.com/derivexyz/derive-utils

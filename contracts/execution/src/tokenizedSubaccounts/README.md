@@ -13,6 +13,6 @@ Each subaccount can hold a different type of asset, and the assets in each subac
 
 The `tokenizedSubaccounts` directory is organized as follows:
 
-- `CCTSA.sol`: This is an implementation of the TSA, which allows users to deposit any erc20 accepted by lyra protocol, and sell covered calls using it.
+- `CCTSA.sol`: This is an implementation of the TSA, which allows users to deposit any erc20 accepted by numo protocol, and sell covered calls using it.
 - `TSATestUtils.sol`: This contract includes helper functions for writing tests for the `CCTSA` contract.
 - `CCTSATest.t.sol`: This file contains tests for the `CCTSA` contract.

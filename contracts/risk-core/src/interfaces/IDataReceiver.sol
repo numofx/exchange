@@ -3,7 +3,7 @@ pragma solidity ^0.8.18;
 
 /**
  * @title IDataReceiver
- * @author Lyra
+ * @author Numo
  * @notice Interface for oracles that takes data off-chain with signer data
  */
 interface IDataReceiver {

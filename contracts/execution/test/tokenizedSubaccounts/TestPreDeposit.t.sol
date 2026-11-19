@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 pragma solidity ^0.8.18;
 
-import {OptionEncoding} from "lyra-utils/encoding/OptionEncoding.sol";
+import {OptionEncoding} from "numo-utils/encoding/OptionEncoding.sol";
 
 import {IDutchAuction} from "v2-core/src/interfaces/IDutchAuction.sol";
 import {IManager} from "v2-core/src/interfaces/IManager.sol";

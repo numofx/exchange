@@ -12,7 +12,7 @@ import {IAllowances} from "../../../../src/interfaces/IAllowances.sol";
 
 import "test/shared/mocks/MockManager.sol";
 
-import "lyra-utils/encoding/OptionEncoding.sol";
+import "numo-utils/encoding/OptionEncoding.sol";
 
 contract UNIT_TestOptionBasics is Test {
   SubAccounts subAccounts;
@@ -26,7 +26,7 @@ contract UNIT_TestOptionBasics is Test {
   uint bobAcc;
 
   function setUp() public {
-    subAccounts = new SubAccounts("Lyra Margin Accounts", "LyraMarginNFTs");
+    subAccounts = new SubAccounts("Numo Margin Accounts", "NumoMarginNFTs");
 
     option = new OptionAsset(subAccounts, address(0));
     manager = new MockManager(address(subAccounts));

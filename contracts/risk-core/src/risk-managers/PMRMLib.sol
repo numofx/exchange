@@ -5,9 +5,9 @@ import "openzeppelin/access/Ownable2Step.sol";
 import {SafeCast} from "openzeppelin/utils/math/SafeCast.sol";
 import {SignedMath} from "openzeppelin/utils/math/SignedMath.sol";
 import {Math} from "openzeppelin/utils/math/Math.sol";
-import "lyra-utils/math/Black76.sol";
-import "lyra-utils/decimals/SignedDecimalMath.sol";
-import "lyra-utils/decimals/DecimalMath.sol";
+import "numo-utils/math/Black76.sol";
+import "numo-utils/decimals/SignedDecimalMath.sol";
+import "numo-utils/decimals/DecimalMath.sol";
 
 import {IPMRM} from "../interfaces/IPMRM.sol";
 import {IPMRMLib} from "../interfaces/IPMRMLib.sol";

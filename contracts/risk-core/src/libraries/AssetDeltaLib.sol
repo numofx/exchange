@@ -6,7 +6,7 @@ import {ISubAccounts} from "../interfaces/ISubAccounts.sol";
 
 /**
  * @title ArrayDeltaLib
- * @author Lyra
+ * @author Numo
  * @notice util functions for AssetDeltaLib operations
  */
 library AssetDeltaLib {

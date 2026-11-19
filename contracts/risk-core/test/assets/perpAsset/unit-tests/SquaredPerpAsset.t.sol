@@ -26,7 +26,7 @@ contract UNIT_SquaredPerpAsset is Test {
   uint bobAcc;
 
   function setUp() public {
-    subAccounts = new SubAccounts("Lyra", "LYRA");
+    subAccounts = new SubAccounts("Numo", "NUMO");
 
     spotFeed = new MockFeeds();
     spotFeed.setSpot(20e18, 1e18);

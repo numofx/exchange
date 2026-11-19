@@ -9,8 +9,8 @@ import {MarginEngine} from "../src/risk-managers/MarginEngine.sol";
 import {MarginEngineV1} from "../src/legacy/v1/MarginEngineV1.sol";
 import {MarginEnginePortfolioViewer} from "../src/risk-managers/MarginEnginePortfolioViewer.sol";
 import {DutchAuction} from "../src/liquidation/DutchAuction.sol";
-import {LyraForwardFeed} from "../src/feeds/LyraForwardFeed.sol";
-import {LyraSpotFeed} from "../src/feeds/LyraSpotFeed.sol";
+import {NumoForwardFeed} from "../src/feeds/NumoForwardFeed.sol";
+import {NumoSpotFeed} from "../src/feeds/NumoSpotFeed.sol";
 import {IAsset} from "../src/interfaces/IAsset.sol";
 import {ICashAsset} from "../src/interfaces/ICashAsset.sol";
 import {IDutchAuction} from "../src/interfaces/IDutchAuction.sol";
@@ -146,7 +146,7 @@ contract DeployMarginEngineV2 is Utils {
     MarginEngine engine;
     MarginEnginePortfolioViewer viewer;
     FutureAsset future;
-    LyraForwardFeed forwardFeed;
+    NumoForwardFeed forwardFeed;
     uint96 subId;
     uint poolAccount;
   }
@@ -239,7 +239,7 @@ contract DeployMarginEngineV2 is Utils {
       revert("deployer key must be single use: it has sent transactions before (name it in USED_DEPLOYER to accept)");
     }
     if (deployer == params.vault) revert("deployer is the vault");
-    if (LyraSpotFeed(params.indexFeed).isSigner(deployer)) revert("deployer signs the index");
+    if (NumoSpotFeed(params.indexFeed).isSigner(deployer)) revert("deployer signs the index");
   }
 
   /// @dev Each check is a way the deployment lands and then cannot be governed, trade, or settle.
@@ -279,7 +279,7 @@ contract DeployMarginEngineV2 is Utils {
 
     if (params.forwardSigner == address(0)) revert("FORWARD_SIGNER is zero");
     if (params.forwardSigner == params.vault) revert("FORWARD_SIGNER must not be the vault");
-    if (LyraSpotFeed(params.indexFeed).isSigner(params.forwardSigner)) {
+    if (NumoSpotFeed(params.indexFeed).isSigner(params.forwardSigner)) {
       revert("FORWARD_SIGNER must not also sign the index");
     }
     if (params.initialMark == 0) revert("INITIAL_MARK is zero");
@@ -383,7 +383,7 @@ contract DeployMarginEngineV2 is Utils {
         MAX_SAMPLE_GAP,
         FALLBACK_DELAY
       );
-    d.forwardFeed = new LyraForwardFeed(ISpotFeed(params.indexFeed));
+    d.forwardFeed = new NumoForwardFeed(ISpotFeed(params.indexFeed));
     d.forwardFeed.setHeartbeat(FORWARD_HEARTBEAT);
     d.forwardFeed.addSigner(params.forwardSigner, true);
     d.forwardFeed.setRequiredSigners(1);

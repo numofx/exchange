@@ -10,11 +10,11 @@ import {InterestRateModel} from "../src/assets/InterestRateModel.sol";
 import {SecurityModule} from "../src/SecurityModule.sol";
 import {DutchAuction} from "../src/liquidation/DutchAuction.sol";
 import {ISpotFeed} from "../src/interfaces/ISpotFeed.sol";
-import {LyraSpotFeed} from "../src/feeds/LyraSpotFeed.sol";
-import {LyraSpotDiffFeed} from "../src/feeds/LyraSpotDiffFeed.sol";
-import {LyraVolFeed} from "../src/feeds/LyraVolFeed.sol";
-import {LyraRateFeedStatic} from "../src/feeds/static/LyraRateFeedStatic.sol";
-import {LyraForwardFeed} from "../src/feeds/LyraForwardFeed.sol";
+import {NumoSpotFeed} from "../src/feeds/NumoSpotFeed.sol";
+import {NumoSpotDiffFeed} from "../src/feeds/NumoSpotDiffFeed.sol";
+import {NumoVolFeed} from "../src/feeds/NumoVolFeed.sol";
+import {NumoRateFeedStatic} from "../src/feeds/static/NumoRateFeedStatic.sol";
+import {NumoForwardFeed} from "../src/feeds/NumoForwardFeed.sol";
 
 // Standard Manager (SRM)
 import {StandardManager} from "../src/risk-managers/StandardManager.sol";
@@ -57,18 +57,18 @@ struct Deployment {
 }
 
 struct Market {
-  // lyra asset
+  // numo asset
   OptionAsset option;
   PerpAsset perp;
   WrappedERC20Asset base;
   // feeds
-  LyraSpotFeed spotFeed;
-  LyraSpotDiffFeed perpFeed;
-  LyraSpotDiffFeed iapFeed;
-  LyraSpotDiffFeed ibpFeed;
-  LyraVolFeed volFeed;
-  LyraRateFeedStatic rateFeed;
-  LyraForwardFeed forwardFeed;
+  NumoSpotFeed spotFeed;
+  NumoSpotDiffFeed perpFeed;
+  NumoSpotDiffFeed iapFeed;
+  NumoSpotDiffFeed ibpFeed;
+  NumoVolFeed volFeed;
+  NumoRateFeedStatic rateFeed;
+  NumoForwardFeed forwardFeed;
   // manager for specific market
   PMRM pmrm;
   PMRMLib pmrmLib;

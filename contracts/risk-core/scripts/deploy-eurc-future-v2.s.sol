@@ -4,8 +4,8 @@ pragma solidity ^0.8.0;
 import {SubAccounts} from "../src/SubAccounts.sol";
 import {FutureAssetV2 as FutureAsset} from "../src/legacy/v2/FutureAssetV2.sol";
 import {MarginEngine} from "../src/risk-managers/MarginEngine.sol";
-import {LyraForwardFeed} from "../src/feeds/LyraForwardFeed.sol";
-import {LyraSpotFeed} from "../src/feeds/LyraSpotFeed.sol";
+import {NumoForwardFeed} from "../src/feeds/NumoForwardFeed.sol";
+import {NumoSpotFeed} from "../src/feeds/NumoSpotFeed.sol";
 import {IAsset} from "../src/interfaces/IAsset.sol";
 import {IFutureAsset} from "../src/interfaces/IFutureAsset.sol";
 import {ISpotFeed} from "../src/interfaces/ISpotFeed.sol";
@@ -24,7 +24,7 @@ interface ITradeModuleFutures {
  * @title DeployEurcFutureV2
  *
  * @dev EURC-<expiry> on the live MarginEngine v2 (deployments/8453/MARGIN_ENGINE_V2.json), on market 2 (EUR): a FutureAsset
- *      and its own LyraForwardFeed over the EURC spot feed, both nominated to the vault. American terms, as v2's cNGN
+ *      and its own NumoForwardFeed over the EURC spot feed, both nominated to the vault. American terms, as v2's cNGN
  *      series: USDC per EURC, one contract CONTRACT_SIZE EURC, VM in USDC cash, a long gains as EUR strengthens. v1's
  *      futures are inverse with VM in base, so this series is v2's only.
  *
@@ -114,7 +114,7 @@ contract DeployEurcFutureV2 is Utils {
     /// @dev market 2's base and spot feed on v2, checked against EURC_SPOT.json
     address escrow;
     address indexFeed;
-    /// @dev the cNGN index (a LyraSpotFeed): its signers may not deploy or sign the forward
+    /// @dev the cNGN index (a NumoSpotFeed): its signers may not deploy or sign the forward
     address cngnIndexFeed;
     uint poolAccount;
     uint64 expiry;
@@ -131,7 +131,7 @@ contract DeployEurcFutureV2 is Utils {
 
   struct Deployment {
     FutureAsset future;
-    LyraForwardFeed forwardFeed;
+    NumoForwardFeed forwardFeed;
     uint96 subId;
   }
 
@@ -208,7 +208,7 @@ contract DeployEurcFutureV2 is Utils {
       revert("deployer key must be single use: it has sent transactions before (name it in USED_DEPLOYER to accept)");
     }
     if (deployer == params.vault) revert("deployer is the vault");
-    if (LyraSpotFeed(params.cngnIndexFeed).isSigner(deployer)) revert("deployer signs the index");
+    if (NumoSpotFeed(params.cngnIndexFeed).isSigner(deployer)) revert("deployer signs the index");
     if (deployer == params.forwardSigner) revert("deployer signs the forward");
   }
 
@@ -258,7 +258,7 @@ contract DeployEurcFutureV2 is Utils {
 
     if (params.forwardSigner == address(0)) revert("FORWARD_SIGNER is zero");
     if (params.forwardSigner == params.vault) revert("FORWARD_SIGNER must not be the vault");
-    if (LyraSpotFeed(params.cngnIndexFeed).isSigner(params.forwardSigner)) {
+    if (NumoSpotFeed(params.cngnIndexFeed).isSigner(params.forwardSigner)) {
       revert("FORWARD_SIGNER must not also sign the index");
     }
     uint index = indexPrice(params);
@@ -329,7 +329,7 @@ contract DeployEurcFutureV2 is Utils {
         MAX_SAMPLE_GAP,
         FALLBACK_DELAY
       );
-    d.forwardFeed = new LyraForwardFeed(ISpotFeed(params.indexFeed));
+    d.forwardFeed = new NumoForwardFeed(ISpotFeed(params.indexFeed));
     d.forwardFeed.setHeartbeat(FORWARD_HEARTBEAT);
     d.forwardFeed.addSigner(params.forwardSigner, true);
     d.forwardFeed.setRequiredSigners(1);

@@ -5,9 +5,9 @@ import {SubAccounts} from "../src/SubAccounts.sol";
 import {OptionAsset} from "../src/assets/OptionAsset.sol";
 import {FutureAssetV2 as FutureAsset} from "../src/legacy/v2/FutureAssetV2.sol";
 import {MarginEngine} from "../src/risk-managers/MarginEngine.sol";
-import {LyraVolFeed} from "../src/feeds/LyraVolFeed.sol";
-import {LyraSpotFeed} from "../src/feeds/LyraSpotFeed.sol";
-import {LyraForwardFeed} from "../src/feeds/LyraForwardFeed.sol";
+import {NumoVolFeed} from "../src/feeds/NumoVolFeed.sol";
+import {NumoSpotFeed} from "../src/feeds/NumoSpotFeed.sol";
+import {NumoForwardFeed} from "../src/feeds/NumoForwardFeed.sol";
 import {FutureFixingSettlementFeed} from "../src/feeds/FutureFixingSettlementFeed.sol";
 import {IFutureAsset} from "../src/interfaces/IFutureAsset.sol";
 import {ISpotFeed} from "../src/interfaces/ISpotFeed.sol";
@@ -26,12 +26,12 @@ interface ITradeModuleOptions {
  * @title DeployCngnOptionsV2
  *
  * @dev cNGN-USDC options on the live MarginEngine v2 (deployments/8453/MARGIN_ENGINE_V2.json), on market 1 (NGN), at the
- *      expiry of v2's cNGN future (30NOV26). Deploys an OptionAsset, a LyraVolFeed and a FutureFixingSettlementFeed,
+ *      expiry of v2's cNGN future (30NOV26). Deploys an OptionAsset, a NumoVolFeed and a FutureFixingSettlementFeed,
  *      nominates the first two to the vault (the settlement feed is ownerless), and writes the vault's batches.
  *      test/fork/CngnOptionsV2Fork.t.sol runs this script's own deploy and batches against the live engine.
  *
  * @dev UNITS. American terms throughout, as v2: strikes, premiums and settlement in USDC per cNGN, one option unit (1e18)
- *      one cNGN. Strikes are stored to 1e-8 USDC (OptionEncoding). The forward is the cNGN future's LyraForwardFeed and
+ *      one cNGN. Strikes are stored to 1e-8 USDC (OptionEncoding). The forward is the cNGN future's NumoForwardFeed and
  *      settlement is that future's own settlement price, so an option can never settle away from the future.
  *
  * @dev VAULT_ACTIONS: accept the option and the vol feed; whitelist the option on market 1; set market 1's option margin
@@ -120,7 +120,7 @@ contract DeployCngnOptionsV2 is Utils {
 
   struct Deployment {
     OptionAsset option;
-    LyraVolFeed volFeed;
+    NumoVolFeed volFeed;
     FutureFixingSettlementFeed settlement;
   }
 
@@ -200,8 +200,8 @@ contract DeployCngnOptionsV2 is Utils {
     }
     if (deployer == params.vault) revert("deployer is the vault");
     if (deployer == params.volSigner) revert("deployer signs the vol");
-    if (LyraSpotFeed(params.indexFeed).isSigner(deployer)) revert("deployer signs the index");
-    if (LyraForwardFeed(params.forwardFeed).isSigner(deployer)) revert("deployer signs the forward");
+    if (NumoSpotFeed(params.indexFeed).isSigner(deployer)) revert("deployer signs the index");
+    if (NumoForwardFeed(params.forwardFeed).isSigner(deployer)) revert("deployer signs the forward");
   }
 
   /// @dev Each check is a way the deployment lands and then cannot be attached, margin, trade or settle, or a way the
@@ -243,7 +243,7 @@ contract DeployCngnOptionsV2 is Utils {
     if (address(FutureAsset(params.future).forwardFeed()) != params.forwardFeed) {
       revert("FORWARD is not the future's forward feed");
     }
-    if (address(LyraForwardFeed(params.forwardFeed).spotFeed()) != params.indexFeed) {
+    if (address(NumoForwardFeed(params.forwardFeed).spotFeed()) != params.indexFeed) {
       revert("the forward feed is not on the index");
     }
     (uint index,) = ISpotFeed(params.indexFeed).getSpot();
@@ -277,8 +277,8 @@ contract DeployCngnOptionsV2 is Utils {
     // the vol signer
     if (params.volSigner == address(0)) revert("VOL_SIGNER is zero");
     if (params.volSigner == params.vault) revert("VOL_SIGNER must not be the vault");
-    if (LyraSpotFeed(params.indexFeed).isSigner(params.volSigner)) revert("VOL_SIGNER must not also sign the index");
-    if (LyraForwardFeed(params.forwardFeed).isSigner(params.volSigner)) {
+    if (NumoSpotFeed(params.indexFeed).isSigner(params.volSigner)) revert("VOL_SIGNER must not also sign the index");
+    if (NumoForwardFeed(params.forwardFeed).isSigner(params.volSigner)) {
       revert("VOL_SIGNER must not also sign the forward");
     }
     if (params.volHeartbeat == 0 || params.volHeartbeat > 2 hours) revert("VOL_HEARTBEAT out of (0, 2h]");
@@ -294,7 +294,7 @@ contract DeployCngnOptionsV2 is Utils {
     d.option = new OptionAsset(SubAccounts(params.subAccounts), address(d.settlement));
     d.option.setWhitelistManager(address(engine), true);
     d.option.setTotalPositionCap(engine, 0);
-    d.volFeed = new LyraVolFeed();
+    d.volFeed = new NumoVolFeed();
     d.volFeed.setHeartbeat(params.volHeartbeat);
     d.volFeed.addSigner(params.volSigner, true);
     d.volFeed.setRequiredSigners(1);

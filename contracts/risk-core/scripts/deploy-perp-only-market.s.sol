@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.0;
 
-import {LyraSpotFeed} from "../src/feeds/LyraSpotFeed.sol";
+import {NumoSpotFeed} from "../src/feeds/NumoSpotFeed.sol";
 import {PerpAsset} from "../src/assets/PerpAsset.sol";
-import {LyraSpotDiffFeed} from "../src/feeds/LyraSpotDiffFeed.sol";
+import {NumoSpotDiffFeed} from "../src/feeds/NumoSpotDiffFeed.sol";
 import {PMRM} from "../src/risk-managers/PMRM.sol";
 import {IManager} from "../src/interfaces/IManager.sol";
 import {IVolFeed} from "../src/interfaces/IVolFeed.sol";
@@ -27,8 +27,8 @@ import "./config-mainnet.sol";
  **/
 
 // MAINNET 
-// RPC: https://rpc.lyra.finance
-// VERIFIER: https://explorer.derive.xyz/api
+// RPC: https://mainnet.base.org
+// VERIFIER: https://base.blockscout.com/api
 
 // TESTNET
 // RPC: https://rpc-prod-testnet-0eakp60405.t.conduit.xyz
@@ -114,10 +114,10 @@ contract DeployPerpOnlyMarket is Utils {
       market.iapFeed = new SpotPassthroughDiffFeed(market.spotFeed);
       market.ibpFeed = new SpotPassthroughDiffFeed(market.spotFeed);
     } else {
-      LyraSpotFeed spotFeed = new LyraSpotFeed();
-      LyraSpotDiffFeed perpFeed = new LyraSpotDiffFeed(spotFeed);
-      LyraSpotDiffFeed iapFeed = new LyraSpotDiffFeed(spotFeed);
-      LyraSpotDiffFeed ibpFeed = new LyraSpotDiffFeed(spotFeed);
+      NumoSpotFeed spotFeed = new NumoSpotFeed();
+      NumoSpotDiffFeed perpFeed = new NumoSpotDiffFeed(spotFeed);
+      NumoSpotDiffFeed iapFeed = new NumoSpotDiffFeed(spotFeed);
+      NumoSpotDiffFeed ibpFeed = new NumoSpotDiffFeed(spotFeed);
 
       spotFeed.setHeartbeat(Config.SPOT_HEARTBEAT);
       perpFeed.setHeartbeat(Config.PERP_HEARTBEAT);
@@ -208,10 +208,10 @@ contract DeployPerpOnlyMarket is Utils {
     if (keccak256(abi.encodePacked(marketName)) == keccak256(abi.encodePacked("NGN"))) {
       InvertedChainlinkSpotFeed(address(market.spotFeed)).transferOwnership(newOwner);
     } else {
-      LyraSpotFeed(address(market.spotFeed)).transferOwnership(newOwner);
-      LyraSpotDiffFeed(address(market.iapFeed)).transferOwnership(newOwner);
-      LyraSpotDiffFeed(address(market.ibpFeed)).transferOwnership(newOwner);
-      LyraSpotDiffFeed(address(market.perpFeed)).transferOwnership(newOwner);
+      NumoSpotFeed(address(market.spotFeed)).transferOwnership(newOwner);
+      NumoSpotDiffFeed(address(market.iapFeed)).transferOwnership(newOwner);
+      NumoSpotDiffFeed(address(market.ibpFeed)).transferOwnership(newOwner);
+      NumoSpotDiffFeed(address(market.perpFeed)).transferOwnership(newOwner);
     }
 
     console2.log("New owner for market: ", newOwner);

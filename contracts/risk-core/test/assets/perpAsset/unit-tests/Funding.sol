@@ -36,7 +36,7 @@ contract UNIT_PerpAssetFunding is Test {
 
   function setUp() public {
     // deploy contracts
-    subAccounts = new SubAccounts("Lyra", "LYRA");
+    subAccounts = new SubAccounts("Numo", "NUMO");
     spotFeed = new MockFeeds();
     perpFeed = new MockSpotDiffFeed(spotFeed);
     askImpactFeed = new MockSpotDiffFeed(spotFeed);

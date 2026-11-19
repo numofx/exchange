@@ -42,7 +42,7 @@ contract TestDeliverableFXManagerBase is Test {
   uint fxExpiry;
 
   function setUp() public virtual {
-    subAccounts = new SubAccounts("Lyra Margin Accounts", "LyraMarginNFTs");
+    subAccounts = new SubAccounts("Numo Margin Accounts", "NumoMarginNFTs");
 
     usdc = new MockERC20("USDC", "USDC");
     cngn = new MockERC20("cNGN", "cNGN");

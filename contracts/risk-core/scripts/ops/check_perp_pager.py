@@ -61,7 +61,7 @@ cash through the engine's pool, so no reserve target and no escrow cap: the pool
 
 cNGN options on MarginEngine v2 (OPTIONS_ARTIFACTS, comma-separated, default deployments/8453/CNGN_OPTIONS_V2.json; skipped
 while missing). Live once the option's cap is open or anyone holds one:
-  vol-stale-<series>  the options' LyraVolFeed has no live surface for the expiry (missing, or past its 30-min heartbeat),
+  vol-stale-<series>  the options' NumoVolFeed has no live surface for the expiry (missing, or past its 30-min heartbeat),
                      before expiry: every account holding an option stops margining, so trading AND liquidations stop.
                      Is numo-vol-feeds running? A degraded surface (confidence under 1) is a Slack warning, not a page.
   options-unsettled-<series>  options are still held OPTION_UNSETTLED_PAGE_SEC (3 h) past expiry: the keeper's
@@ -219,7 +219,7 @@ FUTURE_POOL_DUST_USD = 1.0
 FUTURE_ESCROW_WARN_USED = 0.75
 # cNGN options on MarginEngine v2 (deploy-cngn-options-v2.s.sol), one artifact per option asset; skipped while missing.
 OPTIONS_ARTIFACTS = [ROOT / "deployments" / "8453" / "CNGN_OPTIONS_V2.json"]
-SEL_GET_EXPIRY_MIN_CONFIDENCE = "0xd4435817"  # getExpiryMinConfidence(uint64) on LyraVolFeed: reverts when missing or stale
+SEL_GET_EXPIRY_MIN_CONFIDENCE = "0xd4435817"  # getExpiryMinConfidence(uint64) on NumoVolFeed: reverts when missing or stale
 # Past expiry, options still held this long means nothing settled them (perp-keeper's sweep, or the future's fixing).
 OPTION_UNSETTLED_PAGE_SEC = 3 * 3600
 OPTION_DEGRADED_WARN_REPEAT_SEC = 6 * 3600

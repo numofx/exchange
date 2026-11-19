@@ -12,7 +12,7 @@ import {ISubAccounts} from "v2-core/src/interfaces/ISubAccounts.sol";
 import {PerpAsset} from "v2-core/src/assets/PerpAsset.sol";
 import {IPerpAsset} from "v2-core/src/interfaces/IPerpAsset.sol";
 import {ICashAsset} from "v2-core/src/interfaces/ICashAsset.sol";
-import {LyraRateFeedStatic} from "v2-core/src/feeds/static/LyraRateFeedStatic.sol";
+import {NumoRateFeedStatic} from "v2-core/src/feeds/static/NumoRateFeedStatic.sol";
 
 import {WrappedERC20Asset} from "v2-core/src/assets/WrappedERC20Asset.sol";
 import {IManager} from "v2-core/src/interfaces/IManager.sol";
@@ -21,7 +21,7 @@ import {ISubAccounts} from "v2-core/src/interfaces/ISubAccounts.sol";
 import {IAsset} from "v2-core/src/interfaces/IAsset.sol";
 import {ISpotFeed} from "v2-core/src/interfaces/ISpotFeed.sol";
 
-import {LyraERC20} from "v2-core/src/l2/LyraERC20.sol";
+import {NumoERC20} from "v2-core/src/l2/NumoERC20.sol";
 
 import "forge-std/console2.sol";
 import {Deployment, NetworkConfig} from "./types.sol";
@@ -102,12 +102,12 @@ contract UpdateCallees is Utils {
     }
 
     // Set custom caps for local testing
-    LyraERC20(_getV2CoreContract(shared, "usdc")).configureMinter(deployer, true);
-    LyraERC20(_getV2CoreContract(shared, "eth")).configureMinter(deployer, true);
-    LyraERC20(_getV2CoreContract(shared, "btc")).configureMinter(deployer, true);
-    LyraERC20(_getV2CoreContract(shared, "usdt")).configureMinter(deployer, true);
-    LyraERC20(_getV2CoreContract(shared, "wsteth")).configureMinter(deployer, true);
-    LyraERC20(_getV2CoreContract(shared, "snx")).configureMinter(deployer, true);
+    NumoERC20(_getV2CoreContract(shared, "usdc")).configureMinter(deployer, true);
+    NumoERC20(_getV2CoreContract(shared, "eth")).configureMinter(deployer, true);
+    NumoERC20(_getV2CoreContract(shared, "btc")).configureMinter(deployer, true);
+    NumoERC20(_getV2CoreContract(shared, "usdt")).configureMinter(deployer, true);
+    NumoERC20(_getV2CoreContract(shared, "wsteth")).configureMinter(deployer, true);
+    NumoERC20(_getV2CoreContract(shared, "snx")).configureMinter(deployer, true);
 
     WrappedERC20Asset(_getV2CoreContract(ethMarket, "base")).setTotalPositionCap(
       IManager(managers[0]), 10_000 ether

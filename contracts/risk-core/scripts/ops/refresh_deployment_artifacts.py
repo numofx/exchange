@@ -2,7 +2,7 @@
 """Re-derive the recorded core addresses AND the documented SRM state from live chain state.
 
 Why this exists: `deployments/8453/core.json` recorded `stableFeed` as the live
-LyraSpotFeed, but the vault batch repointed the SRM at a static feed and nobody updated
+NumoSpotFeed, but the vault batch repointed the SRM at a static feed and nobody updated
 the artifact. `scripts/deploy-market.s.sol` and `scripts/deploy-pm2.s.sol` read that key,
 so the next new market would have been wired to a dead feed. A hand edit fixes today's
 drift; deriving from chain is what stops it recurring.
@@ -126,7 +126,7 @@ def word_address(word_hex: str, index: int = 0) -> str:
 
 
 def feed_kind(url: str, feed: str) -> str:
-  """LyraStaticSpotFeed has no heartbeat; the keeper-driven LyraSpotFeed does.
+  """NumoStaticSpotFeed has no heartbeat; the keeper-driven NumoSpotFeed does.
 
   Read as a capability probe rather than a name lookup: a feed that cannot go stale is
   the property that matters here, and a contract's symbol or address would not prove it.

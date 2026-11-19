@@ -2,13 +2,13 @@
 pragma solidity ^0.8.18;
 
 import "openzeppelin/utils/math/SafeCast.sol";
-import "lyra-utils/decimals/DecimalMath.sol";
+import "numo-utils/decimals/DecimalMath.sol";
 
 import "../../../../src/interfaces/IInterestRateModel.sol";
 
 /**
  * @title Interest Rate Model
- * @author Lyra
+ * @author Numo
  * @notice Contract that implements the logic for calculating the borrow rate
  */
 contract MockInterestRateModel is IInterestRateModel {

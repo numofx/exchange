@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {CashAsset} from "v2-core/src/assets/CashAsset.sol";
-import {ConvertDecimals} from "lyra-utils/decimals/ConvertDecimals.sol";
+import {ConvertDecimals} from "numo-utils/decimals/ConvertDecimals.sol";
 import {DutchAuction} from "v2-core/src/liquidation/DutchAuction.sol";
 import {ERC20Upgradeable} from "openzeppelin-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import {IERC20Metadata} from "openzeppelin/token/ERC20/extensions/IERC20Metadata.sol";
@@ -17,7 +17,7 @@ import {ReentrancyGuardUpgradeable} from "openzeppelin-upgradeable/utils/Reentra
 /// @notice Base class for tokenized subaccounts
 /// @dev This contract is abstract and must be inherited by a concrete implementation. It works assuming share decimals
 /// are the same as depositAsset decimals.
-/// @author Lyra
+/// @author Numo
 abstract contract BaseTSA is ERC20Upgradeable, Ownable2StepUpgradeable, ReentrancyGuardUpgradeable {
   struct BaseTSAInitParams {
     ISubAccounts subAccounts;
@@ -68,6 +68,8 @@ abstract contract BaseTSA is ERC20Upgradeable, Ownable2StepUpgradeable, Reentran
     uint timestamp;
     uint sharesReceived;
   }
+
+  // The "lyra.storage" namespace is kept: the slot below is its hash, and deployed proxies use it.
 
   /// @custom:storage-location erc7201:lyra.storage.BaseTSA
   struct BaseTSAStorage {

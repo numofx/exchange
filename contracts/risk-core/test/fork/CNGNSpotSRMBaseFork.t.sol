@@ -14,7 +14,7 @@ import "../../src/interfaces/IVolFeed.sol";
 import "../../src/interfaces/IWrappedERC20Asset.sol";
 import "../../src/assets/utils/ManagerWhitelist.sol";
 import "../../src/assets/utils/PositionTracking.sol";
-import "../../src/feeds/static/LyraStaticSpotFeed.sol";
+import "../../src/feeds/static/NumoStaticSpotFeed.sol";
 import "../../src/risk-managers/StandardManager.sol";
 import {CNGNSpotBatch} from "../../scripts/cngn-spot-batch.sol";
 
@@ -44,8 +44,8 @@ contract FORK_TestCNGNSpotOnSRMBase is Test {
   WrappedERC20Asset internal cngnAsset;
   ISpotFeed internal liveCngnFeed;
 
-  LyraStaticSpotFeed internal staticCngnFeed;
-  LyraStaticSpotFeed internal staticStableFeed;
+  NumoStaticSpotFeed internal staticCngnFeed;
+  NumoStaticSpotFeed internal staticStableFeed;
 
   IERC20Metadata internal usdc;
   IERC20Metadata internal cngn;
@@ -307,11 +307,11 @@ contract FORK_TestCNGNSpotOnSRMBase is Test {
 
   /// @dev mirrors scripts/deploy-cngn-spot-static-feeds.s.sol
   function _deployStaticFeeds() internal {
-    staticCngnFeed = new LyraStaticSpotFeed();
+    staticCngnFeed = new NumoStaticSpotFeed();
     staticCngnFeed.setSpot(USDC_PER_CNGN, 1e18);
     staticCngnFeed.transferOwnership(vault);
 
-    staticStableFeed = new LyraStaticSpotFeed();
+    staticStableFeed = new NumoStaticSpotFeed();
     staticStableFeed.setSpot(1e18, 1e18);
     staticStableFeed.transferOwnership(vault);
   }

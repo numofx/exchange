@@ -25,7 +25,7 @@ contract UNIT_CashAssetDeposit is Test {
   uint accountId;
 
   function setUp() public {
-    subAccounts = new SubAccounts("Lyra Margin Accounts", "LyraMarginNFTs");
+    subAccounts = new SubAccounts("Numo Margin Accounts", "NumoMarginNFTs");
 
     manager = new MockManager(address(subAccounts));
     badManager = new MockManager(address(subAccounts));
@@ -91,7 +91,7 @@ contract UNIT_LendingDeposit6Decimals is Test {
   uint accountId;
 
   function setUp() public {
-    subAccounts = new SubAccounts("Lyra Margin Accounts", "LyraMarginNFTs");
+    subAccounts = new SubAccounts("Numo Margin Accounts", "NumoMarginNFTs");
     MockManager manager = new MockManager(address(subAccounts));
     MockERC20 usdc = new MockERC20("USDC", "USDC");
 
@@ -129,7 +129,7 @@ contract UNIT_LendingDeposit20Decimals is Test {
   uint accountId;
 
   function setUp() public {
-    subAccounts = new SubAccounts("Lyra Margin Accounts", "LyraMarginNFTs");
+    subAccounts = new SubAccounts("Numo Margin Accounts", "NumoMarginNFTs");
     MockManager manager = new MockManager(address(subAccounts));
     MockERC20 usdc = new MockERC20("USDC", "USDC");
 

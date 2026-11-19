@@ -3,7 +3,7 @@ pragma solidity ^0.8.18;
 
 /**
  * @title IForwardFeed
- * @author Lyra
+ * @author Numo
  * @notice return forward feed for 1 asset
  */
 interface IForwardFeed {

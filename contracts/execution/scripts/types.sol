@@ -7,8 +7,8 @@ import {TradeModule} from "../src/modules/TradeModule.sol";
 import {TransferModule} from "../src/modules/TransferModule.sol";
 import {WithdrawalModule} from "../src/modules/WithdrawalModule.sol";
 import {SubAccountCreator} from "../src/periphery/SubAccountCreator.sol";
-import {LyraSettlementUtils} from "../src/periphery/LyraSettlementUtils.sol";
-import {LyraAuctionUtils} from "../src/periphery/LyraAuctionUtils.sol";
+import {NumoSettlementUtils} from "../src/periphery/NumoSettlementUtils.sol";
+import {NumoAuctionUtils} from "../src/periphery/NumoAuctionUtils.sol";
 import {RfqModule} from "../src/modules/RfqModule.sol";
 import {LiquidateModule} from "../src/modules/LiquidateModule.sol";
 import {AtomicSigningExecutor} from "../src/AtomicSigningExecutor.sol";
@@ -34,8 +34,8 @@ struct Deployment {
   RfqModule rfq;
   // helper
   SubAccountCreator subAccountCreator;
-  LyraSettlementUtils settlementUtil;
-  LyraAuctionUtils auctionUtil;
+  NumoSettlementUtils settlementUtil;
+  NumoAuctionUtils auctionUtil;
   AtomicSigningExecutor atomicSigningExecutor;
   TSAShareHandler tsaShareHandler;
 }

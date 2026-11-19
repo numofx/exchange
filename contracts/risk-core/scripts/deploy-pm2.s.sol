@@ -8,12 +8,12 @@ import {BasePortfolioViewer} from "../src/risk-managers/BasePortfolioViewer.sol"
 import {Deployment, ConfigJson, Market} from "./types.sol";
 import {IManager} from "../src/interfaces/IManager.sol";
 import {IPMRM_2} from "../src/interfaces/IPMRM_2.sol";
-import {LyraForwardFeed} from "../src/feeds/LyraForwardFeed.sol";
-import {LyraRateFeedStatic} from "../src/feeds/static/LyraRateFeedStatic.sol";
-import {LyraSpotDiffFeed} from "../src/feeds/LyraSpotDiffFeed.sol";
-import {LyraSpotFeed} from "../src/feeds/LyraSpotFeed.sol";
-import {LyraRateFeed} from "../src/feeds/LyraRateFeed.sol";
-import {LyraVolFeed} from "../src/feeds/LyraVolFeed.sol";
+import {NumoForwardFeed} from "../src/feeds/NumoForwardFeed.sol";
+import {NumoRateFeedStatic} from "../src/feeds/static/NumoRateFeedStatic.sol";
+import {NumoSpotDiffFeed} from "../src/feeds/NumoSpotDiffFeed.sol";
+import {NumoSpotFeed} from "../src/feeds/NumoSpotFeed.sol";
+import {NumoRateFeed} from "../src/feeds/NumoRateFeed.sol";
+import {NumoVolFeed} from "../src/feeds/NumoVolFeed.sol";
 import {MockSpotDiffFeed} from "../test/shared/mocks/MockSpotDiffFeed.sol";
 
 import {OptionAsset} from "../src/assets/OptionAsset.sol";
@@ -36,7 +36,7 @@ contract DeployPm2Market is Utils {
     PMRM_2 pmrm_imp;
     PMRMLib_2 pmrmLib_2;
     BasePortfolioViewer pmrmViewer;
-    LyraRateFeed rateFeed;
+    NumoRateFeed rateFeed;
   }
 
   /// @dev main function
@@ -80,7 +80,7 @@ contract DeployPm2Market is Utils {
   ) internal returns (PM2Contracts memory pm2Contracts)  {
     // get the market ERC20 from config (it should be added to the config)
 
-    pm2Contracts.rateFeed = new LyraRateFeed();
+    pm2Contracts.rateFeed = new NumoRateFeed();
     pm2Contracts.rateFeed.setHeartbeat(Config.RATE_HEARTBEAT);
     for (uint i=0; i<config.feedSigners.length; ++i) {
       pm2Contracts.rateFeed.addSigner(config.feedSigners[i], true);

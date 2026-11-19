@@ -21,14 +21,14 @@ import "../../../src/risk-managers/SRMPortfolioViewer.sol";
 
 import "../../shared/mocks/MockFeeds.sol";
 import "../../shared/mocks/MockERC20.sol";
-import "../../../src/feeds/LyraSpotDiffFeed.sol";
-import "../../../src/feeds/LyraRateFeed.sol";
+import "../../../src/feeds/NumoSpotDiffFeed.sol";
+import "../../../src/feeds/NumoRateFeed.sol";
 
-import "../../../src/feeds/LyraSpotFeed.sol";
-import "../../../src/feeds/LyraVolFeed.sol";
-import "../../../src/feeds/LyraForwardFeed.sol";
+import "../../../src/feeds/NumoSpotFeed.sol";
+import "../../../src/feeds/NumoVolFeed.sol";
+import "../../../src/feeds/NumoForwardFeed.sol";
 
-import "lyra-utils/encoding/OptionEncoding.sol";
+import "numo-utils/encoding/OptionEncoding.sol";
 
 import {IPMRMLib} from "../../../src/interfaces/IPMRMLib.sol";
 import {IBaseManager} from "../../../src/interfaces/IBaseManager.sol";
@@ -57,18 +57,18 @@ contract IntegrationTestBase is Test {
   struct Market {
     uint id;
     MockERC20 erc20;
-    // lyra asset
+    // numo asset
     OptionAsset option;
     PerpAsset perp;
     WrappedERC20Asset base;
     // feeds
-    LyraSpotFeed spotFeed;
-    LyraSpotDiffFeed perpFeed;
-    LyraSpotDiffFeed iapFeed;
-    LyraSpotDiffFeed ibpFeed;
-    LyraVolFeed volFeed;
-    LyraRateFeed rateFeed;
-    LyraForwardFeed forwardFeed;
+    NumoSpotFeed spotFeed;
+    NumoSpotDiffFeed perpFeed;
+    NumoSpotDiffFeed iapFeed;
+    NumoSpotDiffFeed ibpFeed;
+    NumoVolFeed volFeed;
+    NumoRateFeed rateFeed;
+    NumoForwardFeed forwardFeed;
     // manager for specific market
     PMRM pmrm;
     PMRMLib pmrmLib;
@@ -79,7 +79,7 @@ contract IntegrationTestBase is Test {
   MockERC20 public usdc;
   MockERC20 public weth;
 
-  // Lyra Assets
+  // Numo Assets
   CashAsset public cash;
 
   SecurityModule public securityModule;
@@ -118,7 +118,7 @@ contract IntegrationTestBase is Test {
 
   function _deployV2Core() internal {
     // Nonce 1: Deploy Accounts
-    subAccounts = new SubAccounts("Lyra Margin Accounts", "LyraMarginNFTs");
+    subAccounts = new SubAccounts("Numo Margin Accounts", "NumoMarginNFTs");
 
     // Nonce 2: Deploy USDC
     usdc = new MockERC20("USDC", "USDC");
@@ -198,8 +198,8 @@ contract IntegrationTestBase is Test {
 
     MockERC20 erc20 = new MockERC20(token, token);
 
-    market.spotFeed = new LyraSpotFeed();
-    market.forwardFeed = new LyraForwardFeed(market.spotFeed);
+    market.spotFeed = new NumoSpotFeed();
+    market.forwardFeed = new NumoForwardFeed(market.spotFeed);
 
     OptionAsset option = new OptionAsset(subAccounts, address(market.forwardFeed));
 
@@ -215,13 +215,13 @@ contract IntegrationTestBase is Test {
     market.base = base;
 
     // feeds for perp
-    market.perpFeed = new LyraSpotDiffFeed(market.spotFeed);
-    market.iapFeed = new LyraSpotDiffFeed(market.spotFeed);
-    market.ibpFeed = new LyraSpotDiffFeed(market.spotFeed);
+    market.perpFeed = new NumoSpotDiffFeed(market.spotFeed);
+    market.iapFeed = new NumoSpotDiffFeed(market.spotFeed);
+    market.ibpFeed = new NumoSpotDiffFeed(market.spotFeed);
 
     // interest and vol feed
-    market.rateFeed = new LyraRateFeed();
-    market.volFeed = new LyraVolFeed();
+    market.rateFeed = new NumoRateFeed();
+    market.volFeed = new NumoVolFeed();
 
     market.spotFeed.setHeartbeat(1 minutes);
     market.perpFeed.setHeartbeat(20 minutes);
@@ -432,14 +432,14 @@ contract IntegrationTestBase is Test {
   ////////////////////////////////////
 
   function _getSpot(string memory key) internal view returns (uint, uint) {
-    LyraSpotFeed spotFeed = markets[key].spotFeed;
+    NumoSpotFeed spotFeed = markets[key].spotFeed;
     return spotFeed.getSpot();
   }
 
   function _setSpotPrice(string memory key, uint96 price, uint64 conf) internal {
-    LyraSpotFeed spotFeed = markets[key].spotFeed;
+    NumoSpotFeed spotFeed = markets[key].spotFeed;
     bytes memory data = abi.encode(price, conf);
-    IBaseLyraFeed.FeedData memory feedData = IBaseLyraFeed.FeedData({
+    IBaseNumoFeed.FeedData memory feedData = IBaseNumoFeed.FeedData({
       data: data,
       timestamp: uint64(block.timestamp),
       deadline: block.timestamp + 5,
@@ -459,7 +459,7 @@ contract IntegrationTestBase is Test {
    * @param price price in 18 decimals
    */
   function _setSettlementPrice(string memory key, uint64 expiry, uint price) internal {
-    LyraForwardFeed feed = markets[key].forwardFeed;
+    NumoForwardFeed feed = markets[key].forwardFeed;
 
     (uint spot,) = markets[key].spotFeed.getSpot();
 
@@ -468,7 +468,7 @@ contract IntegrationTestBase is Test {
     uint startAggregate = price * uint(expiry - feed.SETTLEMENT_TWAP_DURATION());
     uint currAggregate = price * uint(expiry);
 
-    IBaseLyraFeed.FeedData memory feedData = IBaseLyraFeed.FeedData({
+    IBaseNumoFeed.FeedData memory feedData = IBaseNumoFeed.FeedData({
       data: abi.encode(expiry, startAggregate, currAggregate, diff, 1e18),
       timestamp: uint64(expiry), // timestamp need to be expiry to be used as settlement data
       deadline: block.timestamp + 5,
@@ -480,7 +480,7 @@ contract IntegrationTestBase is Test {
   }
 
   function _getForwardPrice(string memory key, uint expiry) internal view returns (uint, uint) {
-    LyraForwardFeed forwardFeed = markets[key].forwardFeed;
+    NumoForwardFeed forwardFeed = markets[key].forwardFeed;
     return forwardFeed.getForwardPrice(uint64(expiry));
   }
 
@@ -489,13 +489,13 @@ contract IntegrationTestBase is Test {
    * @param price price in 18 decimals
    */
   function _setForwardPrice(string memory key, uint64 expiry, uint price, uint64 conf) internal {
-    LyraForwardFeed feed = markets[key].forwardFeed;
+    NumoForwardFeed feed = markets[key].forwardFeed;
 
     (uint spot,) = markets[key].spotFeed.getSpot();
 
     int96 diff = int96(int(price) - int(spot));
 
-    IBaseLyraFeed.FeedData memory feedData = IBaseLyraFeed.FeedData({
+    IBaseNumoFeed.FeedData memory feedData = IBaseNumoFeed.FeedData({
       data: abi.encode(expiry, 0, 0, diff, conf),
       timestamp: uint64(block.timestamp),
       deadline: block.timestamp + 5,
@@ -507,19 +507,19 @@ contract IntegrationTestBase is Test {
   }
 
   function _getPerpPrice(string memory key) internal view returns (uint, uint) {
-    LyraSpotDiffFeed perpFeed = markets[key].perpFeed;
+    NumoSpotDiffFeed perpFeed = markets[key].perpFeed;
     return perpFeed.getResult();
   }
 
   function _setPerpPrice(string memory key, uint price, uint64 conf) internal {
     vm.warp(block.timestamp + 1);
-    LyraSpotDiffFeed perpFeed = markets[key].perpFeed;
+    NumoSpotDiffFeed perpFeed = markets[key].perpFeed;
 
     (uint spot,) = markets[key].spotFeed.getSpot();
 
     int96 diff = int96(int(price) - int(spot));
 
-    IBaseLyraFeed.FeedData memory feedData = IBaseLyraFeed.FeedData({
+    IBaseNumoFeed.FeedData memory feedData = IBaseNumoFeed.FeedData({
       data: abi.encode(diff, conf),
       timestamp: uint64(block.timestamp),
       deadline: block.timestamp + 5,
@@ -535,12 +535,12 @@ contract IntegrationTestBase is Test {
   function _setDefaultSVIForExpiry(string memory key, uint64 expiry) internal {
     vm.warp(block.timestamp + 5);
 
-    LyraForwardFeed forwardFeed = markets[key].forwardFeed;
+    NumoForwardFeed forwardFeed = markets[key].forwardFeed;
     (uint fwdPrice,) = forwardFeed.getForwardPrice(uint64(expiry));
 
-    LyraVolFeed volFeed = markets[key].volFeed;
+    NumoVolFeed volFeed = markets[key].volFeed;
 
-    IBaseLyraFeed.FeedData memory feedData = _getDefaultVolData(expiry, fwdPrice);
+    IBaseNumoFeed.FeedData memory feedData = _getDefaultVolData(expiry, fwdPrice);
 
     // sign data
     bytes memory data = _signFeedData(volFeed, keeperPk, feedData);
@@ -549,14 +549,14 @@ contract IntegrationTestBase is Test {
   }
 
   function _getInterestRate(string memory key, uint64 expiry) internal view returns (int, uint) {
-    LyraRateFeed rateFeed = markets[key].rateFeed;
+    NumoRateFeed rateFeed = markets[key].rateFeed;
     return rateFeed.getInterestRate(expiry);
   }
 
   function _setInterestRate(string memory key, uint64 expiry, int96 rate, uint64 conf) internal {
-    LyraRateFeed rateFeed = markets[key].rateFeed;
+    NumoRateFeed rateFeed = markets[key].rateFeed;
     bytes memory rateData = abi.encode(expiry, rate, conf);
-    IBaseLyraFeed.FeedData memory feedData = IBaseLyraFeed.FeedData({
+    IBaseNumoFeed.FeedData memory feedData = IBaseNumoFeed.FeedData({
       data: rateData,
       timestamp: uint64(block.timestamp),
       deadline: block.timestamp + 5,
@@ -570,7 +570,7 @@ contract IntegrationTestBase is Test {
     rateFeed.acceptData(data);
   }
 
-  function _signFeedData(IBaseLyraFeed feed, uint privateKey, IBaseLyraFeed.FeedData memory feedData)
+  function _signFeedData(IBaseNumoFeed feed, uint privateKey, IBaseNumoFeed.FeedData memory feedData)
     internal
     view
     returns (bytes memory)
@@ -584,7 +584,7 @@ contract IntegrationTestBase is Test {
     return abi.encode(feedData);
   }
 
-  function hashFeedData(IBaseLyraFeed feed, IBaseLyraFeed.FeedData memory feedData) public view returns (bytes32) {
+  function hashFeedData(IBaseNumoFeed feed, IBaseNumoFeed.FeedData memory feedData) public view returns (bytes32) {
     bytes32 typeHash = feed.FEED_DATA_TYPEHASH();
     return keccak256(abi.encode(typeHash, keccak256(feedData.data), feedData.deadline, feedData.timestamp));
   }
@@ -606,7 +606,7 @@ contract IntegrationTestBase is Test {
     pmrm.setScenarios(Config.getDefaultScenarios());
   }
 
-  function _getDefaultVolData(uint64 expiry, uint fwdPrice) internal view returns (IBaseLyraFeed.FeedData memory) {
+  function _getDefaultVolData(uint64 expiry, uint fwdPrice) internal view returns (IBaseNumoFeed.FeedData memory) {
     int SVI_a = 1e18;
     uint SVI_b = 1.5e18;
     int SVI_rho = -0.1e18;
@@ -618,7 +618,7 @@ contract IntegrationTestBase is Test {
 
     // example data: a = 1, b = 1.5, sig = 0.05, rho = -0.1, m = -0.05
     bytes memory volData = abi.encode(expiry, SVI_a, SVI_b, SVI_rho, SVI_m, SVI_sigma, SVI_fwd, SVI_refTau, confidence);
-    return IBaseLyraFeed.FeedData({
+    return IBaseNumoFeed.FeedData({
       data: volData,
       timestamp: uint64(block.timestamp),
       deadline: block.timestamp + 5,

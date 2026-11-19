@@ -19,7 +19,7 @@ contract UNIT_PerpAssetHook is Test {
   MockSpotDiffFeed perpFeed;
 
   function setUp() public {
-    subAccounts = new SubAccounts("Lyra Margin Accounts", "LyraMarginNFTs");
+    subAccounts = new SubAccounts("Numo Margin Accounts", "NumoMarginNFTs");
 
     spotFeed = new MockFeeds();
     perpFeed = new MockSpotDiffFeed(spotFeed);

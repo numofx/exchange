@@ -51,7 +51,7 @@ contract DutchAuctionBase is Test {
   /// @dev deploy mock system
   function _deployMockSystem() public {
     /* Base Layer */
-    subAccounts = new SubAccounts("Lyra Margin Accounts", "LyraMarginNFTs");
+    subAccounts = new SubAccounts("Numo Margin Accounts", "NumoMarginNFTs");
 
     /* Wrappers */
     usdc = new MockERC20("usdc", "USDC");

@@ -5,7 +5,7 @@ import {ISpotFeed} from "./ISpotFeed.sol";
 
 /**
  * @title ISpotDiffFeed
- * @author Lyra
+ * @author Numo
  * @notice Returns the sum of a given feed value and the spot price
  */
 interface ISpotDiffFeed {

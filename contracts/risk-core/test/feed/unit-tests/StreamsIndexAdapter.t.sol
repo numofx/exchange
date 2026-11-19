@@ -322,7 +322,7 @@ contract StreamsIndexAdapterManagerDataTest is Test {
   function setUp() public {
     vm.warp(1_794_702_400);
     tradeModule = new TradeModuleOrder();
-    subAccounts = new SubAccounts("Lyra Margin Accounts", "LyraMarginNFTs");
+    subAccounts = new SubAccounts("Numo Margin Accounts", "NumoMarginNFTs");
     usdc = new MockERC20("USDC", "USDC");
     usdc.setDecimals(6);
     cash = new MockCash(usdc, subAccounts);

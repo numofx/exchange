@@ -20,7 +20,7 @@ type OptionSeries struct {
 	AssetAddress string `json:"asset_address"`
 	// ManagerAddress is the engine that margins it (MarginEngine v2).
 	ManagerAddress string `json:"manager_address"`
-	// VolFeedAddress is the options' LyraVolFeed: no live surface for Expiry, no margin, so no trading.
+	// VolFeedAddress is the options' NumoVolFeed: no live surface for Expiry, no margin, so no trading.
 	VolFeedAddress string `json:"vol_feed_address"`
 	// BaseAsset is what one option unit is (1e18 = one cNGN) and what a strike is priced per.
 	BaseAsset string `json:"base_asset"`

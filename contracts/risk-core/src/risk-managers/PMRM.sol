@@ -6,9 +6,9 @@ import "openzeppelin/utils/math/Math.sol";
 import "openzeppelin/utils/math/SignedMath.sol";
 import "openzeppelin/utils/ReentrancyGuard.sol";
 
-import "lyra-utils/encoding/OptionEncoding.sol";
-import "lyra-utils/decimals/DecimalMath.sol";
-import "lyra-utils/decimals/SignedDecimalMath.sol";
+import "numo-utils/encoding/OptionEncoding.sol";
+import "numo-utils/decimals/DecimalMath.sol";
+import "numo-utils/decimals/SignedDecimalMath.sol";
 
 import {IManager} from "../interfaces/IManager.sol";
 import {ISubAccounts} from "../interfaces/ISubAccounts.sol";
@@ -30,7 +30,7 @@ import {BaseManager} from "./BaseManager.sol";
 
 /**
  * @title PMRM
- * @author Lyra
+ * @author Numo
  * @notice Risk Manager that uses a SPAN like methodology to margin an options portfolio.
  */
 contract PMRM is IPMRM, ILiquidatableManager, BaseManager, ReentrancyGuard {

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """USDC/cNGN price publisher for the Base deliverable FX market.
 
-Signs LyraSpotFeed EIP-712 payloads with the feed-signer key and submits them
+Signs NumoSpotFeed EIP-712 payloads with the feed-signer key and submits them
 with a relayer key. Two feeds are served:
 
 - cNGN spot feed  (heartbeat 3 min)  -> price = cNGN per USDC, 1e18 scale

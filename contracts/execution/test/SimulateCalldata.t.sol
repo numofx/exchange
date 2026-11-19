@@ -7,12 +7,12 @@ import "forge-std/console.sol";
 import "forge-std/console2.sol";
 import "openzeppelin/access/Ownable2Step.sol";
 import "v2-core/scripts/types.sol";
-import "v2-core/src/l2/LyraERC20.sol";
+import "v2-core/src/l2/NumoERC20.sol";
 import "v2-core/src/risk-managers/PMRM.sol";
 import "v2-core/src/risk-managers/SRMPortfolioViewer.sol";
 import "v2-core/src/risk-managers/StandardManager.sol";
 import {MockSpotDiffFeed} from "v2-core/test/shared/mocks/MockSpotDiffFeed.sol";
-import "v2-core/src/feeds/LyraForwardFeed.sol";
+import "v2-core/src/feeds/NumoForwardFeed.sol";
 import {TradeModule} from "../src/modules/TradeModule.sol";
 import {WLWrappedERC20Asset} from "v2-core/src/assets/WLWrappedERC20Asset.sol";
 

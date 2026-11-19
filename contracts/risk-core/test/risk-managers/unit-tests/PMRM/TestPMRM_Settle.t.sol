@@ -7,7 +7,7 @@ import "../../../../src/periphery/OptionSettlementHelper.sol";
 import "../../../risk-managers/unit-tests/PMRM/utils/PMRMTestBase.sol";
 
 import {IBaseManager} from "../../../../src/interfaces/IBaseManager.sol";
-import "lyra-utils/encoding/OptionEncoding.sol";
+import "numo-utils/encoding/OptionEncoding.sol";
 
 contract TestPMRM_Settlement is PMRMTestBase {
   PerpSettlementHelper perpHelper;

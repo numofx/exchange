@@ -2,7 +2,7 @@
 pragma solidity ^0.8.18;
 
 import "forge-std/Test.sol";
-import "lyra-utils/encoding/OptionEncoding.sol";
+import "numo-utils/encoding/OptionEncoding.sol";
 
 import "../shared/IntegrationTestBase.t.sol";
 

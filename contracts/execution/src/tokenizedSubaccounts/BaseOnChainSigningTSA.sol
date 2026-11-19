@@ -11,6 +11,8 @@ abstract contract BaseOnChainSigningTSA is BaseTSA {
   // bytes4(keccak256("isValidSignature(bytes32,bytes)")
   bytes4 internal constant MAGICVALUE = 0x1626ba7e;
 
+  // The "lyra.storage" namespace is kept: the slot below is its hash, and deployed proxies use it.
+
   /// @custom:storage-location erc7201:lyra.storage.BaseOnChainSigningTSA
   struct BaseSigningTSAStorage {
     bool signaturesDisabled;

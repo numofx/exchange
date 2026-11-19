@@ -9,7 +9,7 @@ import "../src/risk-managers/StandardManager.sol";
 import "../src/risk-managers/SRMPortfolioViewer.sol";
 import "../src/periphery/OracleDataSubmitter.sol";
 
-import "../src/feeds/LyraSpotFeed.sol";
+import "../src/feeds/NumoSpotFeed.sol";
 
 import "openzeppelin/token/ERC20/extensions/IERC20Metadata.sol";
 

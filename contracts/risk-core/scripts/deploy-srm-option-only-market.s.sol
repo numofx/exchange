@@ -4,10 +4,10 @@ pragma solidity ^0.8.0;
 import "openzeppelin/token/ERC20/extensions/IERC20Metadata.sol";
 import {OptionAsset} from "../src/assets/OptionAsset.sol";
 import {WrappedERC20Asset} from "../src/assets/WrappedERC20Asset.sol";
-import {LyraSpotFeed} from "../src/feeds/LyraSpotFeed.sol";
-import {LyraVolFeed} from "../src/feeds/LyraVolFeed.sol";
-import {LyraRateFeedStatic} from "../src/feeds/static/LyraRateFeedStatic.sol";
-import {LyraForwardFeed} from "../src/feeds/LyraForwardFeed.sol";
+import {NumoSpotFeed} from "../src/feeds/NumoSpotFeed.sol";
+import {NumoVolFeed} from "../src/feeds/NumoVolFeed.sol";
+import {NumoRateFeedStatic} from "../src/feeds/static/NumoRateFeedStatic.sol";
+import {NumoForwardFeed} from "../src/feeds/NumoForwardFeed.sol";
 import {BasePortfolioViewer} from "../src/risk-managers/BasePortfolioViewer.sol";
 import {IManager} from "../src/interfaces/IManager.sol";
 
@@ -62,9 +62,9 @@ contract DeploySRMOptionOnlyMarket is Utils {
 
     console2.log("target erc20:", marketERC20);
 
-    market.spotFeed = new LyraSpotFeed();
-    market.forwardFeed = new LyraForwardFeed(market.spotFeed);
-    market.volFeed = new LyraVolFeed();
+    market.spotFeed = new NumoSpotFeed();
+    market.forwardFeed = new NumoForwardFeed(market.spotFeed);
+    market.volFeed = new NumoVolFeed();
 
     // init feeds
     market.spotFeed.setHeartbeat(Config.SPOT_HEARTBEAT);

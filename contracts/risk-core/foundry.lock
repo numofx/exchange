@@ -2,7 +2,7 @@
   "../execution/lib/forge-std": {
     "rev": "0e7097750918380d84dd3cfdef595bee74dabb70"
   },
-  "../execution/lib/lyra-utils": {
+  "../execution/lib/numo-utils": {
     "rev": "8f6962cb49525c887d802a1b1d44ac35ed114791"
   },
   "../execution/lib/openzeppelin-contracts": {
@@ -17,7 +17,7 @@
       "rev": "b93cf4bc34ff214c099dc970b153f85ade8c9f66"
     }
   },
-  "lib/lyra-utils": {
+  "lib/numo-utils": {
     "branch": {
       "name": "master",
       "rev": "8f6962cb49525c887d802a1b1d44ac35ed114791"
