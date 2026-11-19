@@ -5,6 +5,31 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-19 02:16–02:23 UTC: spot makers stopped, #42 and #43 emptied to the owner's wallet 0x8f49…1B7a (ECS, chain)
+
+- **Owner's decision:** withdraw all spot market-maker liquidity to MPCVault "Market-Maker EURC-USDC"
+  `0x8f4951f57Fcc4A7dcF99cF066FD35b1AB63D1B7a` (an EOA; it funded the EURC maker on 2026-10-26), and delist spot.
+- **Makers stopped:** `desired_count_market_maker` (service `market-maker-spot`, #42) and
+  `desired_count_market_maker_eurc` (#43) 1 → 0 in `counts.auto.tfvars` (untracked, so recorded here). Plan: 2
+  changes (the two desired counts), applied 02:16:19; tasks STOPPED 02:16:58 (EURC) and 02:17:07 (cNGN). #42's quotes
+  had expired; #43's 8 EURC-USDC orders expired at 02:21:18 (`migrate-spot-mm.ts cancel` now gets 401 from
+  `/orders/cancel`: it sends no auth header).
+- **Withdrawn to the MM wallet** (`migrate-spot-mm.ts withdraw --execute`, MM key from SSM in a subshell; `SPOT_SYMBOL=
+  cNGN-USDC` for both, so the EURC leg goes through `eurcEscrow()` once):
+  - #42: 493.664911 USDC (`0x9c3641b3…d5b1`, block 59,321,973), 390,545.965849 cNGN (`0x7a342faa…f04c`, 59,321,977);
+  - #43: 3,826.274536 USDC (`0x804e97c4…1032`, 59,322,696), 3,272.439616 EURC (`0xaaade986…ef06`, 59,322,700).
+  - Left: sub-unit cash dust (#42 0.0000193, #43 0.0000019 USDC).
+- **Sent to 0x8f49…1B7a** from the MM wallet, exactly the withdrawn amounts (its own 0.047749 USDC stays):
+  - 4,319.939447 USDC `0xbce7b963516def904a3fa51c7f549d8cbd21f74b7ba7aed7a8b6cb79a2e478da` (59,322,816);
+  - 390,545.965849 cNGN `0xef0fabd2c93930aa17978513c2783f8c7c555761f2829ff870a77736c2e50fbc` (59,322,827);
+  - 3,272.439616 EURC `0xed1f6bb62f09991fb2c7a588d9121435f64aa3b6911c867bebff32e20ebb30eb` (59,322,837).
+- **Not yet done: the delisting.** The spot asset addresses also make cNGN and EURC withdrawable and depositable
+  (`local.withdrawal_asset_addresses`, deposits.tf); 20,586 cNGN (v2), 5,000 cNGN (SRM) and ~9 EURC (v2) are still
+  held by others. Blanking them would strand those holders: delisting needs a listed/withdrawable split first.
+- **Found on the way:** all three OnchainBook makers fail every 5 s cycle (receipts refused by publicnode as
+  "archive", 403; the v1 book maker's RPC 429 "monthly capacity"), and resend each time: the cNGN maker sent 120
+  transactions in 10 minutes (~0.007 ETH/day against 0.0092 held), not the ~1,700/day its burn was estimated at.
+
 ## 2026-11-19 01:25–01:38 UTC: options retired: maker #44 stopped, 1,000.05 USDC to #43, options delisted (chain, ECS)
 
 Owner asked to move #44's USDC to the EURC maker and retire the options orderbook (the app dropped its options page in
