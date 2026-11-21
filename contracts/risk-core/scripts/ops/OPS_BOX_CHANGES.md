@@ -5,6 +5,19 @@ is not provisioned from this repo: its checkout at `/home/ec2-user/exchange` is 
 `bf9da89` (2026-07-22) and individual files are copied over it. Until that is fixed, this file is
 the only place the box's real state is written down. Newest first.
 
+## 2026-11-21 ~20:45 UTC: #56's 149.986606 USDC moved to #58 (cast send from a laptop, MM wallet 0x3448…B47B; not the ops box)
+
+- **Why:** the v1 OnchainBook maker (`market-maker-book`, account #56) was retired the same day (owner; infra
+  `62fec9f6`): the v1 book takes nothing from the app or the custodian and had no fills in 3 days. Its cash went to #58,
+  the v2 book's EURC-30NOV26 maker, which the same wallet holds (owner chose #58).
+- **Sent:** CashAsset `withdraw(56, 149986606, 0x3448…B47B)` `0x8c20881e…` (block 60515962); USDC `approve(CashAsset,
+  149986606)` `0xcc6a576d…` (60515964, exact amount, allowance back to 0 after); CashAsset `deposit(58, 149986606)`
+  `0x95283445…` (60515966). All status 1. Key read from SSM `/numo/exchange/mm_private_key` into a subshell, never
+  printed.
+- **After:** #58 cash 1,740.09 USDC (was 1,590.10); #56 0.0000045 USDC of dust, no position, no spline. The sends went
+  through publicnode, which 403'd each receipt lookup ("Archive requests require a personal token") after broadcasting:
+  cast reported errors for transactions that had landed. Read state before resending after any such error.
+
 ## 2026-11-19 ~07:10 UTC: EURC-31DEC26 keeper STREAMS_REFRESH_S 20 → 30 (SSM `5eb32fa0-…`)
 
 - **Why:** to stop the two v3 keepers both posting the shared adapter's reports. The ceiling is the index's
