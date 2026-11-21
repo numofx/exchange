@@ -126,6 +126,9 @@ locals {
   # referencing a missing one does not start.
   secret_arns_book_v2 = var.image_market_maker_book_v2 == "" ? {} : {
     book_maker_v2_heartbeat_url = "${local.ssm_arn_prefix}/numo/exchange/book_maker_v2_heartbeat_url"
+    # SolidRPC (owner, 2026-11-21): mainnet.base.org answered 212 "25/second request limit" 429s in an hour. Keyed, so
+    # a SecureString, put by hand 2026-11-21, never printed.
+    mm_book_v2_rpc_url = "${local.ssm_arn_prefix}/numo/exchange/mm_book_v2_rpc_url"
   }
 
   # The cNGN book maker's own key (its own wallet 0x7b96…bE4d: two book makers on one key collide on nonces). Created

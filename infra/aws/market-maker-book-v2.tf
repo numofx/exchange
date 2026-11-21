@@ -111,13 +111,13 @@ resource "aws_ecs_task_definition" "market_maker_book_v2" {
       { name = "MM_BOOK_POLL_SECONDS", value = "5" },
       { name = "MM_BOOK_DRY_RUN", value = tostring(var.market_maker_book_v2_dry_run) },
       { name = "MM_SIGNER_BACKEND", value = "local" },
-      # var.book_maker_rpc_url (variables.tf): publicnode 403s a receipt lookup for an unmined tx, and the bot resent
-      # every 5 s cycle (2026-11-19).
-      { name = "MM_RPC_URL", value = var.book_maker_rpc_url },
     ]
     secrets = [
       { name = "MM_OWNER_PRIVATE_KEY", valueFrom = local.secret_arns.mm_private_key },
       { name = "MM_BOOK_HEARTBEAT_URL", valueFrom = local.secret_arns_book_v2.book_maker_v2_heartbeat_url },
+      # SolidRPC, not var.book_maker_rpc_url (mainnet.base.org): 212 rate-limit 429s an hour (2026-11-21). A receipt
+      # for an unmined tx answers null there (publicnode's 403 made the bot resend every cycle, 2026-11-19).
+      { name = "MM_RPC_URL", valueFrom = local.secret_arns_book_v2.mm_book_v2_rpc_url },
     ]
 
     logConfiguration = local.log_options["market-maker-book-v2"]
