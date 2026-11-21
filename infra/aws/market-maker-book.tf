@@ -7,6 +7,11 @@
 #
 # Nothing here exists until image_market_maker_book is set, and it runs only with
 # desired_count_market_maker_book = 1 in counts.auto.tfvars.
+#
+# RETIRED 2026-11-21 (owner): desired 0, applied 20:37 UTC (counts.auto.tfvars is local and untracked, so the record is
+# here). The v1 book takes nothing from the app or the custodian (BOOK_TAKE_BOOKS is v2 + cNGN) and had no fills in 3
+# days; the task cancelled its spline on shutdown (0x0ef073cf). #56's USDC went to #58, the v2 book's maker. The matcher
+# still indexes the book (onchain_book_address) so its past fills stay on the tape. Do not set it back to 1.
 
 variable "image_market_maker_book" {
   description = "The market-maker image carrying /app/book-maker, tagged by git SHA. Empty creates nothing."
