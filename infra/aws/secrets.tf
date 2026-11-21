@@ -132,6 +132,9 @@ locals {
   # 2026-11-18, never printed. Only once the service exists, so the execution role's policy does not change before.
   secret_arns_book_cngn = local.book_cngn_enabled ? {
     mm_book_cngn_private_key = "${local.ssm_arn_prefix}/numo/exchange/mm_book_cngn_private_key"
+    # SolidRPC (owner, 2026-11-21): mainnet.base.org's "25/second request limit" failed about half the maker's cycles
+    # and let its 60 s quotes lapse. Keyed, so a SecureString, put by hand 2026-11-21, never printed.
+    mm_book_cngn_rpc_url = "${local.ssm_arn_prefix}/numo/exchange/mm_book_cngn_rpc_url"
   } : {}
 }
 

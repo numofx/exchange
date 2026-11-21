@@ -108,12 +108,12 @@ resource "aws_ecs_task_definition" "market_maker_book_cngn" {
         { name = "MM_BOOK_POLL_SECONDS", value = "5" },
         { name = "MM_BOOK_DRY_RUN", value = tostring(var.market_maker_book_cngn_dry_run) },
         { name = "MM_SIGNER_BACKEND", value = "local" },
-        # var.book_maker_rpc_url (variables.tf): publicnode 403s a receipt lookup for an unmined tx, and the bot resent
-        # every 5 s cycle (2026-11-19).
-        { name = "MM_RPC_URL", value = var.book_maker_rpc_url },
       ]
       secrets = [
         { name = "MM_OWNER_PRIVATE_KEY", valueFrom = local.secret_arns_book_cngn.mm_book_cngn_private_key },
+        # SolidRPC, not var.book_maker_rpc_url (mainnet.base.org): that one rate-limited half the cycles (2026-11-21).
+        # Checked before the switch: a receipt for an unmined tx answers null (publicnode's 403 resent every cycle).
+        { name = "MM_RPC_URL", valueFrom = local.secret_arns_book_cngn.mm_book_cngn_rpc_url },
       ]
       logConfiguration = local.log_options["market-maker-book-cngn"]
     },
