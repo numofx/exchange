@@ -36,21 +36,24 @@ Run-sheets: `eurc-31dec26-listing-runsheet.md`, `onchain-book-next-series-runshe
 
 **Changed since the run-sheet:** the v1 book maker (#56) was retired 2026-11-21, so 30NOV26 has no canary quote on the
 v1 book; #58 is its only maker. Moving #58 on ~27 Nov therefore leaves 30NOV26 with no quotes for its last ~3 days
-(our own position is the only OI). Decide: move on 27 Nov as planned, or at 30NOV26's cutoff (30 Nov 13:30).
+(our own position is the only OI). **Decided (owner, 2026-11-21): move at 30NOV26's cutoff** (30 Nov ~13:00 UTC for
+#60, ~14:00 for #58, right after each bot's cutoff takes its quotes down), so 30NOV26 stays quoted to the end and
+31DEC26 is quoted from expiry day. Both new markets must be enabled and canaried before then.
 
 ## cNGN: 30NOV26 → next series (no run-sheet yet: decisions first)
 
 cNGN-30NOV26 is on MarginEngine v2's FutureAsset `0xcacee66a…9aa75` (contract size 1,000,000 cNGN, forward feed
 `0x2447…`), quoted only on the adapter-less cNGN book `0x5a35…8Bd4` (market 1) by #60. Fee 15 bps.
 
-**Decide (owner):**
+**Decided (owner, 2026-11-21: as recommended):** cNGN-31DEC26 at 14:00 UTC, 15 bps; both makers move at their
+30NOV26 cutoff (below).
 
-| | Question | Recommendation |
+| | Question | Decision |
 |---|---|---|
 | C-a | Roll cNGN at all? | Yes: it is the venue's own market and custody trading now depends on it |
 | C-b | Next expiry | **cNGN-31DEC26, Thu 2026-12-31 14:00 UTC** (`1798725600`), last trade 13:30: the 30NOV26 pattern, an hour before EURC's |
 | C-c | Fee | 15 bps, as now |
-| C-d | When #60 moves | Same answer as EURC's E7 question |
+| C-d | When #60 moves | **At 30NOV26's cutoff**, as E7 |
 
 **Then (sketch, to become `cngn-31dec26-listing-runsheet.md`):**
 
@@ -74,8 +77,8 @@ cNGN-30NOV26 is on MarginEngine v2's FutureAsset `0xcacee66a…9aa75` (contract 
 | Sat 21 – Mon 23 Nov | Owner decides C-a…C-d and the E7 timing; C1–C2 built and rehearsed |
 | Tue 24 Nov | C3 list cNGN-31DEC26; E4–E6 on the EURC v2 book |
 | Wed 25 Nov | C4–C7; E8 canary on EURC market 2 |
-| Thu 26 – Fri 27 Nov | Makers moved (E7, C8) if moving early; C9; both expiry run-sheets final |
-| Mon 30 Nov | Expiry: cNGN 14:00, EURC 15:00 |
+| Thu 26 – Fri 27 Nov | Anvil rehearsal of the maker move (preflight on market 2); C9; both expiry run-sheets final |
+| Mon 30 Nov | ~13:00 move #60 (C8), ~14:00 move #58 (E7); expiry: cNGN 14:00, EURC 15:00 |
 
 ## Related open item
 
