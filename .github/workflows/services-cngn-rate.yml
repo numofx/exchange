@@ -1,0 +1,35 @@
+# .github/workflows/services-cngn-rate.yml
+# The cNGN reference sidecar (P2P corridors on /usd-per-cngn, Daya's book on /daya). No workspace deps to build first.
+name: services-cngn-rate
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'services/cngn-rate/**'
+      - 'pnpm-workspace.yaml'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/services-cngn-rate.yml'
+  pull_request:
+    paths:
+      - 'services/cngn-rate/**'
+      - 'pnpm-workspace.yaml'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/services-cngn-rate.yml'
+concurrency:
+  group: services-cngn-rate-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter cngn-rate run check
+      - run: pnpm --filter cngn-rate test

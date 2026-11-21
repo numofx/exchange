@@ -100,6 +100,10 @@ step node . "execution image builds" execution_image
 step node . "cngn-rebalance check" pnpm --filter cngn-rebalance run check
 step node . "cngn-rebalance test" pnpm --filter cngn-rebalance test
 
+# ---- services-cngn-rate.yml ------------------------------------------------------------
+step node . "cngn-rate check" pnpm --filter cngn-rate run check
+step node . "cngn-rate test" pnpm --filter cngn-rate test
+
 # ---- services-perp-feeds.yml -----------------------------------------------------------
 # The anvil suites deploy the real feed contracts, FutureAssetV1 (the live 30NOV26 series) and FutureAssetV2 (the live v2 series), so they need forge and anvil, and
 # a fresh anvil on the port the tests read: started here, stopped however the tests end.
