@@ -1,7 +1,8 @@
 # 30NOV26 roll checklist (draft, 2026-11-21)
 
-Both live futures stop on Mon 2026-11-30: **cNGN-30NOV26 expires 14:00 UTC, EURC-30NOV26 15:00 UTC** (last trade 30 min
-before each; the book makers' cutoff takes their quotes down an hour before that). The app now trades futures only
+Both live futures stop on Mon 2026-11-30: **cNGN-30NOV26 expires 14:00 UTC (last trade 13:00: its future's fixing window
+is 3,600 s), EURC-30NOV26 15:00 UTC (last trade 14:30)**; each book maker's cutoff takes its quotes down an hour before
+its last trade. The app now trades futures only
 through the OnchainBooks (BookTakeModule and BookCustodian), so after expiry it has nothing to trade unless each
 next series has a **book market with the maker's size on it**.
 
@@ -36,8 +37,8 @@ Run-sheets: `eurc-31dec26-listing-runsheet.md`, `onchain-book-next-series-runshe
 
 **Changed since the run-sheet:** the v1 book maker (#56) was retired 2026-11-21, so 30NOV26 has no canary quote on the
 v1 book; #58 is its only maker. Moving #58 on ~27 Nov therefore leaves 30NOV26 with no quotes for its last ~3 days
-(our own position is the only OI). **Decided (owner, 2026-11-21): move at 30NOV26's cutoff** (30 Nov ~13:00 UTC for
-#60, ~14:00 for #58, right after each bot's cutoff takes its quotes down), so 30NOV26 stays quoted to the end and
+(our own position is the only OI). **Decided (owner, 2026-11-21): move at 30NOV26's cutoff** (30 Nov ~12:00 UTC for
+#60, ~13:30 for #58: right after each bot's cutoff, an hour before its series' last trade, takes its quotes down), so 30NOV26 stays quoted to the end and
 31DEC26 is quoted from expiry day. Both new markets must be enabled and canaried before then.
 
 ## cNGN: 30NOV26 → next series (no run-sheet yet: decisions first)
@@ -51,7 +52,7 @@ cNGN-30NOV26 is on MarginEngine v2's FutureAsset `0xcacee66a…9aa75` (contract 
 | | Question | Decision |
 |---|---|---|
 | C-a | Roll cNGN at all? | Yes: it is the venue's own market and custody trading now depends on it |
-| C-b | Next expiry | **cNGN-31DEC26, Thu 2026-12-31 14:00 UTC** (`1798725600`), last trade 13:30: the 30NOV26 pattern, an hour before EURC's |
+| C-b | Next expiry | **cNGN-31DEC26, Thu 2026-12-31 14:00 UTC** (`1798725600`), last trade 13:00 (expiry − the future's 3,600 s fixing window): the 30NOV26 pattern, an hour before EURC's. It must differ from EURC's `1798729200`: the engine holds close-out until every market listing an expiry has fixed (the `series` gate) |
 | C-c | Fee | 15 bps, as now |
 | C-d | When #60 moves | **At 30NOV26's cutoff**, as E7 |
 
@@ -59,7 +60,7 @@ cNGN-30NOV26 is on MarginEngine v2's FutureAsset `0xcacee66a…9aa75` (contract 
 
 | # | Step | Sends |
 |---|---|---|
-| C1 | Tooling: a `cngn-list --expiry E` batch (`setContract(expiry, expiry − 1800, initialMark)` on the cNGN future), modelled on `eurc-v3-list`; re-read 30NOV26's fixing parameters first (they bind permanently); anvil rehearsal | nothing |
+| C1 | **Done 2026-11-21.** `propose_margin_engine_v2_batch.py list --expiry 1798725600`: `setContract(E, E − 3600, M)` on FutureAssetV2 (no per-series fixing parameters in this version: they are the future's). Gates: custody, schedule (≥ 7 days), series (no other market at E), forward (maxExpiry), mark (inside `markIndexBand(E)`, within 1% of the carry forward). Self-tested (calldata pinned to `cast calldata`; the series gate broken goes red); live dry run all PASS at M = 0.000685579; anvil fork: the vault's call lands (73,771 gas), reads back listed with last trade `1798722000`, 30NOV26 untouched, a second send reverts `FA_InvalidSchedule` | nothing |
 | C2 | Keeper env `future-feeds-v2-cngn-31dec26.env` (copy of 30NOV26's, new `FUTURE_SUB_ID`), `DRY_RUN=true` | nothing |
 | C3 | List | vault |
 | C4 | Keeper live on the box; first forward mark read back; `DRY_RUN=false` | box |
@@ -78,7 +79,7 @@ cNGN-30NOV26 is on MarginEngine v2's FutureAsset `0xcacee66a…9aa75` (contract 
 | Tue 24 Nov | C3 list cNGN-31DEC26; E4–E6 on the EURC v2 book |
 | Wed 25 Nov | C4–C7; E8 canary on EURC market 2 |
 | Thu 26 – Fri 27 Nov | Anvil rehearsal of the maker move (preflight on market 2); C9; both expiry run-sheets final |
-| Mon 30 Nov | ~13:00 move #60 (C8), ~14:00 move #58 (E7); expiry: cNGN 14:00, EURC 15:00 |
+| Mon 30 Nov | ~12:00 move #60 (C8, at its cutoff), ~13:30 move #58 (E7, at its cutoff); expiry: cNGN 14:00, EURC 15:00 |
 
 ## Related open item
 
